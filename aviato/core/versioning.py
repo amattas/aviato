@@ -7,6 +7,33 @@ from collections.abc import Iterable
 from .version import parse_version
 
 _HEADER_RE = re.compile(r"^(?P<type>[a-zA-Z]+)(?P<scope>\([^)]*\))?(?P<bang>!)?:")
+_RELEASE_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(\d+))?$")
+
+# Pre-release rank: a final release outranks beta, which outranks alpha (§13.2).
+_PRE_RANK = {None: 2, "beta": 1, "alpha": 0}
+
+
+def _release_key(tag: str) -> tuple[int, int, int, int, int] | None:
+    match = _RELEASE_RE.match(tag.strip())
+    if match is None:
+        return None
+    major, minor, patch, pre, pre_num = match.groups()
+    return (int(major), int(minor), int(patch), _PRE_RANK[pre], int(pre_num or 0))
+
+
+def is_highest(candidate: str, existing: Iterable[str]) -> bool:
+    """True iff ``candidate`` is the highest released version among ``existing`` (§8.14/§13.2).
+
+    Used to gate a mutable published alias (e.g. an image ``latest`` tag or docs
+    alias) so a slower, older-release deploy cannot move the alias backward.
+    Unparseable tags are ignored; a final release outranks its own pre-releases.
+    """
+    candidate_key = _release_key(candidate)
+    if candidate_key is None:
+        return False
+    keys = [key for key in (_release_key(tag) for tag in existing) if key is not None]
+    keys.append(candidate_key)
+    return max(keys) == candidate_key
 
 
 class BumpKind(enum.IntEnum):

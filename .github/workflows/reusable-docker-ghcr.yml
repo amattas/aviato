@@ -40,6 +40,12 @@ permissions:
   packages: write
   security-events: write
 
+# Per-alias deploy concurrency group so a slower, older-release deploy cannot
+# regress the mutable `latest` tag (§8.14). Queue rather than cancel.
+concurrency:
+  group: ghcr-latest-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   docker:
     name: Build and publish image
@@ -132,3 +138,43 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
+
+      # §8.14/§13.2: move the mutable `latest` tag only if this release is the
+      # highest released version. The comparison mirrors aviato.core.versioning
+      # .is_highest (which is unit-tested); kept inline to avoid a self-reference
+      # install in the deploy job.
+      - name: Determine highest released version
+        id: monotonic
+        if: ${{ inputs.push }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cat > highest.py <<'PY'
+          import sys, re
+          rel = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(\d+))?$")
+          rank = {None: 2, "beta": 1, "alpha": 0}
+          def key(tag):
+              m = rel.match(tag.strip())
+              if not m:
+                  return None
+              a, b, c, pre, pren = m.groups()
+              return (int(a), int(b), int(c), rank[pre], int(pren or 0))
+          candidate = sys.argv[1]
+          ck = key(candidate)
+          keys = [k for k in (key(t) for t in sys.stdin) if k]
+          print("true" if ck and max(keys + [ck]) == ck else "false")
+          PY
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/tags" --jq '.[].name' > tags.txt || true
+          result="$(python3 highest.py "${RELEASE_TAG}" < tags.txt)"
+          echo "is_highest=${result}" >> "${GITHUB_OUTPUT}"
+
+      - name: Tag and push latest (monotonic guard)
+        if: ${{ inputs.push && steps.monotonic.outputs.is_highest == 'true' }}
+        shell: bash
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}
+          TAG: ${{ steps.vars.outputs.tag }}
+        run: docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}:${TAG}"

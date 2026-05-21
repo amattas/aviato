@@ -19,6 +19,7 @@ from .core.registry import Registry
 from .core.render import render
 from .core.scaffold import scaffold
 from .core.settings_drift_flow import run_settings_drift
+from .core.versioning import is_highest
 from .github import GitHubAPIError
 from .github_platform import GitHubPlatform
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
@@ -271,6 +272,11 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_is_highest(args: argparse.Namespace) -> int:
+    """Exit 0 iff CANDIDATE is the highest released version (§8.14 monotonic alias guard)."""
+    return 0 if is_highest(args.candidate, args.existing) else 1
+
+
 def cmd_reconcile(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
     declaration_path = root / ".github" / "aviato.yaml"
@@ -352,6 +358,13 @@ def build_parser() -> argparse.ArgumentParser:
     drift = subparsers.add_parser("drift-report", help="Consumer automation: report file + settings drift (read-only).")
     drift.add_argument("path", help="Path to the consumer repository.")
     drift.set_defaults(func=cmd_drift_report)
+
+    highest = subparsers.add_parser(
+        "is-highest", help="Exit 0 iff CANDIDATE is the highest released version (§8.14 alias guard)."
+    )
+    highest.add_argument("candidate", help="The release tag being deployed.")
+    highest.add_argument("existing", nargs="*", help="All released tags.")
+    highest.set_defaults(func=cmd_is_highest)
 
     reconcile = subparsers.add_parser("reconcile", help="Operator-gated settings reconcile against a tracking issue.")
     reconcile.add_argument("path", help="Path to the consumer repository.")

@@ -3,7 +3,34 @@ from __future__ import annotations
 import pytest
 
 from aviato.core.errors import CompatibilityError
-from aviato.core.versioning import BumpKind, classify_commits, next_version
+from aviato.core.versioning import BumpKind, classify_commits, is_highest, next_version
+
+
+def test_is_highest_true_when_candidate_is_max() -> None:
+    assert is_highest("1.2.0", ["1.0.0", "1.1.5", "1.2.0"]) is True
+
+
+def test_is_highest_false_when_older_release_exists() -> None:
+    assert is_highest("1.1.0", ["1.0.0", "1.2.0", "1.1.0"]) is False
+
+
+def test_release_outranks_its_prerelease() -> None:
+    # 1.2.0 (release) is higher than 1.2.0-beta2 / 1.2.0-alpha1
+    assert is_highest("1.2.0", ["1.2.0-alpha1", "1.2.0-beta2", "1.2.0"]) is True
+    assert is_highest("1.2.0-beta2", ["1.2.0-beta2", "1.2.0"]) is False
+
+
+def test_prerelease_ordering_beta_above_alpha() -> None:
+    assert is_highest("1.2.0-beta1", ["1.2.0-alpha9", "1.2.0-beta1"]) is True
+
+
+def test_is_highest_ignores_unparseable_tags() -> None:
+    assert is_highest("1.0.0", ["garbage", "v-bad", "1.0.0"]) is True
+
+
+def test_is_highest_candidate_not_in_list_still_compares() -> None:
+    assert is_highest("2.0.0", ["1.9.9"]) is True
+    assert is_highest("1.0.0", ["1.9.9"]) is False
 
 
 def test_breaking_change_bumps_major() -> None:
