@@ -10,8 +10,10 @@ from .core.composition import resolve_profile
 from .core.declaration import load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
 from .core.errors import AviatoError
+from .core.onboarding import materialize_items
 from .core.registry import Registry
 from .core.render import render
+from .core.scaffold import scaffold
 from .github import GitHubAPIError
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from .policy import load_policy
@@ -165,6 +167,39 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sync(args: argparse.Namespace) -> int:
+    root = Path(args.path).resolve()
+    declaration_path = root / ".github" / "aviato.yaml"
+    if not declaration_path.is_file():
+        print(f"no declaration at {declaration_path}", file=sys.stderr)
+        return 2
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    try:
+        declaration = load_declaration(declaration_path)
+        items = materialize_items(registry, declaration.profile, declaration.variables)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    result = scaffold(
+        root,
+        items,
+        profile=declaration.profile,
+        version=declaration.version,
+        force=args.force,
+    )
+    for output in result.written:
+        print(f"wrote {output}")
+    for output in result.seeded:
+        print(f"seeded {output}")
+    for output in result.unchanged:
+        print(f"unchanged {output}")
+    for output in result.skipped_unmanaged:
+        print(f"SKIPPED (unmanaged/malformed) {output}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aviato")
     subparsers = parser.add_subparsers(required=True)
@@ -198,6 +233,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = subparsers.add_parser("doctor", help="Diagnose a consumer repository's managed artifacts.")
     doctor.add_argument("path", help="Path to the consumer repository.")
     doctor.set_defaults(func=cmd_doctor)
+
+    sync = subparsers.add_parser("sync", help="Materialize managed artifacts into a consumer repository.")
+    sync.add_argument("path", help="Path to the consumer repository.")
+    sync.add_argument("--force", action="store_true", help="Overwrite unmanaged/malformed-marker files.")
+    sync.set_defaults(func=cmd_sync)
 
     return parser
 
