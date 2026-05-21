@@ -29,7 +29,7 @@ ghcr-publish:
   privileges: ["contents: read", "packages: write", "security-events: write", "id-token: write", "attestations: write"]
   runner: linux
 docs-pages:
-  privileges: ["contents: read", "id-token: write", "pages: write"]
+  privileges: ["contents: write", "id-token: write", "pages: write"]
   runner: linux
 app-store-connect:
   privileges: ["contents: read"]

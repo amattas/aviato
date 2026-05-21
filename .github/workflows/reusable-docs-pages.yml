@@ -32,9 +32,19 @@ on:
         required: false
         type: string
         default: github-pages
+      docs-retention:
+        description: Number of most-recent versions to keep (§13.3 retention cap).
+        required: false
+        type: number
+        default: 10
+      versions-branch:
+        description: Branch persisting the Docusaurus version sources across releases.
+        required: false
+        type: string
+        default: aviato-docs-versions
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
   pages: write
 
@@ -59,6 +69,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate release tag
+        id: release
         shell: bash
         env:
           TAG_PATTERN: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
@@ -69,11 +80,11 @@ jobs:
             echo "::error::Release workflows must run from a tag ref. Got ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}."
             exit 1
           fi
-
           if [[ ! "${GITHUB_REF_NAME}" =~ ${TAG_PATTERN} ]]; then
             echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${GITHUB_REF_NAME}"
             exit 1
           fi
+          echo "tag=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -89,16 +100,99 @@ jobs:
         shell: bash
         run: ${{ inputs.install-command }}
 
-      # §13.3 multi-version: cutting a new Docusaurus version on each release and
-      # pruning to the retention cap requires fetching the prior published versions
-      # from the live gh-pages artifact before building (versions accumulate on the
-      # artifact, not the source branch). That is intentionally NOT yet implemented
-      # here — this publishes a single-version site. The per-alias concurrency group
-      # (above, §8.14) prevents an older release from regressing the published site.
-      # Tracked as the remaining §13.3 work; build is driven by build-command below.
+      # §13.3 multi-version: restore the accumulated Docusaurus version SOURCES
+      # (versioned_docs/, versioned_sidebars/, versions.json) from a dedicated branch
+      # so they accumulate across releases without touching the main source branch.
+      - name: Restore persisted doc versions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSIONS_BRANCH: ${{ inputs.versions-branch }}
+        run: |
+          set -uo pipefail
+          if git fetch origin "${VERSIONS_BRANCH}" 2>/dev/null; then
+            git --work-tree=. checkout "origin/${VERSIONS_BRANCH}" -- versioned_docs versioned_sidebars versions.json 2>/dev/null || true
+            echo "Restored prior doc versions."
+          else
+            echo "No persisted versions branch yet (first release)."
+          fi
+
+      # §8.14 monotonic guard: only cut a NEW version (and move `latest`) when this
+      # release is the highest released version — a slower older release must not
+      # regress the docs `latest` alias. Mirrors aviato.core.versioning.is_highest.
+      - name: Cut new docs version (monotonic)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RETENTION: ${{ inputs.docs-retention }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/highest.py <<'PY'
+          import sys, re
+          rel = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(\d+))?$")
+          rank = {None: 2, "beta": 1, "alpha": 0}
+          def key(t):
+              m = rel.match(t.strip())
+              if not m:
+                  return None
+              a, b, c, pre, pren = m.groups()
+              return (int(a), int(b), int(c), rank[pre], int(pren or 0))
+          cand = sys.argv[1]
+          ck = key(cand)
+          keys = [k for k in (key(t) for t in sys.stdin) if k]
+          print("true" if ck and max(keys + [ck]) == ck else "false")
+          PY
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/tags" --jq '.[].name' > /tmp/tags.txt || true
+          highest="$(python3 /tmp/highest.py "${RELEASE_TAG}" < /tmp/tags.txt)"
+          if [ "${highest}" != "true" ]; then
+            echo "::warning::${RELEASE_TAG} is not the highest released version; not cutting a new docs version (§8.14)."
+            exit 0
+          fi
+          if ! npx --no-install docusaurus docs:version "${RELEASE_TAG}"; then
+            npx docusaurus docs:version "${RELEASE_TAG}"
+          fi
+          # Prune to the retention cap: keep the newest N entries of versions.json.
+          python3 - "${RETENTION}" <<'PY'
+          import json, sys, pathlib, shutil
+          cap = int(sys.argv[1])
+          vf = pathlib.Path("versions.json")
+          if not vf.is_file():
+              raise SystemExit(0)
+          versions = json.loads(vf.read_text())  # newest-first
+          keep, prune = versions[:cap], versions[cap:]
+          for v in prune:
+              shutil.rmtree(pathlib.Path("versioned_docs") / f"version-{v}", ignore_errors=True)
+              pathlib.Path("versioned_sidebars", f"version-{v}-sidebars.json").unlink(missing_ok=True)
+          vf.write_text(json.dumps(keep, indent=2) + "\n")
+          print(f"Kept {keep}; pruned {prune}")
+          PY
+
       - name: Build docs
         shell: bash
         run: ${{ inputs.build-command }}
+
+      # Persist the updated version sources back to the versions branch so the next
+      # release builds on top of them (the source branch stays untouched, §13.3).
+      - name: Persist doc versions
+        shell: bash
+        env:
+          VERSIONS_BRANCH: ${{ inputs.versions-branch }}
+        run: |
+          set -euo pipefail
+          if [ ! -f versions.json ]; then
+            echo "No versions to persist."; exit 0
+          fi
+          tmp="$(mktemp -d)"
+          cp -r versioned_docs versioned_sidebars versions.json "${tmp}/" 2>/dev/null || true
+          git config user.name aviato-bot
+          git config user.email aviato-bot@users.noreply.github.com
+          git fetch origin "${VERSIONS_BRANCH}" 2>/dev/null && git checkout "${VERSIONS_BRANCH}" || git checkout --orphan "${VERSIONS_BRANCH}"
+          git rm -rf . 2>/dev/null || true
+          cp -r "${tmp}/." .
+          git add -A
+          git commit -m "docs: persist versions through ${GITHUB_REF_NAME}" || echo "no changes"
+          git push origin "HEAD:${VERSIONS_BRANCH}"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
