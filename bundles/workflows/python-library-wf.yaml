@@ -1,0 +1,7 @@
+name: python-library-wf
+extends: base
+add:
+  - python-verify
+  - release
+  - pypi-publish
+remove: []

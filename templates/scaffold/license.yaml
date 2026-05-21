@@ -1,0 +1,4 @@
+name: license
+output_path: LICENSE
+source: files/license.txt
+seed_once: true

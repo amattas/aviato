@@ -1,0 +1,6 @@
+name: python-sc
+extends: common
+add:
+  - python-lint-config
+  - python-typecheck-config
+remove: []

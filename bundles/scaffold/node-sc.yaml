@@ -1,0 +1,7 @@
+name: node-sc
+extends: common
+add:
+  - node-lint-config
+  - node-format-config
+  - node-tsconfig
+remove: []

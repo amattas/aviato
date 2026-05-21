@@ -1,0 +1,15 @@
+name: python-component
+# Zero-deploy profile (§10.3): GitHub release is the only output, no deploy plug-in.
+workflows: python-component-wf
+scaffold: python-sc
+settings: baseline
+requires_macos: false
+variables:
+  - {name: import-name, type: string}
+version_source:
+  locations: [pyproject.toml]
+toolchain:
+  linter: ruff
+  formatter: ruff
+  type_checker: mypy
+  test_runner: pytest

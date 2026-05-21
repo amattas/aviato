@@ -1,0 +1,15 @@
+name: baseline
+# Desired protected-resource settings every day-zero profile enforces (§3.2,
+# §15). Branch protection plus the named rulesets applied by the operator-gated
+# reconcile (§5.7). Terminology uses "default branch", never "main" (§ARCH).
+settings:
+  default_branch:
+    requires_pull_request: true
+    required_reviews: 1
+    dismiss_stale_reviews: true
+    require_thread_resolution: true
+    block_force_push: true
+    block_deletion: true
+  rulesets:
+    - "Common: protect default branch"
+    - "Common: release tag format"

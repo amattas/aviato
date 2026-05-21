@@ -1,0 +1,5 @@
+name: gitignore-common
+output_path: .gitignore
+source: files/gitignore-common.txt
+comment: "#"
+seed_once: false

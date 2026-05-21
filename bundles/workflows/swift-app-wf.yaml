@@ -1,0 +1,7 @@
+name: swift-app-wf
+extends: base
+add:
+  - swift-verify
+  - release
+  - app-store-connect
+remove: []
