@@ -38,6 +38,12 @@ permissions:
   id-token: write
   pages: write
 
+# Per-alias deploy concurrency group so a slower, older-release docs deploy cannot
+# regress the published site / `latest` alias (§8.14). Queue rather than cancel.
+concurrency:
+  group: pages-latest-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   publish-docs:
     name: Publish docs
