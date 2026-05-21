@@ -140,6 +140,18 @@ def _version_pin_error(
     )
 
 
+def _desired_settings(resolved) -> dict:
+    """Flat reconcilable settings: branch protection + repo security toggles (§5.6/§2.13).
+
+    Rulesets are applied separately (`apply-rulesets`) and are not part of the
+    branch-protection/security reconcile diff.
+    """
+    return {
+        **resolved.settings.get("default_branch", {}),
+        **resolved.settings.get("security", {}),
+    }
+
+
 def _expected_artifacts(registry: Registry, resolved, variables: dict) -> list[ExpectedArtifact]:
     artifacts: list[ExpectedArtifact] = []
     for template in resolved.templates:
@@ -421,7 +433,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
     settings_outcome = run_settings_drift(
         platform,
         repo=slug,
-        desired_settings=resolved.settings.get("default_branch", {}),
+        desired_settings=_desired_settings(resolved),
         issue_key=SETTINGS_DRIFT_ISSUE_KEY,
     )
     print(f"file drift: proposed={file_outcome.proposed} dirty={file_outcome.dirty}")
@@ -461,7 +473,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     # installed tool version (an explicit --recorded-version still overrides).
     recorded_version = args.recorded_version or _recorded_version(root, expected) or declaration.version
 
-    desired = resolved.settings.get("default_branch", {})
+    desired = _desired_settings(resolved)
     outcome = run_reconcile(
         GitHubPlatform(),
         repo=slug,

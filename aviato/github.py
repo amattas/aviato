@@ -54,6 +54,27 @@ def gh_json_paginated(endpoint: str, *, default: Any = None, allow_error: bool =
     return pages
 
 
+def gh_json_optional(endpoint: str, *, default: Any = None) -> Any:
+    """Read an endpoint that may legitimately 404, failing CLOSED on ambiguity (§2.7).
+
+    A genuine 404 (the resource does not exist — e.g. a branch with no protection)
+    returns ``default``. Any OTHER error (auth, rate limit, 5xx, network) raises,
+    so drift/reconcile never computes from a falsely-"unprotected" live state.
+    """
+    result = run(["gh", "api", endpoint], check=False)
+    if result.returncode != 0:
+        stderr = result.stderr.lower()
+        if "http 404" in stderr or "not found" in stderr or "no such" in stderr:
+            return default
+        raise GitHubAPIError(endpoint, result.returncode, result.stderr)
+    if not result.stdout.strip():
+        return default
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise GitHubAPIError(endpoint, result.returncode, f"invalid JSON response: {exc}") from exc
+
+
 def default_branch(slug: str) -> str:
     response = gh_json(f"repos/{slug}")
     if not isinstance(response, dict):
@@ -62,13 +83,22 @@ def default_branch(slug: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+def repo_security_settings(slug: str) -> dict[str, Any]:
+    """Return the repo's ``security_and_analysis`` block (secret scanning, push
+    protection, Dependabot), failing closed on an ambiguous read (§2.7)."""
+    repo = gh_json_optional(f"repos/{slug}", default={})
+    sa = repo.get("security_and_analysis") if isinstance(repo, dict) else None
+    return sa if isinstance(sa, dict) else {}
+
+
 def active_branch_rules(slug: str, branch: str) -> list[dict[str, Any]]:
-    response = gh_json(f"repos/{slug}/rules/branches/{branch}", default=[], allow_error=True)
+    # Fail closed on an ambiguous read (§2.7): only a genuine 404 is empty.
+    response = gh_json_optional(f"repos/{slug}/rules/branches/{branch}", default=[])
     return response if isinstance(response, list) else []
 
 
 def classic_branch_protection(slug: str, branch: str) -> dict[str, Any]:
-    response = gh_json(f"repos/{slug}/branches/{branch}/protection", default={}, allow_error=True)
+    response = gh_json_optional(f"repos/{slug}/branches/{branch}/protection", default={})
     return response if isinstance(response, dict) else {}
 
 

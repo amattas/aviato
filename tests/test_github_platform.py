@@ -193,6 +193,39 @@ def test_to_branch_protection_payload_no_pr_when_not_required() -> None:
     assert payload["required_pull_request_reviews"] is None
 
 
+def test_map_security_settings_from_live() -> None:
+    from aviato.github_platform import map_security_settings
+
+    sa = {
+        "secret_scanning": {"status": "enabled"},
+        "secret_scanning_push_protection": {"status": "disabled"},
+        "dependabot_security_updates": {"status": "enabled"},
+    }
+    assert map_security_settings(sa) == {
+        "secret_scanning": True,
+        "secret_push_protection": False,
+        "dependency_scanning": True,
+    }
+
+
+def test_to_security_payload_api_shape() -> None:
+    from aviato.github_platform import to_security_payload
+
+    payload = to_security_payload({"secret_scanning": True, "secret_push_protection": False})
+    assert payload["secret_scanning"] == {"status": "enabled"}
+    assert payload["secret_scanning_push_protection"] == {"status": "disabled"}
+
+
+def test_read_settings_includes_security(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    monkeypatch.setattr(github, "repo_security_settings", lambda repo: {"secret_scanning": {"status": "enabled"}})
+    settings = GitHubPlatform().read_settings("o/r")
+    assert settings["secret_scanning"] is True
+    assert "requires_pull_request" in settings  # branch fields still present
+
+
 def test_read_settings_composes_gh_responses(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
     monkeypatch.setattr(

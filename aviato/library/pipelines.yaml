@@ -1,14 +1,16 @@
 # Typed pipeline modules (§3.2): each pipeline declares the job privileges it
-# needs (§11.3), its inputs, any stored secrets, and its runner. A profile that
-# attaches a pipeline must grant exactly these privileges (§8.9). Pipeline names
-# map to the reusable workflows in .github/workflows/reusable-*.yml.
+# needs (§11.3), its inputs, any stored secrets, and its runner. These mirror the
+# `permissions:` of the corresponding reusable workflow in .github/workflows/ so a
+# profile grants exactly what the pipeline needs (§8.9). Kept in sync with those
+# workflows (verified by test_pipeline_privileges_match_workflows).
 security-baseline:
-  privileges: ["contents: read", "security-events: write", "actions: read"]
+  privileges: ["contents: read", "pull-requests: read", "security-events: write"]
   runner: linux
 release-gate:
-  privileges: ["contents: read"]
+  privileges: ["actions: read", "contents: read", "pull-requests: read"]
   runner: linux
 release:
+  # §5.9 release (version bump + tag); writes contents. No reusable workflow yet.
   privileges: ["contents: write"]
   runner: linux
 python-verify:
@@ -21,13 +23,13 @@ swift-verify:
   privileges: ["contents: read"]
   runner: macos
 pypi-publish:
-  privileges: ["id-token: write", "contents: read"]
+  privileges: ["contents: read", "id-token: write", "attestations: write"]
   runner: linux
 ghcr-publish:
-  privileges: ["packages: write", "contents: read", "security-events: write"]
+  privileges: ["contents: read", "packages: write", "security-events: write"]
   runner: linux
 docs-pages:
-  privileges: ["pages: write", "id-token: write", "contents: read"]
+  privileges: ["contents: read", "id-token: write", "pages: write"]
   runner: linux
 app-store-connect:
   privileges: ["contents: read"]

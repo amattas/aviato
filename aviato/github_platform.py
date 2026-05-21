@@ -145,6 +145,43 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     }
 
 
+def map_security_settings(security_and_analysis: dict[str, Any]) -> dict[str, Any]:
+    """Map the live ``security_and_analysis`` block to the flat security settings (§2.13).
+
+    Only the toggles GitHub actually reports are returned; an undeterminable one is
+    omitted (so it shows as additive "to enable", never a false destructive). Code
+    scanning is delivered by the CodeQL **workflow** (a managed artifact, covered by
+    file drift), so it is not read here as a repo toggle.
+    """
+    out: dict[str, Any] = {}
+
+    def _enabled(key: str) -> bool:
+        value = security_and_analysis.get(key)
+        return isinstance(value, dict) and value.get("status") == "enabled"
+
+    if "secret_scanning" in security_and_analysis:
+        out["secret_scanning"] = _enabled("secret_scanning")
+    if "secret_scanning_push_protection" in security_and_analysis:
+        out["secret_push_protection"] = _enabled("secret_scanning_push_protection")
+    if "dependabot_security_updates" in security_and_analysis:
+        out["dependency_scanning"] = _enabled("dependabot_security_updates")
+    return out
+
+
+def to_security_payload(desired: dict[str, Any]) -> dict[str, Any]:
+    """Build a ``security_and_analysis`` PATCH from the flat desired settings (§2.9)."""
+    mapping = {
+        "secret_scanning": "secret_scanning",
+        "secret_push_protection": "secret_scanning_push_protection",
+        "dependency_scanning": "dependabot_security_updates",
+    }
+    payload: dict[str, Any] = {}
+    for desired_key, api_key in mapping.items():
+        if desired_key in desired:
+            payload[api_key] = {"status": "enabled" if desired[desired_key] else "disabled"}
+    return payload
+
+
 def to_branch_protection_payload(desired: dict[str, Any]) -> dict[str, Any]:
     """Translate the flat desired settings into a complete branch-protection PUT payload (§2.9).
 
@@ -186,7 +223,10 @@ class GitHubPlatform:
             return {}
         rules = github.active_branch_rules(repo, branch)
         protection = github.classic_branch_protection(repo, branch)
-        return map_branch_settings(rules, protection)
+        security = map_security_settings(github.repo_security_settings(repo))
+        # Flat merge: branch-protection fields + repo security toggles, matching the
+        # flat desired map the CLI passes (so security drift is visible, §5.6/§2.13).
+        return {**map_branch_settings(rules, protection), **security}
 
     def get_issue(self, repo: str, key: str) -> Issue | None:
         issues = github.gh_json(f"repos/{repo}/issues?state=all&labels={key}", default=[], allow_error=True)
@@ -297,6 +337,11 @@ class GitHubPlatform:
             )
         api_payload = to_branch_protection_payload(payload)
         self._gh_input(["--method", "PUT", f"repos/{repo}/branches/{branch}/protection"], api_payload)
+
+        # Apply the repo-level security toggles (§2.13) when present in the desired set.
+        security_payload = to_security_payload(payload)
+        if security_payload:
+            self._gh_input(["--method", "PATCH", f"repos/{repo}"], {"security_and_analysis": security_payload})
 
     @staticmethod
     def _gh_input(args: list[str], payload: dict[str, Any]) -> None:
