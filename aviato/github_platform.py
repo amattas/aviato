@@ -270,9 +270,15 @@ class GitHubPlatform:
             repo_data = github.gh_json_optional(f"repos/{repo}", default=None)
             if isinstance(repo_data, dict) and "has_issues" in repo_data:
                 issue_channel = bool(repo_data["has_issues"])
-            analyses = github.gh_json_optional(f"repos/{repo}/code-scanning/analyses?per_page=1", default=None)
-            if isinstance(analyses, list):
-                heartbeat = len(analyses) > 0
+            # Read the per-run heartbeat the security baseline EMITS (§5.14) — the
+            # presence of a recent `aviato-security-heartbeat` artifact — not a stale
+            # CodeQL analysis that could read "present" even if this run never ran.
+            artifacts = github.gh_json_optional(
+                f"repos/{repo}/actions/artifacts?name=aviato-security-heartbeat&per_page=1", default=None
+            )
+            if isinstance(artifacts, dict) and "artifacts" in artifacts:
+                items = artifacts["artifacts"]
+                heartbeat = bool(items) and not all(a.get("expired") for a in items)
         except github.GitHubAPIError:
             pass  # ambiguous read → leave unknown (None)
         return issue_channel, heartbeat

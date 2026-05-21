@@ -220,8 +220,8 @@ def test_probe_health_reads_issue_channel_and_heartbeat(monkeypatch: pytest.Monk
     def optional(endpoint, **__):
         if endpoint == "repos/o/r":
             return {"has_issues": True}
-        if endpoint.startswith("repos/o/r/code-scanning/analyses"):
-            return [{"id": 1}]
+        if endpoint.startswith("repos/o/r/actions/artifacts"):
+            return {"artifacts": [{"id": 1, "expired": False}]}
         return None
 
     monkeypatch.setattr(github, "gh_json_optional", optional)
@@ -230,15 +230,28 @@ def test_probe_health_reads_issue_channel_and_heartbeat(monkeypatch: pytest.Monk
     assert heartbeat is True
 
 
-def test_probe_health_heartbeat_false_when_no_analyses(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_probe_health_heartbeat_false_when_no_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
+    def optional(endpoint, **__):
+        if endpoint == "repos/o/r":
+            return {"has_issues": False}
+        return {"artifacts": []}
+
+    monkeypatch.setattr(github, "gh_json_optional", optional)
+    issue_channel, heartbeat = GitHubPlatform().probe_health("o/r")
+    assert issue_channel is False
+    assert heartbeat is False  # no heartbeat artifact → never ran → broken (§5.14)
+
+
+def test_probe_health_heartbeat_false_when_expired(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         github,
         "gh_json_optional",
-        lambda endpoint, **__: {"has_issues": False} if endpoint == "repos/o/r" else [],
+        lambda endpoint, **__: (
+            {"has_issues": True} if endpoint == "repos/o/r" else {"artifacts": [{"id": 1, "expired": True}]}
+        ),
     )
-    issue_channel, heartbeat = GitHubPlatform().probe_health("o/r")
-    assert issue_channel is False
-    assert heartbeat is False  # no analyses → never ran → broken (§5.14)
+    _, heartbeat = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is False
 
 
 def test_read_settings_includes_security(monkeypatch: pytest.MonkeyPatch) -> None:

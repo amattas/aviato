@@ -4,7 +4,7 @@
 # profile grants exactly what the pipeline needs (§8.9). Kept in sync with those
 # workflows (verified by test_pipeline_privileges_match_workflows).
 security-baseline:
-  privileges: ["contents: read", "pull-requests: read", "security-events: write"]
+  privileges: ["contents: read", "pull-requests: read", "security-events: write", "actions: read"]
   runner: linux
 release-gate:
   privileges: ["actions: read", "contents: read", "pull-requests: read"]
