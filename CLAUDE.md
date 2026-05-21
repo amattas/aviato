@@ -27,13 +27,23 @@ aviato apply-rulesets OWNER/REPO            # dry-run rulesets
 aviato apply-rulesets OWNER/REPO --apply    # apply rulesets
 aviato apply-rulesets OWNER/REPO --required-approvals 0 --apply  # solo-repo override
 aviato render-rulesets                       # print rendered ruleset JSON
-aviato onboard OWNER/REPO --profile python-library  # composition-backed onboarding plan
-aviato doctor /path/to/consumer              # classify a consumer's managed artifacts (§5.4)
-aviato sync /path/to/consumer                # materialize managed artifacts from its declaration (§5.3)
+aviato onboard PATH --profile python-library [--write --var k=v]  # plan, or adopt a local repo (§5.2)
+aviato doctor /path/to/consumer              # classify managed artifacts + probe health (§5.4)
+aviato sync /path/to/consumer                # materialize managed artifacts incl. caller workflows (§5.3/§15)
 aviato scan /path/a /path/b                  # read-only fleet diagnosis across many local repos (§5.11)
+aviato drift-report /path/to/consumer        # consumer automation: file + settings drift (§5.5/§5.6)
 aviato reconcile /path/to/consumer <issue> --confirm  # operator-gated settings apply (§5.7)
+aviato next-version --current 1.2.3 --commit "feat: x"  # SemVer from Conventional Commits (§5.9)
+aviato bump-version 1.3.0 /path/to/consumer  # write version into version-source locations (§3.3)
 aviato validate                              # validate this repo's policy infra + core agnosticism
 ```
+
+**Onboarding materializes the caller workflows.** A profile's scaffold bundle includes
+the `.github/workflows/aviato-ci.yml` (verify/release/deploy/security) and
+`aviato-drift.yml` (scheduled drift/report) callers, so `sync`/`onboard --write` give a
+consumer the actual workflows required by §15 — not just composed pipeline names. Caller
+workflows live as packaged bodies under `aviato/library/scaffold/files/wf-*.yml`
+(regenerated from the `templates/profile-*.yml` examples).
 
 `scripts/audit-repos.sh` and `scripts/apply-rulesets.sh` are thin compatibility wrappers that exec the CLI.
 

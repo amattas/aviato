@@ -625,9 +625,7 @@ def build_parser() -> argparse.ArgumentParser:
     highest.add_argument("existing", nargs="*", help="All released tags.")
     highest.set_defaults(func=cmd_is_highest)
 
-    nextver = subparsers.add_parser(
-        "next-version", help="Derive the next SemVer from Conventional Commits (§5.9)."
-    )
+    nextver = subparsers.add_parser("next-version", help="Derive the next SemVer from Conventional Commits (§5.9).")
     nextver.add_argument("--current", required=True, help="Current version (vX.Y.Z or X.Y.Z).")
     nextver.add_argument("--commit", action="append", help="A commit message (repeatable); else read stdin.")
     nextver.set_defaults(func=cmd_next_version)

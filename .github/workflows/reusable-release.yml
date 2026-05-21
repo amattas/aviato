@@ -4,6 +4,11 @@ name: Reusable Release
 # history, write it via the profile's version-source, tag, and publish a GitHub
 # release. Runs on the default branch; the resulting version tag is what triggers
 # the deploy pipelines (§11.1) — this job is the human-gated release cut.
+#
+# OPERATOR NOTE: a tag pushed with the default GITHUB_TOKEN does NOT trigger other
+# workflows (GitHub's recursive-trigger guard). To have the version tag trigger the
+# tag-gated deploy/CI, supply a deploy PAT/app token as the checkout token here, or
+# trigger deploys on `release: { types: [published] }` instead of `push: tags`.
 
 on:
   workflow_call:
