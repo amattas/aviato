@@ -7,6 +7,8 @@ on:
     branches: [main]
     tags:
       - "*"
+  schedule:
+    - cron: "23 5 * * 1"
 
 # Granted to the UNION of every called reusable workflow's permissions: a caller
 # cannot elevate the token for a called workflow, so it must grant >= their needs
@@ -22,7 +24,7 @@ permissions:
 
 jobs:
   ci:
-    if: ${{ github.ref_type != 'tag' }}
+    if: ${{ github.ref_type != 'tag' && github.event_name != 'schedule' }}
     uses: amattas/aviato/.github/workflows/reusable-node-ci.yml@{{ aviato-ref }}
     with:
       node-version: "22"
@@ -43,12 +45,17 @@ jobs:
     with:
       codeql-languages: "javascript-typescript"
 
+  common-lint:
+    if: ${{ github.ref_type != 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-common-lint.yml@{{ aviato-ref }}
+
   release:
     if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
     needs: [ci, security]
     uses: amattas/aviato/.github/workflows/reusable-release.yml@{{ aviato-ref }}
     with:
       aviato-ref: {{ aviato-ref }}
+    secrets: inherit
 
   release-gate:
     if: ${{ github.ref_type == 'tag' }}

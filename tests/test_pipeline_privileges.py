@@ -11,6 +11,7 @@ PIPELINE_WORKFLOWS = {
     "security-baseline": "reusable-security-baseline.yml",
     "release-gate": "reusable-release-gate.yml",
     "release": "reusable-release.yml",
+    "common-lint": "reusable-common-lint.yml",
     "python-verify": "reusable-python-ci.yml",
     "node-verify": "reusable-node-ci.yml",
     "swift-verify": "reusable-swift-ci.yml",

@@ -1,0 +1,76 @@
+name: Reusable Common Lint
+
+# Language-agnostic common verify lint, blocking on every profile (§12 intro):
+# actionlint + yamllint always; hadolint/shellcheck/helm-lint are no-ops when their
+# files are absent.
+
+on:
+  workflow_call:
+    inputs:
+      actionlint-version:
+        required: false
+        type: string
+        default: "1.7.4"
+
+permissions:
+  contents: read
+
+jobs:
+  common-lint:
+    name: Common lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: yamllint (blocking)
+        shell: bash
+        run: |
+          python -m pip install --quiet yamllint
+          yamllint -s .
+
+      - name: actionlint (blocking)
+        shell: bash
+        env:
+          ACTIONLINT_VERSION: ${{ inputs.actionlint-version }}
+        run: |
+          set -euo pipefail
+          if [ ! -d .github/workflows ]; then
+            echo "No workflows to lint."; exit 0
+          fi
+          curl -sSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin actionlint
+          actionlint
+
+      - name: hadolint (blocking, where a Dockerfile exists)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t dockerfiles < <(find . -name 'Dockerfile' -not -path './node_modules/*')
+          if [ "${#dockerfiles[@]}" -eq 0 ]; then
+            echo "No Dockerfile."; exit 0
+          fi
+          docker run --rm -i hadolint/hadolint hadolint - < "${dockerfiles[0]}"
+
+      - name: shellcheck (blocking, where shell scripts exist)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(find . -name '*.sh' -not -path './node_modules/*')
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "No shell scripts."; exit 0
+          fi
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck "${scripts[@]}"
+
+      - name: helm lint (blocking, where a Chart.yaml exists)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t charts < <(find . -name 'Chart.yaml' -not -path './node_modules/*')
+          if [ "${#charts[@]}" -eq 0 ]; then
+            echo "No Helm charts."; exit 0
+          fi
+          for chart in "${charts[@]}"; do
+            helm lint "$(dirname "${chart}")"
+          done

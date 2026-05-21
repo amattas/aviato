@@ -26,6 +26,7 @@ REQUIRED_FILES = [
     ".github/workflows/reusable-docs-pages.yml",
     ".github/workflows/reusable-app-store-connect.yml",
     ".github/workflows/reusable-security-baseline.yml",
+    ".github/workflows/reusable-common-lint.yml",
     ".github/workflows/reusable-consumer-automation.yml",
     "templates/profile-python-service.yml",
     "templates/profile-python-library.yml",

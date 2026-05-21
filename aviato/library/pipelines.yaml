@@ -9,6 +9,9 @@ security-baseline:
 release-gate:
   privileges: ["actions: read", "contents: read", "pull-requests: read"]
   runner: linux
+common-lint:
+  privileges: ["contents: read"]
+  runner: linux
 release:
   # §5.9 release (version bump + tag); writes contents. No reusable workflow yet.
   privileges: ["contents: write"]

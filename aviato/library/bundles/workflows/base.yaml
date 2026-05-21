@@ -6,3 +6,4 @@ name: base
 pipelines:
   - security-baseline
   - release-gate
+  - common-lint
