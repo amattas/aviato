@@ -12,8 +12,6 @@ Usage: python3 scripts/regen-templates.py
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from aviato.core.onboarding import resolved_artifacts
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT, REPO_ROOT

@@ -63,3 +63,14 @@ def test_flow_never_mutates_settings() -> None:
     platform = FakePlatform(settings={"required_reviews": 1})
     run_settings_drift(platform, repo="o/r", desired_settings={"required_reviews": 2}, issue_key="k")
     assert "apply_settings" not in platform.call_names()
+
+
+def test_diff_identity_is_bound_to_values_not_just_kind() -> None:
+    # #1/§6.4: 1->2 and 1->5 are both "additive" but are DIFFERENT changes, so their
+    # consent identities must differ — otherwise consent for 1->2 would authorize 1->5.
+    from aviato.core.settings_drift_flow import diff_identity
+    from aviato.core.settingsdrift import classify_settings
+
+    id_to_2 = diff_identity(classify_settings(desired={"required_reviews": 2}, live={"required_reviews": 1}))
+    id_to_5 = diff_identity(classify_settings(desired={"required_reviews": 5}, live={"required_reviews": 1}))
+    assert id_to_2 != id_to_5

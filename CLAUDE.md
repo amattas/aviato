@@ -27,15 +27,18 @@ aviato apply-rulesets OWNER/REPO            # dry-run rulesets
 aviato apply-rulesets OWNER/REPO --apply    # apply rulesets
 aviato apply-rulesets OWNER/REPO --required-approvals 0 --apply  # solo-repo override
 aviato render-rulesets                       # print rendered ruleset JSON
-aviato onboard PATH --profile python-library [--write --var k=v]  # plan, or adopt a local repo (§5.2)
+aviato onboard PATH --profile python-library [--write --allow-dirty --var k=v]  # plan, or adopt a local repo (§5.2)
 aviato doctor /path/to/consumer              # classify managed artifacts + probe health (§5.4)
 aviato sync /path/to/consumer                # materialize managed artifacts incl. caller workflows (§5.3/§15)
-aviato scan /path/a /path/b                  # read-only fleet diagnosis across many local repos (§5.11)
+aviato scan /path/a /path/b [--fix]          # fleet diagnosis; --fix opens managed-file proposals (§5.11/§5.5)
 aviato drift-report /path/to/consumer        # consumer automation: file + settings drift (§5.5/§5.6)
-aviato reconcile /path/to/consumer <issue> --confirm  # operator-gated settings apply (§5.7)
+aviato reconcile /path/to/consumer <issue> --confirm <diff-id>  # operator-gated settings apply, diff-bound (§5.7)
+aviato complete-protection /path/to/consumer # idempotently (re-)apply full branch protection (§5.2 recovery)
+aviato repin /path/to/consumer vX.Y.Z [--write]  # move the Library version pin (§5.12)
+aviato offboard /path/to/consumer [--write --delete-files]  # remove from Aviato management (§5.13)
 aviato next-version --current 1.2.3 --commit "feat: x"  # SemVer from Conventional Commits (§5.9)
 aviato bump-version 1.3.0 /path/to/consumer  # write version into version-source locations (§3.3)
-aviato validate                              # validate this repo's policy infra + core agnosticism
+aviato validate                              # validate policy infra + agnosticism + digest pins + template parity
 ```
 
 **Onboarding materializes the caller workflows.** A profile's scaffold bundle includes

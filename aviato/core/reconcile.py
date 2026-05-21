@@ -28,7 +28,11 @@ class ReconcileState:
     role: str | None
     role_lookup_ok: bool
     issue_edited_by_nonhuman_since_grant: bool
-    operator_confirmed: bool
+    # The diff id the operator explicitly confirmed (CLI --confirm <id>), bound to the
+    # exact content they reviewed. The apply only proceeds if it equals the apply-time
+    # recomputed current_diff_id — so a change to the live state after review aborts
+    # rather than silently applying a different diff (§2.8/§5.7).
+    confirmed_diff_id: str | None
     desired_settings: dict[str, Any]
     live_settings: dict[str, Any]
     tool_version: str
@@ -44,6 +48,11 @@ class ReconcileOutcome:
     action: Action
     reason: str
     payload: dict[str, Any] | None = None
+    # The apply-time recomputed diff, surfaced so the operator sees the exact change
+    # that was (or would be) applied — not just the earlier preview (§2.8).
+    diff_id: str | None = None
+    changes: dict[str, str] | None = None
+    values: dict[str, dict[str, Any]] | None = None
 
 
 def _purpose_built_payload(desired: dict[str, Any], live: dict[str, Any], diff_keys) -> dict[str, Any]:
@@ -86,8 +95,16 @@ def reconcile_decision(state: ReconcileState) -> ReconcileOutcome:
     if state.issue_edited_by_nonhuman_since_grant:
         return ReconcileOutcome("abort", "issue/consent edited by a non-human since the grant; consent voided")
 
-    if not state.operator_confirmed:
-        return ReconcileOutcome("abort", "operator did not confirm the recomputed diff")
+    if state.confirmed_diff_id is None:
+        return ReconcileOutcome(
+            "abort", f"operator did not confirm the apply-time diff; re-run with --confirm {state.current_diff_id}"
+        )
+    if state.confirmed_diff_id != state.current_diff_id:
+        return ReconcileOutcome(
+            "abort",
+            f"confirmed diff {state.confirmed_diff_id} no longer matches the apply-time diff "
+            f"{state.current_diff_id} (live state changed since review); re-review and re-confirm",
+        )
 
     pin_overridden = False
     if not is_compatible(tool=state.tool_version, pinned=state.pin, recorded=state.recorded_version):

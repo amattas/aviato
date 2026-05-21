@@ -55,6 +55,18 @@ def current_branch(repo: Path) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def working_tree_clean(repo: Path) -> bool:
+    """True iff the working tree has no staged/unstaged/untracked changes (§5.2 adopt).
+
+    A non-git directory is treated as not-clean (fail-closed): adopt must run inside a
+    git repository so the scaffold lands on a reviewable branch.
+    """
+    result = run(["git", "-C", str(repo), "status", "--porcelain"], check=False)
+    if result.returncode != 0:
+        return False
+    return result.stdout.strip() == ""
+
+
 def tags(repo: Path) -> list[str]:
     result = run(["git", "-C", str(repo), "tag", "--list"], check=False)
     if result.returncode != 0:

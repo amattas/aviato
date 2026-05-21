@@ -13,7 +13,7 @@ def _state(**overrides) -> ReconcileState:
         role="admin",
         role_lookup_ok=True,
         issue_edited_by_nonhuman_since_grant=False,
-        operator_confirmed=True,
+        confirmed_diff_id="abc",  # matches current_diff_id
         desired_settings={"required_reviews": 2},
         live_settings={"required_reviews": 1},
         tool_version="1.0.0",
@@ -73,7 +73,15 @@ def test_issue_edited_by_nonhuman_aborts() -> None:
 
 
 def test_operator_declines_recomputed_diff_aborts() -> None:
-    assert reconcile_decision(_state(operator_confirmed=False)).action == "abort"
+    assert reconcile_decision(_state(confirmed_diff_id=None)).action == "abort"
+
+
+def test_stale_confirmation_aborts() -> None:
+    # #2: the operator confirmed an id that no longer matches the apply-time diff
+    # (live state changed since review) -> abort, never apply a different diff (§2.8).
+    outcome = reconcile_decision(_state(confirmed_diff_id="OLDID", current_diff_id="abc"))
+    assert outcome.action == "abort"
+    assert "no longer matches" in outcome.reason
 
 
 def test_version_mismatch_refused() -> None:

@@ -15,12 +15,13 @@ from .core.errors import AviatoError
 from .core.file_drift_flow import run_file_drift
 from .core.fleet import scan_fleet
 from .core.marker import parse_marker_from_text
+from .core.offboarding import offboard as offboard_repo
 from .core.onboarding import materialize_items, plan_onboarding, resolved_artifacts
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
+from .core.repin import plan_repin
 from .core.scaffold import ScaffoldItem, render_managed, scaffold
 from .core.settings_drift_flow import run_settings_drift
-from .core.settingsdrift import classify_settings
 from .core.variables import resolve_variables, writeback_variables
 from .core.version import is_compatible
 from .core.versioning import classify_commits, is_highest, next_version
@@ -29,7 +30,7 @@ from .github import GitHubAPIError
 from .github_platform import GitHubPlatform
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from .policy import load_policy
-from .repos import git_root, normalize_slug, remote_url
+from .repos import git_root, normalize_slug, remote_url, working_tree_clean
 from .rulesets import apply_rulesets, render_all_rulesets
 from .validation import validate
 
@@ -235,6 +236,15 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
         print(f"--write requires a local repository path; {args.target!r} is not a directory", file=sys.stderr)
         return 2
 
+    # §5.2 adopt precondition: the working tree must be clean (so the scaffold lands as
+    # a reviewable change), unless the operator explicitly overrides.
+    if not args.allow_dirty and not working_tree_clean(target):
+        print(
+            "working tree is not clean; commit/stash first or pass --allow-dirty (§5.2).",
+            file=sys.stderr,
+        )
+        return 2
+
     declaration_path = target / ".github" / "aviato.yaml"
     existing = load_declaration(declaration_path) if declaration_path.is_file() else None
 
@@ -423,9 +433,16 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _scan_has_file_drift(scan) -> bool:
+    # "missing"/"drift" managed-file statuses are fixable by a proposal; "dirty"
+    # (operator-owned / malformed marker) is NOT auto-fixed (§5.4/§5.5).
+    return any(status in {"missing", "drift"} for status in scan.statuses.values())
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
     registry = Registry(MODULE_SOURCE_ROOT)
     scans = scan_fleet([Path(p) for p in args.paths], registry)
+    rc = 0
     for scan in scans:
         if scan.error:
             print(f"{scan.path}\tERROR: {scan.error}")
@@ -433,6 +450,188 @@ def cmd_scan(args: argparse.Namespace) -> int:
         summary = ", ".join(f"{output}={status}" for output, status in sorted(scan.statuses.items())) or "—"
         flags = " [secret-in-declaration]" if scan.secret_in_declaration else ""
         print(f"{scan.path}\t{scan.profile}\t{summary}{flags}")
+        if args.fix and _scan_has_file_drift(scan):
+            try:
+                outcome = _propose_file_drift(registry, Path(scan.path))
+                print(f"  fix: proposed={outcome.proposed} dirty={outcome.dirty}")
+            except (AviatoError, GitHubAPIError) as exc:
+                print(f"  fix ERROR: {exc}", file=sys.stderr)
+                rc = 1
+    return rc
+
+
+def _propose_file_drift(registry: Registry, root: Path):
+    """Open a managed-file drift proposal for one repo (§5.5), shared by scan --fix.
+
+    Resolves the repo's declaration, re-diagnoses, and routes the same
+    marker-stamped bodies scaffold() would write through ``run_file_drift`` so a
+    merged PR classifies clean (§6.2/§5.4).
+    """
+    declaration_path = root / ".github" / "aviato.yaml"
+    if not declaration_path.is_file():
+        raise AviatoError(f"no declaration at {declaration_path}")
+    slug = normalize_slug(remote_url(root))
+    if not slug:
+        raise AviatoError("could not determine OWNER/REPO from the repository remote")
+
+    declaration = load_declaration(declaration_path)
+    expected = _expected_artifacts(registry, declaration)
+    resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs)
+    secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
+    report = diagnose(root, expected, declaration_variables=declaration.variables, secret_var_names=secret_names)
+
+    managed_bodies: dict[str, str] = {}
+    for artifact in resolved_artifacts(
+        registry,
+        declaration.profile,
+        declaration.variables,
+        pin=declaration.version,
+        docs=declaration.docs,
+        overrides=declaration.overrides,
+    ):
+        if artifact.seed_once:
+            continue
+        item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+        managed_bodies[artifact.output] = render_managed(item, profile=declaration.profile, version=declaration.version)
+
+    return run_file_drift(
+        GitHubPlatform(workdir=root),
+        repo=slug,
+        profile=declaration.profile,
+        statuses=report.statuses,
+        expected_bodies=managed_bodies,
+    )
+
+
+def cmd_repin(args: argparse.Namespace) -> int:
+    """Move a consumer to a different Library version (§5.12) — the only sanctioned pin move."""
+    root = Path(args.path).resolve()
+    declaration_path = root / ".github" / "aviato.yaml"
+    if not declaration_path.is_file():
+        print(f"no declaration at {declaration_path}", file=sys.stderr)
+        return 2
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    try:
+        declaration = load_declaration(declaration_path)
+        plan = plan_repin(registry, declaration, args.version)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    print(f"re-pin {declaration.version} -> {plan.target_version}")
+    if plan.downgrade_warning:
+        print(f"WARNING: {plan.downgrade_warning}")
+    for name in plan.newly_required:
+        print(f"  newly-required variable (set before re-pinning): {name}")
+    for key in plan.orphaned_overrides:
+        print(f"  orphaned settings override (no longer in the profile): {key}")
+    if not plan.ok:
+        print("re-pin blocked: supply the newly-required variables first.", file=sys.stderr)
+        return 1
+
+    if not args.write:
+        print("dry run; re-run with --write to record the new pin and re-scaffold.")
+        return 0
+
+    updated = Declaration(
+        profile=declaration.profile,
+        version=plan.target_version,
+        docs=declaration.docs,
+        variables=declaration.variables,
+        overrides=declaration.overrides,
+    )
+    dump_declaration(updated, declaration_path)
+    print(f"wrote pin {plan.target_version} to {declaration_path.relative_to(root)}")
+    items = materialize_items(
+        registry,
+        updated.profile,
+        updated.variables,
+        pin=updated.version,
+        docs=updated.docs,
+        overrides=updated.overrides,
+    )
+    result = scaffold(root, items, profile=updated.profile, version=updated.version)
+    for output in result.written:
+        print(f"rewrote {output}")
+    print("next: review the re-pinned artifacts, commit on a branch, and open a PR (§5.2/§5.12).")
+    return 0
+
+
+def cmd_offboard(args: argparse.Namespace) -> int:
+    """Remove a consumer from Aviato management (§5.13)."""
+    root = Path(args.path).resolve()
+    declaration_path = root / ".github" / "aviato.yaml"
+    if not declaration_path.is_file():
+        print(f"no declaration at {declaration_path}", file=sys.stderr)
+        return 2
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    try:
+        declaration = load_declaration(declaration_path)
+        expected = _expected_artifacts(registry, declaration)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    managed_outputs = [a.output_path for a in expected if not a.seed_once]
+    if not args.write:
+        from .core.offboarding import BASELINE_REMOVAL_WARNING
+
+        verb = "delete" if args.delete_files else "strip markers from"
+        print(f"dry run; would {verb} {len(managed_outputs)} managed file(s), then remove the declaration + sidecar.")
+        print(f"WARNING: {BASELINE_REMOVAL_WARNING}")
+        print("re-run with --write to perform the removal.")
+        return 0
+
+    result = offboard_repo(root, managed_outputs, keep_files=not args.delete_files)
+    for output in result.stripped:
+        print(f"stripped marker: {output}")
+    for output in result.removed:
+        print(f"removed: {output}")
+    if result.declaration_removed:
+        print("removed .github/aviato.yaml")
+    if result.sidecar_removed:
+        print("removed .github/aviato.seed.json")
+    print(f"WARNING: {result.warning}")
+    return 0
+
+
+def cmd_complete_protection(args: argparse.Namespace) -> int:
+    """Idempotently (re-)apply full branch protection after onboarding (§5.2 recovery).
+
+    Safe to re-run any number of times: it applies the full desired protected-settings
+    state for the repo's resolved profile. This is operator-DIRECT provisioning (§2.3),
+    not the gated §5.7 drift/consent flow.
+    """
+    root = Path(args.path).resolve()
+    declaration_path = root / ".github" / "aviato.yaml"
+    if not declaration_path.is_file():
+        print(f"no declaration at {declaration_path}", file=sys.stderr)
+        return 2
+
+    slug = normalize_slug(remote_url(root))
+    if not slug:
+        print("could not determine OWNER/REPO from the repository remote", file=sys.stderr)
+        return 2
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    try:
+        declaration = load_declaration(declaration_path)
+        resolved = resolve_profile(
+            registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
+        )
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    desired = _desired_settings(resolved)
+    try:
+        GitHubPlatform().apply_settings(slug, desired)
+    except GitHubAPIError as exc:
+        print(f"GitHub API error applying protection: {exc}", file=sys.stderr)
+        return 1
+    print(f"applied full protection to {slug} (idempotent, §5.2 complete-protection).")
     return 0
 
 
@@ -603,35 +802,35 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 
     desired = _desired_settings(resolved)
 
-    # Render the apply-time diff so --confirm is an informed decision, not blind (§5.7).
-    # This is a read-only preview; run_reconcile recomputes it at apply time (§2.8).
-    platform = GitHubPlatform()
     try:
-        live = platform.read_settings(slug)
+        outcome = run_reconcile(
+            GitHubPlatform(),
+            repo=slug,
+            issue_key=args.issue,
+            desired_settings=desired,
+            pin=declaration.version,
+            tool_version=__version__,
+            recorded_version=recorded_version,
+            confirmed_diff_id=args.confirm,
+            override_version_pin=args.override_version_pin,
+        )
     except GitHubAPIError as exc:
-        print(f"GitHub API error reading live settings: {exc}", file=sys.stderr)
+        print(f"GitHub API error: {exc}", file=sys.stderr)
         return 1
-    diff = classify_settings(desired=desired, live=live)
-    if diff.changes:
-        print("Apply-time settings diff (classified):")
-        for key, kind in sorted(diff.changes.items()):
-            print(f"  {key}: {kind} (desired={desired.get(key)!r}, live={live.get(key)!r})")
+
+    # Render the APPLY-TIME recomputed diff (the read that was actually acted on, §2.8),
+    # not an earlier preview — so the operator confirms/sees the same content.
+    if outcome.changes:
+        print(f"Apply-time settings diff (id {outcome.diff_id}):")
+        values = outcome.values or {}
+        for key, kind in sorted(outcome.changes.items()):
+            v = values.get(key, {})
+            print(f"  {key}: {kind} ({v.get('live')!r} -> {v.get('desired')!r})")
         if not args.confirm:
-            print("Re-run with --confirm to apply these changes.", file=sys.stderr)
+            print(f"Re-run with --confirm {outcome.diff_id} to apply this exact diff.", file=sys.stderr)
     else:
         print("No settings drift: live state already matches desired.")
 
-    outcome = run_reconcile(
-        platform,
-        repo=slug,
-        issue_key=args.issue,
-        desired_settings=desired,
-        pin=declaration.version,
-        tool_version=__version__,
-        recorded_version=recorded_version,
-        operator_confirmed=args.confirm,
-        override_version_pin=args.override_version_pin,
-    )
     print(f"{outcome.action}: {outcome.reason}")
     return 0 if outcome.action in {"apply", "noop"} else 1
 
@@ -685,6 +884,9 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument(
         "--migrate-profile", action="store_true", help="Allow changing an already-declared profile (§5.2)."
     )
+    onboard.add_argument(
+        "--allow-dirty", action="store_true", help="Adopt even if the working tree is not clean (§5.2)."
+    )
     onboard.set_defaults(func=cmd_onboard)
 
     doctor = subparsers.add_parser("doctor", help="Diagnose a consumer repository's managed artifacts.")
@@ -704,9 +906,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sync.set_defaults(func=cmd_sync)
 
-    scan = subparsers.add_parser("scan", help="Diagnose many local consumer repositories (read-only).")
+    scan = subparsers.add_parser("scan", help="Diagnose many local consumer repositories (read-only by default).")
     scan.add_argument("paths", nargs="+", help="Consumer repository paths.")
+    scan.add_argument(
+        "--fix",
+        action="store_true",
+        help="For each repo with file drift, open a managed-file proposal (§5.11 layered on §5.5).",
+    )
     scan.set_defaults(func=cmd_scan)
+
+    repin = subparsers.add_parser("repin", help="Move a consumer to a different Library version (§5.12).")
+    repin.add_argument("path", help="Path to the consumer repository.")
+    repin.add_argument("version", help="Target Library version pin (vX.Y.Z or vX).")
+    repin.add_argument("--write", action="store_true", help="Write the new pin into the declaration and re-scaffold.")
+    repin.set_defaults(func=cmd_repin)
+
+    offboard = subparsers.add_parser("offboard", help="Remove a consumer from Aviato management (§5.13).")
+    offboard.add_argument("path", help="Path to the consumer repository.")
+    offboard.add_argument(
+        "--delete-files",
+        action="store_true",
+        help="Delete managed files instead of stripping their markers (leaving plain files).",
+    )
+    offboard.add_argument("--write", action="store_true", help="Perform the removal (default is a dry-run plan).")
+    offboard.set_defaults(func=cmd_offboard)
+
+    complete = subparsers.add_parser(
+        "complete-protection",
+        help="Idempotently (re-)apply full branch protection after onboarding (§5.2 recovery).",
+    )
+    complete.add_argument("path", help="Path to the consumer repository.")
+    complete.set_defaults(func=cmd_complete_protection)
 
     drift = subparsers.add_parser("drift-report", help="Consumer automation: report file + settings drift (read-only).")
     drift.add_argument("path", help="Path to the consumer repository.")
@@ -742,7 +972,12 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile = subparsers.add_parser("reconcile", help="Operator-gated settings reconcile against a tracking issue.")
     reconcile.add_argument("path", help="Path to the consumer repository.")
     reconcile.add_argument("issue", help="Tracking-issue key/label.")
-    reconcile.add_argument("--confirm", action="store_true", help="Confirm the apply-time recomputed diff.")
+    reconcile.add_argument(
+        "--confirm",
+        metavar="DIFF_ID",
+        help="Confirm a specific diff id (from the tracking issue / a prior dry run). The apply "
+        "proceeds only if the apply-time recomputed diff still matches this id.",
+    )
     reconcile.add_argument("--recorded-version", help="Version recorded in the consumer's markers (§2.6).")
     reconcile.add_argument(
         "--override-version-pin",

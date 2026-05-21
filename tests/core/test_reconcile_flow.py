@@ -33,7 +33,7 @@ def test_apply_path_mutates_and_comments() -> None:
         pin="v1",
         tool_version="1.0.0",
         recorded_version="1.0.0",
-        operator_confirmed=True,
+        confirmed_diff_id=diff_id,
     )
     assert outcome.action == "apply"
     names = platform.call_names()
@@ -52,7 +52,7 @@ def test_missing_issue_refused() -> None:
         pin="v1",
         tool_version="1.0.0",
         recorded_version="1.0.0",
-        operator_confirmed=True,
+        confirmed_diff_id="anything",
     )
     assert outcome.action == "refuse"
     assert "apply_settings" not in platform.call_names()
@@ -78,7 +78,7 @@ def test_empty_diff_noop_does_not_mutate() -> None:
         pin="v1",
         tool_version="1.0.0",
         recorded_version="1.0.0",
-        operator_confirmed=True,
+        confirmed_diff_id=empty_id,
     )
     assert outcome.action == "noop"
     assert "apply_settings" not in platform.call_names()
@@ -104,7 +104,7 @@ def test_non_human_consent_refused_no_mutation() -> None:
         pin="v1",
         tool_version="1.0.0",
         recorded_version="1.0.0",
-        operator_confirmed=True,
+        confirmed_diff_id=_current_diff_id(desired, live),
     )
     assert outcome.action == "refuse"
     assert "apply_settings" not in platform.call_names()

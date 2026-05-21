@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
 
 from aviato.cli import main
+
+
+def _git_init_clean(path: Path) -> None:
+    subprocess.run(["git", "-C", str(path), "init", "-q"], check=True)
+    # An empty repo with no changes is a clean working tree.
 
 
 def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -16,6 +22,7 @@ def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureF
             "--profile",
             "python-library",
             "--write",
+            "--allow-dirty",
             "--pin",
             "v0",
             "--var",
@@ -54,6 +61,7 @@ def test_onboard_write_refuses_profile_change_without_migrate(tmp_path: Path) ->
             "--profile",
             "python-library",
             "--write",
+            "--allow-dirty",
             "--var",
             "distribution-name=a",
             "--var",
@@ -61,6 +69,46 @@ def test_onboard_write_refuses_profile_change_without_migrate(tmp_path: Path) ->
         ]
     )
     assert rc == 2
+
+
+def test_onboard_write_refuses_dirty_tree_without_override(tmp_path: Path) -> None:
+    # §5.2 adopt precondition: a non-clean working tree is refused unless --allow-dirty.
+    _git_init_clean(tmp_path)
+    (tmp_path / "untracked.txt").write_text("dirty", encoding="utf-8")
+    rc = main(
+        [
+            "onboard",
+            str(tmp_path),
+            "--profile",
+            "python-library",
+            "--write",
+            "--var",
+            "distribution-name=a",
+            "--var",
+            "import-name=a",
+        ]
+    )
+    assert rc == 2
+    assert not (tmp_path / ".github" / "aviato.yaml").exists()
+
+
+def test_onboard_write_adopts_clean_git_repo(tmp_path: Path) -> None:
+    _git_init_clean(tmp_path)
+    rc = main(
+        [
+            "onboard",
+            str(tmp_path),
+            "--profile",
+            "python-library",
+            "--write",
+            "--var",
+            "distribution-name=a",
+            "--var",
+            "import-name=a",
+        ]
+    )
+    assert rc == 0
+    assert (tmp_path / ".github" / "aviato.yaml").exists()
 
 
 def test_onboard_without_write_only_prints_plan(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

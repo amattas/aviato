@@ -20,23 +20,42 @@ class SettingsDriftOutcome:
 
 
 def diff_identity(diff: SettingsDiff) -> str:
-    """A stable content identity for a settings diff (§6.4 consent binding)."""
-    blob = json.dumps(diff.changes, sort_keys=True)
+    """A stable, content-bound identity for a settings diff (§6.4 consent binding).
+
+    Hashes the changed keys together with their classification AND their concrete
+    desired/live values, so consent for ``required_reviews: 1 -> 2`` does not match
+    ``required_reviews: 1 -> 5`` (a different change needs different consent, §8.3).
+    """
+    payload = {
+        key: {
+            "kind": kind,
+            "desired": diff.values.get(key, {}).get("desired"),
+            "live": diff.values.get(key, {}).get("live"),
+        }
+        for key, kind in diff.changes.items()
+    }
+    blob = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
+def _render_change(diff: SettingsDiff, key: str) -> str:
+    kind = diff.changes[key]
+    vals = diff.values.get(key, {})
+    return f"- {key}: {kind} ({vals.get('live')!r} -> {vals.get('desired')!r})"
+
+
 def _render_issue_body(diff: SettingsDiff, repo: str, issue_key: str) -> str:
-    lines = ["Aviato detected settings drift.", "", "Changes (classified):"]
-    for key, kind in sorted(diff.changes.items()):
-        lines.append(f"- {key}: {kind}")
+    diff_id = diff_identity(diff)
+    lines = ["Aviato detected settings drift.", "", f"Diff id: {diff_id}", "", "Changes (classified):"]
+    lines += [_render_change(diff, key) for key in sorted(diff.changes)]
     lines += [
         "",
         f"To apply, an operator checks out {repo} and, from the repository root, runs:",
-        f"    aviato reconcile . {issue_key} --confirm",
+        f"    aviato reconcile . {issue_key} --confirm {diff_id}",
         "",
         "(reconcile takes the LOCAL repository path; OWNER/REPO is read from its remote. "
-        "It re-reads live settings, re-classifies, prints the apply-time diff, and "
-        "applies only with --confirm.)",
+        "It re-reads live settings at apply time, re-classifies, and applies only if the "
+        "recomputed diff still matches the id you confirmed — otherwise it aborts.)",
         "",
         "No settings mutation has been performed (report-only, §5.6).",
     ]
