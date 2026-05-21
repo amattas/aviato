@@ -20,6 +20,7 @@ REQUIRED_FILES = [
     ".github/workflows/reusable-node-ci.yml",
     ".github/workflows/reusable-swift-ci.yml",
     ".github/workflows/reusable-release-gate.yml",
+    ".github/workflows/reusable-release.yml",
     ".github/workflows/reusable-docker-ghcr.yml",
     ".github/workflows/reusable-pypi-publish.yml",
     ".github/workflows/reusable-docs-pages.yml",

@@ -23,7 +23,8 @@ from .core.scaffold import ScaffoldItem, render_managed, scaffold
 from .core.settings_drift_flow import run_settings_drift
 from .core.variables import resolve_variables, writeback_variables
 from .core.version import is_compatible
-from .core.versioning import is_highest
+from .core.versioning import classify_commits, is_highest, next_version
+from .core.versionsource import bump_files
 from .github import GitHubAPIError
 from .github_platform import GitHubPlatform
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
@@ -463,6 +464,47 @@ def cmd_is_highest(args: argparse.Namespace) -> int:
     return 0 if is_highest(args.candidate, args.existing) else 1
 
 
+def cmd_next_version(args: argparse.Namespace) -> int:
+    """Derive the next SemVer from Conventional Commits (§5.9).
+
+    Commit messages come from --commit (repeatable) or, failing that, stdin
+    (NUL-separated, e.g. `git log --format=%B%x00`).
+    """
+    commits = list(args.commit or [])
+    if not commits:
+        raw = sys.stdin.read()
+        commits = [c for c in (raw.split("\0") if "\0" in raw else raw.split("\n\n")) if c.strip()]
+    print(next_version(args.current, classify_commits(commits)))
+    return 0
+
+
+def cmd_bump_version(args: argparse.Namespace) -> int:
+    """Write a new version into the profile's version-source locations (§3.3/§5.9)."""
+    root = Path(args.path).resolve()
+    declaration_path = root / ".github" / "aviato.yaml"
+    if not declaration_path.is_file():
+        print(f"no declaration at {declaration_path}", file=sys.stderr)
+        return 2
+    registry = Registry(MODULE_SOURCE_ROOT)
+    try:
+        declaration = load_declaration(declaration_path)
+        resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    locations = list(resolved.version_source.locations) if resolved.version_source else []
+    if not locations:
+        print("profile declares no version-source locations", file=sys.stderr)
+        return 2
+    changed = bump_files(root, locations, args.version)
+    for location in changed:
+        print(f"bumped {location} -> {args.version}")
+    if not changed:
+        print("no version-source files found to bump", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_reconcile(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
     declaration_path = root / ".github" / "aviato.yaml"
@@ -582,6 +624,18 @@ def build_parser() -> argparse.ArgumentParser:
     highest.add_argument("candidate", help="The release tag being deployed.")
     highest.add_argument("existing", nargs="*", help="All released tags.")
     highest.set_defaults(func=cmd_is_highest)
+
+    nextver = subparsers.add_parser(
+        "next-version", help="Derive the next SemVer from Conventional Commits (§5.9)."
+    )
+    nextver.add_argument("--current", required=True, help="Current version (vX.Y.Z or X.Y.Z).")
+    nextver.add_argument("--commit", action="append", help="A commit message (repeatable); else read stdin.")
+    nextver.set_defaults(func=cmd_next_version)
+
+    bump = subparsers.add_parser("bump-version", help="Write a version into the version-source locations (§3.3).")
+    bump.add_argument("version", help="The new version to write.")
+    bump.add_argument("path", help="Path to the consumer repository.")
+    bump.set_defaults(func=cmd_bump_version)
 
     reconcile = subparsers.add_parser("reconcile", help="Operator-gated settings reconcile against a tracking issue.")
     reconcile.add_argument("path", help="Path to the consumer repository.")
