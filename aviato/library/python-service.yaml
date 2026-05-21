@@ -16,3 +16,5 @@ toolchain:
 notes:
   - "Requires a seed-once container build definition before GHCR publishing (§13.2)."
 docs_pipeline: docs-pages
+prerequisites:
+  container_build_definition: [Dockerfile]

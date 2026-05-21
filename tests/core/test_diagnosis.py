@@ -99,6 +99,30 @@ def test_seed_once_integrity_divergence_is_reported_not_overwritten(tmp_path: Pa
     assert (tmp_path / "Dockerfile").read_text() == "FROM tampered\n"  # never overwritten
 
 
+def test_probes_drift_automation_and_prerequisites(tmp_path: Path) -> None:
+    prereqs = {"container_build_definition": ["Dockerfile"]}
+    # no drift workflow, no Dockerfile → probes false
+    report = diagnose(tmp_path, [], prerequisite_paths=prereqs)
+    assert report.drift_automation_present is False
+    assert report.prerequisites["container_build_definition"] is False
+
+    # add a consumer drift workflow + a Dockerfile
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "drift.yml").write_text("uses: amattas/aviato/.github/workflows/reusable-consumer-automation.yml@main\n")
+    (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+    report2 = diagnose(tmp_path, [], prerequisite_paths=prereqs)
+    assert report2.drift_automation_present is True
+    assert report2.prerequisites["container_build_definition"] is True
+
+
+def test_platform_probes_default_unknown(tmp_path: Path) -> None:
+    # platform-dependent probes are None until the binding fills them (absence != clean)
+    report = diagnose(tmp_path, [])
+    assert report.issue_channel_available is None
+    assert report.scan_heartbeat_present is None
+
+
 def test_bootstrap_declaration_rejected_outside_library(tmp_path: Path) -> None:
     with pytest.raises(BootstrapError):
         diagnose(tmp_path, [], bootstrap_declared=True, is_library=False)

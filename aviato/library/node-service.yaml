@@ -16,3 +16,5 @@ notes:
   - "Requires a seed-once container build definition before GHCR publishing (§13.2)."
   - "type-check runs only when language-variant is typescript (§12.2)."
 docs_pipeline: docs-pages
+prerequisites:
+  container_build_definition: [Dockerfile]

@@ -192,11 +192,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         return 2
 
     secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
+    prerequisite_paths = registry.profile_doc(declaration.profile).get("prerequisites", {})
     report = diagnose(
         root,
         expected,
         declaration_variables=declaration.variables,
         secret_var_names=secret_names,
+        prerequisite_paths=prerequisite_paths,
     )
 
     print(f"doctor: {declaration.profile} @ {declaration.version} ({root})")
@@ -208,6 +210,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print(f"- {path}")
     if report.secret_in_declaration:
         print("WARNING: secret-typed variable present in declaration (§6.6/§8.15)")
+    print(f"drift automation present: {'yes' if report.drift_automation_present else 'no'}")
+    print("prerequisites:")
+    for name, ok in sorted(report.prerequisites.items()):
+        print(f"- {name}: {'ok' if ok else 'missing'}")
     return 0
 
 

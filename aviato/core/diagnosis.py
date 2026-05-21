@@ -24,6 +24,38 @@ class DiagnosisReport:
     statuses: dict[str, ArtifactStatus] = field(default_factory=dict)
     seed_divergence: list[str] = field(default_factory=list)
     secret_in_declaration: bool = False
+    # §5.4 probes. Locally-determinable ones are filled by diagnose(); the
+    # platform-dependent ones (issue-channel availability, per-run scan heartbeat)
+    # are left None here and populated by the GitHub binding when it has API access
+    # — and absence reads as broken, never clean (§5.14).
+    drift_automation_present: bool = False
+    prerequisites: dict[str, bool] = field(default_factory=dict)
+    issue_channel_available: bool | None = None
+    scan_heartbeat_present: bool | None = None
+
+
+def _has_drift_automation(root: Path) -> bool:
+    """True if a consumer workflow wires the scheduled drift/report automation (§5.5/§5.6)."""
+    workflows = root / ".github" / "workflows"
+    if not workflows.is_dir():
+        return False
+    return any(
+        "reusable-consumer-automation" in path.read_text(encoding="utf-8") for path in workflows.glob("*.yml")
+    )
+
+
+def _probe_prerequisites(root: Path, prerequisite_paths: Mapping[str, Sequence[str]]) -> dict[str, bool]:
+    """Probe the §17 prerequisites determinable from the local tree.
+
+    The names and candidate paths are plug-in **data** (e.g. a service profile
+    declares its container build definition), never hardcoded here — so the core
+    stays free of deployment-specific identifiers (§9b). A prerequisite is
+    satisfied if any of its candidate paths exists.
+    """
+    return {
+        name: any((root / candidate).is_file() for candidate in candidates)
+        for name, candidates in prerequisite_paths.items()
+    }
 
 
 def _live_body(text: str) -> str:
@@ -67,6 +99,7 @@ def diagnose(
     *,
     declaration_variables: Mapping[str, object] | None = None,
     secret_var_names: Sequence[str] = (),
+    prerequisite_paths: Mapping[str, Sequence[str]] | None = None,
     is_library: bool = False,
     bootstrap_declared: bool = False,
 ) -> DiagnosisReport:
@@ -101,5 +134,8 @@ def diagnose(
 
     declaration_variables = declaration_variables or {}
     report.secret_in_declaration = any(name in declaration_variables for name in secret_var_names)
+
+    report.drift_automation_present = _has_drift_automation(root)
+    report.prerequisites = _probe_prerequisites(root, prerequisite_paths or {})
 
     return report
