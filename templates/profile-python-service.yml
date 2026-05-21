@@ -37,6 +37,13 @@ jobs:
     with:
       codeql-languages: "python"
 
+  release:
+    if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
+    needs: [ci, security]
+    uses: amattas/aviato/.github/workflows/reusable-release.yml@main
+    with:
+      aviato-ref: main
+
   release-gate:
     if: ${{ github.ref_type == 'tag' }}
     uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@main
