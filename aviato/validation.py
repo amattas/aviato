@@ -25,10 +25,13 @@ REQUIRED_FILES = [
     ".github/workflows/reusable-docs-pages.yml",
     ".github/workflows/reusable-app-store-connect.yml",
     ".github/workflows/reusable-security-baseline.yml",
+    ".github/workflows/reusable-consumer-automation.yml",
     "templates/profile-python-service.yml",
     "templates/profile-python-library.yml",
+    "templates/profile-python-component.yml",
     "templates/profile-node-service.yml",
     "templates/profile-swift-app.yml",
+    "templates/consumer-automation.yml",
 ]
 
 RELEASE_WORKFLOWS = [

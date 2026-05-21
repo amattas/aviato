@@ -1,0 +1,52 @@
+name: Reusable Consumer Automation
+
+# Scheduled, low-privilege consumer automation (§5.5/§5.6/§5.14): detect file and
+# settings drift and report (open proposals / file tracking issues). It performs
+# NO settings mutation — that is the operator-gated reconcile (§5.7). Privileges
+# are declared per §11.3; no stored secret (platform token only, §6.6).
+
+on:
+  workflow_call:
+    inputs:
+      aviato-ref:
+        description: The Aviato version pin to install and resolve against.
+        required: false
+        type: string
+        default: main
+      python-version:
+        required: false
+        type: string
+        default: "3.12"
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  drift-report:
+    name: Drift detection (propose/report only)
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AVIATO_REF: ${{ inputs.aviato-ref }}
+    steps:
+      - name: Jitter
+        shell: bash
+        run: sleep $((RANDOM % 120))
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install Aviato (pinned)
+        shell: bash
+        run: python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
+
+      - name: Report drift
+        shell: bash
+        run: aviato drift-report .

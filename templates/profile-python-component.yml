@@ -1,0 +1,41 @@
+name: Aviato Python Component
+
+# Zero-deploy profile (§10.3/§15): verify + security baseline + release gate, with
+# NO deployment plug-in. The GitHub release/tag is the only output (e.g. consumed
+# by a HACS integration or a not-yet-published library).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags:
+      - "*"
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+
+jobs:
+  ci:
+    if: ${{ github.ref_type != 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-python-ci.yml@main
+    with:
+      python-version: "3.12"
+      install-command: "python -m pip install -e .[dev]"
+      lint-command: "python -m ruff check ."
+      test-command: "python -m pytest"
+
+  security:
+    if: ${{ github.ref_type != 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@main
+    with:
+      codeql-languages: "python"
+
+  release-gate:
+    if: ${{ github.ref_type == 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@main
+    with:
+      default-branch: main
+      require-merged-pr: true

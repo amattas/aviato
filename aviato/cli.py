@@ -11,12 +11,14 @@ from .core.composition import resolve_profile
 from .core.declaration import load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
 from .core.errors import AviatoError
+from .core.file_drift_flow import run_file_drift
 from .core.fleet import scan_fleet
 from .core.onboarding import materialize_items
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.render import render
 from .core.scaffold import scaffold
+from .core.settings_drift_flow import run_settings_drift
 from .github import GitHubAPIError
 from .github_platform import GitHubPlatform
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
@@ -217,6 +219,58 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+SETTINGS_DRIFT_ISSUE_KEY = "aviato-settings-drift"
+
+
+def cmd_drift_report(args: argparse.Namespace) -> int:
+    """Consumer-automation entrypoint: report file + settings drift (§5.5/§5.6).
+
+    Low-privilege, propose/report-only — never mutates protected settings. Run on
+    a jittered schedule by the consumer-automation workflow.
+    """
+    root = Path(args.path).resolve()
+    declaration_path = root / ".github" / "aviato.yaml"
+    if not declaration_path.is_file():
+        print(f"no declaration at {declaration_path}", file=sys.stderr)
+        return 2
+
+    slug = normalize_slug(remote_url(root))
+    if not slug:
+        print("could not determine OWNER/REPO from the repository remote", file=sys.stderr)
+        return 2
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    try:
+        declaration = load_declaration(declaration_path)
+        resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides)
+        expected = _expected_artifacts(registry, resolved, declaration.variables)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
+    report = diagnose(root, expected, declaration_variables=declaration.variables, secret_var_names=secret_names)
+    expected_bodies = {artifact.output_path: artifact.body for artifact in expected if not artifact.seed_once}
+
+    platform = GitHubPlatform()
+    file_outcome = run_file_drift(
+        platform,
+        repo=slug,
+        profile=declaration.profile,
+        statuses=report.statuses,
+        expected_bodies=expected_bodies,
+    )
+    settings_outcome = run_settings_drift(
+        platform,
+        repo=slug,
+        desired_settings=resolved.settings.get("default_branch", {}),
+        issue_key=SETTINGS_DRIFT_ISSUE_KEY,
+    )
+    print(f"file drift: proposed={file_outcome.proposed} dirty={file_outcome.dirty}")
+    print(f"settings drift: {settings_outcome.status} (destructive={settings_outcome.destructive})")
+    return 0
+
+
 def cmd_reconcile(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
     declaration_path = root / ".github" / "aviato.yaml"
@@ -294,6 +348,10 @@ def build_parser() -> argparse.ArgumentParser:
     scan = subparsers.add_parser("scan", help="Diagnose many local consumer repositories (read-only).")
     scan.add_argument("paths", nargs="+", help="Consumer repository paths.")
     scan.set_defaults(func=cmd_scan)
+
+    drift = subparsers.add_parser("drift-report", help="Consumer automation: report file + settings drift (read-only).")
+    drift.add_argument("path", help="Path to the consumer repository.")
+    drift.set_defaults(func=cmd_drift_report)
 
     reconcile = subparsers.add_parser("reconcile", help="Operator-gated settings reconcile against a tracking issue.")
     reconcile.add_argument("path", help="Path to the consumer repository.")
