@@ -51,6 +51,9 @@ jobs:
       - name: Analyze
         uses: github/codeql-action/analyze@v3
 
+  # PR-only diff-based review (richer signal on pull requests); the gating
+  # dependency vulnerability scan below runs on EVERY trigger including the
+  # release ref, so it is not the sole dependency gate.
   dependency-review:
     name: Dependency Review
     if: ${{ inputs.run-dependency-review && github.event_name == 'pull_request' }}
@@ -64,12 +67,33 @@ jobs:
         with:
           fail-on-severity: ${{ inputs.dependency-review-fail-on-severity }}
 
+  # Dependency vulnerability scan that runs on PRs, schedule, AND the release ref
+  # (§2.13/§5.14: source dependency scanning is re-run on the deployed code, not a
+  # stale PR head). Gates on high/critical.
+  dependency-scan:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Scan dependencies (gate high/critical)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: "."
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          scanners: vuln
+
   # Per-run heartbeat (§5.14): emit a completion marker even on zero findings so
-  # diagnosis (§5.4) can distinguish "ran clean" from "never ran" — the absence of
-  # this heartbeat reads as broken, never clean.
+  # diagnosis (§5.4) can distinguish "ran clean" from "never ran". The required
+  # scans (SAST + dependency) MUST have actually run — a skipped scan is treated as
+  # broken, never clean.
   heartbeat:
     name: Security baseline heartbeat
-    needs: [codeql, dependency-review]
+    needs: [codeql, dependency-review, dependency-scan]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -77,10 +101,17 @@ jobs:
         shell: bash
         env:
           CODEQL_RESULT: ${{ needs.codeql.result }}
+          DEPSCAN_RESULT: ${{ needs.dependency-scan.result }}
           DEPREVIEW_RESULT: ${{ needs.dependency-review.result }}
         run: |
-          echo "aviato:security-baseline ran sast=${CODEQL_RESULT} dependency=${DEPREVIEW_RESULT}"
-          if [ "${CODEQL_RESULT}" = "failure" ] || [ "${DEPREVIEW_RESULT}" = "failure" ]; then
-            echo "::error::Security baseline reported failures."
+          echo "aviato:security-baseline ran sast=${CODEQL_RESULT} dependency=${DEPSCAN_RESULT} review=${DEPREVIEW_RESULT}"
+          # The gating dependency scan must succeed (skipped/failed/cancelled = broken).
+          if [ "${DEPSCAN_RESULT}" != "success" ]; then
+            echo "::error::Dependency scan did not run successfully (result=${DEPSCAN_RESULT}); treating as broken (§5.14)."
+            exit 1
+          fi
+          # CodeQL must not have failed; it is skipped only when no language is configured.
+          if [ "${CODEQL_RESULT}" = "failure" ]; then
+            echo "::error::CodeQL SAST reported failures."
             exit 1
           fi

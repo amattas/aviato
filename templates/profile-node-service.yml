@@ -21,9 +21,13 @@ jobs:
     with:
       node-version: "22"
       install-command: "npm ci"
-      lint-command: "npm run lint --if-present"
-      test-command: "npm test --if-present"
-      build-command: "npm run build --if-present"
+      # Required gates are explicit (no --if-present): a missing script fails the
+      # verify pipeline (§12.2). Format-check (Prettier) and TS type-check (tsc,
+      # auto-skipped when there is no tsconfig.json, i.e. language-variant=javascript)
+      # use the reusable workflow defaults.
+      lint-command: "npx eslint ."
+      test-command: "npm test"
+      build-command: "npm run build"
 
   security:
     # Runs on PRs AND on the release tag, so source scans gate the verify pipeline

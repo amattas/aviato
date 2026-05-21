@@ -98,10 +98,18 @@ jobs:
         shell: bash
         run: ${{ inputs.format-command }}
 
+      # TypeScript type-check is a blocking gate for TS projects and auto-skips for
+      # JavaScript projects (language-variant=javascript), detected by the absence of
+      # tsconfig.json (§12.2). Set run-typecheck:false to disable explicitly.
       - name: Type check
         if: ${{ inputs.run-typecheck && inputs.typecheck-command != '' }}
         shell: bash
-        run: ${{ inputs.typecheck-command }}
+        run: |
+          if [ -f tsconfig.json ]; then
+            ${{ inputs.typecheck-command }}
+          else
+            echo "No tsconfig.json (JavaScript project); skipping type-check."
+          fi
 
       - name: Test
         if: ${{ inputs.run-tests && inputs.test-command != '' }}
