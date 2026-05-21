@@ -83,3 +83,18 @@ def test_version_mismatch_refused() -> None:
 
 def test_major_mismatch_refused() -> None:
     assert reconcile_decision(_state(tool_version="2.0.0", pin="v1", recorded_version="1.0.0")).action == "refuse"
+
+
+def test_version_mismatch_message_names_the_override_flag() -> None:
+    # #5: the refusal must name the actual flag (--override-version-pin), not just "override required".
+    outcome = reconcile_decision(_state(tool_version="1.0.0", recorded_version="1.5.0"))
+    assert outcome.action == "refuse"
+    assert "--override-version-pin" in outcome.reason
+
+
+def test_version_mismatch_applies_with_override() -> None:
+    # #5: the advertised override actually exists and lets a confirmed, consented,
+    # admin-granted reconcile proceed despite the pin mismatch.
+    outcome = reconcile_decision(_state(tool_version="1.0.0", recorded_version="1.5.0", override_version_pin=True))
+    assert outcome.action == "apply"
+    assert "overridden" in outcome.reason

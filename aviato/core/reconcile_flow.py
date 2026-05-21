@@ -18,6 +18,7 @@ def run_reconcile(
     tool_version: str,
     recorded_version: str,
     operator_confirmed: bool,
+    override_version_pin: bool = False,
 ) -> ReconcileOutcome:
     """Operator-gated settings reconcile against a tracking issue (§5.7).
 
@@ -49,6 +50,7 @@ def run_reconcile(
         tool_version=tool_version,
         pin=pin,
         recorded_version=recorded_version,
+        override_version_pin=override_version_pin,
     )
 
     outcome = reconcile_decision(state)

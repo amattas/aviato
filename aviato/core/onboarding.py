@@ -86,11 +86,16 @@ def materialize_items(
     *,
     pin: str = "main",
     docs: bool = False,
+    overrides: Mapping[str, Any] | None = None,
 ) -> list[ScaffoldItem]:
-    """Turn a resolved profile into concrete scaffold items (§5.3)."""
+    """Turn a resolved profile into concrete scaffold items (§5.3).
+
+    ``overrides`` are the consumer's declaration overrides (§4.2); they must be passed
+    so the materialized set matches what diagnosis/drift expect for the same repo.
+    """
     return [
         ScaffoldItem(output=a.output, body=a.body, comment=a.comment, seed_once=a.seed_once)
-        for a in resolved_artifacts(registry, profile, variables, pin=pin, docs=docs)
+        for a in resolved_artifacts(registry, profile, variables, pin=pin, docs=docs, overrides=overrides)
     ]
 
 

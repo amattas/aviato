@@ -34,6 +34,9 @@ class ReconcileState:
     tool_version: str
     pin: str
     recorded_version: str
+    # Operator escape hatch for the §2.6 version-pin gate (the "override required"
+    # path). Default False keeps the gate fail-closed.
+    override_version_pin: bool = False
 
 
 @dataclass(frozen=True)
@@ -86,8 +89,16 @@ def reconcile_decision(state: ReconcileState) -> ReconcileOutcome:
     if not state.operator_confirmed:
         return ReconcileOutcome("abort", "operator did not confirm the recomputed diff")
 
+    pin_overridden = False
     if not is_compatible(tool=state.tool_version, pinned=state.pin, recorded=state.recorded_version):
-        return ReconcileOutcome("refuse", "version-pin mismatch (§2.6); override required")
+        if not state.override_version_pin:
+            return ReconcileOutcome(
+                "refuse", "version-pin mismatch (§2.6); re-run with --override-version-pin to proceed"
+            )
+        pin_overridden = True
 
     payload = _purpose_built_payload(state.desired_settings, state.live_settings, diff.changes)
-    return ReconcileOutcome("apply", "human consent, admin role, confirmed recomputed diff", payload=payload)
+    reason = "human consent, admin role, confirmed recomputed diff"
+    if pin_overridden:
+        reason += " (version-pin mismatch overridden by operator, §2.6)"
+    return ReconcileOutcome("apply", reason, payload=payload)

@@ -135,9 +135,17 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     classic_deletion_blocked = isinstance(allow_del, dict) and allow_del.get("enabled") is not True
     block_deletion = rules_deletion or classic_deletion_blocked
 
+    # Status checks can be enforced by EITHER classic branch protection OR a branch
+    # ruleset's required_status_checks rule (the bundled "protect default branch"
+    # ruleset uses the latter). Read both, or a rule-protected repo maps to an empty
+    # set and shows false drift / a duplicate classic-protection write (§5.6).
     rsc = protection.get("required_status_checks") or {}
     contexts = list(rsc.get("contexts") or [])
     contexts += [c.get("context") for c in rsc.get("checks", []) if isinstance(c, dict) and c.get("context")]
+    rsc_rule = next((r for r in rules if r.get("type") == "required_status_checks"), None)
+    if rsc_rule is not None:
+        rule_checks = rsc_rule.get("parameters", {}).get("required_status_checks", [])
+        contexts += [c.get("context") for c in rule_checks if isinstance(c, dict) and c.get("context")]
 
     return {
         "requires_pull_request": requires_pr,

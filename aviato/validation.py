@@ -143,6 +143,58 @@ def _check_action_pins(root: Path, errors: list[str]) -> None:
         errors.append(f"unpinned third-party action/tool (§11.3): {violation}")
 
 
+# The documented copyable caller templates are RENDERED from the authoritative scaffold
+# bundles with these example variables — they are not a hand-maintained second copy.
+# The parity check below fails if they drift, so editing a scaffold caller forces a
+# regenerate (scripts/regen-templates.py).
+_TEMPLATE_EXAMPLE_VARS: dict[str, dict[str, str]] = {
+    "python-library": {"distribution-name": "your-distribution", "import-name": "your_package"},
+    "python-service": {"image-name": "your-image", "import-name": "your_package"},
+    "python-component": {"import-name": "your_package"},
+    "node-service": {"project-name": "your-app", "language-variant": "typescript"},
+    "swift-app": {
+        "product-scheme": "App",
+        "bundle-identifier": "com.example.app",
+        "team-id": "TEAMID1234",
+        "export-method": "app-store",
+    },
+}
+_PROFILE_TEMPLATE_FILES = {
+    "python-library": "templates/profile-python-library.yml",
+    "python-service": "templates/profile-python-service.yml",
+    "python-component": "templates/profile-python-component.yml",
+    "node-service": "templates/profile-node-service.yml",
+    "swift-app": "templates/profile-swift-app.yml",
+}
+
+
+def _rendered_caller(root: Path, profile: str, output: str) -> str | None:
+    from .core.onboarding import resolved_artifacts
+    from .core.registry import Registry
+
+    registry = Registry(root / "aviato" / "library")
+    artifacts = resolved_artifacts(registry, profile, _TEMPLATE_EXAMPLE_VARS[profile], pin="main", docs=False)
+    return next((a.body for a in artifacts if a.output == output), None)
+
+
+def _check_template_scaffold_parity(root: Path, errors: list[str]) -> None:
+    """Documented caller templates must equal the rendered scaffold output (no drift)."""
+    checks = [(p, f, ".github/workflows/aviato-ci.yml") for p, f in _PROFILE_TEMPLATE_FILES.items()]
+    checks.append(("python-library", "templates/consumer-automation.yml", ".github/workflows/aviato-drift.yml"))
+    for profile, rel_path, output in checks:
+        path = root / rel_path
+        if not path.exists():
+            continue  # absence is already reported by the REQUIRED_FILES check
+        expected = _rendered_caller(root, profile, output)
+        if expected is None:
+            errors.append(f"{rel_path}: profile {profile!r} no longer produces {output}")
+        elif path.read_text(encoding="utf-8") != expected:
+            errors.append(
+                f"{rel_path} is stale: it does not match the rendered scaffold caller for "
+                f"{profile!r}. Regenerate with scripts/regen-templates.py."
+            )
+
+
 def validate(root: Path = REPO_ROOT) -> list[str]:
     errors: list[str] = []
 
@@ -170,5 +222,6 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_release_workflow_contract(root, errors)
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
     _check_action_pins(root, errors)
+    _check_template_scaffold_parity(root, errors)
 
     return errors

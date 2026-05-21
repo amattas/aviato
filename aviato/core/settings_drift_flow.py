@@ -31,8 +31,12 @@ def _render_issue_body(diff: SettingsDiff, repo: str, issue_key: str) -> str:
         lines.append(f"- {key}: {kind}")
     lines += [
         "",
-        "To apply, an operator runs:",
-        f"    aviato reconcile {repo} {issue_key}",
+        f"To apply, an operator checks out {repo} and, from the repository root, runs:",
+        f"    aviato reconcile . {issue_key} --confirm",
+        "",
+        "(reconcile takes the LOCAL repository path; OWNER/REPO is read from its remote. "
+        "It re-reads live settings, re-classifies, prints the apply-time diff, and "
+        "applies only with --confirm.)",
         "",
         "No settings mutation has been performed (report-only, §5.6).",
     ]

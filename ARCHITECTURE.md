@@ -86,7 +86,9 @@ use an empty command and a disabled default.
 ### Caller Templates
 
 Caller templates live in `templates/`. They are examples or starting points for
-consumer repositories and are not the source of policy truth.
+consumer repositories and are not the source of policy truth. They are **rendered
+from** the authoritative scaffold bundles (`aviato/library/scaffold/files/wf-*.yml`)
+via `scripts/regen-templates.py`; `aviato validate` fails if they drift.
 
 The templates should stay thin. They should select a reusable workflow, provide
 repository-specific input values, and avoid duplicating release or protection

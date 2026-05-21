@@ -20,6 +20,7 @@ from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.scaffold import ScaffoldItem, render_managed, scaffold
 from .core.settings_drift_flow import run_settings_drift
+from .core.settingsdrift import classify_settings
 from .core.variables import resolve_variables, writeback_variables
 from .core.version import is_compatible
 from .core.versioning import classify_commits, is_highest, next_version
@@ -269,7 +270,9 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
     dump_declaration(declaration, declaration_path)
     print(f"wrote {declaration_path.relative_to(target)}")
 
-    items = materialize_items(registry, args.profile, variables, pin=args.pin, docs=args.docs)
+    items = materialize_items(
+        registry, args.profile, variables, pin=args.pin, docs=args.docs, overrides=declaration.overrides
+    )
     result = scaffold(target, items, profile=args.profile, version=args.pin)
     for output in result.written:
         print(f"wrote {output}")
@@ -383,7 +386,12 @@ def cmd_sync(args: argparse.Namespace) -> int:
     try:
         declaration = load_declaration(declaration_path)
         items = materialize_items(
-            registry, declaration.profile, declaration.variables, pin=declaration.version, docs=declaration.docs
+            registry,
+            declaration.profile,
+            declaration.variables,
+            pin=declaration.version,
+            docs=declaration.docs,
+            overrides=declaration.overrides,
         )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -594,8 +602,27 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     recorded_version = args.recorded_version or _recorded_version(root, expected) or declaration.version
 
     desired = _desired_settings(resolved)
+
+    # Render the apply-time diff so --confirm is an informed decision, not blind (§5.7).
+    # This is a read-only preview; run_reconcile recomputes it at apply time (§2.8).
+    platform = GitHubPlatform()
+    try:
+        live = platform.read_settings(slug)
+    except GitHubAPIError as exc:
+        print(f"GitHub API error reading live settings: {exc}", file=sys.stderr)
+        return 1
+    diff = classify_settings(desired=desired, live=live)
+    if diff.changes:
+        print("Apply-time settings diff (classified):")
+        for key, kind in sorted(diff.changes.items()):
+            print(f"  {key}: {kind} (desired={desired.get(key)!r}, live={live.get(key)!r})")
+        if not args.confirm:
+            print("Re-run with --confirm to apply these changes.", file=sys.stderr)
+    else:
+        print("No settings drift: live state already matches desired.")
+
     outcome = run_reconcile(
-        GitHubPlatform(),
+        platform,
         repo=slug,
         issue_key=args.issue,
         desired_settings=desired,
@@ -603,6 +630,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         tool_version=__version__,
         recorded_version=recorded_version,
         operator_confirmed=args.confirm,
+        override_version_pin=args.override_version_pin,
     )
     print(f"{outcome.action}: {outcome.reason}")
     return 0 if outcome.action in {"apply", "noop"} else 1
@@ -716,6 +744,11 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile.add_argument("issue", help="Tracking-issue key/label.")
     reconcile.add_argument("--confirm", action="store_true", help="Confirm the apply-time recomputed diff.")
     reconcile.add_argument("--recorded-version", help="Version recorded in the consumer's markers (§2.6).")
+    reconcile.add_argument(
+        "--override-version-pin",
+        action="store_true",
+        help="Proceed despite a version-pin mismatch (§2.6); pairs with --confirm.",
+    )
     reconcile.set_defaults(func=cmd_reconcile)
 
     return parser

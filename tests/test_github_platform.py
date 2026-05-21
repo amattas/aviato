@@ -157,6 +157,34 @@ def test_map_branch_settings_reads_required_status_checks() -> None:
     assert map_branch_settings([], protection)["required_status_checks"] == ["common-lint / Common lint"]
 
 
+def test_map_branch_settings_reads_status_checks_from_ruleset() -> None:
+    # #2: a repo protected by the branch RULESET (not classic protection) must still
+    # surface its required checks — otherwise it maps to [] and shows false drift.
+    rules = [
+        {
+            "type": "required_status_checks",
+            "parameters": {
+                "strict_required_status_checks_policy": True,
+                "required_status_checks": [
+                    {"context": "common-lint / Common lint"},
+                    {"context": "ci / Python CI"},
+                ],
+            },
+        }
+    ]
+    mapped = map_branch_settings(rules, {})
+    assert mapped["required_status_checks"] == ["ci / Python CI", "common-lint / Common lint"]
+
+
+def test_map_branch_settings_unions_classic_and_ruleset_checks() -> None:
+    rules = [
+        {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "ci / Python CI"}]}}
+    ]
+    protection = {"required_status_checks": {"contexts": ["common-lint / Common lint"]}}
+    mapped = map_branch_settings(rules, protection)
+    assert mapped["required_status_checks"] == ["ci / Python CI", "common-lint / Common lint"]
+
+
 def test_to_branch_protection_payload_sets_required_checks() -> None:
     payload = to_branch_protection_payload({"required_status_checks": ["security / Security baseline heartbeat"]})
     assert payload["required_status_checks"]["contexts"] == ["security / Security baseline heartbeat"]

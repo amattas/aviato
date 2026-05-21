@@ -122,8 +122,12 @@ and deployment jobs for common repo shapes:
 - `profile-node-service.yml`
 - `profile-swift-app.yml`
 
-Use `aviato onboard TARGET --profile PROFILE` to list the exact templates,
-secrets, environments, and rulesets for a repository.
+These are **examples rendered from** the authoritative scaffold bundles
+(`aviato/library/scaffold/files/wf-*.yml`); `aviato validate` fails if they drift,
+and `python3 scripts/regen-templates.py` regenerates them. Prefer materializing the
+real workflows with `aviato sync` / `aviato onboard --write`. Use
+`aviato onboard TARGET --profile PROFILE` to list the exact artifacts, secrets,
+environments, and rulesets for a repository.
 
 ## App Store Connect
 

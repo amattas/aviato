@@ -42,8 +42,11 @@ aviato validate                              # validate this repo's policy infra
 the `.github/workflows/aviato-ci.yml` (verify/release/deploy/security) and
 `aviato-drift.yml` (scheduled drift/report) callers, so `sync`/`onboard --write` give a
 consumer the actual workflows required by §15 — not just composed pipeline names. Caller
-workflows live as packaged bodies under `aviato/library/scaffold/files/wf-*.yml`
-(regenerated from the `templates/profile-*.yml` examples).
+workflows live as packaged bodies under `aviato/library/scaffold/files/wf-*.yml` — these
+are the **authoritative source**. The top-level `templates/profile-*.yml` and
+`templates/consumer-automation.yml` are documented copyable EXAMPLES **rendered from**
+those scaffold bodies (run `python3 scripts/regen-templates.py` after editing a caller);
+`aviato validate` fails if they drift (`_check_template_scaffold_parity`).
 
 `scripts/audit-repos.sh` and `scripts/apply-rulesets.sh` are thin compatibility wrappers that exec the CLI.
 
@@ -110,11 +113,11 @@ docstrings — keep them accurate when changing behavior.
 
 ### Validation is the gate
 
-`aviato/validation.py` (`validate()`) is what CI runs and what guards correctness. It checks required files exist, YAML/JSON parse, `policy.yml` examples actually match/reject the pattern, pattern drift across embedded copies, template `uses:` references point at workflows that exist, and that release workflows are tag-only (no `release/*`, no checkout by repository name, must reference `GITHUB_REF_TYPE`/`tag`). Adding a new required workflow/file or release workflow means updating `REQUIRED_FILES` / `RELEASE_WORKFLOWS`.
+`aviato/validation.py` (`validate()`) is what CI runs and what guards correctness. It checks required files exist, YAML/JSON parse, `policy.yml` examples actually match/reject the pattern, pattern drift across embedded copies, template `uses:` references point at workflows that exist, release workflows are tag-only (no `release/*`, no checkout by repository name, must reference `GITHUB_REF_TYPE`/`tag`), third-party actions/tools are digest-pinned (§11.3, `_check_action_pins`), and the `templates/profile-*.yml` examples match the rendered scaffold (`_check_template_scaffold_parity`). Adding a new required workflow/file or release workflow means updating `REQUIRED_FILES` / `RELEASE_WORKFLOWS`.
 
 ### Reusable workflows share one command contract
 
-All language CI workflows (`reusable-python-ci`, `reusable-node-ci`, `reusable-swift-ci`) expose the same inputs: `working-directory`, `install-command`, `lint-command`, `test-command`, `build-command`, and the `run-*` toggles. Keep this contract identical across languages; unsupported steps use an empty command and a disabled default. `templates/profile-*.yml` compose these reusable workflows for a repo shape and must stay thin (select workflow + supply inputs, no duplicated release/protection logic). Profiles are defined in code in `aviato/profiles.py`.
+All language CI workflows (`reusable-python-ci`, `reusable-node-ci`, `reusable-swift-ci`) expose the same inputs: `working-directory`, `install-command`, `lint-command`, `test-command`, `build-command`, and the `run-*` toggles. Keep this contract identical across languages; unsupported steps use an empty command and a disabled default. The `templates/profile-*.yml` examples compose these reusable workflows for a repo shape and stay thin (select workflow + supply inputs, no duplicated release/protection logic); they are rendered from the scaffold bodies (see "Onboarding materializes the caller workflows"), not hand-edited.
 
 ## Conventions
 
