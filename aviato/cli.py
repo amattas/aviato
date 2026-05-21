@@ -140,6 +140,10 @@ def _version_pin_error(
     )
 
 
+def _tri(value: bool | None) -> str:
+    return "unknown" if value is None else ("yes" if value else "no")
+
+
 def _desired_settings(resolved) -> dict:
     """Flat reconcilable settings: branch protection + repo security toggles (§5.6/§2.13).
 
@@ -301,6 +305,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         prerequisite_paths=prerequisite_paths,
     )
 
+    # Platform-dependent probes (§5.4/§5.14): issue-channel availability and the
+    # per-run scan heartbeat. Best-effort — populated only if a repo slug resolves.
+    slug = normalize_slug(remote_url(root))
+    if slug and not args.no_remote_probe:
+        report.issue_channel_available, report.scan_heartbeat_present = GitHubPlatform().probe_health(slug)
+
     print(f"doctor: {declaration.profile} @ {declaration.version} ({root})")
     for output_path, status in sorted(report.statuses.items()):
         print(f"- {output_path}: {status}")
@@ -314,6 +324,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     print("prerequisites:")
     for name, ok in sorted(report.prerequisites.items()):
         print(f"- {name}: {'ok' if ok else 'missing'}")
+    print(f"issue channel available: {_tri(report.issue_channel_available)}")
+    print(f"scan heartbeat present: {_tri(report.scan_heartbeat_present)} (absence reads as broken, §5.14)")
     return 0
 
 
@@ -533,6 +545,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = subparsers.add_parser("doctor", help="Diagnose a consumer repository's managed artifacts.")
     doctor.add_argument("path", help="Path to the consumer repository.")
+    doctor.add_argument(
+        "--no-remote-probe",
+        action="store_true",
+        help="Skip the GitHub probes for issue-channel availability and scan heartbeat.",
+    )
     doctor.set_defaults(func=cmd_doctor)
 
     sync = subparsers.add_parser("sync", help="Materialize managed artifacts into a consumer repository.")

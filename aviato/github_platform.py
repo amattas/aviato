@@ -256,6 +256,27 @@ class GitHubPlatform:
             edited_by_nonhuman_since_grant=nonhuman_edit_after_grant(raw_timeline, grant.diff_id),
         )
 
+    def probe_health(self, repo: str) -> tuple[bool | None, bool | None]:
+        """Probe issue-channel availability and scan-heartbeat presence (§5.4/§5.14).
+
+        Returns ``(issue_channel_available, scan_heartbeat_present)``. A value is
+        None when it cannot be determined (e.g. the API call failed) — and a None
+        heartbeat reads as broken, never clean (§5.14). Best-effort: a failed probe
+        does not raise (doctor is a read-only health report).
+        """
+        issue_channel: bool | None = None
+        heartbeat: bool | None = None
+        try:
+            repo_data = github.gh_json_optional(f"repos/{repo}", default=None)
+            if isinstance(repo_data, dict) and "has_issues" in repo_data:
+                issue_channel = bool(repo_data["has_issues"])
+            analyses = github.gh_json_optional(f"repos/{repo}/code-scanning/analyses?per_page=1", default=None)
+            if isinstance(analyses, list):
+                heartbeat = len(analyses) > 0
+        except github.GitHubAPIError:
+            pass  # ambiguous read → leave unknown (None)
+        return issue_channel, heartbeat
+
     def _actor_role(self, repo: str, login: str | None) -> tuple[str | None, bool]:
         if not login:
             return None, False
