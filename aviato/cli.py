@@ -9,18 +9,19 @@ from . import __version__
 from .audit import audit_repos, discover_and_audit, render_json, render_tsv
 from .core.bootstrap import is_library
 from .core.composition import resolve_profile
-from .core.declaration import Declaration, load_declaration
+from .core.declaration import Declaration, dump_declaration, load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
 from .core.errors import AviatoError
 from .core.file_drift_flow import run_file_drift
 from .core.fleet import scan_fleet
 from .core.marker import parse_marker_from_text
-from .core.onboarding import materialize_items
+from .core.onboarding import materialize_items, plan_onboarding
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.render import render
 from .core.scaffold import ScaffoldItem, render_managed, scaffold
 from .core.settings_drift_flow import run_settings_drift
+from .core.variables import resolve_variables, writeback_variables
 from .core.version import is_compatible
 from .core.versioning import is_highest
 from .github import GitHubAPIError
@@ -137,6 +138,79 @@ def _expected_artifacts(registry: Registry, resolved, variables: dict) -> list[E
     return artifacts
 
 
+def _parse_var_flags(pairs: list[str] | None) -> dict[str, str]:
+    resolved: dict[str, str] = {}
+    for pair in pairs or []:
+        key, sep, value = pair.partition("=")
+        if not sep:
+            raise AviatoError(f"--var expects KEY=VALUE, got {pair!r}")
+        resolved[key.strip()] = value
+    return resolved
+
+
+def _env_vars(specs) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for spec in specs:
+        key = "AVIATO_VAR_" + spec.name.upper().replace("-", "_")
+        if key in os.environ:
+            env[spec.name] = os.environ[key]
+    return env
+
+
+def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> int:
+    """Adopt a local repository (§5.2): resolve variables, write the declaration, scaffold."""
+    target = Path(args.target)
+    if not target.is_dir():
+        print(f"--write requires a local repository path; {args.target!r} is not a directory", file=sys.stderr)
+        return 2
+
+    declaration_path = target / ".github" / "aviato.yaml"
+    existing = load_declaration(declaration_path) if declaration_path.is_file() else None
+
+    try:
+        flags = _parse_var_flags(args.var)
+        variables = resolve_variables(
+            resolved.variables,
+            flags=flags,
+            declaration=(existing.variables if existing else {}),
+            env=_env_vars(resolved.variables),
+            autodetect={},
+        )
+        plan_onboarding(
+            registry,
+            profile=args.profile,
+            existing_declaration=existing,
+            variables=variables,
+            allow_migrate=args.migrate_profile,
+        )
+        persisted = writeback_variables(resolved.variables, variables)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    declaration = Declaration(
+        profile=args.profile,
+        version=args.pin,
+        docs=args.docs,
+        variables=persisted,
+        overrides=(existing.overrides if existing else {}),
+    )
+    declaration_path.parent.mkdir(parents=True, exist_ok=True)
+    dump_declaration(declaration, declaration_path)
+    print(f"wrote {declaration_path.relative_to(target)}")
+
+    items = materialize_items(registry, args.profile, variables)
+    result = scaffold(target, items, profile=args.profile, version=args.pin)
+    for output in result.written:
+        print(f"wrote {output}")
+    for output in result.seeded:
+        print(f"seeded {output}")
+    for output in result.skipped_unmanaged + result.skipped_modified:
+        print(f"SKIPPED (operator-owned) {output}")
+    print("next: review the changes, then apply protections with `aviato apply-rulesets OWNER/REPO --apply`")
+    return 0
+
+
 def cmd_onboard(args: argparse.Namespace) -> int:
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
@@ -144,6 +218,9 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+
+    if args.write:
+        return _onboard_write(args, registry, resolved)
 
     print(f"Onboarding plan for {args.target}")
     print(f"profile: {resolved.profile}")
@@ -413,10 +490,22 @@ def build_parser() -> argparse.ArgumentParser:
     validate_cmd = subparsers.add_parser("validate", help="Validate Aviato policy infrastructure.")
     validate_cmd.set_defaults(func=cmd_validate)
 
-    onboard = subparsers.add_parser("onboard", help="Print an onboarding plan for one repository.")
+    onboard = subparsers.add_parser(
+        "onboard", help="Print an onboarding plan, or adopt a local repository with --write (§5.2)."
+    )
     onboard.add_argument("target", help="Repository path or OWNER/REPO slug.")
     onboard.add_argument("--profile", default="python-service")
     onboard.add_argument("--docs", action="store_true", help="Compose the opt-in docs deploy (§13.3).")
+    onboard.add_argument(
+        "--write",
+        action="store_true",
+        help="Adopt a local repo: write .github/aviato.yaml and scaffold managed files.",
+    )
+    onboard.add_argument("--pin", default="v0", help="Library version pin to record in the declaration.")
+    onboard.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
+    onboard.add_argument(
+        "--migrate-profile", action="store_true", help="Allow changing an already-declared profile (§5.2)."
+    )
     onboard.set_defaults(func=cmd_onboard)
 
     doctor = subparsers.add_parser("doctor", help="Diagnose a consumer repository's managed artifacts.")
