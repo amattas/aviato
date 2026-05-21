@@ -13,14 +13,19 @@ from aviato.paths import MODULE_SOURCE_ROOT
 
 def test_docs_true_scaffolds_gated_docs_workflow() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
-    without = {i.output for i in materialize_items(reg, "python-library", {})}
-    withdocs = {i.output: i for i in materialize_items(reg, "python-library", {}, docs=True)}
+    variables = {"distribution-name": "acme", "import-name": "acme"}
+    without = {i.output for i in materialize_items(reg, "python-library", variables)}
+    withdocs = {i.output: i for i in materialize_items(reg, "python-library", variables, docs=True)}
     assert ".github/workflows/aviato-docs.yml" not in without
     docs = withdocs[".github/workflows/aviato-docs.yml"]
     # §4/§5.14: docs deploy is gated by the release gate AND the release-ref security baseline.
     assert "reusable-release-gate.yml" in docs.body
     assert "reusable-security-baseline.yml" in docs.body
-    assert "needs: [release-gate, security]" in docs.body
+    assert "needs: [resolve, release-gate, security]" in docs.body
+    # In-run model (#1): triggered by workflow_run (token-pushed tags don't re-trigger),
+    # deploying only when the completed run carries a fresh release tag.
+    assert "workflow_run:" in docs.body
+    assert "release-tag: ${{ needs.resolve.outputs.tag }}" in docs.body
 
 
 def test_pin_is_stamped_into_generated_workflows() -> None:

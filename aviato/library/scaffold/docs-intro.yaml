@@ -1,0 +1,6 @@
+name: docs-intro
+output_path: website/docs/intro.md
+source: files/docs-intro.md.txt
+seed_once: true
+when:
+  docs: "true"

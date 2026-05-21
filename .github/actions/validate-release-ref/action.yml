@@ -9,7 +9,7 @@ inputs:
   tag-format-description:
     description: Human-readable description of the accepted tag format.
     required: false
-    default: 'n.n.n, n.n.n-alphaN, or n.n.n-betaN'
+    default: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
   require-tag-ref:
     description: Whether to fail when the workflow is not running from a tag ref.
     required: false

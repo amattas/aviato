@@ -16,10 +16,33 @@ on:
         required: false
         type: string
         default: "."
+      release-tag:
+        description: >-
+          Tag to build/publish when invoked IN-RUN (branch context) by the release
+          job. When empty the workflow runs in the classic tag-ref context.
+        required: false
+        type: string
+        default: ""
       install-command:
         required: false
         type: string
-        default: "npm ci"
+        # Reproducible install when a lockfile is committed; falls back to a plain
+        # install on a freshly-scaffolded docs site that has none yet.
+        default: "if [ -f package-lock.json ]; then npm ci; else npm install; fi"
+      docs-emit-command:
+        description: >-
+          §12 language docs emission: a command that writes API/narrative md(x) into
+          the docs source tree (e.g. pdoc/pydoc-markdown for Python, TypeDoc markdown
+          for Node) before the Docusaurus version-cut + build. Empty = narrative-only
+          (Swift), where the scaffolded pages are the source.
+        required: false
+        type: string
+        default: ""
+      docs-source-directory:
+        description: Working directory for docs-emit-command (the project root, where source lives).
+        required: false
+        type: string
+        default: "."
       build-command:
         required: false
         type: string
@@ -66,6 +89,11 @@ jobs:
     steps:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
+        with:
+          # Build from the release tag — explicit in-run, or the tag ref otherwise.
+          ref: ${{ inputs.release-tag || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Validate release tag
         id: release
@@ -73,17 +101,23 @@ jobs:
         env:
           TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
           TAG_FORMAT_DESCRIPTION: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
+          RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
-            echo "::error::Release workflows must run from a tag ref. Got ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}."
+          if [ -n "${RELEASE_TAG_INPUT}" ]; then
+            tag="${RELEASE_TAG_INPUT}"
+          else
+            if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+              echo "::error::Release workflows must run from a tag ref (or pass release-tag). Got ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}."
+              exit 1
+            fi
+            tag="${GITHUB_REF_NAME}"
+          fi
+          if [[ ! "${tag}" =~ ${TAG_PATTERN} ]]; then
+            echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${tag}"
             exit 1
           fi
-          if [[ ! "${GITHUB_REF_NAME}" =~ ${TAG_PATTERN} ]]; then
-            echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${GITHUB_REF_NAME}"
-            exit 1
-          fi
-          echo "tag=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -98,6 +132,15 @@ jobs:
       - name: Install
         shell: bash
         run: ${{ inputs.install-command }}
+
+      # §12: emit language API/narrative docs into the docs source tree BEFORE the
+      # version cut, so the generated reference is captured in the versioned snapshot
+      # and the published build. Runs from the project root (source lives there).
+      - name: Emit language API docs
+        if: ${{ inputs.docs-emit-command != '' }}
+        shell: bash
+        working-directory: ${{ inputs.docs-source-directory }}
+        run: ${{ inputs.docs-emit-command }}
 
       # §13.3 multi-version: restore the accumulated Docusaurus version SOURCES from the
       # prior run's `aviato-docs-versions` artifact (read-only; no source-branch push).

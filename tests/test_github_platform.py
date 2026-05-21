@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -163,14 +164,16 @@ def test_to_branch_protection_payload_sets_required_checks() -> None:
 
 
 def test_map_branch_settings_keys_match_baseline_desired() -> None:
-    from pathlib import Path
+    from aviato.core.composition import resolve_profile
+    from aviato.core.registry import Registry
 
-    import yaml
-
-    text = Path("aviato/library/bundles/settings/baseline.yaml").read_text(encoding="utf-8")
-    desired = yaml.safe_load(text)["settings"]["default_branch"]
+    # required_status_checks is derived at composition time (not in the static
+    # bundle), so compare the mapped keys against a fully-composed profile's desired
+    # default-branch state — like-for-like, no spurious destructive drift.
+    registry = Registry(Path("aviato/library"))
+    desired = resolve_profile(registry, "python-library").settings["default_branch"]
     mapped = map_branch_settings([], {})
-    assert set(mapped) == set(desired)  # like-for-like comparison, no spurious destructive drift
+    assert set(mapped) == set(desired)
 
 
 def test_map_branch_settings_unprotected() -> None:

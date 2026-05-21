@@ -1,0 +1,8 @@
+name: node-manifest-js
+# Seed-once project manifest for the JavaScript variant: no tsc type-check/build and
+# no TypeScript dev dependency (§12.2). Includes scripts + engines.
+output_path: package.json
+source: files/package.json.js.txt
+seed_once: true
+when:
+  language-variant: javascript

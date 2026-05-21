@@ -6,25 +6,31 @@
 security-baseline:
   privileges: ["contents: read", "pull-requests: read", "security-events: write", "actions: read"]
   runner: linux
+  status_check: "security / Security baseline heartbeat"
 release-gate:
   privileges: ["actions: read", "contents: read", "pull-requests: read"]
   runner: linux
 common-lint:
   privileges: ["contents: read"]
   runner: linux
+  status_check: "common-lint / Common lint"
 release:
-  # §5.9 release (version bump + tag); writes contents. No reusable workflow yet.
-  privileges: ["contents: write"]
+  # §5.9 release: proposes the version-bump PR (pull-requests: write) and tags +
+  # publishes the GitHub release (contents: write). Mirrors reusable-release.yml.
+  privileges: ["contents: write", "pull-requests: write"]
   runner: linux
 python-verify:
   privileges: ["contents: read"]
   runner: linux
+  status_check: "ci / Python CI"
 node-verify:
   privileges: ["contents: read"]
   runner: linux
+  status_check: "ci / Node CI"
 swift-verify:
   privileges: ["contents: read"]
   runner: macos
+  status_check: "ci / Swift CI"
 pypi-publish:
   privileges: ["contents: read", "id-token: write", "attestations: write"]
   runner: linux

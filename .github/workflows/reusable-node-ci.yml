@@ -14,7 +14,9 @@ on:
       install-command:
         required: false
         type: string
-        default: "npm ci"
+        # Reproducible install when a lockfile is committed; falls back to a plain
+        # install on a freshly-scaffolded repo that has none yet (then commit the lock).
+        default: "if [ -f package-lock.json ]; then npm ci; else npm install; fi"
       lint-command:
         required: false
         type: string

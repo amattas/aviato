@@ -30,6 +30,39 @@ def unpinned_third_party_uses(text: str) -> list[str]:
     return violations
 
 
+# §11.3 covers shell-fetched tools/images too, not just `uses:` refs. Two well-defined
+# anti-patterns are detected: a `docker run` image without an `@sha256:` digest, and a
+# remote artifact fetched and piped straight into a shell/extractor (no checksum gate).
+_DOCKER_RUN_RE = re.compile(r"\bdocker\s+run\b(?P<rest>[^\n]*)")
+_FETCH_PIPE_RE = re.compile(r"\b(?:curl|wget)\b[^\n|]*\|[^\n]*\b(?:sh|bash|tar)\b")
+
+
+def unpinned_tool_invocations(text: str) -> list[str]:
+    """Return shell-invoked tools/images not pinned by digest/checksum (§11.3)."""
+    violations: list[str] = []
+    for match in _DOCKER_RUN_RE.finditer(text):
+        image = _docker_run_image(match.group("rest"))
+        if image is not None and "@sha256:" not in image:
+            violations.append(f"docker run image not digest-pinned: {image}")
+    for match in _FETCH_PIPE_RE.finditer(text):
+        violations.append(f"fetch-and-execute without checksum: {match.group(0).strip()}")
+    return violations
+
+
+def _docker_run_image(rest: str) -> str | None:
+    """The image argument of a ``docker run`` invocation: the first non-flag token.
+
+    Skips option flags (``--rm``, ``-i``) — valueless flags only; a flag taking a
+    separate value (``-e VAR``) would shift the image, so the detector is a best-effort
+    guard for the common pinning mistake, paired with the digest check above.
+    """
+    for token in rest.split():
+        if token.startswith("-"):
+            continue
+        return token
+    return None
+
+
 def action_pin_violations(root: Path) -> list[str]:
     """Scan workflows + scaffolded workflow bodies for unpinned third-party actions.
 
@@ -46,4 +79,6 @@ def action_pin_violations(root: Path) -> list[str]:
             if "{{" in ref:  # scaffold placeholder, not a real mutable tag
                 continue
             violations.append(f"{path.name}: {ref}")
+        for tool in unpinned_tool_invocations(text):
+            violations.append(f"{path.name}: {tool}")
     return violations

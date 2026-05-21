@@ -14,8 +14,8 @@ on:
 # cannot elevate the token for a called workflow, so it must grant >= their needs
 # (release-gate: actions:read; GHCR/PyPI provenance: id-token+attestations:write).
 permissions:
-  contents: read
-  pull-requests: read
+  contents: write
+  pull-requests: write
   security-events: write
   actions: read
   packages: write
@@ -28,7 +28,7 @@ jobs:
     uses: amattas/aviato/.github/workflows/reusable-node-ci.yml@{{ aviato-ref }}
     with:
       node-version: "22"
-      install-command: "npm ci"
+      install-command: "if [ -f package-lock.json ]; then npm ci; else npm install; fi"
       # Required gates are explicit (no --if-present): a missing script fails the
       # verify pipeline (§12.2). Format-check (Prettier) and TS type-check (tsc,
       # auto-skipped when there is no tsconfig.json, i.e. language-variant=javascript)
@@ -56,19 +56,24 @@ jobs:
     with:
       aviato-ref: {{ aviato-ref }}
 
+  # Gate before deploy. Two entry points: IN-RUN (release just tagged on this push;
+  # release-tag = its output) or a manual tag push (classic tag-ref context).
   release-gate:
-    if: ${{ github.ref_type == 'tag' }}
+    needs: [release]
+    if: ${{ always() && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@{{ aviato-ref }}
     with:
       default-branch: main
       require-merged-pr: true
+      release-tag: ${{ needs.release.outputs.tag }}
 
   docker:
-    if: ${{ github.ref_type == 'tag' }}
-    needs: [release-gate, security]
+    needs: [release, release-gate, security]
+    if: ${{ always() && needs.release-gate.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@{{ aviato-ref }}
     with:
       context: "."
       dockerfile: "Dockerfile"
       platforms: "linux/amd64"
+      release-tag: ${{ needs.release.outputs.tag }}
 

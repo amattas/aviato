@@ -3,6 +3,14 @@ name: Reusable Security Baseline
 on:
   workflow_call:
     inputs:
+      ref:
+        description: >-
+          Commit/tag to scan. Empty uses the triggering ref. Set this when the caller
+          runs out-of-band (e.g. the docs workflow_run path) so the release-ref
+          security baseline (§5.14) scans the released commit, not a later default-branch tip.
+        required: false
+        type: string
+        default: ""
       codeql-languages:
         description: Comma-separated CodeQL languages, for example python or javascript-typescript.
         required: false
@@ -64,6 +72,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
@@ -85,6 +95,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Dependency review
         uses: actions/dependency-review-action@v4
@@ -100,9 +112,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Scan dependencies
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           scan-type: fs
           scan-ref: "."
@@ -129,9 +143,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Scan for secrets
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           scan-type: fs
           scan-ref: "."

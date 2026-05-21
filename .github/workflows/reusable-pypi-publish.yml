@@ -16,6 +16,13 @@ on:
         required: false
         type: string
         default: "."
+      release-tag:
+        description: >-
+          Tag to build/publish when invoked IN-RUN (branch context) by the release
+          job. When empty the workflow runs in the classic tag-ref context.
+        required: false
+        type: string
+        default: ""
       install-command:
         required: false
         type: string
@@ -50,23 +57,34 @@ jobs:
     steps:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
+        with:
+          # Build from the release tag — explicit in-run, or the tag ref otherwise.
+          ref: ${{ inputs.release-tag || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Validate release tag
         shell: bash
         env:
           TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
-          TAG_FORMAT_DESCRIPTION: 'n.n.n, n.n.n-alphaN, or n.n.n-betaN'
+          TAG_FORMAT_DESCRIPTION: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
+          RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
-            echo "::error::Release workflows must run from a tag ref. Got ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}."
+          if [ -n "${RELEASE_TAG_INPUT}" ]; then
+            tag="${RELEASE_TAG_INPUT}"
+          else
+            if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+              echo "::error::Release workflows must run from a tag ref (or pass release-tag). Got ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}."
+              exit 1
+            fi
+            tag="${GITHUB_REF_NAME}"
+          fi
+          if [[ ! "${tag}" =~ ${TAG_PATTERN} ]]; then
+            echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${tag}"
             exit 1
           fi
-
-          if [[ ! "${GITHUB_REF_NAME}" =~ ${TAG_PATTERN} ]]; then
-            echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${GITHUB_REF_NAME}"
-            exit 1
-          fi
+          echo "RESOLVED_TAG=${tag}" >> "${GITHUB_ENV}"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -108,7 +126,7 @@ jobs:
           }
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           path: ${{ inputs.working-directory }}
           format: cyclonedx-json
@@ -129,13 +147,13 @@ jobs:
 
       - name: Publish distributions
         if: ${{ inputs.repository-url == '' }}
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
           packages-dir: ${{ inputs.working-directory }}/${{ inputs.packages-dir }}
 
       - name: Publish distributions to alternate repository
         if: ${{ inputs.repository-url != '' }}
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
           packages-dir: ${{ inputs.working-directory }}/${{ inputs.packages-dir }}
           repository-url: ${{ inputs.repository-url }}
@@ -147,7 +165,8 @@ jobs:
           INDEX_URL: ${{ inputs.repository-url }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME}"
+          # Package version is the bare SemVer (strip the leading v from the tag).
+          version="${RESOLVED_TAG#v}"
           name="$(python -c 'import tomllib,glob; print(tomllib.load(open("pyproject.toml","rb"))["project"]["name"])')"
           extra=""
           if [ -n "${INDEX_URL}" ]; then extra="--index-url ${INDEX_URL%/}/simple/"; fi

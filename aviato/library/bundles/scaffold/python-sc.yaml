@@ -3,4 +3,5 @@ extends: common
 add:
   - python-lint-config
   - python-typecheck-config
+  - python-manifest
 remove: []

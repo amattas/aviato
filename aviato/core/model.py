@@ -41,6 +41,11 @@ class PipelineModule:
     inputs: tuple[str, ...] = ()
     secrets: tuple[str, ...] = ()
     runner: str | None = None
+    # The branch-protection status-check context this pipeline produces (§10), e.g.
+    # ``ci / <Verify Job>``. Composition unions these into required_status_checks so
+    # the merge gate requires exactly the jobs the profile actually runs. None = the
+    # pipeline gates nothing (release/publish run after merge).
+    status_check: str | None = None
 
 
 @dataclass(frozen=True)

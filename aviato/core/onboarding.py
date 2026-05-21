@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from .composition import resolve_profile
@@ -30,6 +31,7 @@ def render_variables(variables: Mapping[str, Any], *, pin: str = "main", docs: b
     derived = dict(variables)
     derived["aviato-ref"] = pin
     derived["docs"] = "true" if docs else "false"
+    derived.setdefault("year", str(date.today().year))
     variant = variables.get("language-variant")
     if variant is not None:
         derived["run-typecheck"] = "false" if variant == "javascript" else "true"
@@ -70,7 +72,9 @@ def resolved_artifacts(
     artifacts: list[ResolvedArtifact] = []
     for template in applicable_templates(resolved, render_vars):
         body = registry.template_body(template)
-        rendered = body if template.seed_once else render(body, render_vars)
+        # Seed-once starter files are rendered once (leniently — the developer owns
+        # and completes them); managed files are re-rendered strictly every sync.
+        rendered = render(body, render_vars, strict=not template.seed_once)
         artifacts.append(ResolvedArtifact(template.output_path, rendered, template.comment or "#", template.seed_once))
     return artifacts
 

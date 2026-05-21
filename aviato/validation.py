@@ -135,6 +135,14 @@ def _check_core_agnosticism(core_dir: Path, denylist_file: Path, errors: list[st
         errors.append(f"core names a denylisted identifier: {violation}")
 
 
+def _check_action_pins(root: Path, errors: list[str]) -> None:
+    """§11.3: third-party actions/tools invoked by any pipeline are pinned by digest."""
+    from .core.actionpins import action_pin_violations
+
+    for violation in action_pin_violations(root):
+        errors.append(f"unpinned third-party action/tool (§11.3): {violation}")
+
+
 def validate(root: Path = REPO_ROOT) -> list[str]:
     errors: list[str] = []
 
@@ -161,5 +169,6 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_template_references(root, errors)
     _check_release_workflow_contract(root, errors)
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
+    _check_action_pins(root, errors)
 
     return errors

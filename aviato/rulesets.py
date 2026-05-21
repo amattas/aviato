@@ -24,12 +24,33 @@ def _patch_tag_ruleset(payload: dict[str, Any], tag_pattern: str) -> None:
             parameters["pattern"] = tag_pattern
 
 
+def _patch_status_checks(payload: dict[str, Any], extra_contexts: list[str]) -> None:
+    """Union additional required status-check contexts into the branch ruleset (§10).
+
+    The static ruleset carries only the common (language-agnostic) checks; a resolved
+    profile adds its language verify job (e.g. ``ci / Python CI``) so the ruleset cannot
+    enforce merge protection weaker than the profile composed for the repo.
+    """
+    if not extra_contexts:
+        return
+    for rule in payload.get("rules", []):
+        if rule.get("type") == "required_status_checks":
+            parameters = rule.setdefault("parameters", {})
+            checks = parameters.setdefault("required_status_checks", [])
+            present = {c.get("context") for c in checks}
+            for context in extra_contexts:
+                if context not in present:
+                    checks.append({"context": context})
+                    present.add(context)
+
+
 def render_ruleset(
     item: dict[str, Any],
     *,
     root: Path = REPO_ROOT,
     policy: dict[str, Any] | None = None,
     required_approvals: int | None = None,
+    extra_status_checks: list[str] | None = None,
 ) -> dict[str, Any]:
     policy = policy or load_policy(root)
     payload_path = root / item["file"]
@@ -46,6 +67,7 @@ def render_ruleset(
             approval_path = patch.get("required_approving_review_count")
             approvals = int(get_path(policy, approval_path)) if approval_path else default_required_approvals(policy)
         _patch_branch_ruleset(rendered, approvals)
+        _patch_status_checks(rendered, extra_status_checks or [])
 
     if target == "tag":
         tag_path = patch.get("tag_name_pattern", "release.tag_pattern")
@@ -58,17 +80,30 @@ def render_all_rulesets(
     *,
     root: Path = REPO_ROOT,
     required_approvals: int | None = None,
+    extra_status_checks: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     policy = load_policy(root)
     manifest = load_ruleset_manifest(root)
     return [
-        render_ruleset(item, root=root, policy=policy, required_approvals=required_approvals)
+        render_ruleset(
+            item,
+            root=root,
+            policy=policy,
+            required_approvals=required_approvals,
+            extra_status_checks=extra_status_checks,
+        )
         for item in manifest.get("rulesets", [])
     ]
 
 
-def apply_rulesets(slugs: list[str], *, apply: bool, required_approvals: int | None = None) -> list[str]:
-    payloads = render_all_rulesets(required_approvals=required_approvals)
+def apply_rulesets(
+    slugs: list[str],
+    *,
+    apply: bool,
+    required_approvals: int | None = None,
+    extra_status_checks: list[str] | None = None,
+) -> list[str]:
+    payloads = render_all_rulesets(required_approvals=required_approvals, extra_status_checks=extra_status_checks)
     messages: list[str] = []
     for slug in slugs:
         for payload in payloads:

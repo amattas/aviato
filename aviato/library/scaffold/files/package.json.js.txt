@@ -1,0 +1,19 @@
+{
+  "name": "{{ project-name }}",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=18.0"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "format:check": "prettier --check .",
+    "test": "vitest run --coverage",
+    "build": "echo 'Configure a JavaScript bundle for your service (e.g. esbuild).'"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "vitest": "^2.0.0"
+  }
+}

@@ -14,8 +14,8 @@ on:
 # cannot elevate the token for a called workflow, so it must grant >= their needs
 # (release-gate: actions:read; GHCR/PyPI provenance: id-token+attestations:write).
 permissions:
-  contents: read
-  pull-requests: read
+  contents: write
+  pull-requests: write
   security-events: write
   actions: read
 
@@ -24,8 +24,8 @@ jobs:
     if: ${{ github.ref_type != 'tag' && github.event_name != 'schedule' }}
     uses: amattas/aviato/.github/workflows/reusable-swift-ci.yml@{{ aviato-ref }}
     with:
-      scheme: "App"
-      workspace: "App.xcworkspace"
+      scheme: "{{ product-scheme }}"
+      workspace: "{{ product-scheme }}.xcworkspace"
       destination: "platform=iOS Simulator,name=iPhone 16"
       install-command: "brew install swiftformat swiftlint"
       run-install: true
@@ -49,28 +49,33 @@ jobs:
     with:
       aviato-ref: {{ aviato-ref }}
 
+  # Gate before deploy. Two entry points: IN-RUN (release just tagged on this push;
+  # release-tag = its output) or a manual tag push (classic tag-ref context).
   release-gate:
-    if: ${{ github.ref_type == 'tag' }}
+    needs: [release]
+    if: ${{ always() && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@{{ aviato-ref }}
     with:
       default-branch: main
       require-merged-pr: true
+      release-tag: ${{ needs.release.outputs.tag }}
 
   app-store-connect:
-    if: ${{ github.ref_type == 'tag' }}
-    needs: [release-gate, security]
+    needs: [release, release-gate, security]
+    if: ${{ always() && needs.release-gate.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-app-store-connect.yml@{{ aviato-ref }}
     with:
+      release-tag: ${{ needs.release.outputs.tag }}
       environment-name: app-store-connect
-      scheme: "App"
-      workspace: "App.xcworkspace"
-      bundle-identifier: "com.example.app"
-      team-id: "TEAMID1234"
-      export-options-plist: ExportOptions.plist
-      version-command: |
-        base_version="${RELEASE_TAG%%-*}"
-        agvtool new-marketing-version "${base_version}"
-        agvtool new-version -all "${BUILD_NUMBER}"
+      scheme: "{{ product-scheme }}"
+      workspace: "{{ product-scheme }}.xcworkspace"
+      bundle-identifier: "{{ bundle-identifier }}"
+      team-id: "{{ team-id }}"
+      export-method: "{{ export-method }}"
+      # No version-command: the merged release PR already wrote the marketing version
+      # + monotonic build number into the version-source (§13.4), and this job builds
+      # from that exact tagged commit — re-deriving here (a different run, hence a
+      # different run number) would make the uploaded build disagree with the tag.
     secrets:
       APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
       APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}

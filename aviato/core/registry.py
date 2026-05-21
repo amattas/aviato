@@ -104,6 +104,7 @@ class Registry:
             inputs=tuple(doc.get("inputs", ())),
             secrets=tuple(doc.get("secrets", ())),
             runner=doc.get("runner"),
+            status_check=doc.get("status_check"),
         )
 
     def template_module(self, name: str) -> TemplateModule:

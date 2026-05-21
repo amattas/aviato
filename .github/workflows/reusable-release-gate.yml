@@ -18,6 +18,14 @@ on:
         required: false
         type: boolean
         default: true
+      release-tag:
+        description: >-
+          The release tag to gate when invoked IN-RUN (branch context) by the release
+          job, e.g. v1.2.3. When empty the gate runs in the classic tag-ref context
+          and validates GITHUB_REF_NAME.
+        required: false
+        type: string
+        default: ""
       required-workflow:
         description: Optional workflow file name or ID that must have a successful push run for the tagged commit.
         required: false
@@ -44,18 +52,26 @@ jobs:
         shell: bash
         env:
           TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
-          TAG_FORMAT_DESCRIPTION: 'n.n.n, n.n.n-alphaN, or n.n.n-betaN'
+          TAG_FORMAT_DESCRIPTION: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
+          RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
-            echo "::error::Release workflows must run from a tag ref. Got ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}."
-            exit 1
+          # Two contexts: IN-RUN (release-tag input set, branch ref) or classic tag ref.
+          if [ -n "${RELEASE_TAG_INPUT}" ]; then
+            tag="${RELEASE_TAG_INPUT}"
+          else
+            if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+              echo "::error::Release workflows must run from a tag ref (or pass release-tag). Got ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}."
+              exit 1
+            fi
+            tag="${GITHUB_REF_NAME}"
           fi
 
-          if [[ ! "${GITHUB_REF_NAME}" =~ ${TAG_PATTERN} ]]; then
-            echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${GITHUB_REF_NAME}"
+          if [[ ! "${tag}" =~ ${TAG_PATTERN} ]]; then
+            echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${tag}"
             exit 1
           fi
+          echo "RESOLVED_TAG=${tag}" >> "${GITHUB_ENV}"
 
       - name: Verify tag points at default branch
         shell: bash
@@ -64,14 +80,24 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin "${DEFAULT_BRANCH}" --tags
-          tag_sha="$(git rev-parse "${GITHUB_SHA}")"
+          # In both contexts GITHUB_SHA is the commit being gated: the tag commit (tag
+          # ref) or the merge commit we are deploying (in-run). It must be the default
+          # branch tip and (in-run) the resolved tag must point at it.
+          gated_sha="$(git rev-parse "${GITHUB_SHA}")"
           branch_sha="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
 
-          if [ "${tag_sha}" != "${branch_sha}" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} must point at origin/${DEFAULT_BRANCH}."
-            echo "tag=${tag_sha}"
+          if [ "${gated_sha}" != "${branch_sha}" ]; then
+            echo "::error::${RESOLVED_TAG} must point at origin/${DEFAULT_BRANCH}."
+            echo "gated=${gated_sha}"
             echo "branch=${branch_sha}"
             exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/${RESOLVED_TAG}" >/dev/null; then
+            tag_sha="$(git rev-parse "refs/tags/${RESOLVED_TAG}^{commit}")"
+            if [ "${tag_sha}" != "${gated_sha}" ]; then
+              echo "::error::Tag ${RESOLVED_TAG} (${tag_sha}) does not point at the gated commit ${gated_sha}."
+              exit 1
+            fi
           fi
 
       - name: Require merged pull request
@@ -115,7 +141,7 @@ jobs:
           ' <<<"${response}" | head -n1)"
 
           if [ -z "${pr_json}" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} must point at the ${DEFAULT_BRANCH} tip associated with a merged PR."
+            echo "::error::${RESOLVED_TAG} must point at the ${DEFAULT_BRANCH} tip associated with a merged PR."
             exit 1
           fi
 

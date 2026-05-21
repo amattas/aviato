@@ -7,4 +7,7 @@ add:
   - wf-drift
   - wf-docs-swift-app
   - docusaurus-config
+  - docs-package
+  - docs-sidebars
+  - docs-intro
 remove: []

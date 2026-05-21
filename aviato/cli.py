@@ -60,6 +60,23 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def _profile_status_checks(profile: str | None) -> list[str]:
+    """The resolved profile's required status-check contexts (§10), or [] if none.
+
+    Lets `apply-rulesets`/`render-rulesets` inject the language verify job (e.g.
+    `ci / Python CI`) into the otherwise-static branch ruleset so it matches the
+    profile composed for the repo.
+    """
+    if not profile:
+        return []
+    from .core.composition import resolve_profile
+    from .core.registry import Registry
+    from .paths import MODULE_SOURCE_ROOT
+
+    resolved = resolve_profile(Registry(MODULE_SOURCE_ROOT), profile)
+    return list(resolved.settings.get("default_branch", {}).get("required_status_checks", []))
+
+
 def cmd_apply_rulesets(args: argparse.Namespace) -> int:
     slugs = list(args.repo_pos)
     slugs.extend(args.repo or [])
@@ -68,6 +85,12 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
 
     if not slugs:
         print("at least one repository slug is required", file=sys.stderr)
+        return 2
+
+    try:
+        extra_checks = _profile_status_checks(getattr(args, "profile", None))
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
 
     if args.apply:
@@ -82,7 +105,12 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
         )
 
     try:
-        for message in apply_rulesets(slugs, apply=args.apply, required_approvals=args.required_approvals):
+        for message in apply_rulesets(
+            slugs,
+            apply=args.apply,
+            required_approvals=args.required_approvals,
+            extra_status_checks=extra_checks,
+        ):
             print(message)
         return 0
     except GitHubAPIError as exc:
@@ -93,7 +121,12 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
 def cmd_render_rulesets(args: argparse.Namespace) -> int:
     import json
 
-    payloads = render_all_rulesets(required_approvals=args.required_approvals)
+    try:
+        extra_checks = _profile_status_checks(getattr(args, "profile", None))
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    payloads = render_all_rulesets(required_approvals=args.required_approvals, extra_status_checks=extra_checks)
     print(json.dumps(payloads, indent=2))
     return 0
 
@@ -524,7 +557,7 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
     if not locations:
         print("profile declares no version-source locations", file=sys.stderr)
         return 2
-    changed = bump_files(root, locations, args.version)
+    changed = bump_files(root, locations, args.version, args.build_number)
     for location in changed:
         print(f"bumped {location} -> {args.version}")
     if not changed:
@@ -591,10 +624,18 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--repos-file", help="Optional newline-delimited list of repository slugs.")
     apply.add_argument("--apply", action="store_true", help="Apply changes instead of dry-running.")
     apply.add_argument("--required-approvals", type=int, help="Override required PR approval count.")
+    apply.add_argument(
+        "--profile",
+        help="Inject the profile's language verify status checks (e.g. ci / Python CI) into the branch ruleset.",
+    )
     apply.set_defaults(func=cmd_apply_rulesets)
 
     render = subparsers.add_parser("render-rulesets", help="Render configured ruleset payloads.")
     render.add_argument("--required-approvals", type=int, help="Override required PR approval count.")
+    render.add_argument(
+        "--profile",
+        help="Inject the profile's language verify status checks into the rendered branch ruleset.",
+    )
     render.set_defaults(func=cmd_render_rulesets)
 
     validate_cmd = subparsers.add_parser("validate", help="Validate Aviato policy infrastructure.")
@@ -667,6 +708,7 @@ def build_parser() -> argparse.ArgumentParser:
     bump = subparsers.add_parser("bump-version", help="Write a version into the version-source locations (§3.3).")
     bump.add_argument("version", help="The new version to write.")
     bump.add_argument("path", help="Path to the consumer repository.")
+    bump.add_argument("--build-number", help="Strictly-increasing build number (Swift marketing/build, §13.4).")
     bump.set_defaults(func=cmd_bump_version)
 
     reconcile = subparsers.add_parser("reconcile", help="Operator-gated settings reconcile against a tracking issue.")

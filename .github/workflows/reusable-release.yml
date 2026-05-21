@@ -1,16 +1,24 @@
 name: Reusable Release
 
-# §5.9 library/consumer release: derive the next SemVer from Conventional Commit
-# history, write it via the profile's version-source, tag the exact version, and
-# advance the floating major. Runs on the default branch (the human-gated release
-# cut is merging the release-bearing change).
+# §5.9 release with propose -> merge -> tag (-> in-run deploy). Runs on the default
+# branch. Two phases, chosen automatically:
 #
-# DEPLOY TRIGGER: the tag is pushed with the platform GITHUB_TOKEN — NO stored
-# secret (§11.2 forbids stored secrets outside App Store Connect). A tag pushed by
-# GITHUB_TOKEN does not auto-trigger the tag-gated deploy workflows, so the operator
-# starts the deploy by either (a) re-pushing the tag with their own credentials /
-# a GitHub App (§17 out-of-band), or (b) running the tag-gated workflow manually.
-# This avoids modeling a forbidden stored secret.
+#   PROPOSE: when the version-source has NOT yet been bumped to the derived next
+#     version, open/update a release PR that bumps the version-source + changelog.
+#     The version bump lands through a reviewed PR, so it never bypasses branch
+#     protection (requires_pull_request). No tag, no deploy this run.
+#
+#   TAG: when the latest commit IS the merged release bump (version-source already
+#     equals next), tag the exact version, advance the floating major, and publish
+#     the GitHub release. Emits outputs.released=true + outputs.tag so the caller can
+#     run deploy as IN-RUN downstream jobs.
+#
+# WHY IN-RUN DEPLOY: a tag pushed with GITHUB_TOKEN does NOT trigger a new
+# workflow run (GitHub suppresses events from the platform token to prevent
+# recursion), and §11.2 forbids a stored PAT/App token to re-trigger. So deploy
+# cannot be a separate tag-triggered workflow without a forbidden secret. Instead
+# the caller chains deploy off this job's outputs in the SAME run — fully
+# automatic, secret-free, and still gated by the release gate (merged-PR check).
 
 on:
   workflow_call:
@@ -24,17 +32,34 @@ on:
         required: false
         type: string
         default: "3.12"
+      build-number:
+        description: Strictly-increasing build number for app-bundle version sources (§13.4).
+        required: false
+        type: string
+        default: ""
+    outputs:
+      released:
+        description: Set to true when this run cut a release (tagged + published).
+        value: ${{ jobs.release.outputs.released }}
+      tag:
+        description: The released tag (vX.Y.Z), set only when released is true.
+        value: ${{ jobs.release.outputs.tag }}
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   release:
     name: Cut release
     runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.tag.outputs.released }}
+      tag: ${{ steps.derive.outputs.next }}
     env:
       GH_TOKEN: ${{ github.token }}
       AVIATO_REF: ${{ inputs.aviato-ref }}
+      BUILD_NUMBER: ${{ inputs.build-number || github.run_number }}
     steps:
       - name: Checkout (full history)
         uses: actions/checkout@v4
@@ -66,31 +91,82 @@ jobs:
           echo "next=${next}" >> "${GITHUB_OUTPUT}"
           if [ "${next}" = "${last}" ]; then
             echo "release=false" >> "${GITHUB_OUTPUT}"
-            echo "No releasable change in commit history; skipping release (no loop)."
+            echo "No releasable change in commit history; nothing to propose or tag."
           else
             echo "release=true" >> "${GITHUB_OUTPUT}"
           fi
 
-      - name: Bump version-source, tag, advance floating major, and release
+      - name: Choose phase (propose vs tag)
+        id: phase
         if: ${{ steps.derive.outputs.release == 'true' }}
         shell: bash
         env:
           NEXT: ${{ steps.derive.outputs.next }}
         run: |
           set -euo pipefail
-          # §5.9: writing the version through the version-source MUST succeed before
-          # cutting release artifacts — a failure aborts (no release without a bump).
-          aviato bump-version "${NEXT}" .
+          # TAG phase iff the merged HEAD carries the release bump for NEXT. Robust to
+          # the merge strategy: a squash merge puts "chore(release): <NEXT>" on HEAD;
+          # a merge commit puts it on the second parent (HEAD^2).
+          is_release_commit() {
+            git log -1 --format=%s "$1" 2>/dev/null | grep -q "^chore(release): ${NEXT}\$"
+          }
+          if is_release_commit HEAD || is_release_commit "HEAD^2"; then
+            echo "phase=tag" >> "${GITHUB_OUTPUT}"
+          else
+            echo "phase=propose" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Propose release PR
+        if: ${{ steps.phase.outputs.phase == 'propose' }}
+        shell: bash
+        env:
+          NEXT: ${{ steps.derive.outputs.next }}
+          LAST: ${{ steps.derive.outputs.last }}
+        run: |
+          set -euo pipefail
+          branch="release/${NEXT}"
           git config user.name aviato-bot
           git config user.email aviato-bot@users.noreply.github.com
-          git commit -am "chore(release): ${NEXT}" || echo "nothing to commit"
+          git checkout -B "${branch}"
+          # §5.9: the version-source bump MUST succeed before proposing — no release PR
+          # without a bump. The strictly-increasing build number is the run number.
+          aviato bump-version "${NEXT}" . --build-number "${BUILD_NUMBER}"
+          range="${LAST}..HEAD"
+          if ! git rev-parse "${LAST}" >/dev/null 2>&1; then range="HEAD"; fi
+          git log "${range}" --pretty=format:'- %s' > /tmp/changelog.md || true
+          git commit -am "chore(release): ${NEXT}"
+          git push -f origin "${branch}"
+          body="$(printf 'Automated release PR (§5.9). Merging this bumps the version-source to %s; the merge to the default branch then tags %s and runs deploy in the same run.\n\n## Changes\n' "${NEXT}" "${NEXT}"; cat /tmp/changelog.md)"
+          if existing="$(gh pr list --head "${branch}" --base "${GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null)" && [ -n "${existing}" ]; then
+            gh pr edit "${existing}" --title "chore(release): ${NEXT}" --body "${body}"
+            echo "Updated release PR #${existing} for ${NEXT}."
+          else
+            gh pr create --base "${GITHUB_REF_NAME}" --head "${branch}" --title "chore(release): ${NEXT}" --body "${body}"
+            echo "Opened release PR for ${NEXT}."
+          fi
+
+      - name: Tag release, advance floating major, publish
+        id: tag
+        if: ${{ steps.phase.outputs.phase == 'tag' }}
+        shell: bash
+        env:
+          NEXT: ${{ steps.derive.outputs.next }}
+          LAST: ${{ steps.derive.outputs.last }}
+        run: |
+          set -euo pipefail
+          git config user.name aviato-bot
+          git config user.email aviato-bot@users.noreply.github.com
           git tag "${NEXT}"
           # §5.9: advance the floating major (e.g. v1) to this release — a mutable
           # published pointer consumers pin with @vN (§6.1/§11.3).
           major="$(printf '%s' "${NEXT}" | sed -E 's/^(v[0-9]+).*/\1/')"
           git tag -f "${major}"
-          git push origin HEAD "${NEXT}"
+          git push origin "${NEXT}"
           git push -f origin "${major}"
-          prev="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "${NEXT}^" 2>/dev/null || git rev-list --max-parents=0 HEAD)"
-          git log "${prev}..HEAD" --pretty=format:'- %s' > /tmp/changelog.md || true
+          range="${LAST}..HEAD"
+          if ! git rev-parse "${LAST}" >/dev/null 2>&1; then range="HEAD"; fi
+          git log "${range}" --pretty=format:'- %s' > /tmp/changelog.md || true
           gh release create "${NEXT}" --title "${NEXT}" --notes-file /tmp/changelog.md
+          # Signal the caller to run deploy as in-run downstream jobs for this tag.
+          echo "released=true" >> "${GITHUB_OUTPUT}"
+          echo "Tagged and published ${NEXT}; deploy runs in-run from caller."

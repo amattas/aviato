@@ -133,6 +133,17 @@ def resolve_profile(
     # are simply absent from pipeline_modules.
     pipeline_modules = tuple(module for ref in pipelines if (module := registry.pipeline_module(ref)) is not None)
 
+    # §10/#5: the merge gate must require exactly the checks the profile's composed
+    # pipelines produce. Union the per-pipeline status_check contexts (e.g. the
+    # language verify job) into the desired branch protection — single source of
+    # truth, so a profile cannot require a check it never runs (or omit one it does).
+    status_checks = sorted({m.status_check for m in pipeline_modules if m.status_check})
+    if status_checks:
+        branch = dict(settings.get("default_branch", {}))
+        existing = list(branch.get("required_status_checks", ()))
+        branch["required_status_checks"] = sorted(set(existing) | set(status_checks))
+        settings = {**settings, "default_branch": branch}
+
     return ResolvedSet(
         profile=name,
         pipelines=pipelines,

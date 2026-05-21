@@ -1,5 +1,5 @@
 name: docusaurus-config
-output_path: docusaurus.config.js
+output_path: website/docusaurus.config.js
 source: files/docusaurus.config.js.txt
 seed_once: true
 when:
