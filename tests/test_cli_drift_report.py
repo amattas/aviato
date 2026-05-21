@@ -39,7 +39,7 @@ class FakePlatform:
 def _consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text("profile: python-library\nversion: v0\n", encoding="utf-8")
     return tmp_path
 
 

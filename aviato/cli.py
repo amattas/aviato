@@ -7,18 +7,21 @@ from pathlib import Path
 
 from . import __version__
 from .audit import audit_repos, discover_and_audit, render_json, render_tsv
+from .core.bootstrap import is_library
 from .core.composition import resolve_profile
-from .core.declaration import load_declaration
+from .core.declaration import Declaration, load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
 from .core.errors import AviatoError
 from .core.file_drift_flow import run_file_drift
 from .core.fleet import scan_fleet
+from .core.marker import parse_marker_from_text
 from .core.onboarding import materialize_items
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.render import render
 from .core.scaffold import ScaffoldItem, render_managed, scaffold
 from .core.settings_drift_flow import run_settings_drift
+from .core.version import is_compatible
 from .core.versioning import is_highest
 from .github import GitHubAPIError
 from .github_platform import GitHubPlatform
@@ -91,6 +94,38 @@ def cmd_validate(_: argparse.Namespace) -> int:
         return 1
     print("Aviato validation passed.")
     return 0
+
+
+def _recorded_version(root: Path, expected: list[ExpectedArtifact]) -> str | None:
+    """Return the version recorded in the consumer's managed markers, if any (§2.6)."""
+    for artifact in expected:
+        if artifact.seed_once:
+            continue
+        path = root / artifact.output_path
+        if path.is_file():
+            info = parse_marker_from_text(path.read_text(encoding="utf-8"))
+            if info is not None:
+                return info.version
+    return None
+
+
+def _version_pin_error(
+    root: Path, declaration: Declaration, expected: list[ExpectedArtifact], override: bool
+) -> str | None:
+    """Enforce §2.6 version-pin compatibility before a write/proposal; None if OK.
+
+    Skipped in bootstrap (the Library resolves self-references locally, §2.10/§5.10).
+    Refuses on a mismatch unless ``override`` is set.
+    """
+    if override or is_library(root):
+        return None
+    recorded = _recorded_version(root, expected) or declaration.version
+    if is_compatible(tool=__version__, pinned=declaration.version, recorded=recorded):
+        return None
+    return (
+        f"version-pin mismatch: tool {__version__} is incompatible with pin "
+        f"{declaration.version!r} (recorded {recorded!r}); pass --override-version-pin to proceed"
+    )
 
 
 def _expected_artifacts(registry: Registry, resolved, variables: dict) -> list[ExpectedArtifact]:
@@ -191,6 +226,12 @@ def cmd_sync(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    expected = [ExpectedArtifact(i.output, i.body, i.seed_once) for i in items]
+    pin_error = _version_pin_error(root, declaration, expected, args.override_version_pin)
+    if pin_error:
+        print(pin_error, file=sys.stderr)
+        return 2
+
     result = scaffold(
         root,
         items,
@@ -255,6 +296,11 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    pin_error = _version_pin_error(root, declaration, expected, args.override_version_pin)
+    if pin_error:
+        print(pin_error, file=sys.stderr)
+        return 2
+
     secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
     report = diagnose(root, expected, declaration_variables=declaration.variables, secret_var_names=secret_names)
 
@@ -312,9 +358,14 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
+        expected = _expected_artifacts(registry, resolved, declaration.variables)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+
+    # The §2.6 lower bound comes from the consumer's own managed markers, not the
+    # installed tool version (an explicit --recorded-version still overrides).
+    recorded_version = args.recorded_version or _recorded_version(root, expected) or declaration.version
 
     desired = resolved.settings.get("default_branch", {})
     outcome = run_reconcile(
@@ -324,7 +375,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         desired_settings=desired,
         pin=declaration.version,
         tool_version=__version__,
-        recorded_version=args.recorded_version or __version__,
+        recorded_version=recorded_version,
         operator_confirmed=args.confirm,
     )
     print(f"{outcome.action}: {outcome.reason}")
@@ -369,6 +420,9 @@ def build_parser() -> argparse.ArgumentParser:
     sync = subparsers.add_parser("sync", help="Materialize managed artifacts into a consumer repository.")
     sync.add_argument("path", help="Path to the consumer repository.")
     sync.add_argument("--force", action="store_true", help="Overwrite unmanaged/malformed-marker files.")
+    sync.add_argument(
+        "--override-version-pin", action="store_true", help="Proceed despite a version-pin mismatch (§2.6)."
+    )
     sync.set_defaults(func=cmd_sync)
 
     scan = subparsers.add_parser("scan", help="Diagnose many local consumer repositories (read-only).")
@@ -377,6 +431,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     drift = subparsers.add_parser("drift-report", help="Consumer automation: report file + settings drift (read-only).")
     drift.add_argument("path", help="Path to the consumer repository.")
+    drift.add_argument(
+        "--override-version-pin", action="store_true", help="Proceed despite a version-pin mismatch (§2.6)."
+    )
     drift.set_defaults(func=cmd_drift_report)
 
     highest = subparsers.add_parser(

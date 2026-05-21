@@ -10,7 +10,7 @@ from aviato.cli import main
 def _consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text("profile: python-library\nversion: v0\n", encoding="utf-8")
     return tmp_path
 
 
@@ -20,7 +20,7 @@ def test_sync_materializes_managed_and_seed_once(tmp_path: Path, capsys: pytest.
     assert rc == 0
     assert "wrote .editorconfig" in out
     assert "seeded LICENSE" in out
-    assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library version=v1")
+    assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library version=v0")
 
 
 def test_sync_is_idempotent(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

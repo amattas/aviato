@@ -57,6 +57,14 @@ def test_nonhuman_edit_after_grant_false_when_only_humans_after() -> None:
     assert nonhuman_edit_after_grant(timeline, "abc") is False
 
 
+def test_nonhuman_edit_unknown_actor_type_fails_closed() -> None:
+    timeline = [
+        {"event": "labeled", "label": {"name": "aviato-consent:abc"}, "actor": {"type": "User"}},
+        {"event": "commented", "actor": {"login": "x"}},  # actor present, type unknown → fail closed
+    ]
+    assert nonhuman_edit_after_grant(timeline, "abc") is True
+
+
 def test_nonhuman_edit_before_grant_does_not_count() -> None:
     timeline = [
         {"event": "commented", "actor": {"type": "Bot"}},

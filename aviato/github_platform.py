@@ -71,7 +71,10 @@ def nonhuman_edit_after_grant(timeline: list[dict[str, Any]], diff_id: str) -> b
         return False
     for entry in timeline[grant_index + 1 :]:
         actor = entry.get("actor")
-        if isinstance(actor, dict) and actor.get("type") not in (None, "User"):
+        # Fail closed (§2.7): an actor present on a post-grant edit whose type is
+        # not exactly "User" — including an ambiguous/unknown type — counts as a
+        # non-human edit and voids consent. Actorless system events are ignored.
+        if isinstance(actor, dict) and actor.get("type") != "User":
             return True
     return False
 

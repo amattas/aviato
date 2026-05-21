@@ -29,14 +29,26 @@ def _pinned_major(pinned: str) -> int:
     raise CompatibilityError(f"not a version pin: {pinned!r}")
 
 
+def _as_lower_bound(value: str) -> Version:
+    """Coerce an exact version or a floating major reference to a comparable lower bound.
+
+    The managed marker may record either an exact version (``vX.Y.Z``) or a
+    floating pin (``vX``); a floating ``vX`` floors to ``X.0.0`` (§2.6, §6.2).
+    """
+    try:
+        return parse_version(value)
+    except CompatibilityError:
+        return (_pinned_major(value), 0, 0)
+
+
 def is_compatible(*, tool: str, pinned: str, recorded: str) -> bool:
     """The §2.6 compatibility relation.
 
     The acting tool is compatible with a Consumer's pin iff the tool's major
     equals the pinned major **and** the tool's version is ``>=`` the version
-    recorded in the Consumer's managed markers. Holds for both an exact pin
-    (``vX.Y.Z``) and a floating major pin (``vX``).
+    recorded in the Consumer's managed markers. The recorded value may be an exact
+    version or a floating pin (floored to ``X.0.0``).
     """
     tool_version = parse_version(tool)
-    recorded_version = parse_version(recorded)
+    recorded_version = _as_lower_bound(recorded)
     return tool_version[0] == _pinned_major(pinned) and tool_version >= recorded_version
