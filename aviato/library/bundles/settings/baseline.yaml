@@ -10,6 +10,12 @@ settings:
     require_thread_resolution: true
     block_force_push: true
     block_deletion: true
+    # Verify/security checks required to merge (§10): the common-lint job and the
+    # security-baseline heartbeat (which only succeeds when all scans ran). Context
+    # names are '<caller-job> / <reusable-job>' (operators add per-language verify).
+    required_status_checks:
+      - "common-lint / Common lint"
+      - "security / Security baseline heartbeat"
   rulesets:
     - "Common: protect default branch"
     - "Common: release tag format"

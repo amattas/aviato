@@ -22,7 +22,7 @@ def test_apply_settings_fails_closed_on_unmodeled_protection(monkeypatch: pytest
     monkeypatch.setattr(
         github,
         "classic_branch_protection",
-        lambda repo, branch: {"required_status_checks": {"contexts": ["ci"]}},
+        lambda repo, branch: {"restrictions": {"users": ["alice"]}},  # unmodeled push restriction
     )
     monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT")))
     with pytest.raises(UnmodeledProtectionError):
@@ -147,7 +147,19 @@ def test_map_branch_settings_from_rules_matches_desired_shape() -> None:
         "require_thread_resolution": True,
         "block_force_push": True,
         "block_deletion": True,
+        "required_status_checks": [],
     }
+
+
+def test_map_branch_settings_reads_required_status_checks() -> None:
+    protection = {"required_status_checks": {"strict": True, "contexts": ["common-lint / Common lint"]}}
+    assert map_branch_settings([], protection)["required_status_checks"] == ["common-lint / Common lint"]
+
+
+def test_to_branch_protection_payload_sets_required_checks() -> None:
+    payload = to_branch_protection_payload({"required_status_checks": ["security / Security baseline heartbeat"]})
+    assert payload["required_status_checks"]["contexts"] == ["security / Security baseline heartbeat"]
+    assert payload["required_status_checks"]["strict"] is True
 
 
 def test_map_branch_settings_keys_match_baseline_desired() -> None:

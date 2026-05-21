@@ -135,6 +135,10 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     classic_deletion_blocked = isinstance(allow_del, dict) and allow_del.get("enabled") is not True
     block_deletion = rules_deletion or classic_deletion_blocked
 
+    rsc = protection.get("required_status_checks") or {}
+    contexts = list(rsc.get("contexts") or [])
+    contexts += [c.get("context") for c in rsc.get("checks", []) if isinstance(c, dict) and c.get("context")]
+
     return {
         "requires_pull_request": requires_pr,
         "required_reviews": required_reviews,
@@ -142,6 +146,7 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
         "require_thread_resolution": require_threads,
         "block_force_push": block_force_push,
         "block_deletion": block_deletion,
+        "required_status_checks": sorted(set(contexts)),
     }
 
 
@@ -197,8 +202,11 @@ def to_branch_protection_payload(desired: dict[str, Any]) -> dict[str, Any]:
             "dismiss_stale_reviews": bool(desired.get("dismiss_stale_reviews", False)),
             "require_code_owner_reviews": False,
         }
+    # §10: require the verify/security checks to merge. None when unmodeled/empty.
+    contexts = list(desired.get("required_status_checks") or [])
+    status_checks = {"strict": True, "contexts": contexts} if contexts else None
     return {
-        "required_status_checks": None,
+        "required_status_checks": status_checks,
         "enforce_admins": True,
         "required_pull_request_reviews": reviews,
         "restrictions": None,
@@ -355,7 +363,9 @@ class GitHubPlatform:
         # saw or consented to (§2.4/§5.7).
         branch = github.default_branch(repo)
         live = github.classic_branch_protection(repo, branch)
-        unmodeled = [k for k in ("required_status_checks", "restrictions") if live.get(k)]
+        # required_status_checks is now modeled (§10); only push restrictions remain
+        # unmodeled — fail closed rather than silently drop them.
+        unmodeled = [k for k in ("restrictions",) if live.get(k)]
         if unmodeled:
             raise UnmodeledProtectionError(
                 f"refusing to PUT branch protection on {repo}@{branch}: it carries unmodeled "
