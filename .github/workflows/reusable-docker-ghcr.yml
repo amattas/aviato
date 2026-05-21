@@ -108,7 +108,41 @@ jobs:
         with:
           images: ${{ steps.vars.outputs.image }}
 
-      - name: Build image
+      # §11.7: the published-artifact security scan GATES the publish. Build the
+      # image locally first (no push), scan it, and only push if the scan passes —
+      # so a high/critical vulnerability never reaches the registry.
+      - name: Build image for scan
+        if: ${{ inputs.scan-image }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image (gate before publish)
+        if: ${{ inputs.scan-image }}
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload image scan results
+        if: ${{ always() && inputs.scan-image }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Build and push image
         uses: docker/build-push-action@v5
         with:
           context: ${{ inputs.context }}
@@ -121,23 +155,6 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
-
-      - name: Scan published image
-        if: ${{ inputs.push && inputs.scan-image }}
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
-          format: sarif
-          output: trivy-results.sarif
-          severity: HIGH,CRITICAL
-          exit-code: "1"
-          ignore-unfixed: true
-
-      - name: Upload image scan results
-        if: ${{ always() && inputs.push && inputs.scan-image }}
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-results.sarif
 
       # §8.14/§13.2: move the mutable `latest` tag only if this release is the
       # highest released version. The comparison mirrors aviato.core.versioning
