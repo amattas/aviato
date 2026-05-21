@@ -89,6 +89,13 @@ jobs:
         shell: bash
         run: ${{ inputs.install-command }}
 
+      # §13.3 multi-version: cutting a new Docusaurus version on each release and
+      # pruning to the retention cap requires fetching the prior published versions
+      # from the live gh-pages artifact before building (versions accumulate on the
+      # artifact, not the source branch). That is intentionally NOT yet implemented
+      # here — this publishes a single-version site. The per-alias concurrency group
+      # (above, §8.14) prevents an older release from regressing the published site.
+      # Tracked as the remaining §13.3 work; build is driven by build-command below.
       - name: Build docs
         shell: bash
         run: ${{ inputs.build-command }}

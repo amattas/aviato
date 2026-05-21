@@ -108,39 +108,44 @@ jobs:
         with:
           images: ${{ steps.vars.outputs.image }}
 
-      # §11.7: the published-artifact security scan GATES the publish. Build the
-      # image locally first (no push), scan it, and only push if the scan passes —
-      # so a high/critical vulnerability never reaches the registry.
-      - name: Build image for scan
+      # §11.7: the published-artifact security scan GATES the publish. Build EACH
+      # target platform locally first (no push) and scan it — so a high/critical
+      # vulnerability on ANY published architecture blocks the push, not just amd64.
+      - name: Install Trivy
         if: ${{ inputs.scan-image }}
-        uses: docker/build-push-action@v5
+        uses: aquasecurity/setup-trivy@v0.2.2
         with:
-          context: ${{ inputs.context }}
-          file: ${{ inputs.dockerfile }}
-          platforms: linux/amd64
-          load: true
-          push: false
-          tags: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          version: v0.55.0
 
-      - name: Scan image (gate before publish)
+      - name: Build and scan each target platform (gate before publish)
         if: ${{ inputs.scan-image }}
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
-          format: sarif
-          output: trivy-results.sarif
-          severity: HIGH,CRITICAL
-          exit-code: "1"
-          ignore-unfixed: true
+        shell: bash
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          PLATFORMS: ${{ inputs.platforms }}
+          CONTEXT: ${{ inputs.context }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+        run: |
+          set -euo pipefail
+          mkdir -p trivy-sarif
+          IFS=',' read -ra plats <<< "${PLATFORMS}"
+          for raw in "${plats[@]}"; do
+            plat="$(echo "${raw}" | xargs)"
+            [ -z "${plat}" ] && continue
+            echo "::group::Build + scan ${plat}"
+            docker buildx build --platform "${plat}" --load \
+              -t "${IMAGE}:scan-tmp" -f "${DOCKERFILE}" "${CONTEXT}"
+            trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
+              --format sarif --output "trivy-sarif/${plat//\//-}.sarif" "${IMAGE}:scan-tmp"
+            echo "::endgroup::"
+          done
 
       - name: Upload image scan results
         if: ${{ always() && inputs.scan-image }}
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: trivy-results.sarif
+          sarif_file: trivy-sarif
 
       - name: Build and push image
         uses: docker/build-push-action@v5

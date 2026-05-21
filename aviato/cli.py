@@ -70,6 +70,17 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
         print("at least one repository slug is required", file=sys.stderr)
         return 2
 
+    if args.apply:
+        # apply-rulesets is operator-DIRECT provisioning (§2.3: human-initiated with
+        # own credentials). It is not the §5.7 drift/consent flow — ongoing settings
+        # reconciliation should go through `aviato reconcile`, which adds the tracking
+        # issue, consent record, and apply-time recompute.
+        print(
+            "WARNING: applying rulesets directly (operator provisioning). For ongoing "
+            "settings drift, use the gated `aviato reconcile` flow (§5.7).",
+            file=sys.stderr,
+        )
+
     try:
         for message in apply_rulesets(slugs, apply=args.apply, required_approvals=args.required_approvals):
             print(message)
