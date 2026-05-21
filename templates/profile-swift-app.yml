@@ -25,7 +25,8 @@ jobs:
       run-install: true
 
   security:
-    if: ${{ github.ref_type != 'tag' }}
+    # Runs on PRs AND on the release tag, so source scans gate the verify pipeline
+    # and are re-run on the release ref before any deploy (§2.13/§5.14).
     uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@main
     with:
       codeql-languages: "swift"
@@ -40,7 +41,7 @@ jobs:
 
   app-store-connect:
     if: ${{ github.ref_type == 'tag' }}
-    needs: release-gate
+    needs: [release-gate, security]
     uses: amattas/aviato/.github/workflows/reusable-app-store-connect.yml@main
     with:
       environment-name: app-store-connect

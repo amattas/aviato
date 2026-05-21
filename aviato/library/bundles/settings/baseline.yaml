@@ -13,3 +13,11 @@ settings:
   rulesets:
     - "Common: protect default branch"
     - "Common: release tag format"
+  # Always-on security baseline (§2.13). These are repo-level GitHub features the
+  # operator enables out-of-band (§17, probeable by diagnosis §5.4); modeled here as
+  # desired state so a profile cannot silently omit them.
+  security:
+    code_scanning: true
+    secret_scanning: true
+    secret_push_protection: true
+    dependency_scanning: true

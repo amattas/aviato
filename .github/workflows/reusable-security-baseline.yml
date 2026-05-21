@@ -63,3 +63,24 @@ jobs:
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: ${{ inputs.dependency-review-fail-on-severity }}
+
+  # Per-run heartbeat (§5.14): emit a completion marker even on zero findings so
+  # diagnosis (§5.4) can distinguish "ran clean" from "never ran" — the absence of
+  # this heartbeat reads as broken, never clean.
+  heartbeat:
+    name: Security baseline heartbeat
+    needs: [codeql, dependency-review]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record completion
+        shell: bash
+        env:
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+          DEPREVIEW_RESULT: ${{ needs.dependency-review.result }}
+        run: |
+          echo "aviato:security-baseline ran sast=${CODEQL_RESULT} dependency=${DEPREVIEW_RESULT}"
+          if [ "${CODEQL_RESULT}" = "failure" ] || [ "${DEPREVIEW_RESULT}" = "failure" ]; then
+            echo "::error::Security baseline reported failures."
+            exit 1
+          fi

@@ -19,10 +19,18 @@ on:
         required: false
         type: string
         default: "python -m ruff check ."
+      format-command:
+        required: false
+        type: string
+        default: "python -m ruff format --check ."
+      typecheck-command:
+        required: false
+        type: string
+        default: "python -m mypy --strict ."
       test-command:
         required: false
         type: string
-        default: "python -m pytest"
+        default: "python -m pytest --cov --cov-report=term-missing"
       build-command:
         required: false
         type: string
@@ -32,6 +40,14 @@ on:
         type: boolean
         default: true
       run-lint:
+        required: false
+        type: boolean
+        default: true
+      run-format:
+        required: false
+        type: boolean
+        default: true
+      run-typecheck:
         required: false
         type: boolean
         default: true
@@ -73,6 +89,16 @@ jobs:
         if: ${{ inputs.run-lint && inputs.lint-command != '' }}
         shell: bash
         run: ${{ inputs.lint-command }}
+
+      - name: Format check
+        if: ${{ inputs.run-format && inputs.format-command != '' }}
+        shell: bash
+        run: ${{ inputs.format-command }}
+
+      - name: Type check
+        if: ${{ inputs.run-typecheck && inputs.typecheck-command != '' }}
+        shell: bash
+        run: ${{ inputs.typecheck-command }}
 
       - name: Test
         if: ${{ inputs.run-tests && inputs.test-command != '' }}

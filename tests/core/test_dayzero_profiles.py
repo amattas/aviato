@@ -33,6 +33,16 @@ def test_release_gate_present_in_every_profile(registry: Registry, name: str) ->
     assert "release-gate" in rs.pipelines
 
 
+@pytest.mark.parametrize("name", DAYZERO)
+def test_security_baseline_modeled_in_settings(registry: Registry, name: str) -> None:
+    # §2.13: secret scanning + push protection must be modeled desired state, not omittable
+    security = resolve_profile(registry, name).settings.get("security", {})
+    assert security.get("secret_scanning") is True
+    assert security.get("secret_push_protection") is True
+    assert security.get("code_scanning") is True
+    assert security.get("dependency_scanning") is True
+
+
 def test_python_library_deploys_pypi(registry: Registry) -> None:
     assert "pypi-publish" in resolve_profile(registry, "python-library").pipelines
 
