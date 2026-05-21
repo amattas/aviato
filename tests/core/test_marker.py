@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from aviato.core.marker import (
-    COMMENT_SYNTAX,
-    comment_for_path,
     content_hash,
     parse_marker,
     parse_marker_from_text,
     render_marker,
 )
+from aviato.plugins.comment_syntax import COMMENT_SYNTAX, comment_for_path
 
 
 def test_render_and_parse_roundtrip_hash_comment() -> None:

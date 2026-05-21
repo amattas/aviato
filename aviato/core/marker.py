@@ -4,29 +4,8 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-# Per-filetype comment-syntax mapping (§6.2). Maps a file extension to the
-# line-comment prefix used to render/parse the managed marker.
-COMMENT_SYNTAX: dict[str, str] = {
-    ".py": "#",
-    ".yml": "#",
-    ".yaml": "#",
-    ".toml": "#",
-    ".cfg": "#",
-    ".ini": "#",
-    ".sh": "#",
-    ".rb": "#",
-    ".ts": "//",
-    ".tsx": "//",
-    ".js": "//",
-    ".jsx": "//",
-    ".mjs": "//",
-    ".cjs": "//",
-    ".swift": "//",
-    ".go": "//",
-    ".rs": "//",
-    ".java": "//",
-    ".kt": "//",
-}
+# The marker uses a caller-supplied comment prefix; the per-filetype mapping is
+# plug-in data (see aviato.plugins.comment_syntax), keeping this module agnostic.
 
 _TOKEN = "aviato:managed"
 _MARKER_RE = re.compile(
@@ -39,14 +18,6 @@ class MarkerInfo:
     profile: str
     version: str
     hash: str
-
-
-def comment_for_path(path: str) -> str | None:
-    """Return the comment prefix for ``path``'s extension, or None if unmapped."""
-    dot = path.rfind(".")
-    if dot == -1:
-        return None
-    return COMMENT_SYNTAX.get(path[dot:])
 
 
 def content_hash(body: str) -> str:
