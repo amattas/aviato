@@ -206,6 +206,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
         print(f"unchanged {output}")
     for output in result.skipped_unmanaged:
         print(f"SKIPPED (unmanaged/malformed) {output}")
+    for output in result.skipped_modified:
+        print(f"SKIPPED (hand-edited — use --force to overwrite) {output}")
     return 0
 
 

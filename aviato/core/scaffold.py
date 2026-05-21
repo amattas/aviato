@@ -6,7 +6,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .marker import content_hash, parse_marker_from_text, render_marker
+from .marker import content_hash, parse_marker_from_text, render_marker, strip_marker_from_text
 
 SIDECAR_PATH = ".github/aviato.seed.json"
 
@@ -26,6 +26,7 @@ class ScaffoldResult:
     written: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
     skipped_unmanaged: list[str] = field(default_factory=list)
+    skipped_modified: list[str] = field(default_factory=list)
     seeded: list[str] = field(default_factory=list)
 
 
@@ -105,9 +106,17 @@ def scaffold(
             if existing == rendered:
                 result.unchanged.append(output)
                 continue
-            if parse_marker_from_text(existing) is None and not force:
-                result.skipped_unmanaged.append(output)
-                continue
+            if not force:
+                marker = parse_marker_from_text(existing)
+                if marker is None:
+                    # Unmanaged or malformed-marker file — protect the operator's file.
+                    result.skipped_unmanaged.append(output)
+                    continue
+                if content_hash(strip_marker_from_text(existing)) != marker.hash:
+                    # Valid marker but the body diverges from what Aviato last wrote:
+                    # the operator hand-edited a managed file → never clobber (§2.5/§5.4).
+                    result.skipped_modified.append(output)
+                    continue
         _atomic_write(target, rendered)
         result.written.append(output)
 

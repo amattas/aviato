@@ -33,6 +33,24 @@ def test_clean_ignores_marker_version_change(tmp_path: Path) -> None:
     assert report.statuses["cfg.py"] == "clean"
 
 
+def test_hand_edited_managed_file_is_dirty_drift(tmp_path: Path) -> None:
+    # valid marker, but the body was edited so it no longer matches the marker's
+    # recorded hash → operator hand-edit → dirty-drift, never silently regenerated
+    _scaffold_one(tmp_path, "cfg.py", "X = 1\n")
+    text = (tmp_path / "cfg.py").read_text()
+    marker_line = text.splitlines()[0]
+    (tmp_path / "cfg.py").write_text(marker_line + "\nX = HAND_EDITED\n")
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])
+    assert report.statuses["cfg.py"] == "dirty-drift"
+
+
+def test_template_moved_but_file_untouched_is_mergeable(tmp_path: Path) -> None:
+    # file is exactly what Aviato wrote (body hash == marker hash) but expected changed
+    _scaffold_one(tmp_path, "cfg.py", "X = 1\n")
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 999\n")])
+    assert report.statuses["cfg.py"] == "mergeable-drift"
+
+
 def test_dirty_drift_when_no_marker(tmp_path: Path) -> None:
     (tmp_path / "cfg.py").write_text("hand written\n")
     report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])
