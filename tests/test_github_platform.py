@@ -11,7 +11,34 @@ from aviato.github_platform import (
     _label_events,
     current_consent,
     map_branch_settings,
+    nonhuman_edit_after_grant,
+    to_branch_protection_payload,
 )
+
+
+def test_nonhuman_edit_after_grant_detects_bot() -> None:
+    timeline = [
+        {"event": "labeled", "label": {"name": "aviato-consent:abc"}, "actor": {"type": "User"}},
+        {"event": "commented", "actor": {"type": "Bot"}},
+    ]
+    assert nonhuman_edit_after_grant(timeline, "abc") is True
+
+
+def test_nonhuman_edit_after_grant_false_when_only_humans_after() -> None:
+    timeline = [
+        {"event": "labeled", "label": {"name": "aviato-consent:abc"}, "actor": {"type": "User"}},
+        {"event": "commented", "actor": {"type": "User"}},
+        {"event": "renamed"},  # actorless system event ignored
+    ]
+    assert nonhuman_edit_after_grant(timeline, "abc") is False
+
+
+def test_nonhuman_edit_before_grant_does_not_count() -> None:
+    timeline = [
+        {"event": "commented", "actor": {"type": "Bot"}},
+        {"event": "labeled", "label": {"name": "aviato-consent:abc"}, "actor": {"type": "User"}},
+    ]
+    assert nonhuman_edit_after_grant(timeline, "abc") is False
 
 
 def test_current_consent_returns_active_grant() -> None:
@@ -67,19 +94,39 @@ def test_adapter_satisfies_platform_protocol() -> None:
     assert isinstance(GitHubPlatform(), Platform)
 
 
-def test_map_branch_settings_from_rules() -> None:
+def test_map_branch_settings_from_rules_matches_desired_shape() -> None:
     rules = [
         {"type": "deletion"},
         {"type": "non_fast_forward"},
-        {"type": "pull_request", "parameters": {"required_approving_review_count": 2}},
+        {
+            "type": "pull_request",
+            "parameters": {
+                "required_approving_review_count": 2,
+                "dismiss_stale_reviews_on_push": True,
+                "required_review_thread_resolution": True,
+            },
+        },
     ]
     mapped = map_branch_settings(rules, {})
     assert mapped == {
         "requires_pull_request": True,
         "required_reviews": 2,
+        "dismiss_stale_reviews": True,
+        "require_thread_resolution": True,
         "block_force_push": True,
         "block_deletion": True,
     }
+
+
+def test_map_branch_settings_keys_match_baseline_desired() -> None:
+    from pathlib import Path
+
+    import yaml
+
+    text = Path("aviato/library/bundles/settings/baseline.yaml").read_text(encoding="utf-8")
+    desired = yaml.safe_load(text)["settings"]["default_branch"]
+    mapped = map_branch_settings([], {})
+    assert set(mapped) == set(desired)  # like-for-like comparison, no spurious destructive drift
 
 
 def test_map_branch_settings_unprotected() -> None:
@@ -89,15 +136,29 @@ def test_map_branch_settings_unprotected() -> None:
     assert mapped["block_deletion"] is False
 
 
-def test_map_branch_settings_classic_protection() -> None:
-    protection = {
-        "required_pull_request_reviews": {"required_approving_review_count": 1},
-        "allow_force_pushes": {"enabled": False},
+def test_to_branch_protection_payload_api_shape() -> None:
+    desired = {
+        "requires_pull_request": True,
+        "required_reviews": 1,
+        "dismiss_stale_reviews": True,
+        "require_thread_resolution": True,
+        "block_force_push": True,
+        "block_deletion": True,
     }
-    mapped = map_branch_settings([], protection)
-    assert mapped["requires_pull_request"] is True
-    assert mapped["required_reviews"] == 1
-    assert mapped["block_force_push"] is True
+    payload = to_branch_protection_payload(desired)
+    assert payload["required_pull_request_reviews"]["required_approving_review_count"] == 1
+    assert payload["required_pull_request_reviews"]["dismiss_stale_reviews"] is True
+    assert payload["allow_force_pushes"] is False  # block_force_push -> not allowed
+    assert payload["allow_deletions"] is False
+    assert payload["required_conversation_resolution"] is True
+    assert payload["enforce_admins"] is True
+    assert payload["restrictions"] is None
+    assert "required_status_checks" in payload
+
+
+def test_to_branch_protection_payload_no_pr_when_not_required() -> None:
+    payload = to_branch_protection_payload({"requires_pull_request": False})
+    assert payload["required_pull_request_reviews"] is None
 
 
 def test_read_settings_composes_gh_responses(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,7 +171,9 @@ def test_read_settings_composes_gh_responses(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
 
     settings = GitHubPlatform().read_settings("o/r")
-    assert settings["default_branch"]["required_reviews"] == 1
+    # flat shape (matches the desired default_branch map the CLI passes)
+    assert settings["required_reviews"] == 1
+    assert "default_branch" not in settings
 
 
 def test_read_settings_empty_when_no_default_branch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -161,6 +224,43 @@ def test_get_issue_role_lookup_failure_is_not_authorized(monkeypatch: pytest.Mon
     assert issue.consent_role_lookup_ok is False
 
 
+def test_open_or_update_proposal_writes_files_and_pushes(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **__):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "run", fake_run)
+    monkeypatch.setattr(github, "gh_json", lambda endpoint, **__: [])  # no existing PR
+
+    platform = GitHubPlatform(workdir=tmp_path)
+    branch = platform.open_or_update_proposal(
+        "owner/repo", "aviato/sync/x", "Aviato sync", {"ruff.toml": "line-length = 120\n"}, "body"
+    )
+
+    assert branch == "aviato/sync/x"
+    assert (tmp_path / "ruff.toml").read_text() == "line-length = 120\n"  # regenerated file written
+    joined = [" ".join(c) for c in calls]
+    assert any("git switch -C aviato/sync/x" in j for j in joined)
+    assert any(j.startswith("git -c user.name=aviato-bot") and "commit" in j for j in joined)
+    assert any("git push --force origin aviato/sync/x" in j for j in joined)
+    assert any("gh pr create" in j for j in joined)
+
+
+def test_open_or_update_proposal_skips_pr_create_when_pr_exists(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(
+        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+    )
+    monkeypatch.setattr(github, "gh_json", lambda endpoint, **__: [{"number": 5}])  # PR already open
+
+    GitHubPlatform(workdir=tmp_path).open_or_update_proposal("owner/repo", "b", "t", {"f.txt": "x\n"}, "body")
+    assert not any("pr create" in " ".join(c) for c in calls)  # push updated the existing PR
+
+
 def test_apply_settings_issues_put_with_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
@@ -170,8 +270,26 @@ def test_apply_settings_issues_put_with_payload(monkeypatch: pytest.MonkeyPatch)
         captured["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr(github, "run", fake_run)
-    GitHubPlatform().apply_settings("o/r", {"required_reviews": 2})
+    written: dict[str, object] = {}
+
+    def fake_run2(cmd, **__):
+        captured["cmd"] = cmd
+        # capture the --input payload file contents
+        import json as _json
+        from pathlib import Path
+
+        idx = cmd.index("--input")
+        written["payload"] = _json.loads(Path(cmd[idx + 1]).read_text(encoding="utf-8"))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(github, "run", fake_run2)
+    GitHubPlatform().apply_settings(
+        "o/r", {"requires_pull_request": True, "required_reviews": 2, "block_force_push": True}
+    )
     cmd = captured["cmd"]
     assert "PUT" in cmd
     assert "repos/o/r/branches/main/protection" in cmd
+    # translated to the branch-protection API shape, not the internal keys
+    assert "required_reviews" not in written["payload"]
+    assert written["payload"]["required_pull_request_reviews"]["required_approving_review_count"] == 2
+    assert written["payload"]["allow_force_pushes"] is False

@@ -53,9 +53,11 @@ def run_reconcile(
 
     outcome = reconcile_decision(state)
 
-    if outcome.action == "apply" and outcome.payload is not None:
-        platform.apply_settings(repo, outcome.payload)
-        platform.comment_issue(repo, issue_key, f"Applied: {outcome.payload}")
+    if outcome.action == "apply":
+        # Apply the FULL desired state (the branch-protection PUT replaces wholesale);
+        # the diff (outcome.payload) is what the operator confirmed and is recorded.
+        platform.apply_settings(repo, desired_settings)
+        platform.comment_issue(repo, issue_key, f"Applied (changes: {outcome.payload})")
     else:
         platform.comment_issue(repo, issue_key, f"{outcome.action}: {outcome.reason}")
 

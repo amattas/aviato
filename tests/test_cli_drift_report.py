@@ -47,9 +47,9 @@ def test_drift_report_proposes_missing_files_and_reports_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     consumer = _consumer(tmp_path)
-    fake = FakePlatform(settings={"default_branch": {"required_reviews": 1}})
+    fake = FakePlatform(settings={"required_reviews": 1})
 
-    monkeypatch.setattr(cli, "GitHubPlatform", lambda: fake)
+    monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
     monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:owner/repo.git")
 
     rc = cli.main(["drift-report", str(consumer)])

@@ -257,7 +257,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
     report = diagnose(root, expected, declaration_variables=declaration.variables, secret_var_names=secret_names)
     expected_bodies = {artifact.output_path: artifact.body for artifact in expected if not artifact.seed_once}
 
-    platform = GitHubPlatform()
+    platform = GitHubPlatform(workdir=root)
     file_outcome = run_file_drift(
         platform,
         repo=slug,

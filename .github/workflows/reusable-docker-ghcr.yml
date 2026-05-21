@@ -184,7 +184,13 @@ jobs:
           keys = [k for k in (key(t) for t in sys.stdin) if k]
           print("true" if ck and max(keys + [ck]) == ck else "false")
           PY
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/tags" --jq '.[].name' > tags.txt || true
+          # Fail CLOSED: if the tag listing fails (e.g. an API outage), do NOT move
+          # `latest` — an empty list must never make an old release look highest (§8.14).
+          if ! gh api --paginate "repos/${GITHUB_REPOSITORY}/tags" --jq '.[].name' > tags.txt; then
+            echo "::warning::Could not list tags; skipping latest-alias move (fail-closed)."
+            echo "is_highest=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           result="$(python3 highest.py "${RELEASE_TAG}" < tags.txt)"
           echo "is_highest=${result}" >> "${GITHUB_OUTPUT}"
 

@@ -51,6 +51,27 @@ def _label_events(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return events
 
 
+def nonhuman_edit_after_grant(timeline: list[dict[str, Any]], diff_id: str) -> bool:
+    """True if a non-human actor touched the issue after the consent grant (§2.8/§5.7).
+
+    Finds the latest grant of ``aviato-consent:<diff_id>`` and reports whether any
+    later timeline entry was performed by an actor whose type is not ``User`` (a
+    Bot/App/unknown actor). Entries with no actor are system events and ignored.
+    """
+    grant_label = f"{CONSENT_LABEL_PREFIX}{diff_id}"
+    grant_index = -1
+    for i, entry in enumerate(timeline):
+        if entry.get("event") == "labeled" and (entry.get("label") or {}).get("name") == grant_label:
+            grant_index = i
+    if grant_index < 0:
+        return False
+    for entry in timeline[grant_index + 1 :]:
+        actor = entry.get("actor")
+        if isinstance(actor, dict) and actor.get("type") not in (None, "User"):
+            return True
+    return False
+
+
 def current_consent(events: list[dict[str, Any]]) -> ConsentGrant | None:
     """Reduce a chronological list of label events to the active consent grant (§6.4).
 
@@ -77,46 +98,88 @@ def current_consent(events: list[dict[str, Any]]) -> ConsentGrant | None:
 
 
 def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any]) -> dict[str, Any]:
-    """Map live default-branch rules/protection into a comparable settings map (§5.6, §2.9).
+    """Map live default-branch rules/protection into the flat comparable settings map (§5.6, §2.9).
 
-    Read-shaped platform data is reduced to the operator-relevant fields only; it
-    is never replayed verbatim into a write.
+    Read-shaped platform data is reduced to exactly the keys the desired baseline
+    uses (so a compliant repo compares clean), never replayed verbatim into a
+    write. Returns the same flat shape the resolved ``default_branch`` map carries.
     """
     pr_rule = next((r for r in rules if r.get("type") == "pull_request"), None)
+    pr_params = pr_rule.get("parameters", {}) if pr_rule else {}
+    classic_reviews = protection.get("required_pull_request_reviews") or {}
     requires_pr = pr_rule is not None or protection.get("required_pull_request_reviews") is not None
 
-    required_reviews = 0
     if pr_rule is not None:
-        required_reviews = int(pr_rule.get("parameters", {}).get("required_approving_review_count", 0))
+        required_reviews = int(pr_params.get("required_approving_review_count", 0))
+        dismiss_stale = bool(pr_params.get("dismiss_stale_reviews_on_push", False))
+        require_threads = bool(pr_params.get("required_review_thread_resolution", False))
     else:
-        classic = protection.get("required_pull_request_reviews") or {}
-        required_reviews = int(classic.get("required_approving_review_count", 0))
+        required_reviews = int(classic_reviews.get("required_approving_review_count", 0))
+        dismiss_stale = bool(classic_reviews.get("dismiss_stale_reviews", False))
+        require_threads = bool((protection.get("required_conversation_resolution") or {}).get("enabled", False))
 
     rules_nff = any(r.get("type") == "non_fast_forward" for r in rules)
     allow_force = protection.get("allow_force_pushes")
     classic_force_blocked = isinstance(allow_force, dict) and allow_force.get("enabled") is not True
     block_force_push = rules_nff or classic_force_blocked
 
-    block_deletion = any(r.get("type") == "deletion" for r in rules)
+    rules_deletion = any(r.get("type") == "deletion" for r in rules)
+    allow_del = protection.get("allow_deletions")
+    classic_deletion_blocked = isinstance(allow_del, dict) and allow_del.get("enabled") is not True
+    block_deletion = rules_deletion or classic_deletion_blocked
 
     return {
         "requires_pull_request": requires_pr,
         "required_reviews": required_reviews,
+        "dismiss_stale_reviews": dismiss_stale,
+        "require_thread_resolution": require_threads,
         "block_force_push": block_force_push,
         "block_deletion": block_deletion,
     }
 
 
+def to_branch_protection_payload(desired: dict[str, Any]) -> dict[str, Any]:
+    """Translate the flat desired settings into a complete branch-protection PUT payload (§2.9).
+
+    The PUT endpoint replaces protection wholesale, so the full desired state is
+    sent in the API's own shape (all required keys present, nullable where unset)
+    — not the internal key names, and not a partial diff that would drop other
+    protections.
+    """
+    reviews: dict[str, Any] | None = None
+    if desired.get("requires_pull_request"):
+        reviews = {
+            "required_approving_review_count": int(desired.get("required_reviews", 1)),
+            "dismiss_stale_reviews": bool(desired.get("dismiss_stale_reviews", False)),
+            "require_code_owner_reviews": False,
+        }
+    return {
+        "required_status_checks": None,
+        "enforce_admins": True,
+        "required_pull_request_reviews": reviews,
+        "restrictions": None,
+        "allow_force_pushes": not bool(desired.get("block_force_push", False)),
+        "allow_deletions": not bool(desired.get("block_deletion", False)),
+        "required_conversation_resolution": bool(desired.get("require_thread_resolution", False)),
+    }
+
+
 class GitHubPlatform:
-    """Concrete :class:`aviato.core.ports.Platform` over the ``gh`` CLI."""
+    """Concrete :class:`aviato.core.ports.Platform` over the ``gh``/``git`` CLIs."""
+
+    def __init__(self, workdir: Path | str = ".") -> None:
+        self.workdir = Path(workdir)
 
     def read_settings(self, repo: str) -> dict[str, Any]:
+        # Returns the flat default-branch settings map, matching the desired map
+        # the CLI passes (resolved.settings["default_branch"]) so the diff compares
+        # like-for-like (§5.6).
         branch = github.default_branch(repo)
         if not branch:
             return {}
         rules = github.active_branch_rules(repo, branch)
         protection = github.classic_branch_protection(repo, branch)
-        return {"default_branch": map_branch_settings(rules, protection)}
+        return map_branch_settings(rules, protection)
 
     def get_issue(self, repo: str, key: str) -> Issue | None:
         issues = github.gh_json(f"repos/{repo}/issues?state=all&labels={key}", default=[], allow_error=True)
@@ -135,6 +198,7 @@ class GitHubPlatform:
             return Issue(key=key, open=is_open)
 
         role, role_ok = self._actor_role(repo, grant.actor_login)
+        raw_timeline = timeline if isinstance(timeline, list) else []
         return Issue(
             key=key,
             open=is_open,
@@ -142,6 +206,7 @@ class GitHubPlatform:
             consent_actor_type=grant.actor_type,
             consent_role=role,
             consent_role_lookup_ok=role_ok,
+            edited_by_nonhuman_since_grant=nonhuman_edit_after_grant(raw_timeline, grant.diff_id),
         )
 
     def _actor_role(self, repo: str, login: str | None) -> tuple[str | None, bool]:
@@ -169,13 +234,50 @@ class GitHubPlatform:
             self._gh_input(["--method", "POST", f"repos/{repo}/issues/{number}/comments"], {"body": body})
 
     def open_or_update_proposal(self, repo: str, branch: str, title: str, files: dict[str, str], body: str) -> str:
-        # Branch/PR creation is performed by the consumer-side workflow that holds
-        # the working tree; this binding records the intended proposal identity.
+        """Write the regenerated files onto an identity-keyed branch and open/update a PR (§5.5).
+
+        Runs in the checked-out working tree (``workdir``). Requires ``contents:
+        write`` (to push the branch) and ``pull-requests: write``. Re-runs converge
+        on the same branch, so the existing PR is simply updated by the push.
+        """
+        base = github.default_branch(repo) or "main"
+        owner = repo.split("/", 1)[0]
+
+        for output_path, content in files.items():
+            target = self.workdir / output_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
+        self._git("switch", "-C", branch)
+        self._git("add", "--", *files.keys())
+        self._git(
+            "-c",
+            "user.name=aviato-bot",
+            "-c",
+            "user.email=aviato-bot@users.noreply.github.com",
+            "commit",
+            "-m",
+            title,
+        )
+        self._git("push", "--force", "origin", branch)
+
+        existing = github.gh_json(f"repos/{repo}/pulls?head={owner}:{branch}&state=open", default=[], allow_error=True)
+        if not (isinstance(existing, list) and existing):
+            self._gh("pr", "create", "--repo", repo, "--head", branch, "--base", base, "--title", title, "--body", body)
         return branch
 
+    def _git(self, *args: str) -> None:
+        github.run(["git", *args], cwd=self.workdir)
+
+    def _gh(self, *args: str) -> None:
+        github.run(["gh", *args], cwd=self.workdir)
+
     def apply_settings(self, repo: str, payload: dict[str, Any]) -> None:
+        # ``payload`` is the flat desired default-branch state; translate it to the
+        # branch-protection API shape before the PUT (§2.9).
         branch = github.default_branch(repo)
-        self._gh_input(["--method", "PUT", f"repos/{repo}/branches/{branch}/protection"], payload)
+        api_payload = to_branch_protection_payload(payload)
+        self._gh_input(["--method", "PUT", f"repos/{repo}/branches/{branch}/protection"], api_payload)
 
     @staticmethod
     def _gh_input(args: list[str], payload: dict[str, Any]) -> None:
