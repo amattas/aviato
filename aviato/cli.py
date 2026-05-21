@@ -469,6 +469,24 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_lint_actions(args: argparse.Namespace) -> int:
+    """Flag third-party actions not pinned by commit digest (§11.3); exit 1 on any."""
+    from .core.actionpins import action_pin_violations
+
+    violations = action_pin_violations(Path(args.path))
+    for violation in violations:
+        print(f"unpinned third-party action: {violation}", file=sys.stderr)
+    if violations:
+        print(
+            f"{len(violations)} third-party action(s) not pinned to a commit digest (§11.3); "
+            f"pin each `uses: owner/repo@<40-hex-sha>` (Dependabot keeps them current).",
+            file=sys.stderr,
+        )
+        return 1
+    print("All third-party actions are digest-pinned.")
+    return 0
+
+
 def cmd_is_highest(args: argparse.Namespace) -> int:
     """Exit 0 iff CANDIDATE is the highest released version (§8.14 monotonic alias guard)."""
     return 0 if is_highest(args.candidate, args.existing) else 1
@@ -634,6 +652,12 @@ def build_parser() -> argparse.ArgumentParser:
     highest.add_argument("candidate", help="The release tag being deployed.")
     highest.add_argument("existing", nargs="*", help="All released tags.")
     highest.set_defaults(func=cmd_is_highest)
+
+    lint_actions = subparsers.add_parser(
+        "lint-actions", help="Flag third-party actions not pinned by commit digest (§11.3)."
+    )
+    lint_actions.add_argument("path", nargs="?", default=".", help="Repository root (default: .).")
+    lint_actions.set_defaults(func=cmd_lint_actions)
 
     nextver = subparsers.add_parser("next-version", help="Derive the next SemVer from Conventional Commits (§5.9).")
     nextver.add_argument("--current", required=True, help="Current version (vX.Y.Z or X.Y.Z).")
