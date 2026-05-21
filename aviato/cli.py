@@ -5,19 +5,23 @@ import os
 import sys
 from pathlib import Path
 
+from . import __version__
 from .audit import audit_repos, discover_and_audit, render_json, render_tsv
 from .core.composition import resolve_profile
 from .core.declaration import load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
 from .core.errors import AviatoError
+from .core.fleet import scan_fleet
 from .core.onboarding import materialize_items
+from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.render import render
 from .core.scaffold import scaffold
 from .github import GitHubAPIError
+from .github_platform import GitHubPlatform
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from .policy import load_policy
-from .repos import git_root
+from .repos import git_root, normalize_slug, remote_url
 from .rulesets import apply_rulesets, render_all_rulesets
 from .validation import validate
 
@@ -200,6 +204,54 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scan(args: argparse.Namespace) -> int:
+    registry = Registry(MODULE_SOURCE_ROOT)
+    scans = scan_fleet([Path(p) for p in args.paths], registry)
+    for scan in scans:
+        if scan.error:
+            print(f"{scan.path}\tERROR: {scan.error}")
+            continue
+        summary = ", ".join(f"{output}={status}" for output, status in sorted(scan.statuses.items())) or "—"
+        flags = " [secret-in-declaration]" if scan.secret_in_declaration else ""
+        print(f"{scan.path}\t{scan.profile}\t{summary}{flags}")
+    return 0
+
+
+def cmd_reconcile(args: argparse.Namespace) -> int:
+    root = Path(args.path).resolve()
+    declaration_path = root / ".github" / "aviato.yaml"
+    if not declaration_path.is_file():
+        print(f"no declaration at {declaration_path}", file=sys.stderr)
+        return 2
+
+    slug = normalize_slug(remote_url(root))
+    if not slug:
+        print("could not determine OWNER/REPO from the repository remote", file=sys.stderr)
+        return 2
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    try:
+        declaration = load_declaration(declaration_path)
+        resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    desired = resolved.settings.get("default_branch", {})
+    outcome = run_reconcile(
+        GitHubPlatform(),
+        repo=slug,
+        issue_key=args.issue,
+        desired_settings=desired,
+        pin=declaration.version,
+        tool_version=__version__,
+        recorded_version=args.recorded_version or __version__,
+        operator_confirmed=args.confirm,
+    )
+    print(f"{outcome.action}: {outcome.reason}")
+    return 0 if outcome.action in {"apply", "noop"} else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aviato")
     subparsers = parser.add_subparsers(required=True)
@@ -238,6 +290,17 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("path", help="Path to the consumer repository.")
     sync.add_argument("--force", action="store_true", help="Overwrite unmanaged/malformed-marker files.")
     sync.set_defaults(func=cmd_sync)
+
+    scan = subparsers.add_parser("scan", help="Diagnose many local consumer repositories (read-only).")
+    scan.add_argument("paths", nargs="+", help="Consumer repository paths.")
+    scan.set_defaults(func=cmd_scan)
+
+    reconcile = subparsers.add_parser("reconcile", help="Operator-gated settings reconcile against a tracking issue.")
+    reconcile.add_argument("path", help="Path to the consumer repository.")
+    reconcile.add_argument("issue", help="Tracking-issue key/label.")
+    reconcile.add_argument("--confirm", action="store_true", help="Confirm the apply-time recomputed diff.")
+    reconcile.add_argument("--recorded-version", help="Version recorded in the consumer's markers (§2.6).")
+    reconcile.set_defaults(func=cmd_reconcile)
 
     return parser
 
