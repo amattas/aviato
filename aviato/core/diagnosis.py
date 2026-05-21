@@ -44,14 +44,19 @@ def _classify_managed(target: Path, expected_body: str) -> ArtifactStatus:
         # No marker, or malformed marker → never silently regenerated (§5.4).
         return "dirty-drift"
     live = content_hash(_live_body(text))
-    if live == content_hash(expected_body):
+    expected = content_hash(expected_body)
+    # Clean only when the body matches expected AND the marker hash is current — so
+    # diagnosis and scaffold agree on the same file (a stale marker is regenerable,
+    # not clean). The marker version is excluded (§5.5), so a version-only move stays
+    # clean.
+    if live == expected and marker.hash == live:
         return "clean"
     # The marker records the hash of the body Aviato last wrote. If the live body
-    # still matches it, the operator hasn't touched the file and the divergence is
-    # only a template/variable move → mergeable (safe to regenerate). If it does
-    # NOT match, the operator hand-edited a managed file → dirty-drift, which must
-    # never be silently clobbered (§5.4, §2.5).
-    if live == marker.hash:
+    # still matches it (template/variable moved) OR already matches expected (only the
+    # marker is stale), regenerating is safe → mergeable. If it matches neither, the
+    # operator hand-edited a managed file → dirty-drift, never silently clobbered
+    # (§5.4, §2.5).
+    if live == marker.hash or live == expected:
         return "mergeable-drift"
     return "dirty-drift"
 

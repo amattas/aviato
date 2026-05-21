@@ -57,7 +57,13 @@ def _write_sidecar(root: Path, data: dict[str, str]) -> None:
     _atomic_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
-def _render_managed(item: ScaffoldItem, *, profile: str, version: str) -> str:
+def render_managed(item: ScaffoldItem, *, profile: str, version: str) -> str:
+    """Render a managed file's full content: the §6.2 marker line followed by the body.
+
+    This is the exact content :func:`scaffold` writes, so a file-drift proposal
+    that uses it produces a merge that diagnosis classifies clean (not dirty for a
+    missing marker).
+    """
     marker = render_marker(profile=profile, version=version, body=item.body, comment=item.comment)
     return f"{marker}\n{item.body}"
 
@@ -100,23 +106,30 @@ def scaffold(
             result.seeded.append(output)
             continue
 
-        rendered = _render_managed(item, profile=profile, version=version)
+        rendered = render_managed(item, profile=profile, version=version)
+        expected_hash = content_hash(item.body)
         if target.exists():
             existing = target.read_text(encoding="utf-8")
-            if existing == rendered:
-                result.unchanged.append(output)
-                continue
-            if not force:
-                marker = parse_marker_from_text(existing)
-                if marker is None:
+            marker = parse_marker_from_text(existing)
+            if marker is None:
+                if not force:
                     # Unmanaged or malformed-marker file — protect the operator's file.
                     result.skipped_unmanaged.append(output)
                     continue
-                if content_hash(strip_marker_from_text(existing)) != marker.hash:
-                    # Valid marker but the body diverges from what Aviato last wrote:
-                    # the operator hand-edited a managed file → never clobber (§2.5/§5.4).
+            else:
+                body_hash = content_hash(strip_marker_from_text(existing))
+                # Body correct and marker hash current → no-op (marker version excluded,
+                # so a version-only move is not churn; matches diagnosis "clean", §5.5).
+                if body_hash == expected_hash and marker.hash == expected_hash:
+                    result.unchanged.append(output)
+                    continue
+                # Body matches neither expected nor what Aviato last wrote → the operator
+                # hand-edited a managed file → never clobber (§2.5/§5.4); matches
+                # diagnosis "dirty-drift".
+                if not force and body_hash != expected_hash and body_hash != marker.hash:
                     result.skipped_modified.append(output)
                     continue
+                # else: template moved or marker stale → regenerate (diagnosis "mergeable").
         _atomic_write(target, rendered)
         result.written.append(output)
 

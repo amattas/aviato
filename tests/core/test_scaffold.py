@@ -65,6 +65,16 @@ def test_refuses_to_overwrite_hand_edited_managed_file_unless_forced(tmp_path: P
     assert "X = 2" in (tmp_path / "cfg.py").read_text()
 
 
+def test_stale_marker_correct_body_is_regenerated_not_skipped(tmp_path: Path) -> None:
+    # body already matches desired but marker hash is stale: scaffold must regenerate
+    # (refresh the marker), agreeing with diagnosis "mergeable" rather than skipping
+    (tmp_path / "cfg.py").write_text("# aviato:managed profile=p version=v1 hash=DEADBEEF\nX = 1\n")
+    result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="v1")
+    assert "cfg.py" in result.written
+    assert result.skipped_modified == []
+    assert "hash=DEADBEEF" not in (tmp_path / "cfg.py").read_text()  # marker refreshed
+
+
 def test_regenerates_managed_file_when_body_changes(tmp_path: Path) -> None:
     scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="v1")
     result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 2\n", "#", False)], profile="p", version="v1")

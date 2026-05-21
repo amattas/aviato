@@ -58,6 +58,11 @@ def test_drift_report_proposes_missing_files_and_reports_settings(
     # nothing scaffolded yet → managed files are "missing" and get proposed
     assert "open_or_update_proposal" in fake.call_names()
     assert "proposed=" in out
+    # the proposed files carry the managed marker (so a merged PR is not dirty-drift)
+    _, args = next(c for c in fake.calls if c[0] == "open_or_update_proposal")
+    files = args[3]
+    assert files, "proposal had no files"
+    assert all("aviato:managed" in body for body in files.values())
     # settings drift reported (never applied)
     assert "apply_settings" not in fake.call_names()
 

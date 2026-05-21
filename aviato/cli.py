@@ -17,7 +17,7 @@ from .core.onboarding import materialize_items
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.render import render
-from .core.scaffold import scaffold
+from .core.scaffold import ScaffoldItem, render_managed, scaffold
 from .core.settings_drift_flow import run_settings_drift
 from .core.versioning import is_highest
 from .github import GitHubAPIError
@@ -257,7 +257,18 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
 
     secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
     report = diagnose(root, expected, declaration_variables=declaration.variables, secret_var_names=secret_names)
-    expected_bodies = {artifact.output_path: artifact.body for artifact in expected if not artifact.seed_once}
+
+    # The proposal must write the SAME marker-stamped content scaffold() writes, so
+    # a merged PR is classified clean (not dirty for a missing marker, §6.2/§5.4).
+    managed_bodies: dict[str, str] = {}
+    for template in resolved.templates:
+        if template.seed_once:
+            continue
+        raw = render(registry.template_body(template), declaration.variables)
+        item = ScaffoldItem(output=template.output_path, body=raw, comment=template.comment or "#")
+        managed_bodies[template.output_path] = render_managed(
+            item, profile=declaration.profile, version=declaration.version
+        )
 
     platform = GitHubPlatform(workdir=root)
     file_outcome = run_file_drift(
@@ -265,7 +276,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         repo=slug,
         profile=declaration.profile,
         statuses=report.statuses,
-        expected_bodies=expected_bodies,
+        expected_bodies=managed_bodies,
     )
     settings_outcome = run_settings_drift(
         platform,

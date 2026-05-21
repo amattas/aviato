@@ -8,12 +8,36 @@ from aviato import github
 from aviato.core.ports import Platform
 from aviato.github_platform import (
     GitHubPlatform,
+    UnmodeledProtectionError,
     _label_events,
     current_consent,
     map_branch_settings,
     nonhuman_edit_after_grant,
     to_branch_protection_payload,
 )
+
+
+def test_apply_settings_fails_closed_on_unmodeled_protection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(
+        github,
+        "classic_branch_protection",
+        lambda repo, branch: {"required_status_checks": {"contexts": ["ci"]}},
+    )
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT")))
+    with pytest.raises(UnmodeledProtectionError):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
+
+
+def test_apply_settings_proceeds_when_no_unmodeled_protection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+    )
+    GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "required_reviews": 1})
+    assert any("PUT" in c for c in calls)
 
 
 def test_nonhuman_edit_after_grant_detects_bot() -> None:
@@ -265,15 +289,14 @@ def test_apply_settings_issues_put_with_payload(monkeypatch: pytest.MonkeyPatch)
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
-
-    def fake_run(cmd, **__):
-        captured["cmd"] = cmd
-        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
 
     written: dict[str, object] = {}
 
     def fake_run2(cmd, **__):
         captured["cmd"] = cmd
+        if "--input" not in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
         # capture the --input payload file contents
         import json as _json
         from pathlib import Path

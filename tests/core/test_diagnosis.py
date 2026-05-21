@@ -44,6 +44,14 @@ def test_hand_edited_managed_file_is_dirty_drift(tmp_path: Path) -> None:
     assert report.statuses["cfg.py"] == "dirty-drift"
 
 
+def test_stale_marker_but_correct_body_is_mergeable_not_clean(tmp_path: Path) -> None:
+    # body matches expected, but the marker hash is stale → mergeable (so doctor and
+    # sync agree: sync regenerates to refresh the marker rather than calling it clean)
+    (tmp_path / "cfg.py").write_text("# aviato:managed profile=p version=v1 hash=DEADBEEF\nX = 1\n")
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])
+    assert report.statuses["cfg.py"] == "mergeable-drift"
+
+
 def test_template_moved_but_file_untouched_is_mergeable(tmp_path: Path) -> None:
     # file is exactly what Aviato wrote (body hash == marker hash) but expected changed
     _scaffold_one(tmp_path, "cfg.py", "X = 1\n")

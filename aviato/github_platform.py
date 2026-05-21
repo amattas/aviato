@@ -24,6 +24,10 @@ from .core.ports import Issue
 CONSENT_LABEL_PREFIX = "aviato-consent:"
 
 
+class UnmodeledProtectionError(RuntimeError):
+    """Raised when a settings apply would drop live protections the model doesn't cover."""
+
+
 @dataclass(frozen=True)
 class ConsentGrant:
     diff_id: str
@@ -274,8 +278,20 @@ class GitHubPlatform:
 
     def apply_settings(self, repo: str, payload: dict[str, Any]) -> None:
         # ``payload`` is the flat desired default-branch state; translate it to the
-        # branch-protection API shape before the PUT (§2.9).
+        # branch-protection API shape before the PUT (§2.9). The PUT replaces
+        # protection wholesale, so FAIL CLOSED if the live branch carries protections
+        # the desired model does not cover (required status checks / push
+        # restrictions): silently dropping them would mutate state the operator never
+        # saw or consented to (§2.4/§5.7).
         branch = github.default_branch(repo)
+        live = github.classic_branch_protection(repo, branch)
+        unmodeled = [k for k in ("required_status_checks", "restrictions") if live.get(k)]
+        if unmodeled:
+            raise UnmodeledProtectionError(
+                f"refusing to PUT branch protection on {repo}@{branch}: it carries unmodeled "
+                f"protection(s) {unmodeled} that this reconcile does not manage and would drop. "
+                f"Reconcile those manually, then re-run."
+            )
         api_payload = to_branch_protection_payload(payload)
         self._gh_input(["--method", "PUT", f"repos/{repo}/branches/{branch}/protection"], api_payload)
 
