@@ -37,16 +37,15 @@ on:
         required: false
         type: number
         default: 10
-      versions-branch:
-        description: Branch persisting the Docusaurus version sources across releases.
-        required: false
-        type: string
-        default: aviato-docs-versions
 
+# §13.3/§1530 least privilege: Pages publish needs pages+id-token write and only
+# READ of contents. Prior doc-version SOURCES persist as a workflow ARTIFACT across
+# runs (read via actions:read) — never a source-branch push — so contents stays read.
 permissions:
-  contents: write
+  contents: read
   id-token: write
   pages: write
+  actions: read
 
 # Per-alias deploy concurrency group so a slower, older-release docs deploy cannot
 # regress the published site / `latest` alias (§8.14). Queue rather than cancel.
@@ -73,7 +72,7 @@ jobs:
         shell: bash
         env:
           TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
-          TAG_FORMAT_DESCRIPTION: 'n.n.n, n.n.n-alphaN, or n.n.n-betaN'
+          TAG_FORMAT_DESCRIPTION: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
         run: |
           set -euo pipefail
           if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
@@ -100,26 +99,26 @@ jobs:
         shell: bash
         run: ${{ inputs.install-command }}
 
-      # §13.3 multi-version: restore the accumulated Docusaurus version SOURCES
-      # (versioned_docs/, versioned_sidebars/, versions.json) from a dedicated branch
-      # so they accumulate across releases without touching the main source branch.
+      # §13.3 multi-version: restore the accumulated Docusaurus version SOURCES from the
+      # prior run's `aviato-docs-versions` artifact (read-only; no source-branch push).
       - name: Restore persisted doc versions
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSIONS_BRANCH: ${{ inputs.versions-branch }}
         run: |
           set -uo pipefail
-          if git fetch origin "${VERSIONS_BRANCH}" 2>/dev/null; then
-            git --work-tree=. checkout "origin/${VERSIONS_BRANCH}" -- versioned_docs versioned_sidebars versions.json 2>/dev/null || true
-            echo "Restored prior doc versions."
+          aid="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=aviato-docs-versions&per_page=1" \
+            --jq '.artifacts[0].id' 2>/dev/null || true)"
+          if [ -n "${aid}" ] && [ "${aid}" != "null" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${aid}/zip" > /tmp/versions.zip || true
+            unzip -o /tmp/versions.zip -d . >/dev/null 2>&1 || true
+            echo "Restored prior doc versions from artifact ${aid}."
           else
-            echo "No persisted versions branch yet (first release)."
+            echo "No persisted versions artifact yet (first release)."
           fi
 
-      # §8.14 monotonic guard: only cut a NEW version (and move `latest`) when this
-      # release is the highest released version — a slower older release must not
-      # regress the docs `latest` alias. Mirrors aviato.core.versioning.is_highest.
+      # §8.14 monotonic guard (fail-closed): only cut a new version / move `latest`
+      # when this release is the highest released version. Mirrors is_highest.
       - name: Cut new docs version (monotonic)
         shell: bash
         env:
@@ -143,16 +142,19 @@ jobs:
           keys = [k for k in (key(t) for t in sys.stdin) if k]
           print("true" if ck and max(keys + [ck]) == ck else "false")
           PY
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/tags" --jq '.[].name' > /tmp/tags.txt || true
+          # Fail CLOSED: a tag-listing failure must NOT let an old release look highest.
+          if ! gh api --paginate "repos/${GITHUB_REPOSITORY}/tags" --jq '.[].name' > /tmp/tags.txt; then
+            echo "::warning::Could not list tags; skipping version cut / latest move (fail-closed, §8.14)."
+            exit 0
+          fi
           highest="$(python3 /tmp/highest.py "${RELEASE_TAG}" < /tmp/tags.txt)"
           if [ "${highest}" != "true" ]; then
-            echo "::warning::${RELEASE_TAG} is not the highest released version; not cutting a new docs version (§8.14)."
+            echo "::warning::${RELEASE_TAG} is not the highest released version; not cutting a new docs version."
             exit 0
           fi
           if ! npx --no-install docusaurus docs:version "${RELEASE_TAG}"; then
             npx docusaurus docs:version "${RELEASE_TAG}"
           fi
-          # Prune to the retention cap: keep the newest N entries of versions.json.
           python3 - "${RETENTION}" <<'PY'
           import json, sys, pathlib, shutil
           cap = int(sys.argv[1])
@@ -172,27 +174,18 @@ jobs:
         shell: bash
         run: ${{ inputs.build-command }}
 
-      # Persist the updated version sources back to the versions branch so the next
-      # release builds on top of them (the source branch stays untouched, §13.3).
+      # Persist the updated version SOURCES as an artifact for the next release
+      # (read back above) — keeps the source branch untouched and contents read-only.
       - name: Persist doc versions
-        shell: bash
-        env:
-          VERSIONS_BRANCH: ${{ inputs.versions-branch }}
-        run: |
-          set -euo pipefail
-          if [ ! -f versions.json ]; then
-            echo "No versions to persist."; exit 0
-          fi
-          tmp="$(mktemp -d)"
-          cp -r versioned_docs versioned_sidebars versions.json "${tmp}/" 2>/dev/null || true
-          git config user.name aviato-bot
-          git config user.email aviato-bot@users.noreply.github.com
-          git fetch origin "${VERSIONS_BRANCH}" 2>/dev/null && git checkout "${VERSIONS_BRANCH}" || git checkout --orphan "${VERSIONS_BRANCH}"
-          git rm -rf . 2>/dev/null || true
-          cp -r "${tmp}/." .
-          git add -A
-          git commit -m "docs: persist versions through ${GITHUB_REF_NAME}" || echo "no changes"
-          git push origin "HEAD:${VERSIONS_BRANCH}"
+        if: ${{ hashFiles(format('{0}/versions.json', inputs.working-directory)) != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: aviato-docs-versions
+          path: |
+            ${{ inputs.working-directory }}/versioned_docs
+            ${{ inputs.working-directory }}/versioned_sidebars
+            ${{ inputs.working-directory }}/versions.json
+          retention-days: 90
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

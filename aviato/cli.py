@@ -15,10 +15,9 @@ from .core.errors import AviatoError
 from .core.file_drift_flow import run_file_drift
 from .core.fleet import scan_fleet
 from .core.marker import parse_marker_from_text
-from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, render_variables
+from .core.onboarding import materialize_items, plan_onboarding, resolved_artifacts
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
-from .core.render import render
 from .core.scaffold import ScaffoldItem, render_managed, scaffold
 from .core.settings_drift_flow import run_settings_drift
 from .core.variables import resolve_variables, writeback_variables
@@ -157,16 +156,23 @@ def _desired_settings(resolved) -> dict:
     }
 
 
-def _expected_artifacts(registry: Registry, resolved, variables: dict) -> list[ExpectedArtifact]:
-    # Filter variable-conditional templates (§12.2) and render with derived vars so
-    # doctor/drift expect exactly what sync would write.
-    render_vars = render_variables(variables)
-    artifacts: list[ExpectedArtifact] = []
-    for template in applicable_templates(resolved, variables):
-        body = registry.template_body(template)
-        rendered = "" if template.seed_once else render(body, render_vars)
-        artifacts.append(ExpectedArtifact(template.output_path, rendered, template.seed_once))
-    return artifacts
+def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[ExpectedArtifact]:
+    """The artifacts a consumer should have, honoring its pin, docs, overrides (§5.4).
+
+    Uses the same resolution/rendering/conditional-filtering as sync, so doctor and
+    drift expect exactly what sync would write.
+    """
+    return [
+        ExpectedArtifact(a.output, a.body if not a.seed_once else "", a.seed_once)
+        for a in resolved_artifacts(
+            registry,
+            declaration.profile,
+            declaration.variables,
+            pin=declaration.version,
+            docs=declaration.docs,
+            overrides=declaration.overrides,
+        )
+    ]
 
 
 def _parse_var_flags(pairs: list[str] | None) -> dict[str, str]:
@@ -230,7 +236,7 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
     dump_declaration(declaration, declaration_path)
     print(f"wrote {declaration_path.relative_to(target)}")
 
-    items = materialize_items(registry, args.profile, variables)
+    items = materialize_items(registry, args.profile, variables, pin=args.pin, docs=args.docs)
     result = scaffold(target, items, profile=args.profile, version=args.pin)
     for output in result.written:
         print(f"wrote {output}")
@@ -294,7 +300,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
-        expected = _expected_artifacts(registry, resolved, declaration.variables)
+        expected = _expected_artifacts(registry, declaration)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -343,7 +349,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = load_declaration(declaration_path)
-        items = materialize_items(registry, declaration.profile, declaration.variables)
+        items = materialize_items(
+            registry, declaration.profile, declaration.variables, pin=declaration.version, docs=declaration.docs
+        )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -413,7 +421,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
-        expected = _expected_artifacts(registry, resolved, declaration.variables)
+        expected = _expected_artifacts(registry, declaration)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -428,17 +436,19 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
 
     # The proposal must write the SAME marker-stamped content scaffold() writes, so
     # a merged PR is classified clean (not dirty for a missing marker, §6.2/§5.4).
-    # Conditional templates (§12.2) are filtered and rendered with derived vars.
-    render_vars = render_variables(declaration.variables)
     managed_bodies: dict[str, str] = {}
-    for template in applicable_templates(resolved, declaration.variables):
-        if template.seed_once:
+    for artifact in resolved_artifacts(
+        registry,
+        declaration.profile,
+        declaration.variables,
+        pin=declaration.version,
+        docs=declaration.docs,
+        overrides=declaration.overrides,
+    ):
+        if artifact.seed_once:
             continue
-        raw = render(registry.template_body(template), render_vars)
-        item = ScaffoldItem(output=template.output_path, body=raw, comment=template.comment or "#")
-        managed_bodies[template.output_path] = render_managed(
-            item, profile=declaration.profile, version=declaration.version
-        )
+        item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+        managed_bodies[artifact.output] = render_managed(item, profile=declaration.profile, version=declaration.version)
 
     platform = GitHubPlatform(workdir=root)
     file_outcome = run_file_drift(
@@ -523,7 +533,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
-        expected = _expected_artifacts(registry, resolved, declaration.variables)
+        expected = _expected_artifacts(registry, declaration)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2

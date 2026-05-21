@@ -17,6 +17,6 @@ permissions:
 
 jobs:
   drift:
-    uses: amattas/aviato/.github/workflows/reusable-consumer-automation.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-consumer-automation.yml@{{ aviato-ref }}
     with:
-      aviato-ref: main
+      aviato-ref: {{ aviato-ref }}

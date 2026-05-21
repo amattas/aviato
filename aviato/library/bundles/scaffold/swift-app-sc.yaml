@@ -5,4 +5,5 @@ extends: swift-sc
 add:
   - wf-ci-swift-app
   - wf-drift
+  - wf-docs
 remove: []

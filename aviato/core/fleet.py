@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from .composition import resolve_profile
-from .declaration import load_declaration
+from .declaration import Declaration, load_declaration
 from .diagnosis import ExpectedArtifact, diagnose
 from .errors import AviatoError
+from .onboarding import resolved_artifacts
 from .registry import Registry
-from .render import render
 
 
 @dataclass
@@ -23,14 +22,21 @@ class RepoScan:
     error: str | None = None
 
 
-def _expected_artifacts(registry: Registry, profile: str, variables: Mapping[str, Any]) -> list[ExpectedArtifact]:
-    resolved = resolve_profile(registry, profile)
-    artifacts: list[ExpectedArtifact] = []
-    for template in resolved.templates:
-        body = registry.template_body(template)
-        rendered = "" if template.seed_once else render(body, variables)
-        artifacts.append(ExpectedArtifact(template.output_path, rendered, template.seed_once))
-    return artifacts
+def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[ExpectedArtifact]:
+    # Same resolution/rendering/conditional-filtering (pin, docs, type-check) as
+    # onboarding/doctor — so the fleet scan doesn't report false drift for JS
+    # consumers or miss docs-enabled artifacts (§5.11 parity).
+    return [
+        ExpectedArtifact(a.output, a.body if not a.seed_once else "", a.seed_once)
+        for a in resolved_artifacts(
+            registry,
+            declaration.profile,
+            declaration.variables,
+            pin=declaration.version,
+            docs=declaration.docs,
+            overrides=declaration.overrides,
+        )
+    ]
 
 
 def scan_fleet(paths: Sequence[Path], registry: Registry) -> list[RepoScan]:
@@ -51,8 +57,8 @@ def scan_fleet(paths: Sequence[Path], registry: Registry) -> list[RepoScan]:
             continue
         try:
             declaration = load_declaration(declaration_path)
-            expected = _expected_artifacts(registry, declaration.profile, declaration.variables)
-            resolved = resolve_profile(registry, declaration.profile)
+            expected = _expected_artifacts(registry, declaration)
+            resolved = resolve_profile(registry, declaration.profile, docs=declaration.docs)
             secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
             report = diagnose(
                 root,

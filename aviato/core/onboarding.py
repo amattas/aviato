@@ -18,14 +18,18 @@ def template_applies(template: TemplateModule, variables: Mapping[str, Any]) -> 
     return all(str(variables.get(key)) == value for key, value in template.when)
 
 
-def render_variables(variables: Mapping[str, Any]) -> dict[str, Any]:
+def render_variables(variables: Mapping[str, Any], *, pin: str = "main", docs: bool = False) -> dict[str, Any]:
     """Augment the resolved variables with derived render values.
 
-    ``run-typecheck`` is driven by the ``language-variant`` enum (§12.2): TypeScript
-    type-checks, JavaScript does not. This is what selects JS vs TS behavior — not
-    tsconfig.json presence.
+    - ``aviato-ref`` is the declared Library pin (§6.1/§2.6), stamped into the
+      generated workflows' ``uses: …@<ref>`` and ``aviato-ref:`` so a consumer runs
+      the version it pinned — not ``@main``.
+    - ``run-typecheck`` is driven by the ``language-variant`` enum (§12.2).
+    - ``docs`` reflects the §6.1 opt-in (gates the docs caller workflow).
     """
     derived = dict(variables)
+    derived["aviato-ref"] = pin
+    derived["docs"] = "true" if docs else "false"
     variant = variables.get("language-variant")
     if variant is not None:
         derived["run-typecheck"] = "false" if variant == "javascript" else "true"
@@ -33,32 +37,57 @@ def render_variables(variables: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def applicable_templates(resolved, variables: Mapping[str, Any]) -> list[TemplateModule]:
-    """The resolved templates that apply given the variables (filters §12.2 conditionals)."""
+    """The resolved templates that apply given the variables (filters §12.2/§6.1 conditionals)."""
     return [t for t in resolved.templates if template_applies(t, variables)]
 
 
-def materialize_items(registry: Registry, profile: str, variables: Mapping[str, Any]) -> list[ScaffoldItem]:
-    """Turn a resolved profile into concrete scaffold items (§5.3).
+@dataclass(frozen=True)
+class ResolvedArtifact:
+    output: str
+    body: str  # rendered, without the managed marker
+    comment: str
+    seed_once: bool
 
-    Conditional templates that do not apply to the variables are skipped (§12.2).
-    Managed bodies are rendered with the resolved + derived variables; seed-once
-    bodies are written verbatim. Feeds :func:`aviato.core.scaffold.scaffold`.
+
+def resolved_artifacts(
+    registry: Registry,
+    profile: str,
+    variables: Mapping[str, Any],
+    *,
+    pin: str = "main",
+    docs: bool = False,
+    overrides: Mapping[str, Any] | None = None,
+) -> list[ResolvedArtifact]:
+    """The fully-resolved, rendered artifact set for a profile (§5.2/§5.3).
+
+    The single source of truth used by onboarding/sync, diagnosis, drift, and the
+    fleet scan — so they agree on conditional filtering (§12.2/§6.1) and derived
+    render variables (pin, docs, type-check). ``docs`` composes the docs pipeline
+    and includes the docs caller workflow.
     """
-    resolved = resolve_profile(registry, profile)
-    render_vars = render_variables(variables)
-    items: list[ScaffoldItem] = []
-    for template in applicable_templates(resolved, variables):
+    resolved = resolve_profile(registry, profile, overrides=dict(overrides or {}), docs=docs)
+    render_vars = render_variables(variables, pin=pin, docs=docs)
+    artifacts: list[ResolvedArtifact] = []
+    for template in applicable_templates(resolved, render_vars):
         body = registry.template_body(template)
         rendered = body if template.seed_once else render(body, render_vars)
-        items.append(
-            ScaffoldItem(
-                output=template.output_path,
-                body=rendered,
-                comment=template.comment or "#",
-                seed_once=template.seed_once,
-            )
-        )
-    return items
+        artifacts.append(ResolvedArtifact(template.output_path, rendered, template.comment or "#", template.seed_once))
+    return artifacts
+
+
+def materialize_items(
+    registry: Registry,
+    profile: str,
+    variables: Mapping[str, Any],
+    *,
+    pin: str = "main",
+    docs: bool = False,
+) -> list[ScaffoldItem]:
+    """Turn a resolved profile into concrete scaffold items (§5.3)."""
+    return [
+        ScaffoldItem(output=a.output, body=a.body, comment=a.comment, seed_once=a.seed_once)
+        for a in resolved_artifacts(registry, profile, variables, pin=pin, docs=docs)
+    ]
 
 
 @dataclass

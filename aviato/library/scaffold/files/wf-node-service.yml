@@ -23,7 +23,7 @@ permissions:
 jobs:
   ci:
     if: ${{ github.ref_type != 'tag' }}
-    uses: amattas/aviato/.github/workflows/reusable-node-ci.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-node-ci.yml@{{ aviato-ref }}
     with:
       node-version: "22"
       install-command: "npm ci"
@@ -39,20 +39,20 @@ jobs:
   security:
     # Runs on PRs AND on the release tag, so source scans gate the verify pipeline
     # and are re-run on the release ref before any deploy (§2.13/§5.14).
-    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@{{ aviato-ref }}
     with:
       codeql-languages: "javascript-typescript"
 
   release:
     if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
     needs: [ci, security]
-    uses: amattas/aviato/.github/workflows/reusable-release.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-release.yml@{{ aviato-ref }}
     with:
-      aviato-ref: main
+      aviato-ref: {{ aviato-ref }}
 
   release-gate:
     if: ${{ github.ref_type == 'tag' }}
-    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@{{ aviato-ref }}
     with:
       default-branch: main
       require-merged-pr: true
@@ -60,7 +60,7 @@ jobs:
   docker:
     if: ${{ github.ref_type == 'tag' }}
     needs: [release-gate, security]
-    uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@{{ aviato-ref }}
     with:
       context: "."
       dockerfile: "Dockerfile"

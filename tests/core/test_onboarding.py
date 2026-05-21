@@ -11,6 +11,24 @@ from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT
 
 
+def test_docs_true_scaffolds_docs_workflow() -> None:
+    reg = Registry(MODULE_SOURCE_ROOT)
+    without = {i.output for i in materialize_items(reg, "python-library", {})}
+    withdocs = {i.output for i in materialize_items(reg, "python-library", {}, docs=True)}
+    assert ".github/workflows/aviato-docs.yml" not in without
+    assert ".github/workflows/aviato-docs.yml" in withdocs
+
+
+def test_pin_is_stamped_into_generated_workflows() -> None:
+    reg = Registry(MODULE_SOURCE_ROOT)
+    items = {i.output: i for i in materialize_items(reg, "python-library", {}, pin="v1.2.3")}
+    ci = items[".github/workflows/aviato-ci.yml"].body
+    assert "@v1.2.3" in ci  # reusable workflow refs pinned (§2.6/§6.1)
+    assert "@main" not in ci
+    drift = items[".github/workflows/aviato-drift.yml"].body
+    assert "aviato-ref: v1.2.3" in drift
+
+
 def test_javascript_variant_omits_tsconfig_and_disables_typecheck() -> None:
     from aviato.core.onboarding import render_variables
 

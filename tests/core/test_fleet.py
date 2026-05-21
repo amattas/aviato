@@ -15,8 +15,30 @@ def _make_consumer(root: Path, *, scaffold_all: bool) -> None:
     (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
     if scaffold_all:
         reg = Registry(MODULE_SOURCE_ROOT)
-        items = materialize_items(reg, "python-library", variables={})
+        # Scaffold with the same pin the declaration records, so the embedded
+        # workflow refs match what fleet expects (parity, §5.11).
+        items = materialize_items(reg, "python-library", variables={}, pin="v1")
         scaffold(root, items, profile="python-library", version="v1")
+
+
+def test_scan_no_false_drift_for_javascript_consumer(tmp_path: Path) -> None:
+    # §5.11 parity: a JS consumer scaffolded without tsconfig must read clean, not
+    # show false drift from fleet resolving without the variant.
+    root = tmp_path / "js"
+    github = root / ".github"
+    github.mkdir(parents=True)
+    (github / "aviato.yaml").write_text(
+        "profile: node-service\nversion: v1\nvariables:\n  language-variant: javascript\n  project-name: x\n",
+        encoding="utf-8",
+    )
+    reg = Registry(MODULE_SOURCE_ROOT)
+    variables = {"language-variant": "javascript", "project-name": "x"}
+    items = materialize_items(reg, "node-service", variables, pin="v1")
+    scaffold(root, items, profile="node-service", version="v1")
+    assert not (root / "tsconfig.json").exists()  # JS omits tsconfig
+
+    scan = scan_fleet([root], Registry(MODULE_SOURCE_ROOT))[0]
+    assert all(status == "clean" for status in scan.statuses.values()), scan.statuses
 
 
 def test_scan_aggregates_per_repo_status(tmp_path: Path) -> None:
