@@ -46,6 +46,19 @@ def test_text_without_marker_parses_none() -> None:
     assert parse_marker_from_text("plain file\n") is None
 
 
+def test_strip_marker_removes_first_marker_line() -> None:
+    from aviato.core.marker import strip_marker_from_text
+
+    text = "# aviato:managed profile=p version=v1 hash=abc\nbody line\n"
+    assert strip_marker_from_text(text) == "body line\n"
+
+
+def test_strip_marker_leaves_unmarked_text_unchanged() -> None:
+    from aviato.core.marker import strip_marker_from_text
+
+    assert strip_marker_from_text("plain\nbody\n") == "plain\nbody\n"
+
+
 def test_comment_for_path_maps_extensions() -> None:
     assert comment_for_path("a.py") == "#"
     assert comment_for_path("a.ts") == "//"

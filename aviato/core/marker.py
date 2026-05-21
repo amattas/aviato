@@ -51,3 +51,18 @@ def parse_marker_from_text(text: str) -> MarkerInfo | None:
         if line.strip():
             return parse_marker(line)
     return None
+
+
+def strip_marker_from_text(text: str) -> str:
+    """Remove the managed-marker line from a file's text, leaving a plain file (§5.13).
+
+    If the first non-blank line is a valid marker it is dropped; otherwise the
+    text is returned unchanged.
+    """
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.strip():
+            if parse_marker(line) is not None:
+                return "".join(lines[:i] + lines[i + 1 :])
+            return text
+    return text
