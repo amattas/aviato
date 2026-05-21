@@ -30,6 +30,8 @@ aviato render-rulesets                       # print rendered ruleset JSON
 aviato onboard OWNER/REPO --profile python-library  # composition-backed onboarding plan
 aviato doctor /path/to/consumer              # classify a consumer's managed artifacts (§5.4)
 aviato sync /path/to/consumer                # materialize managed artifacts from its declaration (§5.3)
+aviato scan /path/a /path/b                  # read-only fleet diagnosis across many local repos (§5.11)
+aviato reconcile /path/to/consumer <issue> --confirm  # operator-gated settings apply (§5.7)
 aviato validate                              # validate this repo's policy infra + core agnosticism
 ```
 
@@ -59,12 +61,24 @@ knowledge that names extensions (e.g. `.swift`) lives in
 
 Core module map: `composition` (§5.1/§4.2 resolution), `declaration` (§6.1),
 `variables` (§5.2/§6.6 + §8.15 secret guard), `marker` (§6.2), `scaffold`
-(§5.3/§6.3 seed-once + sidecar), `diagnosis` (§5.4), `filedrift` (§5.5),
-`settingsdrift` (§5.6), `consent` (§5.8 fail-closed gate), `version`/`compatibility`
-(§2.6), `versioning` (§5.9 Conventional Commit bump), `bootstrap` (§5.10),
-`onboarding` (§5.2), `repin` (§5.12), `offboarding` (§5.13), `selfcheck` (§9b).
-Process flows reference `REQUIREMENTS.md` section numbers in docstrings — keep
-them accurate when changing behavior.
+(§5.3/§6.3 seed-once + sidecar), `diagnosis` (§5.4), `filedrift`/`settingsdrift`
+(§5.5/§5.6 primitives), `consent` (§5.8 fail-closed gate), `reconcile` (§5.7
+decision logic), `version` (§2.6 compatibility), `versioning` (§5.9 Conventional
+Commit bump), `bootstrap` (§5.10), `onboarding` (§5.2), `repin` (§5.12),
+`offboarding` (§5.13), `selfcheck` (§9b).
+
+**Orchestration vs. binding (§2.14).** The platform-touching flows are split:
+the *decision/orchestration* logic lives in core (`settings_drift_flow` §5.6,
+`file_drift_flow` §5.5, `reconcile_flow` §5.7, `fleet` §5.11) and depends only on
+the `Platform` **port** (`core/ports.py`) — so it's unit-tested against an
+in-memory fake (`tests/core/fakeplatform.py`). The concrete GitHub binding is
+`aviato/github_platform.py` (outside core; may name `gh`), composing the tested
+`github.py` helpers. **The live end-to-end runs of these flows, and the Part II
+deploy pipelines (PyPI/GHCR/Pages/Apple), are operator-verified by design**
+(§9.2/§9.9/§13.4.7) — the engine primitives and the GitHub binding's
+response-mapping are tested, but a real GitHub repo + credentials are needed to
+exercise them live. Process flows reference `REQUIREMENTS.md` section numbers in
+docstrings — keep them accurate when changing behavior.
 
 ### policy.yml is the single source of truth
 
