@@ -37,6 +37,7 @@ class PipelineModule:
     privileges: tuple[str, ...] = ()
     inputs: tuple[str, ...] = ()
     secrets: tuple[str, ...] = ()
+    runner: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,3 +100,4 @@ class ResolvedSet:
     variables: tuple[VariableSpec, ...]
     version_source: VersionSourceModule | None
     toolchain: dict[str, Any]
+    pipeline_modules: tuple[PipelineModule, ...] = ()

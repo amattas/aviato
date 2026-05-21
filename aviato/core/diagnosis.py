@@ -39,9 +39,7 @@ def _has_drift_automation(root: Path) -> bool:
     workflows = root / ".github" / "workflows"
     if not workflows.is_dir():
         return False
-    return any(
-        "reusable-consumer-automation" in path.read_text(encoding="utf-8") for path in workflows.glob("*.yml")
-    )
+    return any("reusable-consumer-automation" in path.read_text(encoding="utf-8") for path in workflows.glob("*.yml"))
 
 
 def _probe_prerequisites(root: Path, prerequisite_paths: Mapping[str, Sequence[str]]) -> dict[str, bool]:

@@ -7,6 +7,7 @@ import yaml
 
 from .errors import CompositionError
 from .model import (
+    PipelineModule,
     Profile,
     ScaffoldBundle,
     SettingsBundle,
@@ -80,6 +81,29 @@ class Registry:
             name=doc["name"],
             extends=doc.get("extends"),
             settings=dict(doc.get("settings", {})),
+        )
+
+    def pipeline_module(self, name: str) -> PipelineModule | None:
+        """Load a typed pipeline module (§3.2/§11.3) from ``pipelines.yaml``.
+
+        Returns None when the pipelines manifest is absent or the pipeline is not
+        declared — composition tolerates this so test/empty registries still work;
+        day-zero pipelines are all declared.
+        """
+        path = self.root / "pipelines.yaml"
+        if not path.is_file():
+            return None
+        with path.open("r", encoding="utf-8") as handle:
+            manifest = yaml.safe_load(handle) or {}
+        doc = manifest.get(name)
+        if not isinstance(doc, dict):
+            return None
+        return PipelineModule(
+            name=name,
+            privileges=tuple(doc.get("privileges", ())),
+            inputs=tuple(doc.get("inputs", ())),
+            secrets=tuple(doc.get("secrets", ())),
+            runner=doc.get("runner"),
         )
 
     def template_module(self, name: str) -> TemplateModule:

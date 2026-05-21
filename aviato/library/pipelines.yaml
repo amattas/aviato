@@ -1,0 +1,41 @@
+# Typed pipeline modules (§3.2): each pipeline declares the job privileges it
+# needs (§11.3), its inputs, any stored secrets, and its runner. A profile that
+# attaches a pipeline must grant exactly these privileges (§8.9). Pipeline names
+# map to the reusable workflows in .github/workflows/reusable-*.yml.
+security-baseline:
+  privileges: ["contents: read", "security-events: write", "actions: read"]
+  runner: linux
+release-gate:
+  privileges: ["contents: read"]
+  runner: linux
+release:
+  privileges: ["contents: write"]
+  runner: linux
+python-verify:
+  privileges: ["contents: read"]
+  runner: linux
+node-verify:
+  privileges: ["contents: read"]
+  runner: linux
+swift-verify:
+  privileges: ["contents: read"]
+  runner: macos
+pypi-publish:
+  privileges: ["id-token: write", "contents: read"]
+  runner: linux
+ghcr-publish:
+  privileges: ["packages: write", "contents: read", "security-events: write"]
+  runner: linux
+docs-pages:
+  privileges: ["pages: write", "id-token: write", "contents: read"]
+  runner: linux
+app-store-connect:
+  privileges: ["contents: read"]
+  secrets:
+    - APP_STORE_CONNECT_ISSUER_ID
+    - APP_STORE_CONNECT_KEY_ID
+    - APP_STORE_CONNECT_API_PRIVATE_KEY
+    - APPLE_CERTIFICATE_P12_BASE64
+    - APPLE_CERTIFICATE_PASSWORD
+    - APPLE_PROVISIONING_PROFILE_BASE64
+  runner: macos

@@ -128,6 +128,11 @@ def resolve_profile(
     version_source = VersionSourceModule(locations=tuple(vs_doc.get("locations", ()))) if vs_doc is not None else None
     toolchain = dict(doc.get("toolchain", {}))
 
+    # Resolve each pipeline reference to its typed module (privileges/inputs/
+    # secrets/runner, §3.2/§11.3). Undeclared pipelines (e.g. in a test registry)
+    # are simply absent from pipeline_modules.
+    pipeline_modules = tuple(module for ref in pipelines if (module := registry.pipeline_module(ref)) is not None)
+
     return ResolvedSet(
         profile=name,
         pipelines=pipelines,
@@ -136,4 +141,5 @@ def resolve_profile(
         variables=variables,
         version_source=version_source,
         toolchain=toolchain,
+        pipeline_modules=pipeline_modules,
     )
