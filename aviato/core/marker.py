@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import hashlib
+import re
+from dataclasses import dataclass
+
+# Per-filetype comment-syntax mapping (§6.2). Maps a file extension to the
+# line-comment prefix used to render/parse the managed marker.
+COMMENT_SYNTAX: dict[str, str] = {
+    ".py": "#",
+    ".yml": "#",
+    ".yaml": "#",
+    ".toml": "#",
+    ".cfg": "#",
+    ".ini": "#",
+    ".sh": "#",
+    ".rb": "#",
+    ".ts": "//",
+    ".tsx": "//",
+    ".js": "//",
+    ".jsx": "//",
+    ".mjs": "//",
+    ".cjs": "//",
+    ".swift": "//",
+    ".go": "//",
+    ".rs": "//",
+    ".java": "//",
+    ".kt": "//",
+}
+
+_TOKEN = "aviato:managed"
+_MARKER_RE = re.compile(
+    r"aviato:managed\s+profile=(?P<profile>\S+)\s+version=(?P<version>\S+)\s+hash=(?P<hash>\S+)\s*$"
+)
+
+
+@dataclass(frozen=True)
+class MarkerInfo:
+    profile: str
+    version: str
+    hash: str
+
+
+def comment_for_path(path: str) -> str | None:
+    """Return the comment prefix for ``path``'s extension, or None if unmapped."""
+    dot = path.rfind(".")
+    if dot == -1:
+        return None
+    return COMMENT_SYNTAX.get(path[dot:])
+
+
+def content_hash(body: str) -> str:
+    """SHA-256 of the rendered body with line endings normalized to ``\\n`` (§5.5)."""
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def render_marker(*, profile: str, version: str, body: str, comment: str) -> str:
+    """Render the canonical managed-marker line (§6.2) for ``body``."""
+    return f"{comment} {_TOKEN} profile={profile} version={version} hash={content_hash(body)}"
+
+
+def parse_marker(line: str) -> MarkerInfo | None:
+    """Parse a single line into :class:`MarkerInfo`, or None if absent/malformed.
+
+    A line carrying the ``aviato:managed`` token but not matching the exact
+    grammar is malformed → None (the caller treats that as dirty-drift, §5.4).
+    """
+    if _TOKEN not in line:
+        return None
+    match = _MARKER_RE.search(line)
+    if not match:
+        return None
+    return MarkerInfo(profile=match.group("profile"), version=match.group("version"), hash=match.group("hash"))
+
+
+def parse_marker_from_text(text: str) -> MarkerInfo | None:
+    """Parse the marker from a file's text: the first non-blank line is the marker (§6.2)."""
+    for line in text.splitlines():
+        if line.strip():
+            return parse_marker(line)
+    return None
