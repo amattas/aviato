@@ -59,12 +59,15 @@ def test_app_store_pipeline_declares_secrets_and_macos(registry: Registry) -> No
 
 @pytest.mark.parametrize("name", DAYZERO)
 def test_security_baseline_modeled_in_settings(registry: Registry, name: str) -> None:
-    # §2.13: secret scanning + push protection must be modeled desired state, not omittable
-    security = resolve_profile(registry, name).settings.get("security", {})
+    # §2.13: the reconcilable repo security toggles are modeled desired state.
+    rs = resolve_profile(registry, name)
+    security = rs.settings.get("security", {})
     assert security.get("secret_scanning") is True
     assert security.get("secret_push_protection") is True
-    assert security.get("code_scanning") is True
     assert security.get("dependency_scanning") is True
+    # Code scanning (SAST) is delivered by the always-composed pipeline, not a toggle.
+    assert "security-baseline" in rs.pipelines
+    assert "code_scanning" not in security  # not a perpetually-undriftable setting
 
 
 def test_python_library_deploys_pypi(registry: Registry) -> None:

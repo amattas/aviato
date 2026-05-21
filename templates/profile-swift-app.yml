@@ -8,10 +8,14 @@ on:
     tags:
       - "*"
 
+# Granted to the UNION of every called reusable workflow's permissions: a caller
+# cannot elevate the token for a called workflow, so it must grant >= their needs
+# (release-gate: actions:read; GHCR/PyPI provenance: id-token+attestations:write).
 permissions:
   contents: read
   pull-requests: read
   security-events: write
+  actions: read
 
 jobs:
   ci:

@@ -16,8 +16,11 @@ settings:
   # Always-on security baseline (§2.13). These are repo-level GitHub features the
   # operator enables out-of-band (§17, probeable by diagnosis §5.4); modeled here as
   # desired state so a profile cannot silently omit them.
+  # Repo-level security toggles reconciled by §5.6/§5.7 (read + diff + apply).
+  # Code scanning (SAST) is delivered by the CodeQL `security-baseline` PIPELINE
+  # (always composed, §2.13) and the scaffolded workflow — not a repo toggle —
+  # so it is not listed here (it would otherwise be perpetually un-reconcilable).
   security:
-    code_scanning: true
     secret_scanning: true
     secret_push_protection: true
     dependency_scanning: true

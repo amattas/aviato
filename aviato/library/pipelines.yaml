@@ -26,7 +26,7 @@ pypi-publish:
   privileges: ["contents: read", "id-token: write", "attestations: write"]
   runner: linux
 ghcr-publish:
-  privileges: ["contents: read", "packages: write", "security-events: write"]
+  privileges: ["contents: read", "packages: write", "security-events: write", "id-token: write", "attestations: write"]
   runner: linux
 docs-pages:
   privileges: ["contents: read", "id-token: write", "pages: write"]
