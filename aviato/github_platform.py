@@ -12,11 +12,68 @@ from __future__ import annotations
 
 import json
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from . import github
 from .core.ports import Issue
+
+# A human grants consent by adding a label of this form to the tracking issue;
+# the diff identity it authorizes is encoded after the prefix (§6.4).
+CONSENT_LABEL_PREFIX = "aviato-consent:"
+
+
+@dataclass(frozen=True)
+class ConsentGrant:
+    diff_id: str
+    actor_type: str | None
+    actor_login: str | None
+
+
+def _label_events(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize GitHub timeline entries into label-event dicts for :func:`current_consent`."""
+    events: list[dict[str, Any]] = []
+    for entry in timeline:
+        action = entry.get("event")
+        if action not in ("labeled", "unlabeled"):
+            continue
+        label = entry.get("label") or {}
+        actor = entry.get("actor") or {}
+        events.append(
+            {
+                "action": action,
+                "label": label.get("name", ""),
+                "actor_type": actor.get("type"),
+                "actor_login": actor.get("login"),
+            }
+        )
+    return events
+
+
+def current_consent(events: list[dict[str, Any]]) -> ConsentGrant | None:
+    """Reduce a chronological list of label events to the active consent grant (§6.4).
+
+    Each event is ``{"action": "labeled"|"unlabeled", "label": str,
+    "actor_type": str|None, "actor_login": str|None}``. A ``labeled`` event with
+    the consent prefix is a grant; a matching ``unlabeled`` is a revoke. The
+    current consent is the most recent grant not later revoked. Reading the full
+    (paginated) history is what prevents a later revoke from being missed.
+    """
+    active: dict[str, tuple[int, str | None, str | None]] = {}
+    for seq, event in enumerate(events):
+        label = event.get("label", "")
+        if not isinstance(label, str) or not label.startswith(CONSENT_LABEL_PREFIX):
+            continue
+        diff_id = label[len(CONSENT_LABEL_PREFIX) :]
+        if event.get("action") == "labeled":
+            active[diff_id] = (seq, event.get("actor_type"), event.get("actor_login"))
+        elif event.get("action") == "unlabeled":
+            active.pop(diff_id, None)
+    if not active:
+        return None
+    diff_id, (_, actor_type, actor_login) = max(active.items(), key=lambda item: item[1][0])
+    return ConsentGrant(diff_id=diff_id, actor_type=actor_type, actor_login=actor_login)
 
 
 def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any]) -> dict[str, Any]:
@@ -66,7 +123,35 @@ class GitHubPlatform:
         if not isinstance(issues, list) or not issues:
             return None
         head = issues[0]
-        return Issue(key=key, open=head.get("state") == "open")
+        number = head.get("number")
+        is_open = head.get("state") == "open"
+
+        # Read the FULL (paginated) label-event history so a later revoke cannot
+        # be missed (§2.8/§6.4), then reduce to the active consent grant.
+        timeline = github.gh_json_paginated(f"repos/{repo}/issues/{number}/timeline", default=[], allow_error=True)
+        events = _label_events(timeline if isinstance(timeline, list) else [])
+        grant = current_consent(events)
+        if grant is None:
+            return Issue(key=key, open=is_open)
+
+        role, role_ok = self._actor_role(repo, grant.actor_login)
+        return Issue(
+            key=key,
+            open=is_open,
+            consent_diff_id=grant.diff_id,
+            consent_actor_type=grant.actor_type,
+            consent_role=role,
+            consent_role_lookup_ok=role_ok,
+        )
+
+    def _actor_role(self, repo: str, login: str | None) -> tuple[str | None, bool]:
+        if not login:
+            return None, False
+        response = github.gh_json(f"repos/{repo}/collaborators/{login}/permission", default=None, allow_error=True)
+        if not isinstance(response, dict):
+            return None, False  # lookup failed → not authorized (§2.7)
+        permission = response.get("permission")
+        return (permission, True) if isinstance(permission, str) else (None, False)
 
     def open_or_update_issue(self, repo: str, key: str, title: str, body: str) -> str:
         existing = github.gh_json(f"repos/{repo}/issues?state=open&labels={key}", default=[], allow_error=True)

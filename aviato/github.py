@@ -30,6 +30,30 @@ def gh_json(endpoint: str, *, default: Any = None, allow_error: bool = False) ->
         raise GitHubAPIError(endpoint, result.returncode, f"invalid JSON response: {exc}") from exc
 
 
+def gh_json_paginated(endpoint: str, *, default: Any = None, allow_error: bool = False) -> Any:
+    """Fetch an endpoint following pagination, returning a single combined array.
+
+    Uses ``gh api --paginate --slurp`` so a long resource (e.g. a tracking issue's
+    full event timeline) is read in full — a later page cannot hide a revoke
+    (§2.8/§6.4). Falls back to ``default`` on error when ``allow_error``.
+    """
+    result = run(["gh", "api", "--paginate", "--slurp", endpoint], check=False)
+    if result.returncode != 0:
+        if allow_error:
+            return default
+        raise GitHubAPIError(endpoint, result.returncode, result.stderr)
+    if not result.stdout.strip():
+        return default
+    try:
+        pages = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise GitHubAPIError(endpoint, result.returncode, f"invalid JSON response: {exc}") from exc
+    # --slurp wraps each page's array in an outer array; flatten to one list.
+    if isinstance(pages, list) and pages and all(isinstance(page, list) for page in pages):
+        return [item for page in pages for item in page]
+    return pages
+
+
 def default_branch(slug: str) -> str:
     response = gh_json(f"repos/{slug}")
     if not isinstance(response, dict):
