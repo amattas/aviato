@@ -1,14 +1,14 @@
 release:
-  tag_pattern: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
-  tag_format_description: 'n.n.n, n.n.n-alphaN, or n.n.n-betaN'
+  tag_pattern: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+  tag_format_description: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
   examples:
     valid:
-      - 1.2.3
-      - 1.2.3-alpha1
-      - 1.2.3-beta2
-    invalid:
       - v1.2.3
-      - 1.2.3-beta.1
+      - v1.2.3-alpha1
+      - v1.2.3-beta2
+    invalid:
+      - 1.2.3
+      - v1.2.3-beta.1
       - build-20260519.0215
 
 branch:

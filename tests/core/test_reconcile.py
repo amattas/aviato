@@ -55,6 +55,19 @@ def test_empty_recomputed_diff_is_noop() -> None:
     assert outcome.action == "noop"
 
 
+def test_empty_diff_noops_even_with_stale_consent() -> None:
+    # external convergence: nothing left to apply → no-op regardless of stale consent (§2.8)
+    outcome = reconcile_decision(
+        _state(
+            desired_settings={"x": 1},
+            live_settings={"x": 1},
+            consent_diff_id="STALE",
+            current_diff_id="NEW",
+        )
+    )
+    assert outcome.action == "noop"
+
+
 def test_issue_edited_by_nonhuman_aborts() -> None:
     assert reconcile_decision(_state(issue_edited_by_nonhuman_since_grant=True)).action == "abort"
 

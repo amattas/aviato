@@ -56,14 +56,15 @@ def test_no_conventional_commits_is_patch() -> None:
 
 
 def test_next_version_applies_bump() -> None:
-    assert next_version("1.2.3", BumpKind.MAJOR) == "2.0.0"
-    assert next_version("1.2.3", BumpKind.MINOR) == "1.3.0"
-    assert next_version("1.2.3", BumpKind.PATCH) == "1.2.4"
-    assert next_version("v1.2.3", BumpKind.MINOR) == "1.3.0"
+    # Emits the v-prefixed tag (§6.1 pin format / GitHub @vX.Y.Z convention).
+    assert next_version("1.2.3", BumpKind.MAJOR) == "v2.0.0"
+    assert next_version("1.2.3", BumpKind.MINOR) == "v1.3.0"
+    assert next_version("1.2.3", BumpKind.PATCH) == "v1.2.4"
+    assert next_version("v1.2.3", BumpKind.MINOR) == "v1.3.0"
 
 
 def test_next_version_from_commits_end_to_end() -> None:
-    assert next_version("0.4.1", classify_commits(["feat: x"])) == "0.5.0"
+    assert next_version("0.4.1", classify_commits(["feat: x"])) == "v0.5.0"
 
 
 def test_next_version_rejects_bad_current() -> None:

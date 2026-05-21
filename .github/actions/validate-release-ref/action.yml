@@ -5,7 +5,7 @@ inputs:
   tag-pattern:
     description: Regular expression that release tags must match.
     required: false
-    default: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+    default: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
   tag-format-description:
     description: Human-readable description of the accepted tag format.
     required: false

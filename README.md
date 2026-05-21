@@ -15,12 +15,12 @@ keeping a committed inventory of consumer repositories.
 Release tags must match:
 
 ```text
-^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$
+^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$
 ```
 
-Accepted examples: `1.2.3`, `1.2.3-alpha1`, `1.2.3-beta2`.
+Accepted examples: `v1.2.3`, `v1.2.3-alpha1`, `v1.2.3-beta2`.
 
-Rejected examples: `v1.2.3`, `1.2.3-beta.1`,
+Rejected examples: `1.2.3` (no `v`), `v1.2.3-beta.1`,
 `build-20260519.0215`.
 
 Release publishing is tag-only. Legacy `release/*` branches should be cleaned up

@@ -10,12 +10,12 @@ from aviato.cli import main
 def test_next_version_from_commit_flags(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["next-version", "--current", "1.2.3", "--commit", "feat: a", "--commit", "fix: b"])
     assert rc == 0
-    assert capsys.readouterr().out.strip() == "1.3.0"
+    assert capsys.readouterr().out.strip() == "v1.3.0"
 
 
 def test_next_version_breaking(capsys: pytest.CaptureFixture[str]) -> None:
     main(["next-version", "--current", "1.2.3", "--commit", "feat!: drop x"])
-    assert capsys.readouterr().out.strip() == "2.0.0"
+    assert capsys.readouterr().out.strip() == "v2.0.0"
 
 
 def test_bump_version_rewrites_pyproject(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

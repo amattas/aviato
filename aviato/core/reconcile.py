@@ -60,6 +60,13 @@ def reconcile_decision(state: ReconcileState) -> ReconcileOutcome:
     if not state.issue_open:
         return ReconcileOutcome("refuse", "issue is closed; reopen to act")
 
+    # Apply-time recompute first (§2.8): if the change already converged externally
+    # the recomputed diff is empty, so no-op regardless of consent state — there is
+    # nothing to authorize, and refusing on stale consent would be wrong.
+    diff = classify_settings(desired=state.desired_settings, live=state.live_settings)
+    if not diff.changes:
+        return ReconcileOutcome("noop", "recomputed diff is empty; already converged")
+
     if not state.consent_present or state.consent_diff_id != state.current_diff_id:
         return ReconcileOutcome("refuse", "consent absent or not bound to the current diff; needs (re-)consent")
 
@@ -72,10 +79,6 @@ def reconcile_decision(state: ReconcileState) -> ReconcileOutcome:
     )
     if not decision.allowed:
         return ReconcileOutcome("refuse", f"authorization denied: {decision.reason}")
-
-    diff = classify_settings(desired=state.desired_settings, live=state.live_settings)
-    if not diff.changes:
-        return ReconcileOutcome("noop", "recomputed diff is empty; already converged")
 
     if state.issue_edited_by_nonhuman_since_grant:
         return ReconcileOutcome("abort", "issue/consent edited by a non-human since the grant; consent voided")

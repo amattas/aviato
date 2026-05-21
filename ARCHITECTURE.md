@@ -159,19 +159,19 @@ Policy constants should have one canonical source.
 The release tag format is:
 
 ```text
-^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$
+^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$
 ```
 
 Accepted examples:
 
-- `1.2.3`
-- `1.2.3-alpha1`
-- `1.2.3-beta2`
+- `v1.2.3`
+- `v1.2.3-alpha1`
+- `v1.2.3-beta2`
 
 Rejected examples:
 
-- `v1.2.3`
-- `1.2.3-beta.1`
+- `1.2.3` (no `v`)
+- `v1.2.3-beta.1`
 - `build-20260519.0215`
 
 The canonical file is `policy.yml`. Ruleset rendering derives from it, and

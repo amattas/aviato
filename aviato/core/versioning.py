@@ -72,10 +72,10 @@ def classify_commits(commits: Iterable[str]) -> BumpKind:
 
 
 def next_version(current: str, bump: BumpKind) -> str:
-    """Apply ``bump`` to ``current`` (``vX.Y.Z`` or ``X.Y.Z``) → ``X.Y.Z`` (§5.9)."""
+    """Apply ``bump`` to ``current`` → the next ``vX.Y.Z`` (§5.9, §6.1 pin format)."""
     major, minor, patch = parse_version(current)
     if bump == BumpKind.MAJOR:
-        return f"{major + 1}.0.0"
+        return f"v{major + 1}.0.0"
     if bump == BumpKind.MINOR:
-        return f"{major}.{minor + 1}.0"
-    return f"{major}.{minor}.{patch + 1}"
+        return f"v{major}.{minor + 1}.0"
+    return f"v{major}.{minor}.{patch + 1}"

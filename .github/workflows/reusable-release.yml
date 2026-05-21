@@ -53,21 +53,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          last="$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0)"
+          last="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
           range="${last}..HEAD"
-          if [ "${last}" = "0.0.0" ]; then range="HEAD"; fi
+          if [ "${last}" = "v0.0.0" ] && ! git rev-parse "v0.0.0" >/dev/null 2>&1; then range="HEAD"; fi
           # Commit messages are piped (never interpolated into a command) to aviato.
+          # next-version returns a v-prefixed tag (vX.Y.Z), matching the §6.1 pin format.
           next="$(git log "${range}" --format=%B%x00 | aviato next-version --current "${last}")"
           echo "last=${last}" >> "${GITHUB_OUTPUT}"
           echo "next=${next}" >> "${GITHUB_OUTPUT}"
-          if [ "${next}" = "${last#v}" ] || [ "${next}" = "${last}" ]; then
+          if [ "${next}" = "${last}" ]; then
             echo "release=false" >> "${GITHUB_OUTPUT}"
             echo "No version change implied by commit history; skipping release."
           else
             echo "release=true" >> "${GITHUB_OUTPUT}"
           fi
 
-      - name: Bump version-source, tag, and release
+      - name: Bump version-source, tag, advance floating major, and release
         if: ${{ steps.derive.outputs.release == 'true' }}
         shell: bash
         env:
@@ -79,7 +80,12 @@ jobs:
           git config user.email aviato-bot@users.noreply.github.com
           git commit -am "chore(release): ${NEXT}" || echo "nothing to commit"
           git tag "${NEXT}"
-          git push origin HEAD --tags
-          prev="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD)"
+          # §5.9: advance the floating major reference (e.g. v1) to this release,
+          # unconditionally — it is a published pointer consumers pin with @vN.
+          major="$(printf '%s' "${NEXT}" | sed -E 's/^(v[0-9]+).*/\1/')"
+          git tag -f "${major}"
+          git push origin HEAD "${NEXT}"
+          git push -f origin "${major}"
+          prev="$(git describe --tags --abbrev=0 "${NEXT}^" 2>/dev/null || git rev-list --max-parents=0 HEAD)"
           git log "${prev}..HEAD" --pretty=format:'- %s' > /tmp/changelog.md || true
           gh release create "${NEXT}" --title "${NEXT}" --notes-file /tmp/changelog.md

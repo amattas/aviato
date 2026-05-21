@@ -61,7 +61,7 @@ jobs:
         id: release
         shell: bash
         env:
-          TAG_PATTERN: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+          TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
           TAG_FORMAT_DESCRIPTION: 'n.n.n, n.n.n-alphaN, or n.n.n-betaN'
         run: |
           set -euo pipefail
