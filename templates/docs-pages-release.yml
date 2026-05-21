@@ -1,0 +1,17 @@
+name: Publish Docs
+
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  docs:
+    uses: amattas/aviato/.github/workflows/reusable-docs-pages.yml@main
+    with:
+      node-version: "22"
+      working-directory: "docs"
+      install-command: "npm ci"
+      build-command: "npm run build"
+      artifact-path: "build"
+      environment-name: github-pages

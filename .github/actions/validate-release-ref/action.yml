@@ -1,0 +1,48 @@
+name: Validate Release Ref
+description: Validate that the current GitHub ref is an Aviato release tag.
+
+inputs:
+  tag-pattern:
+    description: Regular expression that release tags must match.
+    required: false
+    default: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+  tag-format-description:
+    description: Human-readable description of the accepted tag format.
+    required: false
+    default: 'n.n.n, n.n.n-alphaN, or n.n.n-betaN'
+  require-tag-ref:
+    description: Whether to fail when the workflow is not running from a tag ref.
+    required: false
+    default: 'true'
+
+outputs:
+  tag:
+    description: The validated release tag.
+    value: ${{ steps.validate.outputs.tag }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate release ref
+      id: validate
+      shell: bash
+      env:
+        TAG_PATTERN: ${{ inputs.tag-pattern }}
+        TAG_FORMAT_DESCRIPTION: ${{ inputs.tag-format-description }}
+        REQUIRE_TAG_REF: ${{ inputs.require-tag-ref }}
+      run: |
+        set -euo pipefail
+
+        if [ "${REQUIRE_TAG_REF}" = "true" ] && [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+          echo "::error::Release workflows must run from a tag ref. Got ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}."
+          exit 1
+        fi
+
+        tag="${GITHUB_REF_NAME}"
+        if [[ ! "${tag}" =~ ${TAG_PATTERN} ]]; then
+          echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${tag}"
+          exit 1
+        fi
+
+        echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+

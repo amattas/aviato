@@ -1,0 +1,94 @@
+name: Reusable PyPI Publish
+
+on:
+  workflow_call:
+    inputs:
+      aviato-ref:
+        description: Deprecated. Release validation is embedded in this pinned workflow.
+        required: false
+        type: string
+        default: ""
+      python-version:
+        required: false
+        type: string
+        default: "3.12"
+      working-directory:
+        required: false
+        type: string
+        default: "."
+      install-command:
+        required: false
+        type: string
+        default: "python -m pip install build"
+      build-command:
+        required: false
+        type: string
+        default: "python -m build"
+      packages-dir:
+        required: false
+        type: string
+        default: "dist"
+      repository-url:
+        description: Optional alternate repository URL, for example TestPyPI.
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish Python package
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout consumer repository
+        uses: actions/checkout@v4
+
+      - name: Validate release tag
+        shell: bash
+        env:
+          TAG_PATTERN: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+          TAG_FORMAT_DESCRIPTION: 'n.n.n, n.n.n-alphaN, or n.n.n-betaN'
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "::error::Release workflows must run from a tag ref. Got ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}."
+            exit 1
+          fi
+
+          if [[ ! "${GITHUB_REF_NAME}" =~ ${TAG_PATTERN} ]]; then
+            echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install build tools
+        if: ${{ inputs.install-command != '' }}
+        shell: bash
+        run: ${{ inputs.install-command }}
+
+      - name: Build distributions
+        shell: bash
+        run: ${{ inputs.build-command }}
+
+      - name: Publish distributions
+        if: ${{ inputs.repository-url == '' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ${{ inputs.working-directory }}/${{ inputs.packages-dir }}
+
+      - name: Publish distributions to alternate repository
+        if: ${{ inputs.repository-url != '' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ${{ inputs.working-directory }}/${{ inputs.packages-dir }}
+          repository-url: ${{ inputs.repository-url }}

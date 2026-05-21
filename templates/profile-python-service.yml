@@ -1,0 +1,48 @@
+name: Aviato Python Service
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags:
+      - "*"
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: read
+  security-events: write
+
+jobs:
+  ci:
+    if: ${{ github.ref_type != 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-python-ci.yml@main
+    with:
+      python-version: "3.12"
+      install-command: "python -m pip install -e .[dev]"
+      lint-command: "python -m ruff check ."
+      test-command: "python -m pytest"
+
+  security:
+    if: ${{ github.ref_type != 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@main
+    with:
+      codeql-languages: "python"
+
+  release-gate:
+    if: ${{ github.ref_type == 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@main
+    with:
+      default-branch: main
+      require-merged-pr: true
+
+  docker:
+    if: ${{ github.ref_type == 'tag' }}
+    needs: release-gate
+    uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@main
+    with:
+      context: "."
+      dockerfile: "Dockerfile"
+      platforms: "linux/amd64"
+

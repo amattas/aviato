@@ -1,0 +1,17 @@
+name: Security
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  security:
+    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@main
+    with:
+      codeql-languages: "python"
+      run-codeql: true
+      run-dependency-review: true
+      dependency-review-fail-on-severity: high
+

@@ -1,0 +1,130 @@
+name: Reusable Swift CI
+
+on:
+  workflow_call:
+    inputs:
+      xcode-version:
+        required: false
+        type: string
+        default: ""
+      working-directory:
+        required: false
+        type: string
+        default: "."
+      scheme:
+        required: false
+        type: string
+        default: ""
+      workspace:
+        required: false
+        type: string
+        default: ""
+      project:
+        required: false
+        type: string
+        default: ""
+      destination:
+        required: false
+        type: string
+        default: "platform=iOS Simulator,name=iPhone 16"
+      configuration:
+        required: false
+        type: string
+        default: Debug
+      install-command:
+        required: false
+        type: string
+        default: ""
+      lint-command:
+        required: false
+        type: string
+        default: |
+          command -v swift-format >/dev/null || { echo "::error::swift-format is required"; exit 1; }
+          command -v swiftlint >/dev/null || { echo "::error::SwiftLint is required"; exit 1; }
+          swift-format lint --recursive .
+          swiftlint --strict
+      test-command:
+        required: false
+        type: string
+        default: |
+          if [ -n "${WORKSPACE}" ]; then
+            xcodebuild test -workspace "${WORKSPACE}" -scheme "${SCHEME}" -configuration "${CONFIGURATION}" -destination "${DESTINATION}"
+          elif [ -n "${PROJECT}" ]; then
+            xcodebuild test -project "${PROJECT}" -scheme "${SCHEME}" -configuration "${CONFIGURATION}" -destination "${DESTINATION}"
+          else
+            swift test
+          fi
+      build-command:
+        required: false
+        type: string
+        default: |
+          if [ -n "${WORKSPACE}" ]; then
+            xcodebuild build -workspace "${WORKSPACE}" -scheme "${SCHEME}" -configuration "${CONFIGURATION}" -destination "${DESTINATION}"
+          elif [ -n "${PROJECT}" ]; then
+            xcodebuild build -project "${PROJECT}" -scheme "${SCHEME}" -configuration "${CONFIGURATION}" -destination "${DESTINATION}"
+          else
+            swift build
+          fi
+      run-install:
+        required: false
+        type: boolean
+        default: false
+      run-lint:
+        required: false
+        type: boolean
+        default: true
+      run-tests:
+        required: false
+        type: boolean
+        default: true
+      run-build:
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  swift-ci:
+    name: Swift CI
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      SCHEME: ${{ inputs.scheme }}
+      WORKSPACE: ${{ inputs.workspace }}
+      PROJECT: ${{ inputs.project }}
+      DESTINATION: ${{ inputs.destination }}
+      CONFIGURATION: ${{ inputs.configuration }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        if: ${{ inputs.xcode-version != '' }}
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ inputs.xcode-version }}
+
+      - name: Install
+        if: ${{ inputs.run-install && inputs.install-command != '' }}
+        shell: bash
+        run: ${{ inputs.install-command }}
+
+      - name: Lint
+        if: ${{ inputs.run-lint && inputs.lint-command != '' }}
+        shell: bash
+        run: ${{ inputs.lint-command }}
+
+      - name: Test
+        if: ${{ inputs.run-tests && inputs.test-command != '' }}
+        shell: bash
+        run: ${{ inputs.test-command }}
+
+      - name: Build
+        if: ${{ inputs.run-build && inputs.build-command != '' }}
+        shell: bash
+        run: ${{ inputs.build-command }}
+

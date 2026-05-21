@@ -1,0 +1,86 @@
+name: Reusable Python CI
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        required: false
+        type: string
+        default: "3.12"
+      working-directory:
+        required: false
+        type: string
+        default: "."
+      install-command:
+        required: false
+        type: string
+        default: "python -m pip install -e .[dev]"
+      lint-command:
+        required: false
+        type: string
+        default: "python -m ruff check ."
+      test-command:
+        required: false
+        type: string
+        default: "python -m pytest"
+      build-command:
+        required: false
+        type: string
+        default: ""
+      run-install:
+        required: false
+        type: boolean
+        default: true
+      run-lint:
+        required: false
+        type: boolean
+        default: true
+      run-tests:
+        required: false
+        type: boolean
+        default: true
+      run-build:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  python-ci:
+    name: Python CI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+
+      - name: Install
+        if: ${{ inputs.run-install && inputs.install-command != '' }}
+        shell: bash
+        run: ${{ inputs.install-command }}
+
+      - name: Lint
+        if: ${{ inputs.run-lint && inputs.lint-command != '' }}
+        shell: bash
+        run: ${{ inputs.lint-command }}
+
+      - name: Test
+        if: ${{ inputs.run-tests && inputs.test-command != '' }}
+        shell: bash
+        run: ${{ inputs.test-command }}
+
+      - name: Build
+        if: ${{ inputs.run-build && inputs.build-command != '' }}
+        shell: bash
+        run: ${{ inputs.build-command }}
+

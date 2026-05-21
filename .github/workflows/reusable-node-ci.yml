@@ -1,0 +1,87 @@
+name: Reusable Node CI
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        required: false
+        type: string
+        default: "22"
+      working-directory:
+        required: false
+        type: string
+        default: "."
+      install-command:
+        required: false
+        type: string
+        default: "npm ci"
+      lint-command:
+        required: false
+        type: string
+        default: "npm run lint --if-present"
+      test-command:
+        required: false
+        type: string
+        default: "npm test --if-present"
+      build-command:
+        required: false
+        type: string
+        default: "npm run build --if-present"
+      run-install:
+        required: false
+        type: boolean
+        default: true
+      run-lint:
+        required: false
+        type: boolean
+        default: true
+      run-tests:
+        required: false
+        type: boolean
+        default: true
+      run-build:
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  node-ci:
+    name: Node CI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install
+        if: ${{ inputs.run-install && inputs.install-command != '' }}
+        shell: bash
+        run: ${{ inputs.install-command }}
+
+      - name: Lint
+        if: ${{ inputs.run-lint && inputs.lint-command != '' }}
+        shell: bash
+        run: ${{ inputs.lint-command }}
+
+      - name: Test
+        if: ${{ inputs.run-tests && inputs.test-command != '' }}
+        shell: bash
+        run: ${{ inputs.test-command }}
+
+      - name: Build
+        if: ${{ inputs.run-build && inputs.build-command != '' }}
+        shell: bash
+        run: ${{ inputs.build-command }}
+

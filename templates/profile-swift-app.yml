@@ -1,0 +1,63 @@
+name: Aviato Swift App
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags:
+      - "*"
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+
+jobs:
+  ci:
+    if: ${{ github.ref_type != 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-swift-ci.yml@main
+    with:
+      scheme: "App"
+      workspace: "App.xcworkspace"
+      destination: "platform=iOS Simulator,name=iPhone 16"
+      install-command: "brew install swiftformat swiftlint"
+      run-install: true
+
+  security:
+    if: ${{ github.ref_type != 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@main
+    with:
+      codeql-languages: "swift"
+      codeql-runner: macos-latest
+
+  release-gate:
+    if: ${{ github.ref_type == 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@main
+    with:
+      default-branch: main
+      require-merged-pr: true
+
+  app-store-connect:
+    if: ${{ github.ref_type == 'tag' }}
+    needs: release-gate
+    uses: amattas/aviato/.github/workflows/reusable-app-store-connect.yml@main
+    with:
+      environment-name: app-store-connect
+      scheme: "App"
+      workspace: "App.xcworkspace"
+      bundle-identifier: "com.example.app"
+      team-id: "TEAMID1234"
+      export-options-plist: ExportOptions.plist
+      version-command: |
+        base_version="${RELEASE_TAG%%-*}"
+        agvtool new-marketing-version "${base_version}"
+        agvtool new-version -all "${BUILD_NUMBER}"
+    secrets:
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+      APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+

@@ -1,0 +1,49 @@
+name: Aviato Node Service
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags:
+      - "*"
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: read
+  security-events: write
+
+jobs:
+  ci:
+    if: ${{ github.ref_type != 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-node-ci.yml@main
+    with:
+      node-version: "22"
+      install-command: "npm ci"
+      lint-command: "npm run lint --if-present"
+      test-command: "npm test --if-present"
+      build-command: "npm run build --if-present"
+
+  security:
+    if: ${{ github.ref_type != 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@main
+    with:
+      codeql-languages: "javascript-typescript"
+
+  release-gate:
+    if: ${{ github.ref_type == 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@main
+    with:
+      default-branch: main
+      require-merged-pr: true
+
+  docker:
+    if: ${{ github.ref_type == 'tag' }}
+    needs: release-gate
+    uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@main
+    with:
+      context: "."
+      dockerfile: "Dockerfile"
+      platforms: "linux/amd64"
+

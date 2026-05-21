@@ -1,0 +1,50 @@
+name: Aviato Python Library
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags:
+      - "*"
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: read
+  security-events: write
+
+jobs:
+  ci:
+    if: ${{ github.ref_type != 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-python-ci.yml@main
+    with:
+      python-version: "3.12"
+      install-command: "python -m pip install -e .[dev]"
+      lint-command: "python -m ruff check ."
+      test-command: "python -m pytest"
+      build-command: "python -m build"
+      run-build: true
+
+  security:
+    if: ${{ github.ref_type != 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@main
+    with:
+      codeql-languages: "python"
+
+  release-gate:
+    if: ${{ github.ref_type == 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@main
+    with:
+      default-branch: main
+      require-merged-pr: true
+
+  pypi:
+    if: ${{ github.ref_type == 'tag' }}
+    needs: release-gate
+    uses: amattas/aviato/.github/workflows/reusable-pypi-publish.yml@main
+    with:
+      python-version: "3.12"
+      working-directory: "."
+      packages-dir: "dist"
+

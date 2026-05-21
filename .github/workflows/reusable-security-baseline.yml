@@ -1,0 +1,65 @@
+name: Reusable Security Baseline
+
+on:
+  workflow_call:
+    inputs:
+      codeql-languages:
+        description: Comma-separated CodeQL languages, for example python or javascript-typescript.
+        required: false
+        type: string
+        default: ""
+      run-codeql:
+        required: false
+        type: boolean
+        default: true
+      run-dependency-review:
+        required: false
+        type: boolean
+        default: true
+      dependency-review-fail-on-severity:
+        required: false
+        type: string
+        default: high
+      codeql-runner:
+        description: Runner used for CodeQL.
+        required: false
+        type: string
+        default: ubuntu-latest
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+
+jobs:
+  codeql:
+    name: CodeQL
+    if: ${{ inputs.run-codeql && inputs.codeql-languages != '' }}
+    runs-on: ${{ inputs.codeql-runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ inputs.codeql-languages }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+
+  dependency-review:
+    name: Dependency Review
+    if: ${{ inputs.run-dependency-review && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: ${{ inputs.dependency-review-fail-on-severity }}

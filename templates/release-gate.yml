@@ -1,0 +1,13 @@
+name: Release Gate
+
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  gate:
+    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@main
+    with:
+      default-branch: main
+      require-merged-pr: true

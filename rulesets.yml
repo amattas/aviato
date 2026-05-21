@@ -1,0 +1,13 @@
+rulesets:
+  - id: protect-default-branch
+    file: rulesets/protect-default-branch.json
+    target: branch
+    patch:
+      required_approving_review_count: branch.required_approvals_default
+
+  - id: release-tag-format
+    file: rulesets/release-tag-format.json
+    target: tag
+    patch:
+      tag_name_pattern: release.tag_pattern
+

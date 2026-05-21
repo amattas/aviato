@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  python:
+    uses: amattas/aviato/.github/workflows/reusable-python-ci.yml@main
+    with:
+      python-version: "3.12"
+      install-command: "python -m pip install -e .[dev]"
+      lint-command: "python -m ruff check ."
+      test-command: "python -m pytest"
+      build-command: ""
+      run-install: true
+      run-lint: true
+      run-tests: true
+      run-build: false

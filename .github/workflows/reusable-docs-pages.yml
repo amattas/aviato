@@ -1,0 +1,97 @@
+name: Reusable Docusaurus Pages Publish
+
+on:
+  workflow_call:
+    inputs:
+      aviato-ref:
+        description: Deprecated. Release validation is embedded in this pinned workflow.
+        required: false
+        type: string
+        default: ""
+      node-version:
+        required: false
+        type: string
+        default: "22"
+      working-directory:
+        required: false
+        type: string
+        default: "."
+      install-command:
+        required: false
+        type: string
+        default: "npm ci"
+      build-command:
+        required: false
+        type: string
+        default: "npm run build"
+      artifact-path:
+        required: false
+        type: string
+        default: "build"
+      environment-name:
+        required: false
+        type: string
+        default: github-pages
+
+permissions:
+  contents: read
+  id-token: write
+  pages: write
+
+jobs:
+  publish-docs:
+    name: Publish docs
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment-name }}
+      url: ${{ steps.deployment.outputs.page_url }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout consumer repository
+        uses: actions/checkout@v4
+
+      - name: Validate release tag
+        shell: bash
+        env:
+          TAG_PATTERN: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+          TAG_FORMAT_DESCRIPTION: 'n.n.n, n.n.n-alphaN, or n.n.n-betaN'
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "::error::Release workflows must run from a tag ref. Got ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}."
+            exit 1
+          fi
+
+          if [[ ! "${GITHUB_REF_NAME}" =~ ${TAG_PATTERN} ]]; then
+            echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Install
+        shell: bash
+        run: ${{ inputs.install-command }}
+
+      - name: Build docs
+        shell: bash
+        run: ${{ inputs.build-command }}
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
+
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
