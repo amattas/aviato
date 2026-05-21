@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/aviato-logo.svg" alt="Aviato — Where code takes flight" width="520">
+  <img src="docs/assets/aviato.jpg" alt="Aviato — Where code takes flight" width="520">
 </p>
 
 # Aviato
