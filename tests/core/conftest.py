@@ -31,7 +31,7 @@ def module_root(tmp_path: Path) -> Path:
         {"name": "child-sc", "templates": ["cfg"]},
     )
     _write(
-        root / "templates" / "scaffold" / "cfg.yaml",
+        root / "scaffold" / "cfg.yaml",
         {"name": "cfg", "output_path": "cfg.py", "source": "cfg.py.tmpl", "comment": "#"},
     )
 
@@ -45,7 +45,7 @@ def module_root(tmp_path: Path) -> Path:
     )
 
     _write(
-        root / "profiles" / "child.yaml",
+        root / "child.yaml",
         {
             "name": "child",
             "workflows": "child-wf",

@@ -28,18 +28,18 @@ def _load_doc(path: Path) -> dict[str, Any]:
 class Registry:
     """Loads profile/bundle/template module definitions from a source root.
 
-    The source root is the §5.10 module-source tree: ``profiles/``,
-    ``bundles/<kind>/``, and ``templates/scaffold/``. The registry maps the
-    declarative YAML onto the :mod:`aviato.core.model` dataclasses. It contains
-    no language- or deployment-specific knowledge — every such specific lives in
-    the data it loads.
+    The source root is the §5.10 module-source tree: profile manifests at the
+    root, ``bundles/<kind>/``, and ``scaffold/`` template modules. The registry
+    maps the declarative YAML onto the :mod:`aviato.core.model` dataclasses. It
+    contains no language- or deployment-specific knowledge — every such specific
+    lives in the data it loads.
     """
 
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
 
     def profile_doc(self, name: str) -> dict[str, Any]:
-        return _load_doc(self.root / "profiles" / f"{name}.yaml")
+        return _load_doc(self.root / f"{name}.yaml")
 
     def profile(self, name: str) -> Profile:
         doc = self.profile_doc(name)
@@ -83,7 +83,7 @@ class Registry:
         )
 
     def template_module(self, name: str) -> TemplateModule:
-        doc = _load_doc(self.root / "templates" / "scaffold" / f"{name}.yaml")
+        doc = _load_doc(self.root / "scaffold" / f"{name}.yaml")
         return TemplateModule(
             output_path=doc["output_path"],
             source=doc["source"],
@@ -94,7 +94,7 @@ class Registry:
 
     def template_body(self, module: TemplateModule) -> str:
         """Read a template module's raw source body from the module-source tree."""
-        path = self.root / "templates" / "scaffold" / module.source
+        path = self.root / "scaffold" / module.source
         if not path.is_file():
             raise CompositionError(f"missing template source: {path}")
         return path.read_text(encoding="utf-8")

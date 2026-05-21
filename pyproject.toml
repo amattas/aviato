@@ -20,6 +20,15 @@ dev = [
 [project.scripts]
 aviato = "aviato.cli:main"
 
+[tool.setuptools.packages.find]
+include = ["aviato*"]
+
+# Ship the module-source tree (profiles, bundles, scaffold templates) and the
+# agnosticism denylist inside the wheel so a pip-installed `aviato` (e.g. the
+# consumer drift automation) can resolve profiles without a source checkout.
+[tool.setuptools.package-data]
+aviato = ["library/**/*", "plugins/*.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
