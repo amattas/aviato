@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/aviato-logo.svg" alt="Aviato — Where code takes flight" width="520">
+</p>
+
 # Aviato
 
 Aviato is a reusable GitHub policy, CI, release, and onboarding conventions
