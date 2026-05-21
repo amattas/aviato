@@ -388,6 +388,15 @@ class GitHubPlatform:
         if security_payload:
             self._gh_input(["--method", "PATCH", f"repos/{repo}"], {"security_and_analysis": security_payload})
 
+    def create_repo(self, repo: str, *, private: bool) -> None:
+        # §5.2 provision-new: create the repository initialized with a README so the
+        # default branch (and its first commit) exists — branch protection cannot be
+        # applied to a branch with no commits, so this enables the staged minimal→full
+        # ordering (§2.11). Idempotent-ish: a pre-existing repo surfaces as an error.
+        args = ["repo", "create", repo, "--add-readme"]
+        args.append("--private" if private else "--public")
+        github.run(["gh", *args])
+
     @staticmethod
     def _gh_input(args: list[str], payload: dict[str, Any]) -> None:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:

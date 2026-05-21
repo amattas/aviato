@@ -19,10 +19,15 @@ class FakePlatform:
         settings: dict[str, Any] | None = None,
         issues: dict[str, Issue] | None = None,
         issues_disabled: bool = False,
+        fail_full_protection: bool = False,
     ) -> None:
         self.settings = settings or {}
         self.issues = issues or {}
         self.issues_disabled = issues_disabled
+        # When set, the SECOND apply_settings (full protection) raises — simulating the
+        # §8.7 partially-provisioned state for provision-flow tests.
+        self.fail_full_protection = fail_full_protection
+        self._apply_count = 0
         self.calls: list[tuple[str, tuple]] = []
 
     def read_settings(self, repo: str) -> dict[str, Any]:
@@ -47,8 +52,14 @@ class FakePlatform:
         return branch
 
     def apply_settings(self, repo: str, payload: dict[str, Any]) -> None:
+        self._apply_count += 1
+        if self.fail_full_protection and self._apply_count >= 2:
+            raise RuntimeError("full protection rejected by platform")
         self.calls.append(("apply_settings", (repo, payload)))
         self.settings.update(payload)
+
+    def create_repo(self, repo: str, *, private: bool) -> None:
+        self.calls.append(("create_repo", (repo, private)))
 
     def call_names(self) -> list[str]:
         return [name for name, _ in self.calls]

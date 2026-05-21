@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 from . import __version__
 from .audit import audit_repos, discover_and_audit, render_json, render_tsv
+from .command import CommandError, run
 from .core.bootstrap import is_library
 from .core.composition import resolve_profile
 from .core.declaration import Declaration, dump_declaration, load_declaration
@@ -17,6 +19,7 @@ from .core.fleet import scan_fleet
 from .core.marker import parse_marker_from_text
 from .core.offboarding import offboard as offboard_repo
 from .core.onboarding import materialize_items, plan_onboarding, resolved_artifacts
+from .core.provision import provision_repo
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.repin import plan_repin
@@ -635,6 +638,76 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_provision(args: argparse.Namespace) -> int:
+    """Provision a NEW repository with staged protection (§5.2 provision-new / §2.11).
+
+    create repo (README-initialized) → MINIMAL protection → clone + write declaration +
+    scaffold + first commit + direct push → FULL protection. If full protection fails
+    the repo is left in the partially-provisioned state and the operator is pointed at
+    the idempotent `complete-protection` recovery (§8.7). Operator-DIRECT (§2.3).
+    """
+    slug = args.slug
+    if "/" not in slug:
+        print("provide the new repository as OWNER/REPO", file=sys.stderr)
+        return 2
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    try:
+        resolved = resolve_profile(registry, args.profile, docs=args.docs)
+        variables = resolve_variables(
+            resolved.variables,
+            flags=_parse_var_flags(args.var),
+            declaration={},
+            env=_env_vars(resolved.variables),
+            autodetect={},
+        )
+        persisted = writeback_variables(resolved.variables, variables)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    declaration = Declaration(profile=args.profile, version=args.pin, docs=args.docs, variables=persisted)
+    desired = _desired_settings(resolved)
+    items = materialize_items(registry, args.profile, variables, pin=args.pin, docs=args.docs)
+
+    def scaffold_push() -> None:
+        # Local side effects only (kept out of core): clone the just-created repo,
+        # write the declaration + scaffold managed files, commit, and push DIRECTLY to
+        # the default branch — allowed because minimal protection has no PR gate (§2.11).
+        workdir = Path(tempfile.mkdtemp(prefix="aviato-provision-"))
+        clone = workdir / "repo"
+        run(["gh", "repo", "clone", slug, str(clone)])
+        decl_path = clone / ".github" / "aviato.yaml"
+        decl_path.parent.mkdir(parents=True, exist_ok=True)
+        dump_declaration(declaration, decl_path)
+        scaffold(clone, items, profile=args.profile, version=args.pin)
+        run(["git", "-C", str(clone), "config", "user.name", "aviato-bot"])
+        run(["git", "-C", str(clone), "config", "user.email", "aviato-bot@users.noreply.github.com"])
+        run(["git", "-C", str(clone), "add", "-A"])
+        run(["git", "-C", str(clone), "commit", "-m", "chore: adopt Aviato conventions (§5.2)"])
+        run(["git", "-C", str(clone), "push", "origin", "HEAD"])
+
+    try:
+        outcome = provision_repo(
+            GitHubPlatform(), repo=slug, desired=desired, private=not args.public, scaffold_push=scaffold_push
+        )
+    except (GitHubAPIError, CommandError) as exc:
+        print(f"provisioning failed before full protection: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"created {slug} (private={not args.public}); minimal protection applied; scaffold pushed.")
+    if outcome.partial:
+        print(
+            f"PARTIAL: full protection failed ({outcome.reason}). The repo is in the "
+            f"partially-provisioned state (minimal protection persists). Recover with:\n"
+            f"    aviato complete-protection <local-clone-of-{slug}>",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"applied full protection to {slug}. Provisioned (§5.2).")
+    return 0
+
+
 SETTINGS_DRIFT_ISSUE_KEY = "aviato-settings-drift"
 
 
@@ -937,6 +1010,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     complete.add_argument("path", help="Path to the consumer repository.")
     complete.set_defaults(func=cmd_complete_protection)
+
+    provision = subparsers.add_parser(
+        "provision", help="Provision a NEW repository with staged minimal->full protection (§5.2)."
+    )
+    provision.add_argument("slug", help="New repository as OWNER/REPO.")
+    provision.add_argument("--profile", default="python-service")
+    provision.add_argument("--docs", action="store_true", help="Compose the opt-in docs deploy (§13.3).")
+    provision.add_argument("--pin", default="v0", help="Library version pin to record in the declaration.")
+    provision.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
+    provision.add_argument("--public", action="store_true", help="Create a public repo (default: private).")
+    provision.set_defaults(func=cmd_provision)
 
     drift = subparsers.add_parser("drift-report", help="Consumer automation: report file + settings drift (read-only).")
     drift.add_argument("path", help="Path to the consumer repository.")
