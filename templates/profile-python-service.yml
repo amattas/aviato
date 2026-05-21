@@ -6,7 +6,7 @@ on:
   push:
     branches: [main]
     tags:
-      - "*"
+      - "v*.*.*"
   schedule:
     - cron: "23 5 * * 1"
 
@@ -45,11 +45,10 @@ jobs:
 
   release:
     if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
-    needs: [ci, security]
+    needs: [ci, security, common-lint]
     uses: amattas/aviato/.github/workflows/reusable-release.yml@main
     with:
       aviato-ref: main
-    secrets: inherit
 
   release-gate:
     if: ${{ github.ref_type == 'tag' }}

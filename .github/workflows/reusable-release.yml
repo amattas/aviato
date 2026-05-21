@@ -1,14 +1,16 @@
 name: Reusable Release
 
 # §5.9 library/consumer release: derive the next SemVer from Conventional Commit
-# history, write it via the profile's version-source, tag, and publish a GitHub
-# release. Runs on the default branch; the resulting version tag is what triggers
-# the deploy pipelines (§11.1) — this job is the human-gated release cut.
+# history, write it via the profile's version-source, tag the exact version, and
+# advance the floating major. Runs on the default branch (the human-gated release
+# cut is merging the release-bearing change).
 #
-# OPERATOR NOTE: a tag pushed with the default GITHUB_TOKEN does NOT trigger other
-# workflows (GitHub's recursive-trigger guard). To have the version tag trigger the
-# tag-gated deploy/CI, supply a deploy PAT/app token as the checkout token here, or
-# trigger deploys on `release: { types: [published] }` instead of `push: tags`.
+# DEPLOY TRIGGER: the tag is pushed with the platform GITHUB_TOKEN — NO stored
+# secret (§11.2 forbids stored secrets outside App Store Connect). A tag pushed by
+# GITHUB_TOKEN does not auto-trigger the tag-gated deploy workflows, so the operator
+# starts the deploy by either (a) re-pushing the tag with their own credentials /
+# a GitHub App (§17 out-of-band), or (b) running the tag-gated workflow manually.
+# This avoids modeling a forbidden stored secret.
 
 on:
   workflow_call:
@@ -22,14 +24,6 @@ on:
         required: false
         type: string
         default: "3.12"
-    secrets:
-      release-token:
-        description: >-
-          A PAT or GitHub App token used to push the release tag. REQUIRED for the
-          tag to trigger the tag-gated deploy workflows (§11.1): a tag pushed with
-          the default GITHUB_TOKEN does not trigger other workflows. Falls back to
-          GITHUB_TOKEN (release created, but deploys must be started another way).
-        required: false
 
 permissions:
   contents: write
@@ -39,16 +33,13 @@ jobs:
     name: Cut release
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.release-token || github.token }}
+      GH_TOKEN: ${{ github.token }}
       AVIATO_REF: ${{ inputs.aviato-ref }}
     steps:
       - name: Checkout (full history)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Use the deploy token (when supplied) so the pushed tag TRIGGERS the
-          # tag-gated deploy workflows (§11.1); else the default token (no trigger).
-          token: ${{ secrets.release-token || github.token }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -64,17 +55,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          last="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
+          # Latest EXACT version tag only (vX.Y.Z) — never the floating major (vX),
+          # which would crash next-version and is not a release point.
+          last="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || echo v0.0.0)"
           range="${last}..HEAD"
-          if [ "${last}" = "v0.0.0" ] && ! git rev-parse "v0.0.0" >/dev/null 2>&1; then range="HEAD"; fi
+          if ! git rev-parse "${last}" >/dev/null 2>&1; then range="HEAD"; fi
           # Commit messages are piped (never interpolated into a command) to aviato.
-          # next-version returns a v-prefixed tag (vX.Y.Z), matching the §6.1 pin format.
           next="$(git log "${range}" --format=%B%x00 | aviato next-version --current "${last}")"
           echo "last=${last}" >> "${GITHUB_OUTPUT}"
           echo "next=${next}" >> "${GITHUB_OUTPUT}"
           if [ "${next}" = "${last}" ]; then
             echo "release=false" >> "${GITHUB_OUTPUT}"
-            echo "No version change implied by commit history; skipping release."
+            echo "No releasable change in commit history; skipping release (no loop)."
           else
             echo "release=true" >> "${GITHUB_OUTPUT}"
           fi
@@ -86,17 +78,19 @@ jobs:
           NEXT: ${{ steps.derive.outputs.next }}
         run: |
           set -euo pipefail
-          aviato bump-version "${NEXT}" . || echo "no version-source files to bump"
+          # §5.9: writing the version through the version-source MUST succeed before
+          # cutting release artifacts — a failure aborts (no release without a bump).
+          aviato bump-version "${NEXT}" .
           git config user.name aviato-bot
           git config user.email aviato-bot@users.noreply.github.com
           git commit -am "chore(release): ${NEXT}" || echo "nothing to commit"
           git tag "${NEXT}"
-          # §5.9: advance the floating major reference (e.g. v1) to this release,
-          # unconditionally — it is a published pointer consumers pin with @vN.
+          # §5.9: advance the floating major (e.g. v1) to this release — a mutable
+          # published pointer consumers pin with @vN (§6.1/§11.3).
           major="$(printf '%s' "${NEXT}" | sed -E 's/^(v[0-9]+).*/\1/')"
           git tag -f "${major}"
           git push origin HEAD "${NEXT}"
           git push -f origin "${major}"
-          prev="$(git describe --tags --abbrev=0 "${NEXT}^" 2>/dev/null || git rev-list --max-parents=0 HEAD)"
+          prev="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "${NEXT}^" 2>/dev/null || git rev-list --max-parents=0 HEAD)"
           git log "${prev}..HEAD" --pretty=format:'- %s' > /tmp/changelog.md || true
           gh release create "${NEXT}" --title "${NEXT}" --notes-file /tmp/changelog.md

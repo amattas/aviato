@@ -11,12 +11,16 @@ from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT
 
 
-def test_docs_true_scaffolds_docs_workflow() -> None:
+def test_docs_true_scaffolds_gated_docs_workflow() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     without = {i.output for i in materialize_items(reg, "python-library", {})}
-    withdocs = {i.output for i in materialize_items(reg, "python-library", {}, docs=True)}
+    withdocs = {i.output: i for i in materialize_items(reg, "python-library", {}, docs=True)}
     assert ".github/workflows/aviato-docs.yml" not in without
-    assert ".github/workflows/aviato-docs.yml" in withdocs
+    docs = withdocs[".github/workflows/aviato-docs.yml"]
+    # §4/§5.14: docs deploy is gated by the release gate AND the release-ref security baseline.
+    assert "reusable-release-gate.yml" in docs.body
+    assert "reusable-security-baseline.yml" in docs.body
+    assert "needs: [release-gate, security]" in docs.body
 
 
 def test_pin_is_stamped_into_generated_workflows() -> None:

@@ -37,8 +37,9 @@ def is_highest(candidate: str, existing: Iterable[str]) -> bool:
 
 
 class BumpKind(enum.IntEnum):
-    """SemVer bump levels, ordered so the highest wins (§5.9)."""
+    """SemVer bump levels, ordered so the highest wins (§5.9). NONE = no release."""
 
+    NONE = 0
     PATCH = 1
     MINOR = 2
     MAJOR = 3
@@ -48,22 +49,28 @@ def _commit_bump(message: str) -> BumpKind:
     header = message.splitlines()[0] if message else ""
     match = _HEADER_RE.match(header.strip())
     if match is None:
-        # Not a Conventional Commit header → treat as a patch-level change.
-        return BumpKind.PATCH
+        # Not a Conventional Commit header → not a releasable change.
+        return BumpKind.NONE
     if match.group("bang") or "BREAKING CHANGE:" in message or "BREAKING-CHANGE:" in message:
         return BumpKind.MAJOR
-    if match.group("type").lower() == "feat":
+    commit_type = match.group("type").lower()
+    if commit_type == "feat":
         return BumpKind.MINOR
-    return BumpKind.PATCH
+    if commit_type in ("fix", "perf"):
+        return BumpKind.PATCH
+    # chore/docs/style/refactor/test/ci/build/etc. do not, on their own, cut a
+    # release — so the release commit (chore) and empty history NEVER loop (§5.9).
+    return BumpKind.NONE
 
 
 def classify_commits(commits: Iterable[str]) -> BumpKind:
     """Derive the highest SemVer bump implied by a set of Conventional Commits (§5.9).
 
-    A ``!`` marker or a ``BREAKING CHANGE:`` footer is major; a ``feat`` is
-    minor; anything else (including non-conventional messages) is patch.
+    A ``!``/``BREAKING CHANGE`` is major; ``feat`` is minor; ``fix``/``perf`` is
+    patch; anything else (including non-conventional or no commits) implies NO
+    release (``NONE``).
     """
-    highest = BumpKind.PATCH
+    highest = BumpKind.NONE
     for message in commits:
         bump = _commit_bump(message)
         if bump > highest:
@@ -72,10 +79,16 @@ def classify_commits(commits: Iterable[str]) -> BumpKind:
 
 
 def next_version(current: str, bump: BumpKind) -> str:
-    """Apply ``bump`` to ``current`` → the next ``vX.Y.Z`` (§5.9, §6.1 pin format)."""
+    """Apply ``bump`` to ``current`` → the next ``vX.Y.Z`` (§5.9, §6.1 pin format).
+
+    ``NONE`` returns the current version unchanged (normalized to ``vX.Y.Z``), so a
+    caller can detect "no release" by comparing to the current tag.
+    """
     major, minor, patch = parse_version(current)
     if bump == BumpKind.MAJOR:
         return f"v{major + 1}.0.0"
     if bump == BumpKind.MINOR:
         return f"v{major}.{minor + 1}.0"
-    return f"v{major}.{minor}.{patch + 1}"
+    if bump == BumpKind.PATCH:
+        return f"v{major}.{minor}.{patch + 1}"
+    return f"v{major}.{minor}.{patch}"

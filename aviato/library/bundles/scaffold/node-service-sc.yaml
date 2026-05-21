@@ -5,5 +5,5 @@ extends: node-sc
 add:
   - wf-ci-node-service
   - wf-drift
-  - wf-docs
+  - wf-docs-node-service
 remove: []

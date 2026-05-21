@@ -117,14 +117,16 @@ jobs:
             echo "No persisted versions artifact yet (first release)."
           fi
 
-      # §8.14 monotonic guard (fail-closed): only cut a new version / move `latest`
-      # when this release is the highest released version. Mirrors is_highest.
-      - name: Cut new docs version (monotonic)
+      # §8.14 monotonic guard (fail-closed): determine whether this release is the
+      # highest. When it is NOT (or the tag listing fails), the version cut, build,
+      # AND deploy are ALL skipped — so an older release cannot regress the published
+      # site / `latest` alias. Mirrors aviato.core.versioning.is_highest.
+      - name: Monotonic guard
+        id: guard
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
-          RETENTION: ${{ inputs.docs-retention }}
         run: |
           set -euo pipefail
           cat > /tmp/highest.py <<'PY'
@@ -142,16 +144,21 @@ jobs:
           keys = [k for k in (key(t) for t in sys.stdin) if k]
           print("true" if ck and max(keys + [ck]) == ck else "false")
           PY
-          # Fail CLOSED: a tag-listing failure must NOT let an old release look highest.
           if ! gh api --paginate "repos/${GITHUB_REPOSITORY}/tags" --jq '.[].name' > /tmp/tags.txt; then
-            echo "::warning::Could not list tags; skipping version cut / latest move (fail-closed, §8.14)."
+            echo "::warning::Could not list tags; skipping docs deploy (fail-closed, §8.14)."
+            echo "highest=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          highest="$(python3 /tmp/highest.py "${RELEASE_TAG}" < /tmp/tags.txt)"
-          if [ "${highest}" != "true" ]; then
-            echo "::warning::${RELEASE_TAG} is not the highest released version; not cutting a new docs version."
-            exit 0
-          fi
+          echo "highest=$(python3 /tmp/highest.py "${RELEASE_TAG}" < /tmp/tags.txt)" >> "${GITHUB_OUTPUT}"
+
+      - name: Cut new docs version + prune
+        if: ${{ steps.guard.outputs.highest == 'true' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RETENTION: ${{ inputs.docs-retention }}
+        run: |
+          set -euo pipefail
           if ! npx --no-install docusaurus docs:version "${RELEASE_TAG}"; then
             npx docusaurus docs:version "${RELEASE_TAG}"
           fi
@@ -171,13 +178,14 @@ jobs:
           PY
 
       - name: Build docs
+        if: ${{ steps.guard.outputs.highest == 'true' }}
         shell: bash
         run: ${{ inputs.build-command }}
 
       # Persist the updated version SOURCES as an artifact for the next release
       # (read back above) — keeps the source branch untouched and contents read-only.
       - name: Persist doc versions
-        if: ${{ hashFiles(format('{0}/versions.json', inputs.working-directory)) != '' }}
+        if: ${{ steps.guard.outputs.highest == 'true' && hashFiles(format('{0}/versions.json', inputs.working-directory)) != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: aviato-docs-versions
@@ -188,10 +196,12 @@ jobs:
           retention-days: 90
 
       - name: Upload Pages artifact
+        if: ${{ steps.guard.outputs.highest == 'true' }}
         uses: actions/upload-pages-artifact@v3
         with:
           path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
 
       - name: Deploy Pages
         id: deployment
+        if: ${{ steps.guard.outputs.highest == 'true' }}
         uses: actions/deploy-pages@v4

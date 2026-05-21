@@ -1,0 +1,34 @@
+name: Aviato Docs
+
+# Multi-version Docusaurus docs publish (§13.3), opt-in via docs: true.
+# Gated by the release gate AND the release-ref security baseline (§5.14):
+# docs publish only after both pass on the tag.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+  actions: read
+  pages: write
+  id-token: write
+
+jobs:
+  release-gate:
+    if: ${{ github.ref_type == 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@{{ aviato-ref }}
+    with:
+      default-branch: main
+      require-merged-pr: true
+
+  security:
+    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@{{ aviato-ref }}
+    with:
+      codeql-languages: "javascript-typescript"
+
+  docs:
+    if: ${{ github.ref_type == 'tag' }}
+    needs: [release-gate, security]
+    uses: amattas/aviato/.github/workflows/reusable-docs-pages.yml@{{ aviato-ref }}

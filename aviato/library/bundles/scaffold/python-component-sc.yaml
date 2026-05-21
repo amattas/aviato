@@ -5,5 +5,5 @@ extends: python-sc
 add:
   - wf-ci-python-component
   - wf-drift
-  - wf-docs
+  - wf-docs-python-component
 remove: []

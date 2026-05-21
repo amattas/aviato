@@ -51,8 +51,12 @@ def test_fix_only_bumps_patch() -> None:
     assert classify_commits(["fix: a", "docs: b"]) == BumpKind.PATCH
 
 
-def test_no_conventional_commits_is_patch() -> None:
-    assert classify_commits(["random message"]) == BumpKind.PATCH
+def test_non_releasable_commits_are_none() -> None:
+    # non-conventional, chore-only, and empty all imply NO release (§5.9) — so the
+    # chore(release) commit and empty history never loop into endless patch cuts.
+    assert classify_commits(["random message"]) == BumpKind.NONE
+    assert classify_commits(["chore(release): v1.2.4", "docs: x"]) == BumpKind.NONE
+    assert classify_commits([]) == BumpKind.NONE
 
 
 def test_next_version_applies_bump() -> None:
@@ -61,6 +65,11 @@ def test_next_version_applies_bump() -> None:
     assert next_version("1.2.3", BumpKind.MINOR) == "v1.3.0"
     assert next_version("1.2.3", BumpKind.PATCH) == "v1.2.4"
     assert next_version("v1.2.3", BumpKind.MINOR) == "v1.3.0"
+
+
+def test_next_version_none_is_unchanged() -> None:
+    assert next_version("v1.2.3", BumpKind.NONE) == "v1.2.3"
+    assert next_version("1.2.3", classify_commits(["chore: x"])) == "v1.2.3"
 
 
 def test_next_version_from_commits_end_to_end() -> None:
