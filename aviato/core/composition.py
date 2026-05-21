@@ -62,14 +62,18 @@ def resolve_profile(
     name: str,
     *,
     overrides: dict[str, Any] | None = None,
+    docs: bool = False,
 ) -> ResolvedSet:
     """Resolve a profile to a fully-composed convention set (§5.1).
 
     Pure and deterministic: it reads only the registry's declarative data,
     applies ``extends`` + add/remove for lists (§4.2 edge rules) and deep-merge
     for the settings map, then applies consumer ``overrides`` under the same
-    semantics. Raises :class:`CompositionError` on a missing module, a bare list
-    under ``extends``/override, or an add/remove edge violation.
+    semantics. When ``docs`` is true (the §6.1 opt-in), the profile's declared
+    documentation deploy pipeline (§13.3) is composed on top — the pipeline name
+    is plug-in data (``docs_pipeline``), never a core literal. Raises
+    :class:`CompositionError` on a missing module, a bare list under
+    ``extends``/override, or an add/remove edge violation.
     """
     overrides = overrides or {}
     profile = registry.profile(name)
@@ -104,6 +108,11 @@ def resolve_profile(
     templates = tuple(registry.template_module(ref) for ref in template_refs)
 
     doc = registry.profile_doc(name)
+
+    if docs:
+        docs_pipeline = doc.get("docs_pipeline")
+        if docs_pipeline and docs_pipeline not in pipelines:
+            pipelines = (*pipelines, docs_pipeline)
     variables = tuple(
         VariableSpec(
             name=item["name"],

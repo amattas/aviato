@@ -105,7 +105,7 @@ def _expected_artifacts(registry: Registry, resolved, variables: dict) -> list[E
 def cmd_onboard(args: argparse.Namespace) -> int:
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        resolved = resolve_profile(registry, args.profile)
+        resolved = resolve_profile(registry, args.profile, docs=args.docs)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -148,7 +148,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = load_declaration(declaration_path)
-        resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides)
+        resolved = resolve_profile(
+            registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
+        )
         expected = _expected_artifacts(registry, resolved, declaration.variables)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -243,7 +245,9 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = load_declaration(declaration_path)
-        resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides)
+        resolved = resolve_profile(
+            registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
+        )
         expected = _expected_artifacts(registry, resolved, declaration.variables)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -292,7 +296,9 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = load_declaration(declaration_path)
-        resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides)
+        resolved = resolve_profile(
+            registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
+        )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -340,6 +346,7 @@ def build_parser() -> argparse.ArgumentParser:
     onboard = subparsers.add_parser("onboard", help="Print an onboarding plan for one repository.")
     onboard.add_argument("target", help="Repository path or OWNER/REPO slug.")
     onboard.add_argument("--profile", default="python-service")
+    onboard.add_argument("--docs", action="store_true", help="Compose the opt-in docs deploy (§13.3).")
     onboard.set_defaults(func=cmd_onboard)
 
     doctor = subparsers.add_parser("doctor", help="Diagnose a consumer repository's managed artifacts.")

@@ -54,6 +54,12 @@ def test_swift_app_requires_macos_and_deploys_app_store(registry: Registry) -> N
     assert "app-store-connect" in rs.pipelines
 
 
+@pytest.mark.parametrize("name", DAYZERO)
+def test_docs_opt_in_composes_docs_pipeline(registry: Registry, name: str) -> None:
+    assert "docs-pages" not in resolve_profile(registry, name).pipelines
+    assert "docs-pages" in resolve_profile(registry, name, docs=True).pipelines
+
+
 def test_node_language_variant_is_enum(registry: Registry) -> None:
     rs = resolve_profile(registry, "node-service")
     variant = next(v for v in rs.variables if v.name == "language-variant")

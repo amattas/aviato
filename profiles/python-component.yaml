@@ -13,3 +13,4 @@ toolchain:
   formatter: ruff
   type_checker: mypy
   test_runner: pytest
+docs_pipeline: docs-pages

@@ -50,6 +50,20 @@ def test_resolution_is_pure_deterministic(module_root: Path) -> None:
     assert resolve_profile(reg, "child") == resolve_profile(reg, "child")
 
 
+def test_docs_opt_in_adds_docs_pipeline(module_root: Path) -> None:
+    reg = Registry(module_root)
+    without = resolve_profile(reg, "child")
+    with_docs = resolve_profile(reg, "child", docs=True)
+    assert "docs-pages" not in without.pipelines  # default off
+    assert "docs-pages" in with_docs.pipelines
+
+
+def test_docs_pipeline_not_duplicated_if_already_present(module_root: Path) -> None:
+    reg = Registry(module_root)
+    rs = resolve_profile(reg, "child", docs=True, overrides={"pipelines": {"add": ["docs-pages"]}})
+    assert rs.pipelines.count("docs-pages") == 1
+
+
 def test_missing_referenced_module_is_hard_error(module_root: Path) -> None:
     # point a profile at a non-existent workflows bundle
     (module_root / "profiles" / "broken.yaml").write_text(

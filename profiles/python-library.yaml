@@ -15,3 +15,4 @@ toolchain:
   test_runner: pytest
 notes:
   - "Requires PyPI Trusted Publishing registration for the deploy pipeline (§13.1)."
+docs_pipeline: docs-pages

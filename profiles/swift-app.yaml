@@ -16,3 +16,4 @@ toolchain:
 notes:
   - "Apple App Store Connect deploy requires stored secrets behind a protected environment (§13.4)."
   - "The deploy secrets are declared by the deploy plug-in, never in the declaration (§6.6)."
+docs_pipeline: docs-pages

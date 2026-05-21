@@ -54,6 +54,7 @@ def module_root(tmp_path: Path) -> Path:
             "variables": [{"name": "dist", "type": "string"}],
             "version_source": {"locations": ["pyproject.toml"]},
             "toolchain": {"engine": "x"},
+            "docs_pipeline": "docs-pages",
         },
     )
     return root
