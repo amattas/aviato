@@ -6,4 +6,5 @@ add:
   - wf-ci-node-service
   - wf-drift
   - wf-docs-node-service
+  - docusaurus-config
 remove: []

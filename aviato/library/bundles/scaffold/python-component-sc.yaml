@@ -6,4 +6,5 @@ add:
   - wf-ci-python-component
   - wf-drift
   - wf-docs-python-component
+  - docusaurus-config
 remove: []

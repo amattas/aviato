@@ -6,4 +6,5 @@ add:
   - wf-ci-python-service
   - wf-drift
   - wf-docs-python-service
+  - docusaurus-config
 remove: []

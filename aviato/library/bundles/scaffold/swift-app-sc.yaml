@@ -6,4 +6,5 @@ add:
   - wf-ci-swift-app
   - wf-drift
   - wf-docs-swift-app
+  - docusaurus-config
 remove: []
