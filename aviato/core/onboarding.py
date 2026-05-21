@@ -7,23 +7,49 @@ from typing import Any
 from .composition import resolve_profile
 from .declaration import Declaration
 from .errors import DeclarationError
+from .model import TemplateModule
 from .registry import Registry
 from .render import render
 from .scaffold import ScaffoldItem
 
 
+def template_applies(template: TemplateModule, variables: Mapping[str, Any]) -> bool:
+    """True if a conditional template's ``when`` matches the resolved variables (§12.2)."""
+    return all(str(variables.get(key)) == value for key, value in template.when)
+
+
+def render_variables(variables: Mapping[str, Any]) -> dict[str, Any]:
+    """Augment the resolved variables with derived render values.
+
+    ``run-typecheck`` is driven by the ``language-variant`` enum (§12.2): TypeScript
+    type-checks, JavaScript does not. This is what selects JS vs TS behavior — not
+    tsconfig.json presence.
+    """
+    derived = dict(variables)
+    variant = variables.get("language-variant")
+    if variant is not None:
+        derived["run-typecheck"] = "false" if variant == "javascript" else "true"
+    return derived
+
+
+def applicable_templates(resolved, variables: Mapping[str, Any]) -> list[TemplateModule]:
+    """The resolved templates that apply given the variables (filters §12.2 conditionals)."""
+    return [t for t in resolved.templates if template_applies(t, variables)]
+
+
 def materialize_items(registry: Registry, profile: str, variables: Mapping[str, Any]) -> list[ScaffoldItem]:
     """Turn a resolved profile into concrete scaffold items (§5.3).
 
-    Managed bodies are rendered with the resolved variables; seed-once bodies are
-    written verbatim (their placeholders, if any, are filled at seed time by the
-    operator who owns them). The result feeds :func:`aviato.core.scaffold.scaffold`.
+    Conditional templates that do not apply to the variables are skipped (§12.2).
+    Managed bodies are rendered with the resolved + derived variables; seed-once
+    bodies are written verbatim. Feeds :func:`aviato.core.scaffold.scaffold`.
     """
     resolved = resolve_profile(registry, profile)
+    render_vars = render_variables(variables)
     items: list[ScaffoldItem] = []
-    for template in resolved.templates:
+    for template in applicable_templates(resolved, variables):
         body = registry.template_body(template)
-        rendered = body if template.seed_once else render(body, variables)
+        rendered = body if template.seed_once else render(body, render_vars)
         items.append(
             ScaffoldItem(
                 output=template.output_path,

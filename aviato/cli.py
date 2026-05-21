@@ -15,7 +15,7 @@ from .core.errors import AviatoError
 from .core.file_drift_flow import run_file_drift
 from .core.fleet import scan_fleet
 from .core.marker import parse_marker_from_text
-from .core.onboarding import materialize_items, plan_onboarding
+from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, render_variables
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.render import render
@@ -157,10 +157,13 @@ def _desired_settings(resolved) -> dict:
 
 
 def _expected_artifacts(registry: Registry, resolved, variables: dict) -> list[ExpectedArtifact]:
+    # Filter variable-conditional templates (§12.2) and render with derived vars so
+    # doctor/drift expect exactly what sync would write.
+    render_vars = render_variables(variables)
     artifacts: list[ExpectedArtifact] = []
-    for template in resolved.templates:
+    for template in applicable_templates(resolved, variables):
         body = registry.template_body(template)
-        rendered = "" if template.seed_once else render(body, variables)
+        rendered = "" if template.seed_once else render(body, render_vars)
         artifacts.append(ExpectedArtifact(template.output_path, rendered, template.seed_once))
     return artifacts
 
@@ -424,11 +427,13 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
 
     # The proposal must write the SAME marker-stamped content scaffold() writes, so
     # a merged PR is classified clean (not dirty for a missing marker, §6.2/§5.4).
+    # Conditional templates (§12.2) are filtered and rendered with derived vars.
+    render_vars = render_variables(declaration.variables)
     managed_bodies: dict[str, str] = {}
-    for template in resolved.templates:
+    for template in applicable_templates(resolved, declaration.variables):
         if template.seed_once:
             continue
-        raw = render(registry.template_body(template), declaration.variables)
+        raw = render(registry.template_body(template), render_vars)
         item = ScaffoldItem(output=template.output_path, body=raw, comment=template.comment or "#")
         managed_bodies[template.output_path] = render_managed(
             item, profile=declaration.profile, version=declaration.version

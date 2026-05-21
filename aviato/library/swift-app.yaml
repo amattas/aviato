@@ -1,6 +1,6 @@
 name: swift-app
 workflows: swift-app-wf
-scaffold: swift-sc
+scaffold: swift-app-sc
 settings: baseline
 requires_macos: true
 variables:

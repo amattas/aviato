@@ -1,6 +1,6 @@
 name: node-service
 workflows: node-service-wf
-scaffold: node-sc
+scaffold: node-service-sc
 settings: baseline
 requires_macos: false
 variables:

@@ -2,3 +2,6 @@ name: node-tsconfig
 output_path: tsconfig.json
 source: files/tsconfig.json.txt
 seed_once: true
+# Only scaffolded for TypeScript projects (§12.2); JavaScript repos omit it.
+when:
+  language-variant: typescript

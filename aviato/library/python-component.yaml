@@ -1,7 +1,7 @@
 name: python-component
 # Zero-deploy profile (§10.3): GitHub release is the only output, no deploy plug-in.
 workflows: python-component-wf
-scaffold: python-sc
+scaffold: python-component-sc
 settings: baseline
 requires_macos: false
 variables:

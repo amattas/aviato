@@ -1,6 +1,6 @@
 name: python-library
 workflows: python-library-wf
-scaffold: python-sc
+scaffold: python-library-sc
 settings: baseline
 requires_macos: false
 variables:

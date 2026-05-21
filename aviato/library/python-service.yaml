@@ -1,6 +1,6 @@
 name: python-service
 workflows: python-service-wf
-scaffold: python-sc
+scaffold: python-service-sc
 settings: baseline
 requires_macos: false
 variables:

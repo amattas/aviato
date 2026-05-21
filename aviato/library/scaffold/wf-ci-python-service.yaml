@@ -1,0 +1,5 @@
+name: wf-ci-python-service
+output_path: .github/workflows/aviato-ci.yml
+source: files/wf-python-service.yml
+comment: "#"
+seed_once: false

@@ -92,6 +92,33 @@ def test_swift_app_requires_macos_and_deploys_app_store(registry: Registry) -> N
 
 
 @pytest.mark.parametrize("name", DAYZERO)
+def test_profile_scaffolds_caller_workflows(registry: Registry, name: str) -> None:
+    # §15: a consumer actually receives the verify/release/deploy/security CI caller
+    # and the scheduled drift/report workflow — not just composed pipeline names.
+    outputs = {t.output_path for t in resolve_profile(registry, name).templates}
+    assert ".github/workflows/aviato-ci.yml" in outputs
+    assert ".github/workflows/aviato-drift.yml" in outputs
+
+
+def test_node_ci_workflow_renders_typecheck_from_variant() -> None:
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    js = next(
+        i
+        for i in materialize_items(reg, "node-service", {"language-variant": "javascript"})
+        if i.output == ".github/workflows/aviato-ci.yml"
+    )
+    ts = next(
+        i
+        for i in materialize_items(reg, "node-service", {"language-variant": "typescript"})
+        if i.output == ".github/workflows/aviato-ci.yml"
+    )
+    assert "run-typecheck: false" in js.body
+    assert "run-typecheck: true" in ts.body
+
+
+@pytest.mark.parametrize("name", DAYZERO)
 def test_docs_opt_in_composes_docs_pipeline(registry: Registry, name: str) -> None:
     assert "docs-pages" not in resolve_profile(registry, name).pipelines
     assert "docs-pages" in resolve_profile(registry, name, docs=True).pipelines

@@ -1,0 +1,8 @@
+name: python-service-sc
+# Adds the profile's caller workflows (verify/release/deploy/security + drift)
+# to the language scaffold, so a consumer actually receives them (§15).
+extends: python-sc
+add:
+  - wf-ci-python-service
+  - wf-drift
+remove: []

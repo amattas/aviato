@@ -11,6 +11,18 @@ from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT
 
 
+def test_javascript_variant_omits_tsconfig_and_disables_typecheck() -> None:
+    from aviato.core.onboarding import render_variables
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    ts_items = {i.output for i in materialize_items(reg, "node-service", {"language-variant": "typescript"})}
+    js_items = {i.output for i in materialize_items(reg, "node-service", {"language-variant": "javascript"})}
+    assert "tsconfig.json" in ts_items
+    assert "tsconfig.json" not in js_items  # §12.2: JS omits TypeScript config
+    assert render_variables({"language-variant": "javascript"})["run-typecheck"] == "false"
+    assert render_variables({"language-variant": "typescript"})["run-typecheck"] == "true"
+
+
 def test_materialize_builds_scaffold_items_from_resolved_set() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     items = materialize_items(reg, "python-library", variables={})

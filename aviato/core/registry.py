@@ -114,6 +114,7 @@ class Registry:
             seed_once=bool(doc.get("seed_once", False)),
             comment=doc.get("comment"),
             required_variables=tuple(doc.get("required_variables", ())),
+            when=tuple(sorted((str(k), str(v)) for k, v in (doc.get("when") or {}).items())),
         )
 
     def template_body(self, module: TemplateModule) -> str:
