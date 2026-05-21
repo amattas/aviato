@@ -21,8 +21,16 @@ The current implementation is intentionally small:
 - generated or local reporting artifacts.
 
 The current implementation includes the day-zero workflow surface from
-`REQUIREMENTS.md`, but not the full profile/scaffold/drift engine. That deeper
-module system remains the next architecture layer.
+`REQUIREMENTS.md` **and** the agnostic core engine (`aviato/core/`): profile
+resolution/composition, the consumer declaration contract, managed-marker
+scaffolding with seed-once, diagnosis, file/settings drift, the fail-closed
+authorization gate, version-pin compatibility, bootstrap detection, Conventional
+Commit version derivation, onboarding/sync, re-pin, and offboarding. The
+remaining gap to the full `REQUIREMENTS.md` is the *platform-side* orchestration
+of the §5.5–§5.7/§5.9 flows (the GitHub automation that opens proposals, files
+tracking issues, applies settings, and cuts releases) plus the live-CI
+definition-of-done runs — the engine primitives those flows compose are built
+and unit-tested.
 
 ## Boundaries
 
@@ -103,6 +111,17 @@ The near-term shape is:
   are injected into them.
 - ruleset JSON files remain readable templates.
 
+### Core Engine
+
+The agnostic core lives in `aviato/core/` and knows how to resolve, compose,
+scaffold, diagnose, and reconcile — with **no** language- or
+deployment-specific logic. Its falsifiable agnosticism (§9b) is enforced by
+`aviato/core/selfcheck.py` (no import edge into `aviato/plugins/`, no denylisted
+identifier from `aviato/plugins/denylist.txt`) and checked as part of
+`aviato validate`. Day-zero plug-in specifics live as **data** in `profiles/`,
+`bundles/`, and `templates/scaffold/` (the §5.10 module-source tree), loaded by
+`aviato/core/registry.py`. See `CLAUDE.md` for the module map.
+
 ### Scripts
 
 The Python CLI lives in `aviato/`.
@@ -112,8 +131,11 @@ The Python CLI lives in `aviato/`.
 - `aviato apply-rulesets <owner/repo>` applies configured rulesets.
 - `aviato render-rulesets` renders the ruleset payloads after policy injection.
 - `aviato validate` validates this repository's policy infrastructure.
-- `aviato onboard <path-or-owner/repo>` currently prints the onboarding plan for
-  one explicit target.
+- `aviato onboard <path-or-owner/repo>` prints the composition-backed onboarding
+  plan (pipelines, templates, variables, settings) for one explicit target.
+- `aviato doctor <path>` classifies a consumer's managed artifacts (§5.4).
+- `aviato sync <path>` materializes managed/seed-once artifacts into a consumer
+  repository from its declaration (§5.3).
 
 Compatibility shell wrappers live in `scripts/`.
 

@@ -27,13 +27,44 @@ aviato apply-rulesets OWNER/REPO            # dry-run rulesets
 aviato apply-rulesets OWNER/REPO --apply    # apply rulesets
 aviato apply-rulesets OWNER/REPO --required-approvals 0 --apply  # solo-repo override
 aviato render-rulesets                       # print rendered ruleset JSON
-aviato onboard OWNER/REPO --profile python-service  # print onboarding plan
-aviato validate                              # validate this repo's policy infra
+aviato onboard OWNER/REPO --profile python-library  # composition-backed onboarding plan
+aviato doctor /path/to/consumer              # classify a consumer's managed artifacts (§5.4)
+aviato sync /path/to/consumer                # materialize managed artifacts from its declaration (§5.3)
+aviato validate                              # validate this repo's policy infra + core agnosticism
 ```
 
 `scripts/audit-repos.sh` and `scripts/apply-rulesets.sh` are thin compatibility wrappers that exec the CLI.
 
 ## Architecture
+
+### The agnostic core engine (`aviato/core/`) vs. plug-in data
+
+`REQUIREMENTS.md` mandates a composition of plug-in modules around an **agnostic
+core** (§2.1). The core lives in `aviato/core/` and must contain **no** language-
+or deployment-specific logic. Day-zero specifics (Python/Node/Swift, PyPI/GHCR/
+Pages/Apple) live as **data** in `profiles/`, `bundles/{workflows,scaffold,settings}/`,
+and `templates/scaffold/` — the §5.10 module-source tree — loaded by
+`aviato/core/registry.py` and resolved by `aviato/core/composition.py` into a
+`ResolvedSet`.
+
+**The agnosticism is falsifiable and enforced (§9b).** `aviato/core/selfcheck.py`
+fails if any `aviato/core/*.py` (a) imports `aviato.plugins`, or (b) contains a
+denylisted identifier (the list is **data** at `aviato/plugins/denylist.txt`, not
+hardcoded — so the checker's own source carries none of the words it scans for).
+This runs inside `aviato validate`. **When adding a capability, add a module/data —
+never put `python`/`ruff`/`ghcr`/etc. into core code.** If a change seems to need
+editing core to add a target, the abstraction is wrong (§4.3). Comment-syntax
+knowledge that names extensions (e.g. `.swift`) lives in
+`aviato/plugins/comment_syntax.py`, not core, for the same reason.
+
+Core module map: `composition` (§5.1/§4.2 resolution), `declaration` (§6.1),
+`variables` (§5.2/§6.6 + §8.15 secret guard), `marker` (§6.2), `scaffold`
+(§5.3/§6.3 seed-once + sidecar), `diagnosis` (§5.4), `filedrift` (§5.5),
+`settingsdrift` (§5.6), `consent` (§5.8 fail-closed gate), `version`/`compatibility`
+(§2.6), `versioning` (§5.9 Conventional Commit bump), `bootstrap` (§5.10),
+`onboarding` (§5.2), `repin` (§5.12), `offboarding` (§5.13), `selfcheck` (§9b).
+Process flows reference `REQUIREMENTS.md` section numbers in docstrings — keep
+them accurate when changing behavior.
 
 ### policy.yml is the single source of truth
 
