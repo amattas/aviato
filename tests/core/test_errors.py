@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 from aviato.core.errors import (
-    AviatoError,
     AuthorizationError,
+    AviatoError,
     BootstrapError,
     CompatibilityError,
     CompositionError,

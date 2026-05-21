@@ -91,3 +91,10 @@ class Registry:
             comment=doc.get("comment"),
             required_variables=tuple(doc.get("required_variables", ())),
         )
+
+    def template_body(self, module: TemplateModule) -> str:
+        """Read a template module's raw source body from the module-source tree."""
+        path = self.root / "templates" / "scaffold" / module.source
+        if not path.is_file():
+            raise CompositionError(f"missing template source: {path}")
+        return path.read_text(encoding="utf-8")

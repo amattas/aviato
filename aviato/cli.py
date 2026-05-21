@@ -6,10 +6,15 @@ import sys
 from pathlib import Path
 
 from .audit import audit_repos, discover_and_audit, render_json, render_tsv
+from .core.composition import resolve_profile
+from .core.declaration import load_declaration
+from .core.diagnosis import ExpectedArtifact, diagnose
+from .core.errors import AviatoError
+from .core.registry import Registry
+from .core.render import render
 from .github import GitHubAPIError
-from .paths import REPO_ROOT
+from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from .policy import load_policy
-from .profiles import profile_plan
 from .repos import git_root
 from .rulesets import apply_rulesets, render_all_rulesets
 from .validation import validate
@@ -79,39 +84,84 @@ def cmd_validate(_: argparse.Namespace) -> int:
     return 0
 
 
+def _expected_artifacts(registry: Registry, resolved, variables: dict) -> list[ExpectedArtifact]:
+    artifacts: list[ExpectedArtifact] = []
+    for template in resolved.templates:
+        body = registry.template_body(template)
+        rendered = "" if template.seed_once else render(body, variables)
+        artifacts.append(ExpectedArtifact(template.output_path, rendered, template.seed_once))
+    return artifacts
+
+
 def cmd_onboard(args: argparse.Namespace) -> int:
+    registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        plan = profile_plan(args.profile)
-    except ValueError as exc:
+        resolved = resolve_profile(registry, args.profile)
+    except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
     print(f"Onboarding plan for {args.target}")
-    print(f"profile: {plan.name}")
+    print(f"profile: {resolved.profile}")
+
+    print("pipelines:")
+    for pipeline in resolved.pipelines:
+        print(f"- {pipeline}")
+
     print("templates:")
-    for template in plan.templates:
-        print(f"- {template}")
+    for template in resolved.templates:
+        kind = "seed-once" if template.seed_once else "managed"
+        print(f"- {template.output_path} ({kind})")
 
-    if plan.environments:
-        print("environments:")
-        for environment in plan.environments:
-            print(f"- {environment}")
+    if resolved.variables:
+        print("variables:")
+        for variable in resolved.variables:
+            secret = ", secret" if variable.secret else ""
+            optional = "" if variable.required else ", optional"
+            print(f"- {variable.name} ({variable.type}{optional}{secret})")
 
-    if plan.secrets:
-        print("secrets:")
-        for secret in plan.secrets:
-            print(f"- {secret}")
+    print("settings:")
+    for ruleset in resolved.settings.get("rulesets", []):
+        print(f"- ruleset: {ruleset}")
 
-    if plan.notes:
-        print("notes:")
-        for note in plan.notes:
-            print(f"- {note}")
-
-    print("rulesets:")
-    print("- Common: protect default branch")
-    print("- Common: release tag format")
     print("next command:")
-    print("aviato apply-rulesets OWNER/REPO --apply")
+    print(f"aviato apply-rulesets {args.target} --apply")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    root = Path(args.path).resolve()
+    declaration_path = root / ".github" / "aviato.yaml"
+    if not declaration_path.is_file():
+        print(f"no declaration at {declaration_path}", file=sys.stderr)
+        return 2
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    try:
+        declaration = load_declaration(declaration_path)
+        resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides)
+        expected = _expected_artifacts(registry, resolved, declaration.variables)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
+    report = diagnose(
+        root,
+        expected,
+        declaration_variables=declaration.variables,
+        secret_var_names=secret_names,
+    )
+
+    print(f"doctor: {declaration.profile} @ {declaration.version} ({root})")
+    for output_path, status in sorted(report.statuses.items()):
+        print(f"- {output_path}: {status}")
+    if report.seed_divergence:
+        print("seed-once integrity divergence (report-only):")
+        for path in sorted(report.seed_divergence):
+            print(f"- {path}")
+    if report.secret_in_declaration:
+        print("WARNING: secret-typed variable present in declaration (§6.6/§8.15)")
     return 0
 
 
@@ -144,6 +194,10 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument("target", help="Repository path or OWNER/REPO slug.")
     onboard.add_argument("--profile", default="python-service")
     onboard.set_defaults(func=cmd_onboard)
+
+    doctor = subparsers.add_parser("doctor", help="Diagnose a consumer repository's managed artifacts.")
+    doctor.add_argument("path", help="Path to the consumer repository.")
+    doctor.set_defaults(func=cmd_doctor)
 
     return parser
 

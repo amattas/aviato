@@ -5,7 +5,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .paths import REPO_ROOT
+from .core.selfcheck import core_import_violations, denylist_violations, load_denylist
+from .paths import DENYLIST_FILE, REPO_ROOT
 from .policy import load_policy, load_ruleset_manifest, load_yaml, release_tag_pattern
 from .rulesets import render_all_rulesets
 
@@ -120,6 +121,15 @@ def _check_release_workflow_contract(root: Path, errors: list[str]) -> None:
             errors.append(f"{rel_path} does not visibly validate that it runs from a tag ref")
 
 
+def _check_core_agnosticism(core_dir: Path, denylist_file: Path, errors: list[str]) -> None:
+    """Enforce the §9b falsifiable agnosticism: no plug-in import edge, no denylisted token."""
+    for violation in core_import_violations(core_dir):
+        errors.append(f"core import edge into plug-in tree: {violation}")
+    denylist = load_denylist(denylist_file)
+    for violation in denylist_violations(core_dir, denylist):
+        errors.append(f"core names a denylisted identifier: {violation}")
+
+
 def validate(root: Path = REPO_ROOT) -> list[str]:
     errors: list[str] = []
 
@@ -145,5 +155,6 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_workflow_yaml(root, errors)
     _check_template_references(root, errors)
     _check_release_workflow_contract(root, errors)
+    _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
 
     return errors

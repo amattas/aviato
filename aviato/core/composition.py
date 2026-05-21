@@ -44,8 +44,7 @@ def _resolve_list(layers: list, base_attr: str) -> tuple[str, ...]:
     for layer in layers[1:]:
         if getattr(layer, base_attr):
             raise CompositionError(
-                f"bundle {layer.name!r} restates a bare {base_attr} list under extends; "
-                f"use add/remove (§4.2)"
+                f"bundle {layer.name!r} restates a bare {base_attr} list under extends; use add/remove (§4.2)"
             )
         resolved = merge_list(resolved, add=layer.add, remove=layer.remove)
     return tuple(resolved)
@@ -117,9 +116,7 @@ def resolve_profile(
         for item in doc.get("variables", [])
     )
     vs_doc = doc.get("version_source")
-    version_source = (
-        VersionSourceModule(locations=tuple(vs_doc.get("locations", ()))) if vs_doc is not None else None
-    )
+    version_source = VersionSourceModule(locations=tuple(vs_doc.get("locations", ()))) if vs_doc is not None else None
     toolchain = dict(doc.get("toolchain", {}))
 
     return ResolvedSet(

@@ -53,9 +53,7 @@ def test_resolution_is_pure_deterministic(module_root: Path) -> None:
 def test_missing_referenced_module_is_hard_error(module_root: Path) -> None:
     # point a profile at a non-existent workflows bundle
     (module_root / "profiles" / "broken.yaml").write_text(
-        yaml.safe_dump(
-            {"name": "broken", "workflows": "ghost", "scaffold": "child-sc", "settings": "child-set"}
-        ),
+        yaml.safe_dump({"name": "broken", "workflows": "ghost", "scaffold": "child-sc", "settings": "child-set"}),
         encoding="utf-8",
     )
     with pytest.raises(CompositionError):
@@ -69,9 +67,7 @@ def test_bare_list_under_extends_is_rejected(module_root: Path) -> None:
         encoding="utf-8",
     )
     (module_root / "profiles" / "bareprof.yaml").write_text(
-        yaml.safe_dump(
-            {"name": "bareprof", "workflows": "bare", "scaffold": "child-sc", "settings": "child-set"}
-        ),
+        yaml.safe_dump({"name": "bareprof", "workflows": "bare", "scaffold": "child-sc", "settings": "child-set"}),
         encoding="utf-8",
     )
     with pytest.raises(CompositionError):

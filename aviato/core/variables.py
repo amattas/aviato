@@ -23,9 +23,7 @@ def _coerce(spec: VariableSpec, value: Any) -> Any:
     if spec.type == "enum":
         domain = spec.domain or ()
         if value not in domain:
-            raise DeclarationError(
-                f"variable {spec.name!r} value {value!r} not in domain {list(domain)}"
-            )
+            raise DeclarationError(f"variable {spec.name!r} value {value!r} not in domain {list(domain)}")
     return value
 
 

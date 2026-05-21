@@ -77,9 +77,12 @@ def diagnose(
         target = root / artifact.output_path
         if artifact.seed_once:
             recorded = sidecar.get(artifact.output_path)
-            if target.exists() and recorded is not None:
-                if content_hash(target.read_text(encoding="utf-8")) != recorded:
-                    report.seed_divergence.append(artifact.output_path)
+            if (
+                target.exists()
+                and recorded is not None
+                and content_hash(target.read_text(encoding="utf-8")) != recorded
+            ):
+                report.seed_divergence.append(artifact.output_path)
             continue
         report.statuses[artifact.output_path] = _classify_managed(target, artifact.body)
 
