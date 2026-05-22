@@ -524,9 +524,10 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def _scan_has_file_drift(scan) -> bool:
-    # "missing"/"drift" managed-file statuses are fixable by a proposal; "dirty"
-    # (operator-owned / malformed marker) is NOT auto-fixed (§5.4/§5.5).
-    return any(status in {"missing", "drift"} for status in scan.statuses.values())
+    # "missing"/"mergeable-drift" managed-file statuses are fixable by a proposal;
+    # "dirty-drift" (operator hand-edited / malformed marker) is NOT auto-fixed
+    # (§5.4/§5.5). Keep this set aligned with file_drift_flow._PROPOSABLE.
+    return any(status in {"missing", "mergeable-drift"} for status in scan.statuses.values())
 
 
 def cmd_scan(args: argparse.Namespace) -> int:

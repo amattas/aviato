@@ -166,14 +166,14 @@ The release tag format is:
 
 Accepted examples:
 
-- `v1.2.3`
-- `v1.2.3-alpha1`
-- `v1.2.3-beta2`
+- `1.2.3`
+- `1.2.3-alpha1`
+- `1.2.3-beta2`
 
 Rejected examples:
 
-- `1.2.3` (no `v`)
-- `v1.2.3-beta.1`
+- `v1.2.3` (no `v` prefix allowed)
+- `1.2.3-beta.1`
 - `build-20260519.0215`
 
 The canonical file is `policy.yml`. Ruleset rendering derives from it, and
@@ -192,13 +192,9 @@ should not be supported by release publishing workflows.
 If branch or pull request Docker builds are needed, they should be implemented
 as a separate non-release workflow instead of weakening the release workflow.
 
-Release workflows embed release reference validation so the validation behavior
-is pinned to the same ref as the reusable workflow. A standalone composite
-validator also exists for direct callers that want it:
-
-```text
-.github/actions/validate-release-ref/action.yml
-```
+Release workflows embed release reference validation inline (a `TAG_PATTERN` env
+fed to the ref check) so the validation behavior is pinned to the same ref as the
+reusable workflow.
 
 Repository validation checks those embedded patterns against `policy.yml`.
 

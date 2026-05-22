@@ -218,7 +218,10 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           MARKETING_VERSION: ${{ steps.release.outputs.tag }}
           BUILD_NUMBER: ${{ github.run_number }}
-        run: ${{ inputs.version-command }}
+          VERSION_COMMAND: ${{ inputs.version-command }}
+        run: |
+          set -euo pipefail
+          eval "$VERSION_COMMAND"
 
       - name: Archive app
         shell: bash
@@ -303,7 +306,10 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           BUILD_NUMBER: ${{ github.run_number }}
-        run: ${{ inputs.submit-for-review-command }}
+          SUBMIT_FOR_REVIEW_COMMAND: ${{ inputs.submit-for-review-command }}
+        run: |
+          set -euo pipefail
+          eval "$SUBMIT_FOR_REVIEW_COMMAND"
 
       - name: Upload App Store Connect receipt
         if: ${{ always() }}

@@ -16,6 +16,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from . import github
 from .command import CommandError
@@ -24,6 +25,17 @@ from .core.ports import Issue
 # A human grants consent by adding a label of this form to the tracking issue;
 # the diff identity it authorizes is encoded after the prefix (§6.4).
 CONSENT_LABEL_PREFIX = "aviato-consent:"
+
+
+def _seg(value: str) -> str:
+    """Percent-encode a single-token value spliced into a ``gh api`` path/query.
+
+    Calls go through ``gh api`` argv (no shell), so this is not about shell injection
+    — it prevents a value containing ``/`` or ``?`` from altering the API path or
+    query. ``safe=""`` because these are single segments (a label name, a login),
+    never multi-segment paths like ``OWNER/REPO``.
+    """
+    return quote(str(value), safe="")
 
 
 class UnmodeledProtectionError(RuntimeError):
@@ -284,7 +296,7 @@ class GitHubPlatform:
         return {**map_branch_settings(rules, protection), **security}
 
     def get_issue(self, repo: str, key: str) -> Issue | None:
-        issues = github.gh_json(f"repos/{repo}/issues?state=all&labels={key}", default=[], allow_error=True)
+        issues = github.gh_json(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[], allow_error=True)
         if not isinstance(issues, list) or not issues:
             return None
         head = issues[0]
@@ -341,14 +353,16 @@ class GitHubPlatform:
     def _actor_role(self, repo: str, login: str | None) -> tuple[str | None, bool]:
         if not login:
             return None, False
-        response = github.gh_json(f"repos/{repo}/collaborators/{login}/permission", default=None, allow_error=True)
+        response = github.gh_json(
+            f"repos/{repo}/collaborators/{_seg(login)}/permission", default=None, allow_error=True
+        )
         if not isinstance(response, dict):
             return None, False  # lookup failed → not authorized (§2.7)
         permission = response.get("permission")
         return (permission, True) if isinstance(permission, str) else (None, False)
 
     def open_or_update_issue(self, repo: str, key: str, title: str, body: str) -> str:
-        existing = github.gh_json(f"repos/{repo}/issues?state=open&labels={key}", default=[], allow_error=True)
+        existing = github.gh_json(f"repos/{repo}/issues?state=open&labels={_seg(key)}", default=[], allow_error=True)
         if isinstance(existing, list) and existing:
             number = existing[0]["number"]
             self._gh_input(["--method", "PATCH", f"repos/{repo}/issues/{number}"], {"body": body})
@@ -357,7 +371,7 @@ class GitHubPlatform:
         return key
 
     def comment_issue(self, repo: str, key: str, body: str) -> None:
-        existing = github.gh_json(f"repos/{repo}/issues?state=all&labels={key}", default=[], allow_error=True)
+        existing = github.gh_json(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[], allow_error=True)
         if isinstance(existing, list) and existing:
             number = existing[0]["number"]
             self._gh_input(["--method", "POST", f"repos/{repo}/issues/{number}/comments"], {"body": body})

@@ -100,8 +100,7 @@ docstrings — keep them accurate when changing behavior.
 
 `policy.yml` owns policy constants — most importantly the release tag pattern (`^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$`) and default required PR approvals. That pattern is **intentionally duplicated** into several places that need a literal at definition time:
 
-- `.github/actions/validate-release-ref/action.yml` (the `tag-pattern` input default)
-- every release workflow in `RELEASE_WORKFLOWS` (embeds the literal so validation is pinned to the same ref)
+- every release workflow in `RELEASE_WORKFLOWS` (embeds the literal in its `TAG_PATTERN` env so validation is pinned to the same ref)
 - rendered ruleset payloads (injected at render time, not stored)
 
 `aviato/validation.py` enforces these copies stay in sync via drift checks. **When you change the tag pattern or any embedded constant, update `policy.yml` and let validation tell you every copy that drifted — never treat docs or a workflow as the source of truth.** Docs (`README.md`, `ARCHITECTURE.md`, `REQUIREMENTS.md`) describe policy but are not authoritative.

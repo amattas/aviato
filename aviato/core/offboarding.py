@@ -8,9 +8,11 @@ from .marker import parse_marker_from_text, strip_marker_from_text
 from .scaffold import _atomic_write
 
 BASELINE_REMOVAL_WARNING = (
-    "Offboarding removes the always-on security baseline (§2.13) and all Aviato "
-    "protection from this repository. This is the maximal protection reduction; "
-    "review carefully before merging."
+    "Offboarding removes the always-on security baseline (§2.13) automation and stops "
+    "Aviato from maintaining this repository's protection. Note: any branch protection "
+    "and rulesets Aviato applied remain on GitHub but become UNMANAGED — this command "
+    "does not tear them down; remove them manually if you want protection fully removed. "
+    "This is the maximal protection reduction; review carefully before merging."
 )
 
 

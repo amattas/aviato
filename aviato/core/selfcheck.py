@@ -28,7 +28,9 @@ def _core_files(core_dir: Path | None) -> list[Path]:
         from ..paths import CORE_DIR
 
         core_dir = CORE_DIR
-    return sorted(Path(core_dir).glob("*.py"))
+    # Recurse (§9b soundness): a future ``aviato/core/<subpkg>/x.py`` must not escape
+    # the agnosticism scan. Exclude bytecode caches, which carry no source to scan.
+    return sorted(p for p in Path(core_dir).rglob("*.py") if "__pycache__" not in p.parts)
 
 
 def _plugin_pkg() -> str:
@@ -90,6 +92,13 @@ def denylist_violations(core_dir: Path | None = None, denylist: Iterable[str] | 
 
     Matching is case-insensitive on word boundaries, so a substring inside an
     unrelated word does not trip the check.
+
+    Limitation (acknowledged): this is a text scan, so a token assembled at runtime
+    (``"py" + "thon"``) is not detected. It is a lint, not a hard guarantee. The
+    highest-impact evasion — reaching the plug-in tree by dynamic import — is closed
+    separately and soundly by :func:`core_import_violations` (which flags any
+    ``import_module``/``__import__`` call); this denylist guards the remaining
+    name-an-identifier case on a best-effort basis.
     """
     if denylist is None:
         from ..paths import DENYLIST_FILE

@@ -18,9 +18,9 @@ Release tags must match:
 ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$
 ```
 
-Accepted examples: `v1.2.3`, `v1.2.3-alpha1`, `v1.2.3-beta2`.
+Accepted examples: `1.2.3`, `1.2.3-alpha1`, `1.2.3-beta2`.
 
-Rejected examples: `1.2.3` (no `v`), `v1.2.3-beta.1`,
+Rejected examples: `v1.2.3` (no `v` prefix allowed), `1.2.3-beta.1`,
 `build-20260519.0215`.
 
 Release publishing is tag-only. Legacy `release/*` branches should be cleaned up
@@ -31,7 +31,6 @@ in consumer repositories rather than supported by release publish workflows.
 - `policy.yml` - canonical policy constants.
 - `rulesets.yml` - ruleset manifest.
 - `rulesets/*.json` - GitHub ruleset templates.
-- `.github/actions/validate-release-ref` - shared release-tag validator.
 - `.github/workflows/reusable-*.yml` - reusable CI, release, deploy, and security workflows.
 - `templates/*.yml` - thin caller workflow templates for consumer repos.
 - `aviato/` - Python CLI implementation.

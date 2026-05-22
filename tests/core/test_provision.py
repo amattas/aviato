@@ -20,7 +20,7 @@ def test_minimal_settings_block_destructive_but_no_pr_gate() -> None:
     # §2.11/§8.7: minimal protection must not require a PR (it would deadlock the first
     # direct push), but must still block force-push/deletion. Required reviews/status
     # checks and §17 security-prerequisite toggles are excluded (they arrive with full).
-    m = minimal_settings(DESIRED)
+    m = minimal_settings()
     assert m["requires_pull_request"] is False
     assert m["block_force_push"] is True
     assert m["block_deletion"] is True

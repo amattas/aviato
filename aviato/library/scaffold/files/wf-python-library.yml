@@ -64,7 +64,7 @@ jobs:
 
   pypi:
     needs: [release, release-gate, security]
-    if: ${{ always() && needs.release-gate.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
+    if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-pypi-publish.yml@{{ aviato-ref }}
     with:
       python-version: "3.12"

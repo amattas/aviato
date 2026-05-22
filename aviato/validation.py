@@ -14,7 +14,6 @@ REQUIRED_FILES = [
     "policy.yml",
     "rulesets.yml",
     ".github/dependabot.yml",
-    ".github/actions/validate-release-ref/action.yml",
     ".github/workflows/ci.yml",
     ".github/workflows/reusable-python-ci.yml",
     ".github/workflows/reusable-node-ci.yml",
@@ -58,19 +57,7 @@ def _check_policy_examples(policy: dict, errors: list[str]) -> None:
 
 def _check_release_pattern_drift(root: Path, policy: dict, errors: list[str]) -> None:
     pattern = release_tag_pattern(policy)
-
-    action = load_yaml(root / ".github/actions/validate-release-ref/action.yml")
-    action_pattern = action.get("inputs", {}).get("tag-pattern", {}).get("default")
-    if action_pattern != pattern:
-        errors.append(".github/actions/validate-release-ref/action.yml tag-pattern default differs from policy.yml")
-
     description = policy.get("release", {}).get("tag_format_description")
-    action_description = action.get("inputs", {}).get("tag-format-description", {}).get("default")
-    if action_description != description:
-        errors.append(
-            ".github/actions/validate-release-ref/action.yml tag-format-description default "
-            "differs from policy.yml (it can advertise a format the pattern rejects)"
-        )
 
     for rel_path in RELEASE_WORKFLOWS:
         workflow_text = (root / rel_path).read_text(encoding="utf-8")

@@ -55,7 +55,7 @@ class ReconcileOutcome:
     values: dict[str, dict[str, Any]] | None = None
 
 
-def _purpose_built_payload(desired: dict[str, Any], live: dict[str, Any], diff_keys) -> dict[str, Any]:
+def _purpose_built_payload(desired: dict[str, Any], diff_keys) -> dict[str, Any]:
     """Construct a write payload of only the changed fields (§2.9): no read-shaped replay."""
     return {key: desired[key] for key in diff_keys if key in desired}
 
@@ -119,7 +119,7 @@ def reconcile_decision(state: ReconcileState) -> ReconcileOutcome:
             )
         pin_overridden = True
 
-    payload = _purpose_built_payload(state.desired_settings, state.live_settings, diff.changes)
+    payload = _purpose_built_payload(state.desired_settings, diff.changes)
     reason = "human consent, admin role, confirmed recomputed diff"
     if pin_overridden:
         reason += " (version-pin mismatch overridden by operator, §2.6)"

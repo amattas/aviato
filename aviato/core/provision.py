@@ -7,8 +7,8 @@ from typing import Any
 from .ports import Platform
 
 
-def minimal_settings(desired: dict[str, Any]) -> dict[str, Any]:
-    """The §2.11 safe-to-persist minimal protection derived from the full desired set.
+def minimal_settings() -> dict[str, Any]:
+    """The §2.11 safe-to-persist minimal protection: a fixed, profile-independent set.
 
     Blocks the destructive operations (force-push, deletion) but DOES NOT require a
     pull request — a PR-required gate would deadlock the very first direct push of the
@@ -17,6 +17,9 @@ def minimal_settings(desired: dict[str, Any]) -> dict[str, Any]:
     §17 operator-prerequisite features that may be unavailable (e.g. secret scanning on
     a private repo without Advanced Security), so they belong to full protection, which
     enables them best-effort.
+
+    This minimal set is the same regardless of the desired full protection (it is a
+    safe floor, not a projection of ``desired``), so it takes no argument.
     """
     return {
         "requires_pull_request": False,
@@ -63,7 +66,7 @@ def provision_repo(
     platform.create_repo(repo, private=private)
     outcome.created = True
 
-    platform.apply_settings(repo, minimal_settings(desired))
+    platform.apply_settings(repo, minimal_settings())
     outcome.minimal_applied = True
 
     scaffold_push()
