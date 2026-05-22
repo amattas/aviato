@@ -6,29 +6,23 @@ from typing import Any
 
 from .ports import Platform
 
-# Repo-level security toggles are additive and safe to enable from the start; they
-# do not block the first direct push the way a PR-required gate would.
-_SAFE_SECURITY_KEYS = ("secret_scanning", "secret_push_protection", "dependency_scanning")
-
 
 def minimal_settings(desired: dict[str, Any]) -> dict[str, Any]:
     """The §2.11 safe-to-persist minimal protection derived from the full desired set.
 
     Blocks the destructive operations (force-push, deletion) but DOES NOT require a
     pull request — a PR-required gate would deadlock the very first direct push of the
-    scaffold (§8.7). Always-safe repo security toggles are carried forward immediately.
-    Required reviews / status checks are intentionally omitted; they arrive with full
-    protection after the first commit.
+    scaffold (§8.7). Required reviews / status checks arrive with full protection after
+    the first commit. Repo security toggles are intentionally NOT applied here: they are
+    §17 operator-prerequisite features that may be unavailable (e.g. secret scanning on
+    a private repo without Advanced Security), so they belong to full protection, which
+    enables them best-effort.
     """
-    minimal: dict[str, Any] = {
+    return {
         "requires_pull_request": False,
         "block_force_push": True,
         "block_deletion": True,
     }
-    for key in _SAFE_SECURITY_KEYS:
-        if key in desired:
-            minimal[key] = desired[key]
-    return minimal
 
 
 @dataclass

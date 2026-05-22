@@ -684,7 +684,20 @@ def cmd_provision(args: argparse.Namespace) -> int:
         run(["git", "-C", str(clone), "config", "user.name", "aviato-bot"])
         run(["git", "-C", str(clone), "config", "user.email", "aviato-bot@users.noreply.github.com"])
         run(["git", "-C", str(clone), "add", "-A"])
-        run(["git", "-C", str(clone), "commit", "-m", "chore: adopt Aviato conventions (§5.2)"])
+        # Disable commit signing for this automated bot commit: it must not depend on the
+        # operator's GPG/SSH signing identity (a global commit.gpgsign would otherwise fail).
+        run(
+            [
+                "git",
+                "-C",
+                str(clone),
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-m",
+                "chore: adopt Aviato conventions (§5.2)",
+            ]
+        )
         run(["git", "-C", str(clone), "push", "origin", "HEAD"])
 
     try:

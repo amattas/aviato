@@ -41,6 +41,41 @@ def test_apply_settings_proceeds_when_no_unmodeled_protection(monkeypatch: pytes
     assert any("PUT" in c for c in calls)
 
 
+def test_apply_settings_tolerates_unavailable_security_feature(monkeypatch: pytest.MonkeyPatch) -> None:
+    # §17: a security feature unavailable on the repo (e.g. secret scanning on a private
+    # repo without Advanced Security) is an adoption warning, not an apply failure — the
+    # branch-protection PUT still applies. Live-test regression (provision smoke).
+    from aviato.command import CommandError
+
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+
+    def fake_run(cmd, **__):
+        if "PATCH" in cmd:  # the security_and_analysis toggle
+            raise CommandError(cmd, 1, "gh: Secret scanning is not available for this repository. (HTTP 422)")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(github, "run", fake_run)
+    # Must NOT raise despite the security PATCH failing as unavailable.
+    GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "secret_scanning": True})
+
+
+def test_apply_settings_reraises_non_feature_security_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aviato.command import CommandError
+
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+
+    def fake_run(cmd, **__):
+        if "PATCH" in cmd:
+            raise CommandError(cmd, 1, "gh: Server Error (HTTP 500)")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(github, "run", fake_run)
+    with pytest.raises(CommandError):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "secret_scanning": True})
+
+
 def test_nonhuman_edit_after_grant_detects_bot() -> None:
     timeline = [
         {"event": "labeled", "label": {"name": "aviato-consent:abc"}, "actor": {"type": "User"}},

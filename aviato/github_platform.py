@@ -11,12 +11,14 @@ logic below is unit-tested.
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from . import github
+from .command import CommandError
 from .core.ports import Issue
 
 # A human grants consent by adding a label of this form to the tracking issue;
@@ -26,6 +28,17 @@ CONSENT_LABEL_PREFIX = "aviato-consent:"
 
 class UnmodeledProtectionError(RuntimeError):
     """Raised when a settings apply would drop live protections the model doesn't cover."""
+
+
+def _is_feature_unavailable(exc: CommandError) -> bool:
+    """True if a gh error reports a security feature is unavailable for the repo (§17).
+
+    These (secret scanning, push protection, Dependabot security updates) require the
+    relevant features enabled at the org/repo level — an adoption prerequisite, not an
+    apply failure.
+    """
+    msg = exc.stderr.lower()
+    return "not available" in msg or "not enabled" in msg or "advanced security" in msg
 
 
 @dataclass(frozen=True)
@@ -384,9 +397,24 @@ class GitHubPlatform:
         self._gh_input(["--method", "PUT", f"repos/{repo}/branches/{branch}/protection"], api_payload)
 
         # Apply the repo-level security toggles (§2.13) when present in the desired set.
+        # These are §17 operator-prerequisite features that can be UNAVAILABLE (e.g.
+        # secret scanning on a private repo without Advanced Security). An "not
+        # available" response is an adoption warning, not an apply failure — surface it
+        # and continue; the branch protection (the safety-critical part) already applied.
+        # Diagnosis (§5.4) separately probes/surfaces feature availability.
         security_payload = to_security_payload(payload)
         if security_payload:
-            self._gh_input(["--method", "PATCH", f"repos/{repo}"], {"security_and_analysis": security_payload})
+            try:
+                self._gh_input(["--method", "PATCH", f"repos/{repo}"], {"security_and_analysis": security_payload})
+            except CommandError as exc:
+                if _is_feature_unavailable(exc):
+                    print(
+                        f"WARNING: repo security features unavailable on {repo} "
+                        f"(enable per §17, e.g. Advanced Security): {exc.stderr.strip()}",
+                        file=sys.stderr,
+                    )
+                else:
+                    raise
 
     def create_repo(self, repo: str, *, private: bool) -> None:
         # §5.2 provision-new: create the repository initialized with a README so the

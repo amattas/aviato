@@ -18,14 +18,15 @@ DESIRED = {
 
 def test_minimal_settings_block_destructive_but_no_pr_gate() -> None:
     # §2.11/§8.7: minimal protection must not require a PR (it would deadlock the first
-    # direct push), but must still block force-push/deletion and may enable safe toggles.
+    # direct push), but must still block force-push/deletion. Required reviews/status
+    # checks and §17 security-prerequisite toggles are excluded (they arrive with full).
     m = minimal_settings(DESIRED)
     assert m["requires_pull_request"] is False
     assert m["block_force_push"] is True
     assert m["block_deletion"] is True
     assert "required_status_checks" not in m
     assert "required_reviews" not in m
-    assert m["secret_scanning"] is True
+    assert "secret_scanning" not in m
 
 
 def test_provision_happy_path_orders_create_minimal_scaffold_full() -> None:
