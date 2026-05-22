@@ -37,6 +37,7 @@ jobs:
       test-command: "npm test"
       build-command: "npm run build"
       run-typecheck: {{ run-typecheck }}
+      run-build: {{ run-build }}
 
   security:
     # Runs on PRs AND on the release tag, so source scans gate the verify pipeline

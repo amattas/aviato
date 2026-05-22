@@ -36,11 +36,12 @@ def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureF
 
     decl = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
     assert decl["profile"] == "python-library"
-    assert decl["version"] == "v0"
+    # --pin v0 (legacy form) is canonicalized to bare on write; a leading v is never emitted (§6.1).
+    assert decl["version"] == "0"
     assert decl["variables"]["distribution-name"] == "acme"
 
-    # managed file scaffolded with marker; seed-once LICENSE written without marker
-    assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library version=v0")
+    # managed file scaffolded with marker (bare pin); seed-once LICENSE written without marker
+    assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library version=0")
     assert "wrote .github/aviato.yaml" in out
 
 

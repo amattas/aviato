@@ -66,6 +66,27 @@ def test_relative_import_edge_detected_in_synthetic_core(tmp_path: Path) -> None
     assert core_import_violations(fake_core) != []
 
 
+def test_relative_import_edge_from_core_subpackage_is_detected(tmp_path: Path) -> None:
+    # §9b soundness: a file in a nested core subpackage must not escape the scan. From
+    # aviato.core.sub, `from ...plugins import x` (level 3) reaches aviato.plugins. The
+    # resolver must derive the package from the file's path, not assume core is flat —
+    # otherwise this edge resolves to a bare "plugins" and slips through.
+    fake_core = tmp_path / "core"
+    sub = fake_core / "sub"
+    sub.mkdir(parents=True)
+    (sub / "deep.py").write_text("from ...plugins import comment_syntax\n")
+    assert core_import_violations(fake_core) != []
+
+
+def test_relative_sibling_import_in_subpackage_does_not_trip(tmp_path: Path) -> None:
+    # A legitimate intra-subpackage `from . import sibling` must NOT be flagged.
+    fake_core = tmp_path / "core"
+    sub = fake_core / "sub"
+    sub.mkdir(parents=True)
+    (sub / "ok.py").write_text("from . import sibling\n")
+    assert core_import_violations(fake_core) == []
+
+
 def test_comment_mentioning_plugin_tree_does_not_trip(tmp_path: Path) -> None:
     # A prose mention of the plug-in package in a comment is not an import edge.
     fake_core = tmp_path / "core"

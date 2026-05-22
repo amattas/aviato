@@ -251,3 +251,67 @@ def test_node_language_variant_is_enum(registry: Registry) -> None:
     variant = next(v for v in rs.variables if v.name == "language-variant")
     assert variant.type == "enum"
     assert variant.domain == ("typescript", "javascript")
+
+
+@pytest.mark.parametrize("variant", ["typescript", "javascript"])
+def test_node_eslint_config_is_runnable(variant: str) -> None:
+    # §16/#8: the managed ESLint flat config must actually load. It uses ESM imports, so
+    # it is materialized as `eslint.config.mjs` (ESM regardless of the package type), and
+    # every plugin it imports must be a declared dependency or `eslint .` fails on a fresh
+    # repo with "Cannot find module".
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": variant})
+    eslint = next(i for i in items if i.output == "eslint.config.mjs")
+    assert 'import security from "eslint-plugin-security"' in eslint.body
+    assert 'import js from "@eslint/js"' in eslint.body
+    pkg = next(i for i in items if i.output == "package.json")
+    assert "eslint-plugin-security" in pkg.body  # imported plugin is declared
+    assert "@eslint/js" in pkg.body  # imported config is declared
+
+
+def test_node_javascript_has_no_fake_build_gate() -> None:
+    # §16/#8: the JS variant must not pass a vacuous `npm run build`. There is no compile
+    # step for plain JS (the production artifact is the Docker image), so the source-CI
+    # build gate is disabled, and the placeholder build script does not silently succeed.
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": "javascript"})
+    ci = next(i for i in items if i.output == ".github/workflows/aviato-ci.yml")
+    assert "run-build: false" in ci.body
+    pkg = next(i for i in items if i.output == "package.json")
+    assert "exit 1" in pkg.body  # not a silent echo-and-pass
+
+
+def test_node_typescript_runs_real_build_gate() -> None:
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": "typescript"})
+    ci = next(i for i in items if i.output == ".github/workflows/aviato-ci.yml")
+    assert "run-build: true" in ci.body
+    pkg = next(i for i in items if i.output == "package.json")
+    assert '"build": "tsc --build"' in pkg.body
+
+
+def test_swift_caller_installs_apple_swift_format() -> None:
+    # §12.3: the reusable Swift CI requires Apple's `swift-format`; the scaffold must
+    # install that exact tool, not the differently-named `swiftformat` (which would make
+    # the generated CI fail at `command -v swift-format`).
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    variables = {
+        "product-scheme": "Acme",
+        "bundle-identifier": "com.acme.app",
+        "team-id": "ABCDE12345",
+        "export-method": "app-store",
+    }
+    ci = next(
+        i for i in materialize_items(reg, "swift-app", variables) if i.output == ".github/workflows/aviato-ci.yml"
+    )
+    assert "swift-format" in ci.body
+    # No bare `swiftformat` (the wrong tool): removing the correct token leaves none behind.
+    assert "swiftformat" not in ci.body.replace("swift-format", "")

@@ -46,6 +46,33 @@ def test_consumer_automation_jitters_scheduled_runs() -> None:
     assert any("sleep" in run and "RANDOM" in run for run in runs), "no anti-stampede jitter step found"
 
 
+def test_consumer_automation_settings_drift_token_is_optional_and_read_only() -> None:
+    # §5.6/§11.3: settings drift READS branch protection + rulesets, which the platform
+    # GITHUB_TOKEN cannot do (there is no `administration` workflow-permission scope — a
+    # common wrong fix that actionlint rejects). Detection therefore takes an OPTIONAL
+    # operator-supplied admin token via the `settings-token` secret, used read-only.
+    wf = _load("reusable-consumer-automation.yml")
+
+    # The bogus scope must never reappear; permissions stay the low-privilege report set.
+    assert "administration" not in wf["permissions"]
+    assert wf["permissions"] == {"contents": "write", "pull-requests": "write", "issues": "write"}
+
+    # The optional admin token is declared (not required) and preferred over the platform
+    # token at runtime, so settings drift works when supplied and degrades when not.
+    # (YAML 1.1 parses the `on:` key as boolean True, hence wf.get(True).)
+    on_block = wf.get("on") or wf.get(True)
+    settings_secret = on_block["workflow_call"]["secrets"]["settings-token"]
+    assert settings_secret.get("required") is False
+    gh_token = wf["jobs"]["drift-report"]["env"]["GH_TOKEN"]
+    assert "settings-token" in gh_token and "github.token" in gh_token
+
+    # The scaffolded caller (read as text — it carries {{ }} placeholders) passes the
+    # consumer's optional secret through to the reusable workflow.
+    caller = (SCAFFOLD_FILES / "wf-drift.yml").read_text(encoding="utf-8")
+    assert "settings-token: ${{ secrets.AVIATO_SETTINGS_TOKEN }}" in caller
+    assert "administration:" not in caller
+
+
 def test_security_baseline_retains_fail_closed_structure() -> None:
     # §5.14/§8.16: the security baseline must (a) probe the findings-upload privilege and
     # hard-fail without it, (b) run each scan only after that probe, (c) emit a per-run

@@ -52,7 +52,8 @@ def test_onboard_open_pr_builds_proposal(tmp_path: Path, monkeypatch: pytest.Mon
     assert ".github/aviato.yaml" in files
     assert "profile: python-library" in files[".github/aviato.yaml"]
     assert "ruff.toml" in files
-    assert files["ruff.toml"].startswith("# aviato:managed profile=python-library version=v0")
+    # --pin v0 (legacy) is canonicalized to a bare marker pin; a leading v is never emitted (§6.1).
+    assert files["ruff.toml"].startswith("# aviato:managed profile=python-library version=0")
     assert ".github/workflows/aviato-ci.yml" in files
     # the pre-existing seed-once LICENSE is NOT overwritten and is enumerated as untouched
     assert "LICENSE" not in files

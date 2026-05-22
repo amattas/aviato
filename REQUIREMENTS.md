@@ -1278,7 +1278,16 @@ it **grants** exactly those (§8.9).
 | Pages docs | `pages: write`, `id-token: write`, `contents: read` | none (platform token) |
 | App Store Connect | `contents: read` | **yes** — §13.4 |
 
-Third-party actions/tools invoked by any pipeline are **pinned by commit digest**.
+Third-party actions/tools invoked by any pipeline are **pinned to an immutable
+reference**, by the strongest pin the delivery channel supports: GitHub Actions and
+container images are **commit-digest / image-digest** pinned; a binary fetched over
+the network is **checksum-verified** before execution; and a tool installed from a
+package index that exposes no digest (e.g. a `pip`/`npm` package) is pinned to an
+**exact version**, never a floating latest. (Distro packages installed via the
+runner's system package manager inherit the pinned runner-image snapshot.) The
+agnostic checker (`aviato.core.actionpins`) and the in-CI gate enforce the
+digest-pinned classes (actions, images, curl-fetched binaries); exact-version tool
+pins are carried as workflow inputs (e.g. `actionlint-version`, `yamllint-version`).
 For the Library reference a Consumer pulls, **digest-level verifiability holds only
 for exact-version pins** (`X.Y.Z`, resolved to a recorded digest / signed tag) —
 those **close the supply-chain delivery path**. A **floating major pin** (`X`,

@@ -506,7 +506,7 @@ def test_open_or_update_proposal_writes_files_and_pushes(tmp_path, monkeypatch: 
 
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
     monkeypatch.setattr(github, "run", fake_run)
-    monkeypatch.setattr(github, "gh_json", lambda endpoint, **__: [])  # no existing PR
+    monkeypatch.setattr(github, "gh_json_optional", lambda endpoint, **__: [])  # no existing PR
 
     platform = GitHubPlatform(workdir=tmp_path)
     branch = platform.open_or_update_proposal(
@@ -528,7 +528,9 @@ def test_open_or_update_proposal_skips_pr_create_when_pr_exists(tmp_path, monkey
     monkeypatch.setattr(
         github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
     )
-    monkeypatch.setattr(github, "gh_json", lambda endpoint, **__: [{"number": 5}])  # PR already open
+    # The PR-existence read is fail-closed (gh_json_optional): a 404 means "no PR",
+    # an auth/5xx error raises rather than silently creating a duplicate.
+    monkeypatch.setattr(github, "gh_json_optional", lambda endpoint, **__: [{"number": 5}])  # PR already open
 
     GitHubPlatform(workdir=tmp_path).open_or_update_proposal("owner/repo", "b", "t", {"f.txt": "x\n"}, "body")
     assert not any("pr create" in " ".join(c) for c in calls)  # push updated the existing PR

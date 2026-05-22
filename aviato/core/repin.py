@@ -6,7 +6,7 @@ from .composition import resolve_profile
 from .declaration import Declaration
 from .errors import CompositionError
 from .registry import Registry
-from .version import _pinned_major, parse_version
+from .version import _pinned_major, normalize_pin, parse_version
 
 DOWNGRADE_WARNING = (
     "You are moving backward to a lower version; protection or behavior may be "
@@ -65,6 +65,11 @@ def plan_repin(
     an explicit backward-movement warning. This is the only sanctioned way a pin moves;
     file drift never advances it.
     """
+    # Canonicalize the target to bare SemVer (§6.1): an operator may type a legacy
+    # ``vX.Y.Z`` out of muscle memory, but re-pin is a *write* and must never emit a
+    # leading ``v``. An unrecognized pin is refused here rather than persisted.
+    target_version = normalize_pin(target_version)
+
     target_registry = target_registry or registry
     if target_registry is not registry:
         current_identity = _profile_identity(registry, declaration.profile)

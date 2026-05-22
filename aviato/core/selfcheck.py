@@ -43,11 +43,21 @@ def _is_plugin_module(name: str) -> bool:
     return name == pkg or name.startswith(pkg + ".")
 
 
-def _resolve_relative(level: int, module: str | None) -> str:
-    """Resolve a relative import (``from .. import x``) to an absolute module name,
-    treating the source file as a member of the agnostic core package."""
-    drop = level - 1  # level 1 == the core package itself
-    base_parts = list(_CORE_PACKAGE[: len(_CORE_PACKAGE) - drop]) if drop <= len(_CORE_PACKAGE) else []
+def _module_package(path: Path, core_dir: Path) -> list[str]:
+    """The dotted package parts a source file belongs to, e.g. a file at
+    ``<core_dir>/sub/x.py`` is in ``aviato.core.sub``. Derived from the path so a
+    nested ``aviato/core/<subpkg>/`` is resolved correctly (not assumed flat)."""
+    rel_parts = path.relative_to(core_dir).parts[:-1]  # drop the filename
+    return list(_CORE_PACKAGE) + list(rel_parts)
+
+
+def _resolve_relative(level: int, module: str | None, package_parts: list[str]) -> str:
+    """Resolve a relative import (``from .. import x``) to an absolute module name.
+
+    ``level`` 1 is the file's own package; each extra level drops one parent, matching
+    the language's relative-import resolution against ``package_parts``."""
+    drop = level - 1
+    base_parts = package_parts[: len(package_parts) - drop] if drop <= len(package_parts) else []
     base = ".".join(base_parts)
     if module:
         return f"{base}.{module}" if base else module
@@ -63,18 +73,28 @@ def core_import_violations(core_dir: Path | None = None) -> list[str]:
     the exact string-assembly evasion a line-regex would miss (core has no legitimate
     dynamic-import need). A prose mention in a comment/string is not an edge.
     """
+    if core_dir is None:
+        from ..paths import CORE_DIR
+
+        core_dir = CORE_DIR
+    core_dir = Path(core_dir)
     violations: list[str] = []
     for path in _core_files(core_dir):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except SyntaxError:
             continue
+        package_parts = _module_package(path, core_dir)
         for element in ast.walk(tree):
             if isinstance(element, ast.Import):
                 if any(_is_plugin_module(alias.name) for alias in element.names):
                     violations.append(f"{path.name}:{element.lineno}")
             elif isinstance(element, ast.ImportFrom):
-                base = element.module if element.level == 0 else _resolve_relative(element.level, element.module)
+                base = (
+                    element.module
+                    if element.level == 0
+                    else _resolve_relative(element.level, element.module, package_parts)
+                )
                 names = [f"{base}.{alias.name}" for alias in element.names]
                 if _is_plugin_module(base) or any(_is_plugin_module(name) for name in names):
                     violations.append(f"{path.name}:{element.lineno}")

@@ -30,7 +30,7 @@ class ScaffoldResult:
     seeded: list[str] = field(default_factory=list)
 
 
-def _atomic_write(path: Path, text: str) -> None:
+def atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".aviato-", suffix=".tmp")
     try:
@@ -54,7 +54,7 @@ def read_sidecar(root: Path) -> dict[str, str]:
 def _write_sidecar(root: Path, data: dict[str, str]) -> None:
     path = Path(root) / SIDECAR_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+    atomic_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def render_managed(item: ScaffoldItem, *, profile: str, version: str) -> str:
@@ -100,7 +100,7 @@ def scaffold(
         if item.seed_once:
             if target.exists():
                 continue
-            _atomic_write(target, item.body)
+            atomic_write(target, item.body)
             sidecar[output] = content_hash(item.body)
             sidecar_changed = True
             result.seeded.append(output)
@@ -130,7 +130,7 @@ def scaffold(
                     result.skipped_modified.append(output)
                     continue
                 # else: template moved or marker stale → regenerate (diagnosis "mergeable").
-        _atomic_write(target, rendered)
+        atomic_write(target, rendered)
         result.written.append(output)
 
     if sidecar_changed:

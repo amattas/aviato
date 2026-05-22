@@ -42,6 +42,20 @@ def _as_lower_bound(value: str) -> Version:
         return (_pinned_major(value), 0, 0)
 
 
+def normalize_pin(value: str) -> str:
+    """Canonicalize a version pin to its bare-SemVer form (§6.1).
+
+    A recognized pin is an exact ``X.Y.Z`` or a floating major ``N``; a legacy
+    leading ``v`` is tolerated on input but **stripped** so it is never emitted
+    into a declaration or managed marker. Raises :class:`CompatibilityError` if
+    ``value`` is not a recognized pin (so an operator typo cannot be persisted).
+    """
+    stripped = value.strip()
+    if not is_known_version_pin(stripped):
+        raise CompatibilityError(f"not a version pin: {value!r}")
+    return stripped[1:] if stripped[:1] == "v" else stripped
+
+
 def is_known_version_pin(value: str) -> bool:
     """True iff ``value`` is a recognized version pin: an exact ``X.Y.Z`` or a floating
     major ``N`` (a legacy ``v`` prefix tolerated). A managed marker recording an

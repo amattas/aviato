@@ -20,3 +20,8 @@ jobs:
     uses: amattas/aviato/.github/workflows/reusable-consumer-automation.yml@{{ aviato-ref }}
     with:
       aviato-ref: {{ aviato-ref }}
+    secrets:
+      # Optional: define AVIATO_SETTINGS_TOKEN (admin-capable) to enable settings-drift
+      # detection; without it only file drift runs (the platform token cannot read
+      # branch protection / rulesets, §5.6).
+      settings-token: ${{ secrets.AVIATO_SETTINGS_TOKEN }}

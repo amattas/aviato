@@ -17,10 +17,24 @@ on:
         required: false
         type: string
         default: "3.12"
+    secrets:
+      settings-token:
+        description: >-
+          Optional admin-capable token (PAT / GitHub App) used to READ branch
+          protection + rulesets for settings drift. The default GITHUB_TOKEN cannot
+          (no administration scope). Omit it and settings drift is skipped; file
+          drift still runs. Read-only use — settings are never mutated here (§5.6/§5.7).
+        required: false
 
 # File-drift proposals push an identity-keyed branch, which needs contents:write
 # (opening a PR with file changes cannot be done with read-only contents).
 # Settings drift remains report-only and never mutates protected settings.
+#
+# NOTE (§5.6/§11.3): the platform GITHUB_TOKEN has no `administration` scope — that
+# scope does not exist for workflow tokens — so it CANNOT read branch protection or
+# rulesets. Full settings-drift detection therefore requires an operator-supplied
+# admin-capable token (PAT / GitHub App) passed as the `settings-token` secret
+# below; without it, file drift still runs and settings reads degrade (skipped).
 permissions:
   contents: write
   pull-requests: write
@@ -31,7 +45,9 @@ jobs:
     name: Drift detection (propose/report only)
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ github.token }}
+      # Prefer the operator's admin token (enables settings-drift reads); fall back to
+      # the platform token (file drift only — settings drift then skips, §5.6).
+      GH_TOKEN: ${{ secrets.settings-token || github.token }}
       AVIATO_REF: ${{ inputs.aviato-ref }}
     steps:
       - name: Jitter

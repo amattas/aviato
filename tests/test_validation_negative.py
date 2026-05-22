@@ -99,3 +99,22 @@ def test_template_scaffold_parity_drift_is_detected(repo_copy: Path) -> None:
     target.write_text(target.read_text(encoding="utf-8") + "\n# drift injected\n", encoding="utf-8")
     errors = validate(repo_copy)
     assert any("does not match" in e or "Regenerate" in e or "parity" in e.lower() for e in errors)
+
+
+def test_static_ruleset_pattern_drift_is_detected(repo_copy: Path) -> None:
+    # The static ruleset template literal is render-injected from policy, but it must still
+    # be drift-checked against policy — otherwise editing it (e.g. re-adding a leading v)
+    # leaves validation green. Regression guard for the previously-tautological check.
+    import json
+
+    f = repo_copy / "rulesets" / "release-tag-format.json"
+    payload = json.loads(f.read_text(encoding="utf-8"))
+    mutated = False
+    for rule in payload["rules"]:
+        if rule.get("type") == "tag_name_pattern":
+            rule["parameters"]["pattern"] = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+            mutated = True
+    assert mutated, "fixture did not contain a tag_name_pattern rule"
+    f.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("tag_name_pattern" in e and "policy.yml" in e for e in errors)

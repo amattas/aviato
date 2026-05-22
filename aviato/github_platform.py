@@ -410,7 +410,10 @@ class GitHubPlatform:
         )
         self._git("push", "--force", "origin", branch)
 
-        existing = github.gh_json(f"repos/{repo}/pulls?head={owner}:{branch}&state=open", default=[], allow_error=True)
+        # Fail-closed read: a 404 cannot occur here (the list is empty when no PR
+        # matches), so an auth/5xx error must raise rather than be read as "no existing
+        # PR" — which would push a duplicate `pr create`. Consistent with the other reads.
+        existing = github.gh_json_optional(f"repos/{repo}/pulls?head={owner}:{branch}&state=open", default=[])
         if not (isinstance(existing, list) and existing):
             self._gh("pr", "create", "--repo", repo, "--head", branch, "--base", base, "--title", title, "--body", body)
         return branch
@@ -442,7 +445,10 @@ class GitHubPlatform:
         )
         self._git("push", "--force", "origin", branch)
 
-        existing = github.gh_json(f"repos/{repo}/pulls?head={owner}:{branch}&state=open", default=[], allow_error=True)
+        # Fail-closed read: a 404 cannot occur here (the list is empty when no PR
+        # matches), so an auth/5xx error must raise rather than be read as "no existing
+        # PR" — which would push a duplicate `pr create`. Consistent with the other reads.
+        existing = github.gh_json_optional(f"repos/{repo}/pulls?head={owner}:{branch}&state=open", default=[])
         if not (isinstance(existing, list) and existing):
             self._gh("pr", "create", "--repo", repo, "--head", branch, "--base", base, "--title", title, "--body", body)
         return branch

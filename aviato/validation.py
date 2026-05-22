@@ -7,8 +7,14 @@ from typing import Any
 
 from .core.selfcheck import core_import_violations, denylist_violations, load_denylist
 from .paths import DENYLIST_FILE, REPO_ROOT
-from .policy import default_required_approvals, load_policy, load_ruleset_manifest, load_yaml, release_tag_pattern
-from .rulesets import render_all_rulesets
+from .policy import (
+    default_required_approvals,
+    get_path,
+    load_policy,
+    load_ruleset_manifest,
+    load_yaml,
+    release_tag_pattern,
+)
 
 REQUIRED_FILES = [
     "policy.yml",
@@ -71,11 +77,25 @@ def _check_release_pattern_drift(root: Path, policy: dict, errors: list[str]) ->
         if f"TAG_FORMAT_DESCRIPTION: '{description}'" not in workflow_text:
             errors.append(f"{rel_path} TAG_FORMAT_DESCRIPTION env differs from policy.yml tag_format_description")
 
-    rendered_tag_rulesets = [payload for payload in render_all_rulesets(root=root) if payload.get("target") == "tag"]
-    for payload in rendered_tag_rulesets:
-        for rule in payload.get("rules", []):
-            if rule.get("type") == "tag_name_pattern" and rule.get("parameters", {}).get("pattern") != pattern:
-                errors.append(f"rendered tag ruleset {payload.get('name')} differs from policy.yml")
+    # Drift-check the STATIC ruleset templates, not the rendered output. Rendering injects
+    # the policy pattern (rulesets._patch_tag_ruleset), so comparing the rendered payload
+    # to policy is a tautology that can never fail — the literal in the JSON file could
+    # drift to anything and stay green. Comparing the on-disk literal to policy makes it a
+    # genuine "every embedded copy stays in sync" guard (§9), even though render re-injects it.
+    for item in load_ruleset_manifest(root).get("rulesets", []):
+        tag_path = item.get("patch", {}).get("tag_name_pattern")
+        if item.get("target") != "tag" or not tag_path:
+            continue
+        expected = str(get_path(policy, tag_path))
+        raw = json.loads((root / item["file"]).read_text(encoding="utf-8"))
+        for rule in raw.get("rules", []):
+            if rule.get("type") == "tag_name_pattern":
+                actual = rule.get("parameters", {}).get("pattern")
+                if actual != expected:
+                    errors.append(
+                        f"{item['file']} tag_name_pattern {actual!r} differs from policy.yml "
+                        f"({tag_path} = {expected!r}); keep the static ruleset template in sync with policy"
+                    )
 
 
 def _walk_jobs(data: dict[str, Any]) -> list[dict[str, Any]]:

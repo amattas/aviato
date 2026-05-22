@@ -15,8 +15,8 @@ from .core.bootstrap import is_library
 from .core.composition import resolve_profile
 from .core.declaration import Declaration, declaration_to_yaml, dump_declaration, load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
-from .core.errors import AviatoError
-from .core.file_drift_flow import run_file_drift
+from .core.errors import AviatoError, DeclarationError
+from .core.file_drift_flow import _PROPOSABLE, run_file_drift
 from .core.fleet import scan_fleet
 from .core.marker import parse_marker_from_text
 from .core.offboarding import offboard as offboard_repo
@@ -28,7 +28,7 @@ from .core.repin import plan_repin
 from .core.scaffold import ScaffoldItem, render_managed, scaffold
 from .core.settings_drift_flow import run_settings_drift
 from .core.variables import resolve_variables, writeback_variables
-from .core.version import is_compatible
+from .core.version import is_compatible, is_known_version_pin, normalize_pin
 from .core.versioning import classify_commits, is_highest, next_version
 from .github import GitHubAPIError
 from .github_platform import GitHubPlatform, UnmodeledProtectionError
@@ -234,10 +234,38 @@ def _env_vars(specs) -> dict[str, str]:
     return env
 
 
+def _resolve_onboard_pin(args: argparse.Namespace, existing) -> str:
+    """Resolve the version pin to record (§6.1/§5.12).
+
+    Onboarding must not double as a re-pin. If the repo is already adopted, the
+    existing pin is **preserved** unless the operator passes an explicit ``--pin``
+    that matches it; an explicit pin that *differs* is refused and the operator is
+    directed to ``aviato repin`` — the only sanctioned pin-move path (§5.12), which
+    carries the backward-movement warning and identity checks. The returned pin is
+    canonical bare SemVer; a legacy leading ``v`` is stripped and never emitted (§6.1).
+    """
+    explicit = None if args.pin is None else normalize_pin(args.pin)
+    if existing is not None:
+        # Preserve (and canonicalize) the recorded pin. An unrecognized recorded
+        # value is left verbatim — diagnosis classifies it as dirty-drift (§5.4)
+        # rather than us guessing or crashing here.
+        current = normalize_pin(existing.version) if is_known_version_pin(existing.version) else existing.version
+        if explicit is None or explicit == current:
+            return current
+        raise DeclarationError(
+            f"already adopted at version {current!r}; onboarding will not move the pin. "
+            f"Use `aviato repin <repo> {explicit}` to change it (§5.12)."
+        )
+    return explicit if explicit is not None else "0"
+
+
 def _resolve_onboard_declaration(args: argparse.Namespace, registry: Registry, resolved, existing):
-    """Resolve variables (§5.2 precedence), enforce the migrate guard, and build the
-    declaration. Raises :class:`AviatoError` on a missing required var or a profile
-    change without --migrate-profile; the caller maps that to a clean CLI error."""
+    """Resolve variables (§5.2 precedence), enforce the migrate guard, resolve the
+    version pin (§5.12 re-pin exclusivity), and build the declaration. Raises
+    :class:`AviatoError` on a missing required var, a profile change without
+    --migrate-profile, or an attempt to move the pin via onboarding; the caller maps
+    that to a clean CLI error. Canonicalizes ``args.pin`` in place so the marker
+    rendering downstream emits the same bare pin (§6.1)."""
     flags = _parse_var_flags(args.var)
     variables = resolve_variables(
         resolved.variables,
@@ -253,10 +281,12 @@ def _resolve_onboard_declaration(args: argparse.Namespace, registry: Registry, r
         variables=variables,
         allow_migrate=args.migrate_profile,
     )
+    pin = _resolve_onboard_pin(args, existing)
+    args.pin = pin  # propagate the canonical pin to materialize/scaffold/marker rendering
     persisted = writeback_variables(resolved.variables, variables)
     declaration = Declaration(
         profile=args.profile,
-        version=args.pin,
+        version=pin,
         docs=args.docs,
         variables=persisted,
         overrides=(existing.overrides if existing else {}),
@@ -408,7 +438,13 @@ def cmd_onboard(args: argparse.Namespace) -> int:
         print(f"- {pipeline}")
 
     print("templates:")
+    # Apply the §12.2/§6.1 conditional filter so the preview lists the *exact* artifacts
+    # that would be written. ``docs`` is always known here, so docs-gated artifacts do not
+    # appear when docs is false; a ``when`` keyed on a not-yet-supplied --var stays visible.
+    known = {**_parse_var_flags(args.var), "docs": "true" if args.docs else "false"}
     for template in resolved.templates:
+        if any(key in known and str(known[key]) != value for key, value in template.when):
+            continue
         kind = "seed-once" if template.seed_once else "managed"
         print(f"- {template.output_path} ({kind})")
 
@@ -529,10 +565,10 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def _scan_has_file_drift(scan) -> bool:
-    # "missing"/"mergeable-drift" managed-file statuses are fixable by a proposal;
-    # "dirty-drift" (operator hand-edited / malformed marker) is NOT auto-fixed
-    # (§5.4/§5.5). Keep this set aligned with file_drift_flow._PROPOSABLE.
-    return any(status in {"missing", "mergeable-drift"} for status in scan.statuses.values())
+    # A repo is fixable by --fix iff it has a proposable managed-file status. Reuse
+    # file_drift_flow._PROPOSABLE directly (not a copy) so the scan gate can never drift
+    # from what run_file_drift actually proposes; "dirty-drift" stays excluded (§5.4/§5.5).
+    return any(status in _PROPOSABLE for status in scan.statuses.values())
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
@@ -548,7 +584,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         print(f"{scan.path}\t{scan.profile}\t{summary}{flags}")
         if args.fix and _scan_has_file_drift(scan):
             try:
-                outcome = _propose_file_drift(registry, Path(scan.path))
+                outcome = _propose_file_drift(registry, Path(scan.path), override_version_pin=args.override_version_pin)
                 print(f"  fix: proposed={outcome.proposed} dirty={outcome.dirty}")
             except (AviatoError, GitHubAPIError) as exc:
                 print(f"  fix ERROR: {exc}", file=sys.stderr)
@@ -556,22 +592,30 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return rc
 
 
-def _propose_file_drift(registry: Registry, root: Path):
+def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin: bool = False):
     """Open a managed-file drift proposal for one repo (§5.5), shared by scan --fix.
 
     Resolves the repo's declaration, re-diagnoses, and routes the same
     marker-stamped bodies scaffold() would write through ``run_file_drift`` so a
-    merged PR classifies clean (§6.2/§5.4).
+    merged PR classifies clean (§6.2/§5.4). Enforces the §2.6 version-pin gate first
+    — exactly like ``drift-report``/``sync`` — so an incompatible local tool cannot
+    regenerate a consumer's files (unless the operator passes --override-version-pin).
     """
     declaration_path = root / ".github" / "aviato.yaml"
     if not declaration_path.is_file():
         raise AviatoError(f"no declaration at {declaration_path}")
-    slug = normalize_slug(remote_url(root))
-    if not slug:
-        raise AviatoError("could not determine OWNER/REPO from the repository remote")
 
     declaration = load_declaration(declaration_path)
     expected = _expected_artifacts(registry, declaration)
+    # §2.6 pin gate before any remote/proposal work (matches drift-report/sync): an
+    # incompatible local tool must not regenerate a consumer's files via scan --fix.
+    pin_error = _version_pin_error(root, declaration, expected, override_version_pin)
+    if pin_error:
+        raise AviatoError(pin_error)
+
+    slug = normalize_slug(remote_url(root))
+    if not slug:
+        raise AviatoError("could not determine OWNER/REPO from the repository remote")
     resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs)
     secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
     report = diagnose(root, expected, declaration_variables=declaration.variables, secret_var_names=secret_names)
@@ -596,6 +640,7 @@ def _propose_file_drift(registry: Registry, root: Path):
         profile=declaration.profile,
         statuses=report.statuses,
         expected_bodies=managed_bodies,
+        is_bootstrap=is_library(root),
     )
 
 
@@ -683,8 +728,16 @@ def cmd_offboard(args: argparse.Namespace) -> int:
     if not args.write:
         from .core.offboarding import BASELINE_REMOVAL_WARNING
 
-        verb = "delete" if args.delete_files else "strip markers from"
-        print(f"dry run; would {verb} {len(managed_outputs)} managed file(s), then remove the declaration + sidecar.")
+        if args.delete_files:
+            print(
+                f"dry run; would delete {len(managed_outputs)} managed file(s), then remove the declaration + sidecar."
+            )
+        else:
+            print(
+                f"dry run; would strip markers from {len(managed_outputs)} managed file(s) "
+                "(automation workflows under .github/workflows are deleted, not just stripped, §5.13), "
+                "then remove the declaration + sidecar."
+            )
         print(f"WARNING: {BASELINE_REMOVAL_WARNING}")
         print("re-run with --write to perform the removal.")
         return 0
@@ -813,6 +866,9 @@ def cmd_provision(args: argparse.Namespace) -> int:
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
+        # Canonicalize the pin to bare SemVer (§6.1) before it lands in the declaration
+        # or markers; a legacy ``v`` is stripped and a malformed pin is refused.
+        args.pin = normalize_pin(args.pin)
         resolved = resolve_profile(registry, args.profile, docs=args.docs)
         variables = resolve_variables(
             resolved.variables,
@@ -944,15 +1000,30 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         profile=declaration.profile,
         statuses=report.statuses,
         expected_bodies=managed_bodies,
-    )
-    settings_outcome = run_settings_drift(
-        platform,
-        repo=slug,
-        desired_settings=_desired_settings(resolved),
-        issue_key=SETTINGS_DRIFT_ISSUE_KEY,
+        # Bootstrap (§2.10/§5.10): when the Library diagnoses itself it does not raise
+        # file-drift proposals against the remote-ref scaffold — its automation is
+        # self-applied/operator-maintained locally. Consistent with the pin-gate skip.
+        is_bootstrap=is_library(root),
     )
     print(f"file drift: proposed={file_outcome.proposed} dirty={file_outcome.dirty}")
-    print(f"settings drift: {settings_outcome.status} (destructive={settings_outcome.destructive})")
+    # File drift uses contents:write (granted). Settings drift READS branch protection /
+    # rulesets, which the platform GITHUB_TOKEN cannot do (it has no administration scope).
+    # Without an operator-supplied admin `settings-token`, skip it — failing CLOSED (never
+    # computing from a falsely-unprotected read, §2.7/§5.6) instead of crashing the run.
+    try:
+        settings_outcome = run_settings_drift(
+            platform,
+            repo=slug,
+            desired_settings=_desired_settings(resolved),
+            issue_key=SETTINGS_DRIFT_ISSUE_KEY,
+        )
+        print(f"settings drift: {settings_outcome.status} (destructive={settings_outcome.destructive})")
+    except GitHubAPIError as exc:
+        print(
+            f"settings drift: skipped — could not read protected settings ({exc}); "
+            "supply an admin-capable `settings-token` secret to enable it (§5.6).",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -1137,7 +1208,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Adopt a local repo: write .github/aviato.yaml and scaffold managed files.",
     )
-    onboard.add_argument("--pin", default="0", help="Library version pin to record in the declaration.")
+    onboard.add_argument(
+        "--pin",
+        default=None,
+        help="Library version pin (X.Y.Z or N) to record. Defaults to floating major 0 for a "
+        "fresh adopt; for an already-adopted repo the existing pin is preserved (use `aviato "
+        "repin` to move it, §5.12).",
+    )
     onboard.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     onboard.add_argument(
         "--migrate-profile", action="store_true", help="Allow changing an already-declared profile (§5.2)."
@@ -1176,6 +1253,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--fix",
         action="store_true",
         help="For each repo with file drift, open a managed-file proposal (§5.11 layered on §5.5).",
+    )
+    scan.add_argument(
+        "--override-version-pin",
+        action="store_true",
+        help="Proceed with --fix even if this tool is incompatible with a repo's version pin (§2.6).",
     )
     scan.set_defaults(func=cmd_scan)
 

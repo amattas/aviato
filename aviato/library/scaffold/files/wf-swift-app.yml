@@ -27,7 +27,7 @@ jobs:
       scheme: "{{ product-scheme }}"
       workspace: "{{ product-scheme }}.xcworkspace"
       destination: "platform=iOS Simulator,name=iPhone 16"
-      install-command: "brew install swiftformat swiftlint"
+      install-command: "brew install swift-format swiftlint"
       run-install: true
 
   security:
