@@ -350,6 +350,9 @@ def test_read_settings_composes_gh_responses(monkeypatch: pytest.MonkeyPatch) ->
         lambda repo, branch: [{"type": "pull_request", "parameters": {"required_approving_review_count": 1}}],
     )
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    # Mock the security read too, or read_settings makes a real `gh api` call (which
+    # fails in CI with no GH_TOKEN); this test must stay fully hermetic.
+    monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
 
     settings = GitHubPlatform().read_settings("o/r")
     # flat shape (matches the desired default_branch map the CLI passes)
