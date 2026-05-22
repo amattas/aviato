@@ -16,7 +16,7 @@ python3 -m pytest tests/test_rulesets.py::test_rendered_tag_ruleset_uses_policy_
 ruff check . && ruff format --check .
 ```
 
-Note: `validate.sh` runs pytest with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`. Tests must not depend on third-party pytest plugins. `shellcheck` and `actionlint` are skipped (not failed) when not installed locally; CI installs them.
+Note: `validate.sh` runs pytest with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`. Tests must not depend on third-party pytest plugins. `ruff`/`pytest`/`shellcheck`/`actionlint` are skipped when not installed locally, but the run ends with a **loud banner** listing every skipped tool (because CI runs them — a green local gate with skips does **not** mean CI is green). Run with `AVIATO_STRICT_TOOLS=1 ./scripts/validate.sh` for CI-parity: a missing tool then fails the gate. CI installs all of them.
 
 CLI surface (entrypoint `aviato.cli:main`):
 
