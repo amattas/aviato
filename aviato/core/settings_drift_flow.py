@@ -77,14 +77,17 @@ def run_settings_drift(
     current_id = diff_identity(diff)
     consent_voided = False
     if issue is not None and issue.consent_diff_id is not None and issue.consent_diff_id != current_id:
-        # Advisory only: we comment that the prior consent no longer applies, but we do
-        # NOT (and cannot, via the port) clear the stored consent record. The authoritative
-        # gate is §5.7's apply-time recompute, which refuses because the stored consent_diff_id
-        # no longer equals the recomputed current diff id — so a stale consent cannot apply.
+        # The reported diff changed since consent was granted: VOID the prior consent by
+        # removing its grant record, not merely commenting (§5.6:633/§6.4). A comment alone
+        # would leave the old grant label in place, so if drift later oscillates BACK to the
+        # old diff id the stale label would re-authorize without fresh human consent. Revoke
+        # first (it fails loud on a real error), then comment. The §5.7 apply-time recompute
+        # remains the authoritative gate; this closes the oscillation gap at report time.
+        platform.revoke_consent(repo, issue_key, issue.consent_diff_id)
         platform.comment_issue(
             repo,
             issue_key,
-            "Reported diff changed since consent was granted; prior consent no longer applies "
+            "Reported diff changed since consent was granted; the prior consent has been voided "
             "(re-consent on the current diff to proceed).",
         )
         consent_voided = True

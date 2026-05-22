@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 from aviato.core.ports import Issue
@@ -54,6 +55,22 @@ class FakePlatform:
         if self.issues_disabled or self.fail_comment:
             raise RuntimeError("issue channel unavailable")
         self.calls.append(("comment_issue", (repo, key, body)))
+
+    def revoke_consent(self, repo: str, key: str, diff_id: str) -> None:
+        if self.issues_disabled:
+            raise RuntimeError("issue channel unavailable")
+        self.calls.append(("revoke_consent", (repo, key, diff_id)))
+        # Reflect the void in the in-memory issue so a later get_issue sees no stale consent
+        # (the §8.3 oscillation guard the real binding enforces by removing the label).
+        issue = self.issues.get(key)
+        if issue is not None and issue.consent_diff_id == diff_id:
+            self.issues[key] = dataclasses.replace(
+                issue,
+                consent_diff_id=None,
+                consent_actor_type=None,
+                consent_role=None,
+                consent_role_lookup_ok=False,
+            )
 
     def open_or_update_proposal(self, repo: str, branch: str, title: str, files: dict[str, str], body: str) -> str:
         self.calls.append(("open_or_update_proposal", (repo, branch, title, files, body)))

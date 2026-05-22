@@ -25,6 +25,32 @@ def test_local_and_reusable_refs_skipped() -> None:
     assert unpinned_third_party_uses(text) == []
 
 
+def test_non_library_reusable_workflow_mutable_ref_is_flagged() -> None:
+    # §11.3: only the consumer's own Library reference is the sanctioned mutable ref; a
+    # THIRD-PARTY reusable workflow must be digest-pinned, not exempted as "a reusable ref".
+    text = "    uses: other-org/repo/.github/workflows/build.yml@main\n"
+    assert unpinned_third_party_uses(text) == ["other-org/repo/.github/workflows/build.yml@main"]
+
+
+def test_non_library_reusable_workflow_sha_is_ok() -> None:
+    text = "    uses: other-org/repo/.github/workflows/build.yml@" + "a" * 40 + "\n"
+    assert unpinned_third_party_uses(text) == []
+
+
+def test_flags_non_exact_pip_specs() -> None:
+    # §11.3: a pin must be EXACT. A range/compatible/wildcard spec is still floating.
+    for spec in ("foo>=1.0", "foo~=1.0", "foo<=2", "foo!=1.5", "foo==1.*"):
+        text = f"          python -m pip install --quiet {spec}\n"
+        out = unpinned_tool_invocations(text)
+        assert out == [f"pip-installed tool not pinned to an exact version: {spec}"], spec
+
+
+def test_exact_pip_pin_is_ok() -> None:
+    for spec in ("foo==1.2.3", "foo===1.2.3", "pkg[extra]==2.0.0"):
+        text = f"          python -m pip install {spec}\n"
+        assert unpinned_tool_invocations(text) == [], spec
+
+
 def test_flags_docker_run_image_without_digest() -> None:
     text = "          docker run --rm -i hadolint/hadolint hadolint -\n"
     assert unpinned_tool_invocations(text) == ["docker run image not digest-pinned: hadolint/hadolint"]

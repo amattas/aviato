@@ -52,7 +52,20 @@ def test_non_mapping_is_error(tmp_path: Path) -> None:
 
 
 def test_round_trip(tmp_path: Path) -> None:
-    decl = Declaration(profile="p", version="v2", docs=True, variables={"a": "b"}, overrides={"settings": {}})
+    decl = Declaration(profile="p", version="2", docs=True, variables={"a": "b"}, overrides={"settings": {}})
     path = tmp_path / "aviato.yaml"
     dump_declaration(decl, path)
     assert load_declaration(path) == decl
+
+
+def test_legacy_v_prefix_is_tolerated_on_read_but_never_emitted(tmp_path: Path) -> None:
+    # §6.1: bare SemVer is canonical; a legacy leading `v` is read but stripped on emit, so the
+    # declaration type self-enforces "never emitted" no matter how the caller built it.
+    import yaml
+
+    from aviato.core.declaration import declaration_to_yaml
+
+    assert yaml.safe_load(declaration_to_yaml(Declaration(profile="p", version="v2")))["version"] == "2"
+    assert yaml.safe_load(declaration_to_yaml(Declaration(profile="p", version="v1.2.3")))["version"] == "1.2.3"
+    # A non-pin string (no digit after v) is left untouched — only the legacy pin form is stripped.
+    assert yaml.safe_load(declaration_to_yaml(Declaration(profile="p", version="vegetable")))["version"] == "vegetable"

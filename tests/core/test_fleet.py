@@ -70,3 +70,29 @@ def test_scan_is_read_only(tmp_path: Path) -> None:
     scan_fleet([consumer], Registry(MODULE_SOURCE_ROOT))
     # scanning never materializes files
     assert not (consumer / "ruff.toml").exists()
+
+
+def test_scan_skips_archived_repo_unless_included(tmp_path: Path) -> None:
+    # §5.11: archived repos are skipped by default and only diagnosed with --include-archived.
+    consumer = tmp_path / "c"
+    _make_consumer(consumer, scaffold_all=True)
+
+    archived = scan_fleet([consumer], Registry(MODULE_SOURCE_ROOT), archived_probe=lambda root: True)
+    assert archived[0].skipped_archived is True
+    assert archived[0].statuses == {}  # not diagnosed
+
+    included = scan_fleet(
+        [consumer], Registry(MODULE_SOURCE_ROOT), include_archived=True, archived_probe=lambda root: True
+    )
+    assert included[0].skipped_archived is False
+    assert included[0].statuses  # diagnosed normally
+
+
+def test_scan_unknown_archived_state_is_not_skipped(tmp_path: Path) -> None:
+    # §5.11 fail-safe: an ambiguous archived probe (None) must NOT silently drop the repo from
+    # the operator's read-only scan — it is diagnosed as usual.
+    consumer = tmp_path / "c"
+    _make_consumer(consumer, scaffold_all=True)
+    scans = scan_fleet([consumer], Registry(MODULE_SOURCE_ROOT), archived_probe=lambda root: None)
+    assert scans[0].skipped_archived is False
+    assert scans[0].statuses

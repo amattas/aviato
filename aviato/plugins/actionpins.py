@@ -6,13 +6,20 @@ from pathlib import Path
 # §11.3: third-party actions/tools must be pinned by commit digest (40-hex SHA).
 # GitHub's own namespaces are first-party and exempt.
 _FIRST_PARTY_OWNERS = {"actions", "github"}
+# The consumer's pinned Library reference is the ONE sanctioned mutable ref (a floating
+# major advances on every release, §6.1/§11.3); its own reusable workflows are exempt.
+# Any OTHER org's reusable workflow is third-party and must be digest-pinned like an action
+# — a blanket `/.github/workflows/` exemption would let `other-org/repo/...@main` through.
+_LIBRARY_SLUG = "amattas/aviato"
+_LIBRARY_REUSABLE_PREFIX = f"{_LIBRARY_SLUG}/.github/workflows/"
 _USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)", re.MULTILINE)
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _is_third_party(action_ref: str) -> bool:
-    # Skip local (./...) and reusable-workflow (contains .github/workflows) references.
-    if action_ref.startswith("./") or "/.github/workflows/" in action_ref:
+    # Local (``./...``) refs and the consumer's own Library reference are exempt; every other
+    # owner — including a non-Library reusable-workflow ref — is third-party (§11.3).
+    if action_ref.startswith("./") or action_ref.startswith(_LIBRARY_REUSABLE_PREFIX):
         return False
     owner = action_ref.split("/", 1)[0]
     return owner not in _FIRST_PARTY_OWNERS
@@ -40,19 +47,24 @@ _FETCH_PIPE_RE = re.compile(r"\b(?:curl|wget)\b[^\n|]*\|[^\n]*\b(?:sh|bash|tar)\
 # must be pinned to an EXACT version, never a floating latest. Match a `pip install`
 # invocation and inspect the package tokens after it.
 _PIP_INSTALL_RE = re.compile(r"\bpip[0-9]*\s+install\b(?P<rest>[^\n]*)")
-# A bare PyPI package name (optionally with an extras spec), e.g. `build`, `pydoc-markdown`,
-# `pkg[extra]` — but NOT a version-pinned, path, VCS, wheel, or variable-bearing token.
+# The package-name portion of a pip token (optionally with an extras spec), e.g. `build`,
+# `pydoc-markdown`, `pkg[extra]`. Used after stripping any version specifier to identify a
+# real index package (vs a path/URL/var) so a NON-exact spec can still be reported by name.
 _PIP_PKG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]*(?:\[[A-Za-z0-9_,.-]+\])?$")
+# Any PEP 440 version operator; used to split a token into its name and to detect a spec.
+_PIP_VERSION_OP_RE = re.compile(r"(===|==|>=|<=|~=|!=|<|>)")
 
 
 def _unpinned_pip_packages(rest: str) -> list[str]:
-    """Floating (un-versioned) PyPI package tokens in a `pip install` argument list.
+    """PyPI package tokens in a `pip install` arg list that are NOT pinned to an exact version.
 
-    Excludes everything that is NOT an index-package-by-name-without-version: option
-    flags, the local project (`.`/`.[extra]`/`-e <path>`), requirements files (`-r ...`),
-    VCS installs (`git+...`), built wheels (`*.whl`), and any token carrying a version
-    specifier (`==`, `>=`, `~=`, …) or a shell variable (`${...}`). Conservative by design:
-    when in doubt it does NOT flag, so a legitimate local/locked install never trips it.
+    §11.3 requires an **exact** version (`name==X.Y.Z`), never a floating latest. So a bare
+    name (`build`) AND a non-exact specifier (`foo>=1.0`, `foo~=1.0`, the wildcard `foo==1.*`)
+    are all flagged; only a concrete `==`/`===` pin with no wildcard is accepted. Excludes
+    things that are not a plain index package: option flags, the local project
+    (`.`/`.[extra]`/`-e <path>`), requirements/constraints files, VCS (`git+…`), built wheels
+    (`*.whl`), URLs, and shell-variable tokens (`${…}`) — conservative, so a legitimate
+    local/VCS install never trips it.
     """
     tokens = rest.split()
     flagged: list[str] = []
@@ -67,12 +79,17 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
             continue
         if stripped.startswith("-"):  # any other flag (-e, --quiet, --upgrade, …)
             continue
-        # Already pinned, or not a plain index package: version spec, path, VCS, wheel, var.
-        if any(marker in stripped for marker in ("==", ">=", "<=", "~=", "!=", "@", "/", "$", "*", ":")):
+        # Not a plain index package: path, VCS/URL, wheel, or shell variable.
+        if any(marker in stripped for marker in ("@", "/", "$", ":")) or stripped.endswith(".whl"):
             continue
         if stripped in (".", "") or stripped.startswith("."):
             continue
-        if _PIP_PKG_RE.match(stripped):
+        # An EXACT pin (`name==X.Y.Z` / `===`) with no wildcard is the only acceptable form.
+        if ("==" in stripped or "===" in stripped) and "*" not in stripped:
+            continue
+        # Bare name or a non-exact specifier (>=, ~=, <=, !=, ==1.*) → not exactly pinned.
+        name = _PIP_VERSION_OP_RE.split(stripped, 1)[0]
+        if _PIP_PKG_RE.match(name):
             flagged.append(stripped)
     return flagged
 

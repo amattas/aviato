@@ -79,7 +79,11 @@ jobs:
             ref="$(printf '%s' "${line}" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//; s/[[:space:]#].*$//')"
             case "${ref}" in
               ""|./*|actions/*|github/*) continue ;;
-              */.github/workflows/*) continue ;;
+              # The consumer's pinned Aviato Library reference is the one sanctioned mutable
+              # ref (§6.1/§11.3); a NON-Library reusable workflow is third-party and must be
+              # digest-pinned like an action (a blanket */.github/workflows/* exemption would
+              # let other-org/repo/.github/workflows/x.yml@main through).
+              amattas/aviato/.github/workflows/*) continue ;;
             esac
             case "${ref}" in *@*) ;; *) continue ;; esac
             version="${ref#*@}"

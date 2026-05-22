@@ -31,7 +31,7 @@ from .core.settings_drift_flow import run_settings_drift
 from .core.variables import resolve_variables, writeback_variables
 from .core.version import is_compatible, is_known_version_pin, most_restrictive_recorded, normalize_pin
 from .core.versioning import classify_commits, is_highest, next_version
-from .github import GitHubAPIError, SettingsReadError
+from .github import GitHubAPIError, SettingsReadError, is_archived
 from .github_platform import GitHubPlatform, UnmodeledProtectionError
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from .plugins.version_formats import bump_files
@@ -441,6 +441,9 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved) ->
 
 
 def cmd_onboard(args: argparse.Namespace) -> int:
+    if args.write and args.open_pr:
+        print("--write and --open-pr are mutually exclusive (local adoption vs. a PR proposal)", file=sys.stderr)
+        return 2
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
         resolved = resolve_profile(registry, args.profile, docs=args.docs)
@@ -586,6 +589,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
         print(f"SKIPPED (unmanaged/malformed) {output}")
     for output in result.skipped_modified:
         print(f"SKIPPED (hand-edited — use --force to overwrite) {output}")
+    for output in result.skipped_foreign:
+        print(f"SKIPPED (marker from a different profile or unknown version — use --force to overwrite) {output}")
     return 0
 
 
@@ -596,11 +601,35 @@ def _scan_has_file_drift(scan) -> bool:
     return any(status in _PROPOSABLE for status in scan.statuses.values())
 
 
+def _archived_probe(root: Path) -> bool | None:
+    """Best-effort archived check for §5.11 (the platform-touching part, kept out of core).
+
+    Resolves the repo's remote slug and reads its archived flag. Any failure (no remote,
+    offline, ambiguous read) yields None → treated as not-archived, so a repo is never
+    silently skipped on an unreadable probe.
+    """
+    try:
+        slug = normalize_slug(remote_url(root))
+        if not slug:
+            return None
+        return is_archived(slug)
+    except (GitHubAPIError, CommandError):
+        return None
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
     registry = Registry(MODULE_SOURCE_ROOT)
-    scans = scan_fleet([Path(p) for p in args.paths], registry)
+    scans = scan_fleet(
+        [Path(p) for p in args.paths],
+        registry,
+        include_archived=args.include_archived,
+        archived_probe=_archived_probe,
+    )
     rc = 0
     for scan in scans:
+        if scan.skipped_archived:
+            print(f"{scan.path}\tSKIPPED: archived (pass --include-archived to scan it)")
+            continue
         if scan.error:
             print(f"{scan.path}\tERROR: {scan.error}")
             continue
@@ -747,6 +776,9 @@ def cmd_repin(args: argparse.Namespace) -> int:
 
 def cmd_offboard(args: argparse.Namespace) -> int:
     """Remove a consumer from Aviato management (§5.13)."""
+    if args.write and args.open_pr:
+        print("--write and --open-pr are mutually exclusive (local removal vs. a PR proposal)", file=sys.stderr)
+        return 2
     if args.open_pr:
         return _offboard_proposal(args)
 
@@ -963,7 +995,34 @@ def cmd_provision(args: argparse.Namespace) -> int:
             GitHubPlatform(), repo=slug, desired=desired, private=not args.public, scaffold_push=scaffold_push
         )
     except (GitHubAPIError, CommandError) as exc:
-        print(f"provisioning failed before full protection: {exc}", file=sys.stderr)
+        # Reached only if create_repo itself failed (nothing was created); post-create failures
+        # are returned as a partial outcome below, never raised (§8.7).
+        print(f"provisioning failed before the repository was created: {exc}", file=sys.stderr)
+        return 1
+
+    if not outcome.minimal_applied:
+        # The repo was CREATED but minimal protection could not be applied — it now EXISTS and
+        # is UNPROTECTED. Never leave that silent (§8.7): point at the idempotent recovery.
+        print(
+            f"created {slug}, but FAILED to apply protection ({outcome.reason}). The repository "
+            f"EXISTS and is currently UNPROTECTED (§8.7). Protect it now with:\n"
+            f"    aviato complete-protection <local-clone-of-{slug}>\n"
+            f"(full protection requires a PR, so push the scaffold via one afterward), or delete "
+            f"the repository and retry.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not outcome.scaffolded:
+        # Minimal protection persists (no force-push/deletion), so the repo is NOT unprotected;
+        # the scaffold push failed before full protection. Recoverable, not an exposure.
+        print(
+            f"created {slug}; minimal protection applied; but the scaffold push FAILED "
+            f"({outcome.reason}). Minimal protection (no force-push/deletion) persists, so the "
+            f"repo is not unprotected. Re-run provisioning, or scaffold + push manually then "
+            f"`aviato complete-protection <local-clone-of-{slug}>`.",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"created {slug} (private={not args.public}); minimal protection applied; scaffold pushed.")
@@ -988,6 +1047,13 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
     Low-privilege, propose/report-only — never mutates protected settings. Run on
     a jittered schedule by the consumer-automation workflow.
     """
+    if args.file_only and args.require_settings:
+        # --require-settings gates the settings-read skip; with --file-only there is no settings
+        # phase to gate, so the combination is a silent no-op. Reject it rather than mislead a CI
+        # gate into thinking it enforces a settings read (§5.6).
+        print("--require-settings has no effect with --file-only (there is no settings drift to gate)", file=sys.stderr)
+        return 2
+
     root = Path(args.path).resolve()
     declaration_path = root / ".github" / "aviato.yaml"
     if not declaration_path.is_file():
@@ -1233,6 +1299,13 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         # report applied — surface the reason and exit non-zero (§2.4/§5.7).
         print(f"reconcile aborted (fail-closed): {exc}", file=sys.stderr)
         return 1
+    except CommandError as exc:
+        # A raw gh/git write failure during apply (e.g. the wholesale branch-protection PUT)
+        # must surface as a clean, fail-closed operator error — not an uncaught traceback. The
+        # apply may have PARTIALLY landed; run_reconcile has already left a best-effort audit
+        # comment on the issue (§5.7), so report and exit non-zero rather than crash.
+        print(f"reconcile failed during apply (a change may have partially landed): {exc}", file=sys.stderr)
+        return 1
 
     # Render the APPLY-TIME recomputed diff (the read that was actually acted on, §2.8),
     # not an earlier preview — so the operator confirms/sees the same content.
@@ -1345,6 +1418,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--override-version-pin",
         action="store_true",
         help="Proceed with --fix even if this tool is incompatible with a repo's version pin (§2.6).",
+    )
+    scan.add_argument(
+        "--include-archived",
+        action="store_true",
+        help="Also scan archived repositories (skipped by default, §5.11).",
     )
     scan.set_defaults(func=cmd_scan)
 

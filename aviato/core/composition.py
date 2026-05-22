@@ -14,6 +14,7 @@ from .model import (
     WorkflowsBundle,
 )
 from .registry import Registry
+from .settingsdrift import weakens
 
 _VARIABLE_TYPES = {"string", "boolean", "enum"}
 
@@ -127,6 +128,11 @@ def resolve_profile(
 
     set_layers: list[SettingsBundle] = _chain(registry.settings_bundle, profile.settings)
     settings = _resolve_settings(set_layers)
+    # Capture the always-on security baseline BEFORE consumer overrides apply (§2.13).
+    # Which toggles are baseline is DATA (the settings bundle's ``security`` block), so
+    # the core names no specific scanner; it only enforces that the composed baseline
+    # cannot be silently omitted or weakened by an override below.
+    baseline_security = dict(settings.get("security", {}))
 
     pipeline_override = overrides.get("pipelines")
     if pipeline_override is not None:
@@ -145,6 +151,22 @@ def resolve_profile(
         if not isinstance(settings_override, dict):
             raise CompositionError("settings override must be a mapping (§4.2)")
         settings = deep_merge(settings, settings_override)
+        # §2.13: the security baseline is always-on — "there is no composition that
+        # silently omits it." An override may strengthen a toggle but may never remove
+        # or weaken one (true→false, etc.); doing so is a hard composition error, the
+        # settings analogue of the always_on_pipelines guard below.
+        resolved_security = settings.get("security", {})
+        weakened = [
+            key
+            for key, base_value in baseline_security.items()
+            if key not in resolved_security or weakens(base_value, resolved_security[key])
+        ]
+        if weakened:
+            raise CompositionError(
+                f"consumer override weakens or removes always-on security baseline "
+                f"setting(s) {sorted(weakened)} (§2.13); the security baseline cannot be "
+                "disabled or weakened via a profile or consumer override"
+            )
 
     templates = tuple(registry.template_module(ref) for ref in template_refs)
 

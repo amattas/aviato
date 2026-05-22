@@ -52,7 +52,14 @@ def test_provision_partial_outcome_reports_recovery(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(
         cli,
         "provision_repo",
-        lambda *a, **k: ProvisionOutcome(full_applied=False, partial=True, reason="protection rejected"),
+        lambda *a, **k: ProvisionOutcome(
+            created=True,
+            minimal_applied=True,
+            scaffolded=True,
+            full_applied=False,
+            partial=True,
+            reason="protection rejected",
+        ),
     )
     rc = main(
         [
@@ -69,12 +76,33 @@ def test_provision_partial_outcome_reports_recovery(monkeypatch: pytest.MonkeyPa
     assert rc == 1  # partial provisioning is a non-zero exit pointing at complete-protection
 
 
+def test_provision_exposed_state_reports_unprotected_and_recovery(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # §8.7: created but minimal protection failed → the repo EXISTS and is UNPROTECTED; the CLI
+    # must say so (not the benign "partial" message) and point at complete-protection, exit 1.
+    monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: object())
+    monkeypatch.setattr(
+        cli,
+        "provision_repo",
+        lambda *a, **k: ProvisionOutcome(created=True, minimal_applied=False, partial=True, reason="403"),
+    )
+    rc = main(
+        ["provision", "o/r", "--profile", "python-library", "--var", "distribution-name=a", "--var", "import-name=a"]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "UNPROTECTED" in err and "complete-protection" in err
+
+
 def test_provision_success_exit_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: object())
     monkeypatch.setattr(
         cli,
         "provision_repo",
-        lambda *a, **k: ProvisionOutcome(full_applied=True, partial=False),
+        lambda *a, **k: ProvisionOutcome(
+            created=True, minimal_applied=True, scaffolded=True, full_applied=True, partial=False
+        ),
     )
     rc = main(
         [

@@ -37,11 +37,23 @@ def load_declaration(path: Path) -> Declaration:
     )
 
 
+def _canonical_version(value: str) -> str:
+    """Strip a legacy leading ``v`` so it is NEVER emitted (§6.1).
+
+    Bare SemVer (``X.Y.Z`` / floating ``X``) is canonical; a leading ``v`` is tolerated on
+    read but stripped on the way out, so the declaration type self-enforces the §6.1 "never
+    emitted" invariant regardless of how a caller constructed it (not only via the CLI's
+    normalize_pin). Only a ``v`` directly preceding a digit is the legacy pin form; anything
+    else is left untouched.
+    """
+    return value[1:] if len(value) > 1 and value[0] == "v" and value[1].isdigit() else value
+
+
 def declaration_to_yaml(declaration: Declaration) -> str:
     """Serialize a declaration to its ``.github/aviato.yaml`` text (§6.1)."""
     payload: dict[str, Any] = {
         "profile": declaration.profile,
-        "version": declaration.version,
+        "version": _canonical_version(declaration.version),
         "docs": declaration.docs,
     }
     if declaration.variables:

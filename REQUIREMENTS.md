@@ -376,6 +376,16 @@ should have kept.
   - **Same-output-path collisions** in the scaffold set are resolved by overlay
     order (§5.3): the later/overriding source wins; ties at the same level are an
     error, not a silent pick.
+    **Day-zero behavior (conservative):** the implementation treats **every**
+    same-output-path collision in the applicable set as a **hard error**
+    (`onboarding.check_output_collisions`), not just same-level ties. Cross-level
+    overlay *resolution* (a descendant template deliberately overriding an ancestor's
+    output) is **deferred**: silently letting a later source win is exactly the §8.1
+    "child silently loses an inherited entry" failure mode, so day-zero fails loud
+    rather than resolve. Day-zero profiles compose **no** two applicable templates at
+    one path (variant-exclusive templates are filtered by `when` before this check),
+    so the resolution branch is never legitimately exercised; implementing an explicit,
+    reviewable cross-level override is a post-day-zero refinement.
 
 ```mermaid
 flowchart TD
@@ -1317,7 +1327,11 @@ File-drift proposes via a pull request, which requires **pushing an identity-key
 proposal branch** — hence `contents: write`, not `contents: read` (it never mutates
 the default branch directly; the PR remains the human gate). The two automations run
 as **separate steps under separate tokens** (§11.2): file-drift uses the platform
-token; settings-drift uses an operator-supplied admin token scoped to its step alone.
+token; settings-drift uses **two** tokens in distinct roles — the ambient platform token
+for its tracking-issue **writes** (open/comment/revoke), and an operator-supplied admin
+**read** token, scoped to the branch-protection/ruleset **reads** alone, for the reads the
+platform token cannot perform. The admin token mutates nothing (read-only *in use*),
+preserving the §11.2/§14 "no write-capable stored secret" posture; both are confined to that step.
 
 **Deployment:**
 

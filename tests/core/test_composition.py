@@ -38,6 +38,32 @@ def test_always_on_security_baseline_cannot_be_composed_away() -> None:
         resolve_profile(registry, "python-library", overrides={"pipelines": {"remove": ["security-baseline"]}})
 
 
+def test_security_baseline_toggles_cannot_be_weakened_by_override() -> None:
+    # §2.13: the baseline is not just the always-on PIPELINE — the repo security toggles
+    # (secret scanning, push protection, dependency scanning) are desired-state in the
+    # settings baseline, and a consumer override must not be able to silently disable
+    # them via the settings deep-merge. Each disable is a hard composition error.
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    baseline = resolve_profile(registry, "python-library").settings.get("security", {})
+    assert baseline, "expected a non-empty security baseline to protect"
+    for key in baseline:
+        with pytest.raises(CompositionError):
+            resolve_profile(registry, "python-library", overrides={"settings": {"security": {key: False}}})
+
+
+def test_security_baseline_override_may_strengthen_or_leave_unchanged() -> None:
+    # A no-op or strengthening override is allowed; only weakening/removal is refused (§2.13).
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    baseline = resolve_profile(registry, "python-library").settings.get("security", {})
+    same = {key: value for key, value in baseline.items()}  # re-asserting the same values
+    resolved = resolve_profile(registry, "python-library", overrides={"settings": {"security": same}})
+    assert resolved.settings["security"] == baseline
+
+
 def test_variable_spec_rejects_unknown_type() -> None:
     # §6.6: a typo'd type (e.g. "bool") must fail loud, never silently render uncoerced.
     with pytest.raises(CompositionError):

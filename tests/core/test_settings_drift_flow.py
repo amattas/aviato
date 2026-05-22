@@ -50,7 +50,24 @@ def test_changed_diff_voids_prior_consent() -> None:
     )
     outcome = run_settings_drift(platform, repo="o/r", desired_settings={"required_reviews": 2}, issue_key="k")
     assert outcome.consent_voided is True
+    # §8.3: the stale grant must be actually REVOKED (label removed), not merely commented —
+    # otherwise drift oscillating back to the old diff id would re-authorize on the stale label.
+    assert "revoke_consent" in platform.call_names()
     assert "comment_issue" in platform.call_names()
+    revoke = next(args for name, args in platform.calls if name == "revoke_consent")
+    assert revoke == ("o/r", "k", "STALE")
+
+
+def test_consent_oscillation_back_to_old_diff_requires_fresh_consent() -> None:
+    # §8.3/§6.4: after drift changes away from a consented diff and the consent is voided,
+    # the in-memory issue carries no consent — so even if drift later returns to the original
+    # diff, get_issue reports no active consent and reconcile would need a fresh grant.
+    platform = FakePlatform(
+        settings={"required_reviews": 1},
+        issues={"k": Issue(key="k", open=True, consent_diff_id="STALE")},
+    )
+    run_settings_drift(platform, repo="o/r", desired_settings={"required_reviews": 2}, issue_key="k")
+    assert platform.get_issue("o/r", "k").consent_diff_id is None
 
 
 def test_issue_channel_unavailable_fails_loud() -> None:

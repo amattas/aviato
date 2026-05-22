@@ -346,13 +346,17 @@ class GitHubPlatform:
         # fail closed by SKIPPING settings drift (§5.6) — distinct from an issue-channel
         # failure, which must fail loud. We never compute a diff from a falsely-
         # "unprotected" read (§2.7): the gh_* readers already fail closed on ambiguity.
+        # All four reads run under the read-only admin token (§5.6/§11.2): the issue writes
+        # this automation also performs (open/comment/revoke) stay on the ambient platform
+        # token, so the stored admin secret is read-only IN USE and never mutates anything.
         try:
-            branch = github.default_branch(repo)
-            if not branch:
-                return {}
-            rules = github.active_branch_rules(repo, branch)
-            protection = github.classic_branch_protection(repo, branch)
-            security = map_security_settings(github.repo_security_settings(repo))
+            with github.settings_read_token_scope():
+                branch = github.default_branch(repo)
+                if not branch:
+                    return {}
+                rules = github.active_branch_rules(repo, branch)
+                protection = github.classic_branch_protection(repo, branch)
+                security = map_security_settings(github.repo_security_settings(repo))
         except github.GitHubAPIError as exc:
             raise github.SettingsReadError(exc.endpoint, exc.returncode, exc.stderr) from exc
         # Flat merge: branch-protection fields + repo security toggles, matching the
@@ -425,6 +429,13 @@ class GitHubPlatform:
         return issue_channel, heartbeat
 
     def _actor_role(self, repo: str, login: str | None) -> tuple[str | None, bool]:
+        # §2.7/§6.4 — DELIBERATE: the granter's role is read at apply/get_issue time, not
+        # snapshotted at grant time. This is consistent with §2.8 apply-time recompute and fails
+        # CLOSED on the dangerous direction (a granter demoted since their grant is now denied).
+        # The opposite (a non-admin who grants, then is promoted before reconcile) would be
+        # allowed — a bounded TOCTOU widening accepted under the single-operator day-zero scope
+        # (§3.4): the same human both grants and applies, so a self-promotion-then-apply is not a
+        # privilege-escalation across actors. Revisit if multi-operator consent is added.
         if not login:
             return None, False
         response = github.gh_json(
@@ -460,6 +471,26 @@ class GitHubPlatform:
         number = chosen.get("number") if chosen else None
         if number is not None:
             self._gh_input(["--method", "POST", f"repos/{repo}/issues/{number}/comments"], {"body": body})
+
+    def revoke_consent(self, repo: str, key: str, diff_id: str) -> None:
+        """Remove the consent-grant label bound to ``diff_id`` from the tracking issue (§5.6/§6.4).
+
+        Called when reported settings drift changes: the prior consent must be VOIDED, not
+        merely commented, so a later return to the old diff id cannot re-authorize on a
+        stale label (§8.3). Fail-closed: an auth/5xx on the issue read or the label DELETE
+        raises (the scheduled run then fails loud, §5.6), while a genuine 404 — the label is
+        already absent — is the desired end state and tolerated.
+        """
+        existing = github.gh_json_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
+        chosen = _select_issue(existing, repo, key)
+        number = chosen.get("number") if chosen else None
+        if number is None:
+            return
+        label = f"{CONSENT_LABEL_PREFIX}{diff_id}"
+        endpoint = f"repos/{repo}/issues/{number}/labels/{_seg(label)}"
+        result = github.run(["gh", "api", "--method", "DELETE", endpoint], check=False)
+        if result.returncode != 0 and "http 404" not in result.stderr.lower():
+            raise github.GitHubAPIError(endpoint, result.returncode, result.stderr)
 
     def open_or_update_proposal(self, repo: str, branch: str, title: str, files: dict[str, str], body: str) -> str:
         """Write the regenerated files onto an identity-keyed branch and open/update a PR (§5.5).

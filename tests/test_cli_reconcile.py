@@ -7,6 +7,7 @@ import pytest
 
 from aviato import __version__, cli
 from aviato.cli import _desired_settings, main
+from aviato.command import CommandError
 from aviato.core.composition import resolve_profile
 from aviato.core.ports import Issue
 from aviato.core.registry import Registry
@@ -122,3 +123,31 @@ def test_reconcile_considers_all_markers_not_just_first(tmp_path: Path, monkeypa
 def test_reconcile_missing_declaration_errors(tmp_path: Path) -> None:
     rc = main(["reconcile", str(tmp_path), "drift", "--confirm", "x"])
     assert rc == 2
+
+
+def test_reconcile_apply_write_failure_is_clean_failure_not_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # §2.4/§5.7: a raw gh/git write failure during apply must surface as a clean fail-closed
+    # operator error (exit 1), not an uncaught CommandError traceback.
+    root = _consumer(tmp_path)
+    live: dict[str, Any] = {}
+    current_id = _current_diff_id(live)
+    issue = Issue(
+        key="drift",
+        open=True,
+        consent_diff_id=current_id,
+        consent_actor_type="User",
+        consent_role="admin",
+        consent_role_lookup_ok=True,
+    )
+    platform = _FakePlatform(settings=live, issue=issue)
+
+    def _boom(repo: str, payload: dict[str, Any]) -> None:
+        raise CommandError(["gh", "api", "--method", "PUT", "..."], 1, "protection PUT rejected")
+
+    platform.apply_settings = _boom  # type: ignore[method-assign]
+    _wire(monkeypatch, platform)
+
+    rc = main(["reconcile", str(root), "drift", "--confirm", current_id])
+    assert rc == 1  # clean fail-closed, not a traceback

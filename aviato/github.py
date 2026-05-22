@@ -1,11 +1,46 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from .command import run
+
+# The settings-drift automation (§5.6) supplies an operator's admin-scoped READ token here
+# so branch-protection/ruleset reads — which the platform's ephemeral workflow token cannot
+# perform — succeed. It is read-only IN USE: scoped (via settings_read_token_scope) to those
+# reads alone, never to the issue WRITES, which run under the ambient platform token. This is
+# what keeps the §11.2/§14 "no write-capable stored secret" posture honest (the stored secret
+# performs no mutation; apply is the separate §5.7 operator-gated path).
+SETTINGS_READ_TOKEN_ENV = "AVIATO_SETTINGS_READ_TOKEN"
+
+
+@contextmanager
+def settings_read_token_scope() -> Iterator[None]:
+    """Point ``gh`` at the admin READ token (if supplied) for the duration of a read block.
+
+    Temporarily sets ``GH_TOKEN`` to ``$AVIATO_SETTINGS_READ_TOKEN`` so the settings reads use
+    the read-only admin token, then restores the prior value so subsequent issue WRITES use the
+    ambient platform token. A no-op when the read token is unset (settings-drift then skips
+    fail-closed on the unreadable admin surface, §5.6).
+    """
+    token = os.environ.get(SETTINGS_READ_TOKEN_ENV)
+    if not token:
+        yield
+        return
+    previous = os.environ.get("GH_TOKEN")
+    os.environ["GH_TOKEN"] = token
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("GH_TOKEN", None)
+        else:
+            os.environ["GH_TOKEN"] = previous
 
 
 class GitHubAPIError(RuntimeError):
@@ -94,6 +129,19 @@ def default_branch(slug: str) -> str:
         return ""
     value = response.get("default_branch")
     return value if isinstance(value, str) else ""
+
+
+def is_archived(slug: str) -> bool | None:
+    """Whether the repository is archived (§5.11 fleet-scan skip), or None if unreadable.
+
+    None — not False — on an ambiguous/absent read, so the fleet scan never silently SKIPS a
+    repo it could not classify (skipping would hide it from the operator's read-only scan). A
+    genuine 404 (repo gone) also reads as None.
+    """
+    repo = gh_json_optional(f"repos/{slug}", default=None)
+    if not isinstance(repo, dict) or "archived" not in repo:
+        return None
+    return bool(repo["archived"])
 
 
 def repo_security_settings(slug: str) -> dict[str, Any]:

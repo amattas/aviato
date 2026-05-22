@@ -88,6 +88,20 @@ def _classify_value_change(desired: Any, live: Any) -> str:
     return DESTRUCTIVE
 
 
+def weakens(baseline_value: Any, proposed_value: Any) -> bool:
+    """True if ``proposed_value`` weakens ``baseline_value`` (a destructive change).
+
+    Reuses the §5.6 additive/destructive classifier so the §2.13 always-on security
+    floor (composition.py) and settings drift agree on what "weaker protection"
+    means. An unchanged value never weakens; any change that the classifier deems
+    destructive (lower number, true→false, a non-superset list, or an ambiguous
+    type change) does.
+    """
+    if proposed_value == baseline_value:
+        return False
+    return _classify_value_change(desired=proposed_value, live=baseline_value) == DESTRUCTIVE
+
+
 def classify_settings(*, desired: dict[str, Any], live: dict[str, Any]) -> SettingsDiff:
     """Diff desired vs live protected settings, classifying each change (§5.6).
 

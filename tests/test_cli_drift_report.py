@@ -181,3 +181,12 @@ def test_drift_report_fails_loud_when_issue_channel_unavailable(
     assert "issue" in captured.err.lower()
     assert "skipped" not in captured.err  # must not masquerade as a settings-read skip
     assert "apply_settings" not in fake.call_names()  # never mutates
+
+
+def test_drift_report_rejects_file_only_with_require_settings(tmp_path) -> None:
+    # §5.6: --require-settings is a silent no-op under --file-only; reject the contradiction
+    # so a CI gate is not misled into thinking it enforces a settings read.
+    from aviato.cli import main
+
+    rc = main(["drift-report", str(tmp_path), "--file-only", "--require-settings"])
+    assert rc == 2

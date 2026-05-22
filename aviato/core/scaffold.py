@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .marker import content_hash, parse_marker_from_text, render_marker, strip_marker_from_text
+from .version import is_known_version_pin
 
 SIDECAR_PATH = ".github/aviato.seed.json"
 
@@ -27,6 +28,10 @@ class ScaffoldResult:
     unchanged: list[str] = field(default_factory=list)
     skipped_unmanaged: list[str] = field(default_factory=list)
     skipped_modified: list[str] = field(default_factory=list)
+    # Marker present and well-formed, but not a trustworthy managed artifact under THIS
+    # declaration: stamped for a different profile, or recording an unknown version. Mirrors
+    # diagnosis dirty-drift — never silently regenerated (§5.3/§5.4 one posture).
+    skipped_foreign: list[str] = field(default_factory=list)
     seeded: list[str] = field(default_factory=list)
 
 
@@ -119,6 +124,20 @@ def scaffold(
                     result.skipped_unmanaged.append(output)
                     continue
             else:
+                if not force and marker.profile != profile:
+                    # Marker stamped for a DIFFERENT profile (one profile per repo, §3): not a
+                    # trustworthy managed artifact under this declaration. Mirror diagnosis
+                    # dirty-drift — never silently regenerate; require human review or --force
+                    # (§5.3/§5.4 one posture). Checked before the body compare so a foreign-profile
+                    # marker is never reported "unchanged" either.
+                    result.skipped_foreign.append(output)
+                    continue
+                if not force and not is_known_version_pin(marker.version):
+                    # Recorded version unknown/unparseable → version compatibility cannot be
+                    # established, so the file is never silently regenerated over (mirrors
+                    # diagnosis dirty-drift, §5.4). Defense in depth behind the CLI §2.6 gate.
+                    result.skipped_foreign.append(output)
+                    continue
                 body_hash = content_hash(strip_marker_from_text(existing))
                 # Body correct and marker hash current → no-op (marker version excluded,
                 # so a version-only move is not churn; matches diagnosis "clean", §5.5).

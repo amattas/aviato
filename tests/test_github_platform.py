@@ -632,3 +632,17 @@ def test_apply_settings_issues_put_with_payload(monkeypatch: pytest.MonkeyPatch)
     assert "required_reviews" not in written["payload"]
     assert written["payload"]["required_pull_request_reviews"]["required_approving_review_count"] == 2
     assert written["payload"]["allow_force_pushes"] is False
+
+
+def test_read_settings_raises_settings_read_error_on_admin_scope_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    # §5.6/§2.7 (the G1 gap): a 403 from the admin-gated branch-rules read must surface as
+    # SettingsReadError — the subclass the CLI distinguishes to SKIP fail-closed — never as an
+    # empty/"unprotected" read. A regression that returned {} here would pass every other test.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+
+    def _forbidden(repo: str, branch: str) -> list:
+        raise github.GitHubAPIError(f"repos/{repo}/rules/branches/{branch}", 1, "HTTP 403")
+
+    monkeypatch.setattr(github, "active_branch_rules", _forbidden)
+    with pytest.raises(github.SettingsReadError):
+        GitHubPlatform().read_settings("o/r")

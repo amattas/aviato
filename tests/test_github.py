@@ -101,3 +101,26 @@ def test_repository_rulesets_follows_pagination(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(github, "run", fake_run)
     names = [r["name"] for r in github.repository_rulesets("o/r")]
     assert "Common: protect default branch" in names
+
+
+def test_settings_read_token_scope_overrides_then_restores_gh_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    # §5.6/§11.2: inside the scope gh reads use the admin READ token; afterwards GH_TOKEN is
+    # restored so the issue WRITES run under the ambient platform token (the admin token mutates
+    # nothing — it is read-only in use).
+    monkeypatch.setenv("GH_TOKEN", "platform-token")
+    monkeypatch.setenv(github.SETTINGS_READ_TOKEN_ENV, "admin-read-token")
+    with github.settings_read_token_scope():
+        assert os.environ["GH_TOKEN"] == "admin-read-token"
+    assert os.environ["GH_TOKEN"] == "platform-token"
+
+
+def test_settings_read_token_scope_is_noop_without_admin_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    monkeypatch.setenv("GH_TOKEN", "platform-token")
+    monkeypatch.delenv(github.SETTINGS_READ_TOKEN_ENV, raising=False)
+    with github.settings_read_token_scope():
+        assert os.environ["GH_TOKEN"] == "platform-token"  # unchanged
+    assert os.environ["GH_TOKEN"] == "platform-token"

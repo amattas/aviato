@@ -65,6 +65,35 @@ def test_refuses_to_overwrite_hand_edited_managed_file_unless_forced(tmp_path: P
     assert "X = 2" in (tmp_path / "cfg.py").read_text()
 
 
+def test_refuses_to_overwrite_marker_from_different_profile_unless_forced(tmp_path: Path) -> None:
+    # §5.3/§5.4 one posture: a valid marker stamped for a DIFFERENT profile is dirty-drift in
+    # diagnosis, so scaffold must NOT silently regenerate it either (one profile per repo, §3).
+    scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="other-profile", version="v1")
+    before = (tmp_path / "cfg.py").read_text()
+
+    # Sync under profile "p" with a CHANGED body — without the guard this would overwrite.
+    result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 2\n", "#", False)], profile="p", version="v1")
+    assert result.skipped_foreign == ["cfg.py"]
+    assert result.written == []
+    assert (tmp_path / "cfg.py").read_text() == before  # foreign-profile file untouched
+
+    forced = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 2\n", "#", False)], profile="p", version="v1", force=True)
+    assert forced.written == ["cfg.py"]
+    assert "profile=p " in (tmp_path / "cfg.py").read_text()
+
+
+def test_refuses_to_overwrite_marker_with_unknown_version_unless_forced(tmp_path: Path) -> None:
+    # §5.4: a marker recording an unknown/unparseable version cannot be reasoned about for
+    # compatibility, so scaffold mirrors diagnosis dirty-drift and never silently regenerates it.
+    (tmp_path / "cfg.py").write_text("# aviato:managed profile=p version=garbage hash=DEADBEEF\nX = 1\n")
+    result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 2\n", "#", False)], profile="p", version="v1")
+    assert result.skipped_foreign == ["cfg.py"]
+    assert "X = 1" in (tmp_path / "cfg.py").read_text()  # not clobbered
+
+    forced = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 2\n", "#", False)], profile="p", version="v1", force=True)
+    assert "cfg.py" in forced.written
+
+
 def test_stale_marker_correct_body_is_regenerated_not_skipped(tmp_path: Path) -> None:
     # body already matches desired but marker hash is stale: scaffold must regenerate
     # (refresh the marker), agreeing with diagnosis "mergeable" rather than skipping

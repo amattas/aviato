@@ -20,10 +20,11 @@ on:
     secrets:
       settings-token:
         description: >-
-          Optional admin-capable token (PAT / GitHub App) used to READ branch
-          protection + rulesets for settings drift. The default GITHUB_TOKEN cannot
-          (no administration scope). Omit it and settings drift is skipped; file
-          drift still runs. Read-only use — settings are never mutated here (§5.6/§5.7).
+          Optional admin-capable READ token (PAT / GitHub App) used ONLY to read branch
+          protection + rulesets for settings drift — the default GITHUB_TOKEN cannot (no
+          administration scope). It is read-only in use: the settings-drift step still writes
+          the tracking issue/comments under the ambient platform GITHUB_TOKEN, never this
+          token (§5.6/§11.2). Omit it and settings drift is skipped; file drift still runs.
         required: false
 
 # File-drift proposals push an identity-keyed branch, which needs contents:write
@@ -74,15 +75,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: aviato drift-report . --file-only
 
-      - name: Settings drift (optional admin token; read-only)
+      - name: Settings drift (platform token for issue writes; admin token READ-only for reads)
         shell: bash
-        # The admin settings-token is scoped to THIS step alone — it never reaches the
-        # file-drift writes or the install step. Omitted ⇒ settings drift skips (§5.6).
+        # Two tokens, distinct roles (§5.6/§11.2): GH_TOKEN is the ambient platform token, used
+        # for the tracking-issue WRITES (open/comment/revoke). AVIATO_SETTINGS_READ_TOKEN is the
+        # operator's admin READ token, scoped by aviato (settings_read_token_scope) to the
+        # branch-protection/ruleset READS alone — it mutates nothing, so the stored secret stays
+        # read-only in use. Both are scoped to THIS step; neither reaches the file-drift writes or
+        # the install step. No admin token ⇒ settings drift skips fail-closed (§5.6).
         env:
-          SETTINGS_TOKEN: ${{ secrets.settings-token }}
+          GH_TOKEN: ${{ github.token }}
+          AVIATO_SETTINGS_READ_TOKEN: ${{ secrets.settings-token }}
         run: |
-          if [ -z "${SETTINGS_TOKEN}" ]; then
+          if [ -z "${AVIATO_SETTINGS_READ_TOKEN}" ]; then
             echo "settings drift: skipped — no admin settings-token secret supplied (§5.6)."
             exit 0
           fi
-          GH_TOKEN="${SETTINGS_TOKEN}" aviato drift-report . --settings-only
+          aviato drift-report . --settings-only
