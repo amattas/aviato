@@ -76,6 +76,12 @@ def resolve_profile(
     ``extends``/override, or an add/remove edge violation.
     """
     overrides = overrides or {}
+    unknown = set(overrides) - {"pipelines", "settings"}
+    if unknown:
+        raise CompositionError(
+            f"unknown override key(s) {sorted(unknown)}; only 'pipelines' and 'settings' "
+            f"are supported (§4.2 — overrides are explicit, never silently dropped)"
+        )
     profile = registry.profile(name)
 
     wf_layers: list[WorkflowsBundle] = _chain(registry.workflows_bundle, profile.workflows)
@@ -113,6 +119,16 @@ def resolve_profile(
         docs_pipeline = doc.get("docs_pipeline")
         if docs_pipeline and docs_pipeline not in pipelines:
             pipelines = (*pipelines, docs_pipeline)
+
+    # §2.13: no composition (profile or consumer override) may drop an always-on
+    # pipeline (e.g. the security baseline). Which pipelines are mandatory is plug-in
+    # DATA (``always_on`` in pipelines.yaml), so the core names no specific capability.
+    dropped = [name for name in registry.always_on_pipelines() if name not in pipelines]
+    if dropped:
+        raise CompositionError(
+            f"composition drops always-on pipeline(s) {sorted(dropped)} that must be present in "
+            f"every Aviato-managed repository (§2.13); they cannot be removed via profile or override"
+        )
     variables = tuple(
         VariableSpec(
             name=item["name"],

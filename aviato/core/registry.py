@@ -105,7 +105,17 @@ class Registry:
             secrets=tuple(doc.get("secrets", ())),
             runner=doc.get("runner"),
             status_check=doc.get("status_check"),
+            always_on=bool(doc.get("always_on", False)),
         )
+
+    def always_on_pipelines(self) -> tuple[str, ...]:
+        """Pipelines the data flags ``always_on`` — they must survive every composition (§2.13)."""
+        path = self.root / "pipelines.yaml"
+        if not path.is_file():
+            return ()
+        with path.open("r", encoding="utf-8") as handle:
+            manifest = yaml.safe_load(handle) or {}
+        return tuple(name for name, doc in manifest.items() if isinstance(doc, dict) and doc.get("always_on"))
 
     def template_module(self, name: str) -> TemplateModule:
         doc = _load_doc(self.root / "scaffold" / f"{name}.yaml")

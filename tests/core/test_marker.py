@@ -36,6 +36,21 @@ def test_malformed_marker_returns_none() -> None:
     assert parse_marker("# just a comment") is None
 
 
+def test_token_in_prose_is_not_a_marker() -> None:
+    # §6.2: the marker is led by the file's comment syntax. A line where the token
+    # appears mid-prose (not led by a comment prefix) must NOT parse as a marker.
+    assert parse_marker("see docs aviato:managed profile=p version=v1 hash=abcdef") is None
+
+
+def test_marker_tolerates_trailing_block_comment_closer() -> None:
+    # A block-comment style with a trailing closer must round-trip: the closer must
+    # not be swallowed into the hash (which would permanently misclassify the file).
+    info = parse_marker("<!-- aviato:managed profile=p version=v1 hash=abcdef -->")
+    assert info is not None
+    assert info.hash == "abcdef"
+    assert info.profile == "p"
+
+
 def test_first_nonblank_line_is_the_marker() -> None:
     text = "\n\n# aviato:managed profile=p version=v1 hash=abc\nbody\n"
     info = parse_marker_from_text(text)

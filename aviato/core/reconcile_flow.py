@@ -65,8 +65,13 @@ def run_reconcile(
     )
 
     if outcome.action == "apply":
-        # Apply the FULL desired state (the branch-protection PUT replaces wholesale);
-        # the diff (outcome.payload) is what the operator confirmed and is recorded.
+        # Apply the full DESIRED state, not the diff. The platform binding constructs
+        # the purpose-built write payload(s) from this (§2.9): branch protection is a
+        # wholesale PUT whose accepted payload is the complete protection object, so a
+        # diff-only payload would DROP the unchanged protections. ``outcome.payload``
+        # (the changed keys) is recorded in the comment so the operator sees exactly
+        # what changed; unchanged desired fields equal live, so applying the full
+        # desired state is equivalent to applying just the diff.
         platform.apply_settings(repo, desired_settings)
         platform.comment_issue(repo, issue_key, f"Applied diff {current_diff_id} (changes: {outcome.payload})")
     else:

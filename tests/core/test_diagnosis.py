@@ -52,6 +52,18 @@ def test_stale_marker_but_correct_body_is_mergeable_not_clean(tmp_path: Path) ->
     assert report.statuses["cfg.py"] == "mergeable-drift"
 
 
+def test_unknown_recorded_version_is_dirty_drift(tmp_path: Path) -> None:
+    # §5.4: a managed file whose marker records an UNKNOWN/unparseable version is
+    # dirty-drift even if the body matches expected — Aviato never silently regenerates
+    # over a marker it cannot reason about (it can't establish version compatibility).
+    body = "X = 1\n"
+    from aviato.core.marker import content_hash
+
+    (tmp_path / "cfg.py").write_text(f"# aviato:managed profile=p version=garbage hash={content_hash(body)}\n{body}")
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", body)])
+    assert report.statuses["cfg.py"] == "dirty-drift"
+
+
 def test_template_moved_but_file_untouched_is_mergeable(tmp_path: Path) -> None:
     # file is exactly what Aviato wrote (body hash == marker hash) but expected changed
     _scaffold_one(tmp_path, "cfg.py", "X = 1\n")

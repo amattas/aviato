@@ -55,3 +55,22 @@ def test_repin_reports_orphaned_override(module_root: Path) -> None:
     decl = _decl(overrides={"settings": {"nonexistent_key": 1}})
     plan = plan_repin(Registry(module_root), decl, "v1.0.0")
     assert "nonexistent_key" in plan.orphaned_overrides
+
+
+def test_repin_refuses_when_profile_repurposed_at_target(module_root: Path, tmp_path: Path) -> None:
+    # §5.12/§6.5: a profile NAME is a stable public identity. If the same name maps to a
+    # different composition at the target version (here: its version-source artifact kind
+    # changed), it has been repurposed → refuse, like "profile no longer exists".
+    import shutil
+
+    import yaml
+
+    target = tmp_path / "target-modsrc"
+    shutil.copytree(module_root, target)
+    child = target / "child.yaml"
+    doc = yaml.safe_load(child.read_text())
+    doc["version_source"] = {"locations": ["package.json"]}  # repurposed: different artifact identity
+    child.write_text(yaml.safe_dump(doc, sort_keys=False))
+
+    with pytest.raises(CompositionError):
+        plan_repin(Registry(module_root), _decl(), "v2.0.0", target_registry=Registry(target))

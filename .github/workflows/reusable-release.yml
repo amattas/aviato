@@ -42,7 +42,7 @@ on:
         description: Set to true when this run cut a release (tagged + published).
         value: ${{ jobs.release.outputs.released }}
       tag:
-        description: The released tag (vX.Y.Z), set only when released is true.
+        description: The released tag (X.Y.Z), set only when released is true.
         value: ${{ jobs.release.outputs.tag }}
 
 permissions:
@@ -80,9 +80,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Latest EXACT version tag only (vX.Y.Z) — never the floating major (vX),
-          # which would crash next-version and is not a release point.
-          last="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || echo v0.0.0)"
+          # Latest EXACT final version tag only (X.Y.Z) — never the floating major (N)
+          # and never a pre-release (X.Y.Z-alphaN/-betaN), which are not release points.
+          # (next-version tolerates a pre-release base, but the bump baseline is the
+          # last FINAL release.)
+          last="$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' 2>/dev/null || echo 0.0.0)"
           range="${last}..HEAD"
           if ! git rev-parse "${last}" >/dev/null 2>&1; then range="HEAD"; fi
           # Commit messages are piped (never interpolated into a command) to aviato.
@@ -157,9 +159,9 @@ jobs:
           git config user.name aviato-bot
           git config user.email aviato-bot@users.noreply.github.com
           git tag "${NEXT}"
-          # §5.9: advance the floating major (e.g. v1) to this release — a mutable
-          # published pointer consumers pin with @vN (§6.1/§11.3).
-          major="$(printf '%s' "${NEXT}" | sed -E 's/^(v[0-9]+).*/\1/')"
+          # §5.9: advance the floating major (e.g. 1) to this release — a mutable
+          # published pointer consumers pin with @N (§6.1/§11.3).
+          major="$(printf '%s' "${NEXT}" | sed -E 's/^([0-9]+).*/\1/')"
           git tag -f "${major}"
           git push origin "${NEXT}"
           git push -f origin "${major}"

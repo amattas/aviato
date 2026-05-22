@@ -12,4 +12,3 @@ jobs:
       context: "."
       dockerfile: "Dockerfile"
       platforms: "linux/amd64"
-      scan-image: true

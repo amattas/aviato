@@ -42,6 +42,41 @@ def test_apply_path_mutates_and_comments() -> None:
     assert platform.settings["required_reviews"] == 2
 
 
+def test_apply_passes_full_desired_state_to_binding() -> None:
+    # §2.9 contract: the flow hands the binding the FULL desired state — the binding
+    # builds the purpose-built write payload(s) from it. Branch protection is a
+    # wholesale PUT whose accepted payload is the complete protection object, so the
+    # flow must NOT pre-trim to the diff (that would drop unchanged protections). The
+    # changed-keys view lives on outcome.payload (recorded for the operator), not the write.
+    desired = {"required_reviews": 2, "requires_pull_request": True, "required_status_checks": ["verify"]}
+    live = {"required_reviews": 1, "requires_pull_request": True, "required_status_checks": ["verify"]}
+    diff_id = _current_diff_id(desired, live)
+    issue = Issue(
+        key="k",
+        open=True,
+        consent_diff_id=diff_id,
+        consent_actor_type="User",
+        consent_role="admin",
+        consent_role_lookup_ok=True,
+    )
+    platform = FakePlatform(settings=dict(live), issues={"k": issue})
+    outcome = run_reconcile(
+        platform,
+        repo="o/r",
+        issue_key="k",
+        desired_settings=desired,
+        pin="1",
+        tool_version="1.0.0",
+        recorded_version="1.0.0",
+        confirmed_diff_id=diff_id,
+    )
+    assert outcome.action == "apply"
+    applied = [args[1] for name, args in platform.calls if name == "apply_settings"]
+    assert applied == [desired]
+    # The operator-facing record still shows only what changed.
+    assert outcome.payload == {"required_reviews": 2}
+
+
 def test_missing_issue_refused() -> None:
     platform = FakePlatform(settings={"required_reviews": 1})
     outcome = run_reconcile(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,6 +22,25 @@ class SettingsDiff:
         return any(kind == DESTRUCTIVE for kind in self.changes.values())
 
 
+def diff_identity(diff: SettingsDiff) -> str:
+    """A stable, content-bound identity for a settings diff (§6.4 consent binding).
+
+    Hashes the changed keys together with their classification AND their concrete
+    desired/live values, so consent for ``required_reviews: 1 -> 2`` does not match
+    ``required_reviews: 1 -> 5`` (a different change needs different consent, §8.3).
+    """
+    payload = {
+        key: {
+            "kind": kind,
+            "desired": diff.values.get(key, {}).get("desired"),
+            "live": diff.values.get(key, {}).get("live"),
+        }
+        for key, kind in diff.changes.items()
+    }
+    blob = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
 def _hashable(value: Any) -> Any:
     """Best-effort hashable view of a list element for subset comparison."""
     if isinstance(value, (list, tuple)):
@@ -30,7 +51,15 @@ def _hashable(value: Any) -> Any:
 
 
 def _classify_value_change(desired: Any, live: Any) -> str:
-    """Classify a changed value as additive or destructive (§5.6, fail-safe)."""
+    """Classify a changed value as additive or destructive (§5.6).
+
+    This assumes the flat settings model is framed so that "more True / higher /
+    superset = more protection" — which the day-zero baseline keys are by
+    construction (e.g. ``block_force_push``, ``required_reviews``,
+    ``required_status_checks``). The classification only labels the report; the
+    operator gate (§5.7) fail-closes regardless, and any unrecognized/ambiguous
+    change falls through to destructive (the safe default).
+    """
     # Booleans first (bool is a subclass of int).
     if isinstance(desired, bool) or isinstance(live, bool):
         if isinstance(desired, bool) and isinstance(live, bool):

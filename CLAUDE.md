@@ -34,8 +34,8 @@ aviato scan /path/a /path/b [--fix]          # fleet diagnosis; --fix opens mana
 aviato drift-report /path/to/consumer        # consumer automation: file + settings drift (§5.5/§5.6)
 aviato reconcile /path/to/consumer <issue> --confirm <diff-id>  # operator-gated settings apply, diff-bound (§5.7)
 aviato complete-protection /path/to/consumer # idempotently (re-)apply full branch protection (§5.2 recovery)
-aviato repin /path/to/consumer vX.Y.Z [--write]  # move the Library version pin (§5.12)
-aviato offboard /path/to/consumer [--write --delete-files]  # remove from Aviato management (§5.13)
+aviato repin /path/to/consumer X.Y.Z [--write]  # move the Library version pin (§5.12)
+aviato offboard /path/to/consumer [--write --delete-files | --open-pr]  # remove from Aviato mgmt; --open-pr opens a reviewable removal proposal (§5.13)
 aviato next-version --current 1.2.3 --commit "feat: x"  # SemVer from Conventional Commits (§5.9)
 aviato bump-version 1.3.0 /path/to/consumer  # write version into version-source locations (§3.3)
 aviato validate                              # validate policy infra + agnosticism + digest pins + template parity

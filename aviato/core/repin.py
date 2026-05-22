@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from .composition import resolve_profile
 from .declaration import Declaration
+from .errors import CompositionError
 from .registry import Registry
 from .version import _pinned_major, parse_version
 
@@ -35,6 +36,15 @@ def _is_downgrade(current: str, target: str) -> bool:
             return False
 
 
+def _profile_identity(registry: Registry, profile: str) -> tuple[str, ...]:
+    """A profile's stable identity for re-pin (§6.5): the version-source artifact kind
+    it manages. A profile name is a public identity; if the same name maps to a
+    different artifact kind at another version it has been repurposed, not evolved."""
+    resolved = resolve_profile(registry, profile)
+    vs = resolved.version_source
+    return tuple(sorted(vs.locations)) if vs is not None else ()
+
+
 def plan_repin(
     registry: Registry,
     declaration: Declaration,
@@ -44,14 +54,27 @@ def plan_repin(
 ) -> RepinPlan:
     """Plan moving a Consumer to a different Library version (§5.12).
 
-    Confirms the profile still exists (and resolves) at the target — a missing
-    or repurposed profile raises :class:`CompositionError`. Detects newly-required
-    variables (the plan is not ``ok`` until they are supplied) and orphaned
-    overrides (settings keys no longer present). A move to a lower version is
-    allowed but carries an explicit backward-movement warning. This is the only
-    sanctioned way a pin moves; file drift never advances it.
+    Confirms the profile still exists (and resolves) at the target — a profile that
+    no longer exists raises :class:`CompositionError`. When a distinct
+    ``target_registry`` is given (a genuine cross-version move), the profile's
+    identity (its version-source artifact kind, §6.5) is compared between the current
+    and target versions; a changed identity means the name has been **repurposed** and
+    is refused, exactly like "profile no longer exists". Detects newly-required
+    variables (the plan is not ``ok`` until they are supplied) and orphaned overrides
+    (settings keys no longer present). A move to a lower version is allowed but carries
+    an explicit backward-movement warning. This is the only sanctioned way a pin moves;
+    file drift never advances it.
     """
     target_registry = target_registry or registry
+    if target_registry is not registry:
+        current_identity = _profile_identity(registry, declaration.profile)
+        target_identity = _profile_identity(target_registry, declaration.profile)
+        if current_identity != target_identity:
+            raise CompositionError(
+                f"profile {declaration.profile!r} has a different identity at the target version "
+                f"(version-source {list(target_identity)} vs {list(current_identity)}): it has been "
+                f"repurposed — refusing to re-pin (§5.12/§6.5). Treat it like a profile change."
+            )
     resolved = resolve_profile(target_registry, declaration.profile, overrides=declaration.overrides)
 
     plan = RepinPlan(target_version=target_version)

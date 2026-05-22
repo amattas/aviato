@@ -28,10 +28,10 @@ from .core.settings_drift_flow import run_settings_drift
 from .core.variables import resolve_variables, writeback_variables
 from .core.version import is_compatible
 from .core.versioning import classify_commits, is_highest, next_version
-from .core.versionsource import bump_files
 from .github import GitHubAPIError
-from .github_platform import GitHubPlatform
+from .github_platform import GitHubPlatform, UnmodeledProtectionError
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
+from .plugins.version_formats import bump_files
 from .policy import load_policy
 from .repos import git_root, normalize_slug, remote_url, working_tree_clean
 from .rulesets import apply_rulesets, render_all_rulesets
@@ -66,7 +66,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
 
 def _profile_status_checks(profile: str | None) -> list[str]:
-    """The resolved profile's required status-check contexts (§10), or [] if none.
+    """The resolved profile's required status-check contexts (§10.3 composition; §5.6 gate), or [] if none.
 
     Lets `apply-rulesets`/`render-rulesets` inject the language verify job (e.g.
     `ci / Python CI`) into the otherwise-static branch ruleset so it matches the
@@ -301,7 +301,11 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
         print(f"seeded {output}")
     for output in result.skipped_unmanaged + result.skipped_modified:
         print(f"SKIPPED (operator-owned) {output}")
-    print("next: review the changes, then apply protections with `aviato apply-rulesets OWNER/REPO --apply`")
+    print(
+        "next: review the changes, then apply protections with "
+        f"`aviato apply-rulesets OWNER/REPO --apply --profile {args.profile}` "
+        "(--profile injects the profile's language verify check into the ruleset)."
+    )
     return 0
 
 
@@ -371,7 +375,10 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved) ->
     print(f"opened onboarding proposal for {slug} on branch {branch} ({len(files)} files).")
     for p in untouched:
         print(f"untouched (left for the operator): {p}")
-    print("next: review + merge the PR, then apply protections (`aviato complete-protection` or `apply-rulesets`).")
+    print(
+        "next: review + merge the PR, then apply protections "
+        f"(`aviato complete-protection` or `aviato apply-rulesets OWNER/REPO --apply --profile {args.profile}`)."
+    )
     return 0
 
 
@@ -412,7 +419,7 @@ def cmd_onboard(args: argparse.Namespace) -> int:
         print(f"- ruleset: {ruleset}")
 
     print("next command:")
-    print(f"aviato apply-rulesets {args.target} --apply")
+    print(f"aviato apply-rulesets {args.target} --apply --profile {args.profile}")
     return 0
 
 
@@ -637,12 +644,21 @@ def cmd_repin(args: argparse.Namespace) -> int:
     result = scaffold(root, items, profile=updated.profile, version=updated.version)
     for output in result.written:
         print(f"rewrote {output}")
+    # §5.12: surface files the no-clobber guard left at the OLD pin so the operator
+    # knows the re-pin did not fully apply (a silent skip would misrepresent success).
+    for output in result.skipped_modified:
+        print(f"skipped (hand-edited; still at old pin — reconcile manually): {output}")
+    for output in result.skipped_unmanaged:
+        print(f"skipped (unmanaged file at this path — not re-pinned): {output}")
     print("next: review the re-pinned artifacts, commit on a branch, and open a PR (§5.2/§5.12).")
     return 0
 
 
 def cmd_offboard(args: argparse.Namespace) -> int:
     """Remove a consumer from Aviato management (§5.13)."""
+    if args.open_pr:
+        return _offboard_proposal(args)
+
     root = Path(args.path).resolve()
     declaration_path = root / ".github" / "aviato.yaml"
     if not declaration_path.is_file():
@@ -676,6 +692,63 @@ def cmd_offboard(args: argparse.Namespace) -> int:
         print("removed .github/aviato.yaml")
     if result.sidecar_removed:
         print("removed .github/aviato.seed.json")
+    print(f"WARNING: {result.warning}")
+    return 0
+
+
+def _offboard_proposal(args: argparse.Namespace) -> int:
+    """Offboard via a reviewable proposal (§5.13): in a fresh temp clone, strip/remove the
+    managed files, remove the consumer automation, delete the declaration, then open a PR
+    carrying the §2.13 baseline-removal warning. Non-destructive to the operator's checkout."""
+    target = args.path
+    slug = target if ("/" in target and not Path(target).is_dir()) else normalize_slug(remote_url(Path(target)))
+    if not slug or "/" not in slug:
+        print("could not determine OWNER/REPO (pass a slug, or a local repo with a github remote)", file=sys.stderr)
+        return 2
+
+    workdir = Path(tempfile.mkdtemp(prefix="aviato-offboard-"))
+    clone = workdir / "repo"
+    try:
+        run(["gh", "repo", "clone", slug, str(clone)])
+    except CommandError as exc:
+        print(f"could not clone {slug}: {exc}", file=sys.stderr)
+        return 1
+
+    declaration_path = clone / ".github" / "aviato.yaml"
+    if not declaration_path.is_file():
+        print(f"no declaration at {declaration_path}; nothing to offboard", file=sys.stderr)
+        return 2
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    try:
+        declaration = load_declaration(declaration_path)
+        expected = _expected_artifacts(registry, declaration)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    managed_outputs = [a.output_path for a in expected if not a.seed_once]
+    result = offboard_repo(clone, managed_outputs, keep_files=not args.delete_files)
+
+    body_lines = [
+        "Aviato offboarding proposal (§5.13).",
+        "",
+        f"WARNING: {result.warning}",
+        "",
+        f"- stripped markers from {len(result.stripped)} file(s)",
+        f"- removed {len(result.removed)} managed file(s)",
+        "- removed the declaration and seed-once sidecar",
+        "- removed the scheduled consumer drift/report automation",
+    ]
+    branch = "aviato/offboard"
+    title = "Offboard from Aviato management (§5.13)"
+    try:
+        GitHubPlatform(workdir=clone).open_worktree_proposal(slug, branch, title, "\n".join(body_lines))
+    except (GitHubAPIError, CommandError) as exc:
+        print(f"could not open offboarding proposal: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"opened offboarding proposal for {slug} on branch {branch}.")
     print(f"WARNING: {result.warning}")
     return 0
 
@@ -908,7 +981,12 @@ def cmd_next_version(args: argparse.Namespace) -> int:
     if not commits:
         raw = sys.stdin.read()
         commits = [c for c in (raw.split("\0") if "\0" in raw else raw.split("\n\n")) if c.strip()]
-    print(next_version(args.current, classify_commits(commits)))
+    try:
+        result = next_version(args.current, classify_commits(commits))
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(result)
     return 0
 
 
@@ -983,6 +1061,12 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     except GitHubAPIError as exc:
         print(f"GitHub API error: {exc}", file=sys.stderr)
         return 1
+    except UnmodeledProtectionError as exc:
+        # Fail closed: the live protection surface this reconcile cannot safely write
+        # (unmodeled classic protection, or branch protection owned by a ruleset). Never
+        # report applied — surface the reason and exit non-zero (§2.4/§5.7).
+        print(f"reconcile aborted (fail-closed): {exc}", file=sys.stderr)
+        return 1
 
     # Render the APPLY-TIME recomputed diff (the read that was actually acted on, §2.8),
     # not an earlier preview — so the operator confirms/sees the same content.
@@ -1045,7 +1129,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Adopt a local repo: write .github/aviato.yaml and scaffold managed files.",
     )
-    onboard.add_argument("--pin", default="v0", help="Library version pin to record in the declaration.")
+    onboard.add_argument("--pin", default="0", help="Library version pin to record in the declaration.")
     onboard.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     onboard.add_argument(
         "--migrate-profile", action="store_true", help="Allow changing an already-declared profile (§5.2)."
@@ -1089,7 +1173,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     repin = subparsers.add_parser("repin", help="Move a consumer to a different Library version (§5.12).")
     repin.add_argument("path", help="Path to the consumer repository.")
-    repin.add_argument("version", help="Target Library version pin (vX.Y.Z or vX).")
+    repin.add_argument("version", help="Target Library version pin (X.Y.Z or N).")
     repin.add_argument("--write", action="store_true", help="Write the new pin into the declaration and re-scaffold.")
     repin.set_defaults(func=cmd_repin)
 
@@ -1100,7 +1184,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Delete managed files instead of stripping their markers (leaving plain files).",
     )
-    offboard.add_argument("--write", action="store_true", help="Perform the removal (default is a dry-run plan).")
+    offboard.add_argument(
+        "--write", action="store_true", help="Perform the removal LOCALLY (default is a dry-run plan)."
+    )
+    offboard.add_argument(
+        "--open-pr",
+        action="store_true",
+        help="Open a reviewable removal proposal (PR) instead of mutating locally (§5.13).",
+    )
     offboard.set_defaults(func=cmd_offboard)
 
     complete = subparsers.add_parser(
@@ -1116,7 +1207,7 @@ def build_parser() -> argparse.ArgumentParser:
     provision.add_argument("slug", help="New repository as OWNER/REPO.")
     provision.add_argument("--profile", default="python-service")
     provision.add_argument("--docs", action="store_true", help="Compose the opt-in docs deploy (§13.3).")
-    provision.add_argument("--pin", default="v0", help="Library version pin to record in the declaration.")
+    provision.add_argument("--pin", default="0", help="Library version pin to record in the declaration.")
     provision.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     provision.add_argument("--public", action="store_true", help="Create a public repo (default: private).")
     provision.set_defaults(func=cmd_provision)
@@ -1142,7 +1233,7 @@ def build_parser() -> argparse.ArgumentParser:
     lint_actions.set_defaults(func=cmd_lint_actions)
 
     nextver = subparsers.add_parser("next-version", help="Derive the next SemVer from Conventional Commits (§5.9).")
-    nextver.add_argument("--current", required=True, help="Current version (vX.Y.Z or X.Y.Z).")
+    nextver.add_argument("--current", required=True, help="Current version (X.Y.Z; a legacy v-prefix is tolerated).")
     nextver.add_argument("--commit", action="append", help="A commit message (repeatable); else read stdin.")
     nextver.set_defaults(func=cmd_next_version)
 

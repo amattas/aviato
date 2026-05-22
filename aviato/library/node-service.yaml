@@ -8,6 +8,10 @@ variables:
   - {name: language-variant, type: enum, domain: [typescript, javascript]}
 version_source:
   locations: [package.json]
+derived_variables:
+  # Data-driven: the typecheck step is gated by the language-variant value.
+  # Lives here (plug-in DATA), never as a literal in the agnostic core (§9b).
+  - {name: run-typecheck, from: language-variant, cases: {javascript: "false"}, default: "true"}
 toolchain:
   linter: eslint
   formatter: prettier

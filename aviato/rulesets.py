@@ -25,7 +25,7 @@ def _patch_tag_ruleset(payload: dict[str, Any], tag_pattern: str) -> None:
 
 
 def _patch_status_checks(payload: dict[str, Any], extra_contexts: list[str]) -> None:
-    """Union additional required status-check contexts into the branch ruleset (§10).
+    """Union additional required status-check contexts into the branch ruleset (§10.3/§5.6).
 
     The static ruleset carries only the common (language-agnostic) checks; a resolved
     profile adds its language verify job (e.g. ``ci / Python CI``) so the ruleset cannot

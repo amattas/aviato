@@ -15,7 +15,7 @@ keeping a committed inventory of consumer repositories.
 Release tags must match:
 
 ```text
-^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$
+^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$
 ```
 
 Accepted examples: `v1.2.3`, `v1.2.3-alpha1`, `v1.2.3-beta2`.

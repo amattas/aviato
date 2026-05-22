@@ -103,7 +103,9 @@ def classic_branch_protection(slug: str, branch: str) -> dict[str, Any]:
 
 
 def tag_ruleset_names(slug: str) -> list[str]:
-    response = gh_json(f"repos/{slug}/rulesets?targets=tag", default=[], allow_error=True)
+    # Fail closed on an ambiguous read (§2.7): only a genuine 404 is empty, so an
+    # auth/5xx/rate-limit error raises rather than masquerading as "no tag ruleset".
+    response = gh_json_optional(f"repos/{slug}/rulesets?targets=tag", default=[])
     if not isinstance(response, list):
         return []
     names = [item.get("name") for item in response if isinstance(item, dict) and item.get("target") == "tag"]
@@ -111,7 +113,9 @@ def tag_ruleset_names(slug: str) -> list[str]:
 
 
 def repository_rulesets(slug: str) -> list[dict[str, Any]]:
-    response = gh_json(f"repos/{slug}/rulesets")
+    # Paginate: upsert_ruleset decides PUT-vs-POST by finding an existing ruleset by
+    # name here, so a match on a later page must not be hidden (else it POSTs a duplicate).
+    response = gh_json_paginated(f"repos/{slug}/rulesets", default=[])
     return response if isinstance(response, list) else []
 
 

@@ -16,6 +16,9 @@ def test_onboard_lists_composed_pipelines_and_variables(capsys: pytest.CaptureFi
     assert "security-baseline" in out  # always-on baseline
     assert "pypi-publish" in out  # python-library deploy
     assert "distribution-name" in out  # required variable
+    # The apply-rulesets guidance must carry --profile so the operator applies the
+    # profile's language verify check (not just the weaker common ruleset).
+    assert "--profile python-library" in out
 
 
 def test_onboard_unknown_profile_fails(capsys: pytest.CaptureFixture[str]) -> None:

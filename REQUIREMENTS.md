@@ -908,8 +908,9 @@ surface, specified normatively below.
 - **Format:** YAML.
 - **Versioned schema** with these fields:
   - `profile` (string) — the profile name (a stable public identity, §6.5).
-  - `version` (string) — the Library version pin: an exact version (`vX.Y.Z`) or
-    a floating major reference (`vX`).
+  - `version` (string) — the Library version pin: an exact version (`X.Y.Z`) or
+    a floating major reference (`X`). Bare SemVer is canonical (matching `policy.yml`
+    and the CLI); a legacy leading `v` is tolerated on read but never emitted.
   - `docs` (boolean, optional, default `false`) — opt-in to building and
     publishing the multi-version documentation site (§13.3). When `true`, the
     language plug-in's docs step emits API/reference material as md/mdx (§12) and
@@ -927,7 +928,7 @@ surface, specified normatively below.
 - A managed file's **first non-blank line** is a marker using the file's native
   comment syntax, of the canonical form:
   `aviato:managed profile=<name> version=<pin> hash=<content-hash>`
-  (e.g. `# aviato:managed profile=python-library version=v1 hash=…` for
+  (e.g. `# aviato:managed profile=python-library version=1 hash=…` for
   hash-comment files; the equivalent block/line comment for other syntaxes).
 - The marker records **profile**, **version**, and a **content-hash** of the
   rendered body (excluding the marker line) for drift comparison (§5.5).
@@ -1268,12 +1269,12 @@ it **grants** exactly those (§8.9).
 
 Third-party actions/tools invoked by any pipeline are **pinned by commit digest**.
 For the Library reference a Consumer pulls, **digest-level verifiability holds only
-for exact-version pins** (`vX.Y.Z`, resolved to a recorded digest / signed tag) —
-those **close the supply-chain delivery path**. A **floating major pin** (`vX`,
+for exact-version pins** (`X.Y.Z`, resolved to a recorded digest / signed tag) —
+those **close the supply-chain delivery path**. A **floating major pin** (`X`,
 §6.1) is deliberately **mutable**: it is advanced on every release (§5.9) and may
-be hand-de-advanced on rollback (§13.5), so a `vX` consumer gets **tag-trust, not
+be hand-de-advanced on rollback (§13.5), so an `X` consumer gets **tag-trust, not
 content-digest immutability**. Operators who require a closed delivery path pin an
-**exact version**; `vX` is convenience with an explicit mutable-reference
+**exact version**; `X` is convenience with an explicit mutable-reference
 trade-off. (The apply path is closed regardless; this is about the delivery path.)
 
 ### 11.4 Stored-secret confinement (App Store Connect)

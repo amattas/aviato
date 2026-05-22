@@ -8,8 +8,16 @@ from dataclasses import dataclass
 # plug-in data (see aviato.plugins.comment_syntax), keeping this module agnostic.
 
 _TOKEN = "aviato:managed"
+# The marker line must be led by the file's comment syntax (§6.2): a run of comment
+# punctuation (e.g. ``#``, ``//``, ``/*``, ``<!--``) — never letters/digits — so the
+# token appearing mid-prose is not mistaken for a marker. The hash is the hex content
+# digest; an optional trailing run of comment punctuation tolerates block-comment
+# closers (e.g. ``*/``, ``-->``) without swallowing them into the hash.
+_LEAD = r"[^\sA-Za-z0-9]+"
+_CLOSE = r"(?:\s+[^\sA-Za-z0-9]+)?"
 _MARKER_RE = re.compile(
-    r"aviato:managed\s+profile=(?P<profile>\S+)\s+version=(?P<version>\S+)\s+hash=(?P<hash>\S+)\s*$"
+    rf"^\s*{_LEAD}\s+aviato:managed\s+profile=(?P<profile>\S+)\s+version=(?P<version>\S+)"
+    rf"\s+hash=(?P<hash>[0-9a-fA-F]+){_CLOSE}\s*$"
 )
 
 

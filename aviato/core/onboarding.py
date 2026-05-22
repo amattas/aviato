@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
 from .composition import resolve_profile
 from .declaration import Declaration
-from .errors import DeclarationError
+from .errors import CompositionError, DeclarationError
 from .model import TemplateModule
 from .registry import Registry
 from .render import render
@@ -19,28 +19,56 @@ def template_applies(template: TemplateModule, variables: Mapping[str, Any]) -> 
     return all(str(variables.get(key)) == value for key, value in template.when)
 
 
-def render_variables(variables: Mapping[str, Any], *, pin: str = "main", docs: bool = False) -> dict[str, Any]:
+def render_variables(
+    variables: Mapping[str, Any],
+    *,
+    pin: str = "main",
+    docs: bool = False,
+    derived_rules: Iterable[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
     """Augment the resolved variables with derived render values.
 
     - ``aviato-ref`` is the declared Library pin (§6.1/§2.6), stamped into the
       generated workflows' ``uses: …@<ref>`` and ``aviato-ref:`` so a consumer runs
       the version it pinned — not ``@main``.
-    - ``run-typecheck`` is driven by the ``language-variant`` enum (§12.2).
     - ``docs`` reflects the §6.1 opt-in (gates the docs caller workflow).
+    - ``derived_rules`` are plug-in DATA from the profile (``derived_variables``):
+      each maps another variable's value onto a derived render variable. Applying
+      them generically keeps language-specific knowledge (e.g. which variant skips
+      type-checking) out of the agnostic core (§9b).
     """
     derived = dict(variables)
     derived["aviato-ref"] = pin
     derived["docs"] = "true" if docs else "false"
     derived.setdefault("year", str(date.today().year))
-    variant = variables.get("language-variant")
-    if variant is not None:
-        derived["run-typecheck"] = "false" if variant == "javascript" else "true"
+    for rule in derived_rules:
+        source_value = variables.get(rule["from"])
+        if source_value is not None:
+            derived[rule["name"]] = rule.get("cases", {}).get(source_value, rule.get("default"))
     return derived
 
 
 def applicable_templates(resolved, variables: Mapping[str, Any]) -> list[TemplateModule]:
     """The resolved templates that apply given the variables (filters §12.2/§6.1 conditionals)."""
     return [t for t in resolved.templates if template_applies(t, variables)]
+
+
+def check_output_collisions(templates: Iterable[TemplateModule]) -> None:
+    """Fail on two templates writing the same output path (§4.2 tie = error, not silent pick).
+
+    Called on the *applicable* set (post ``when`` filtering), so variant-exclusive
+    templates that share a path (e.g. mutually-exclusive language-variant manifest
+    templates) are fine — only one is ever applicable. Two applicable templates at one
+    path is a real collision the resolution must not silently resolve.
+    """
+    seen: set[str] = set()
+    for template in templates:
+        if template.output_path in seen:
+            raise CompositionError(
+                f"two applicable templates write {template.output_path!r}; "
+                f"a same-path collision is a hard error, not a silent pick (§4.2)"
+            )
+        seen.add(template.output_path)
 
 
 @dataclass(frozen=True)
@@ -68,9 +96,12 @@ def resolved_artifacts(
     and includes the docs caller workflow.
     """
     resolved = resolve_profile(registry, profile, overrides=dict(overrides or {}), docs=docs)
-    render_vars = render_variables(variables, pin=pin, docs=docs)
+    derived_rules = registry.profile_doc(profile).get("derived_variables", [])
+    render_vars = render_variables(variables, pin=pin, docs=docs, derived_rules=derived_rules)
+    applicable = applicable_templates(resolved, render_vars)
+    check_output_collisions(applicable)
     artifacts: list[ResolvedArtifact] = []
-    for template in applicable_templates(resolved, render_vars):
+    for template in applicable:
         body = registry.template_body(template)
         # Seed-once starter files are rendered once (leniently — the developer owns
         # and completes them); managed files are re-rendered strictly every sync.

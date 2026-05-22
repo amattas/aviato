@@ -8,6 +8,7 @@ from typing import Literal
 from .errors import BootstrapError
 from .marker import content_hash, parse_marker_from_text
 from .scaffold import read_sidecar
+from .version import is_known_version_pin
 
 ArtifactStatus = Literal["clean", "mergeable-drift", "dirty-drift", "missing"]
 
@@ -72,6 +73,10 @@ def _classify_managed(target: Path, expected_body: str) -> ArtifactStatus:
     marker = parse_marker_from_text(text)
     if marker is None:
         # No marker, or malformed marker → never silently regenerated (§5.4).
+        return "dirty-drift"
+    if not is_known_version_pin(marker.version):
+        # Recorded version unknown/unparseable → dirty-drift: compatibility cannot be
+        # established, so the file is never silently regenerated over (§5.4).
         return "dirty-drift"
     live = content_hash(_live_body(text))
     expected = content_hash(expected_body)

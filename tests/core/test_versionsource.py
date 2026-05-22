@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from aviato.core.errors import AviatoError
-from aviato.core.versionsource import bump_files, bump_text
+from aviato.plugins.version_formats import bump_files, bump_text
 
 
 def test_bump_pyproject_version() -> None:
@@ -45,6 +45,48 @@ def test_bump_pyproject_without_version_errors() -> None:
 def test_bump_package_json_version() -> None:
     out = bump_text("package.json", '{"name": "x", "version": "0.1.0"}', "0.2.0")
     assert json.loads(out)["version"] == "0.2.0"
+
+
+def test_bump_package_json_is_surgical_and_preserves_formatting() -> None:
+    # §3.3: bump the version string only — do not reserialize and churn the
+    # operator-owned manifest's formatting/key order (it is seed-once, §6.3).
+    text = '{\n  "name": "x",\n  "version": "0.1.0",\n  "scripts": { "build": "tsc" }\n}\n'
+    out = bump_text("package.json", text, "0.2.0")
+    assert out == text.replace('"0.1.0"', '"0.2.0"')
+
+
+def test_bump_pyproject_only_rewrites_project_table_not_other_tables() -> None:
+    # Only the [project] (or [tool.poetry]) version is the package version. A tool
+    # table that also carries version = "..." MUST be left untouched — a global
+    # subn would clobber every top-level version= line (§3.3).
+    text = (
+        '[build-system]\nrequires = ["hatchling"]\n\n'
+        '[project]\nname = "x"\nversion = "1.2.3"\n\n'
+        '[tool.bumpver]\nversion = "1.2.3"\n'
+    )
+    out = bump_text("pyproject.toml", text, "2.0.0")
+    assert '[project]\nname = "x"\nversion = "2.0.0"' in out
+    assert '[tool.bumpver]\nversion = "1.2.3"' in out
+
+
+def test_bump_pyproject_poetry_table() -> None:
+    text = '[tool.poetry]\nname = "x"\nversion = "1.2.3"\n'
+    assert 'version = "2.0.0"' in bump_text("pyproject.toml", text, "2.0.0")
+
+
+def test_bump_package_json_ignores_nested_version_with_same_value() -> None:
+    # A nested object carrying the same version string (textually first) must NOT be
+    # rewritten in place of the top-level package version (§3.3).
+    text = '{\n  "dependencies": { "dep": { "version": "0.1.0" } },\n  "version": "0.1.0"\n}\n'
+    out = bump_text("package.json", text, "0.2.0")
+    data = json.loads(out)
+    assert data["version"] == "0.2.0"
+    assert data["dependencies"]["dep"]["version"] == "0.1.0"
+
+
+def test_bump_package_json_without_version_errors() -> None:
+    with pytest.raises(AviatoError):
+        bump_text("package.json", '{"name": "x"}', "0.2.0")
 
 
 def test_bump_unsupported_file_unchanged() -> None:

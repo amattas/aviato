@@ -20,6 +20,7 @@ from aviato.github_platform import (
 
 def test_apply_settings_fails_closed_on_unmodeled_protection(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
     monkeypatch.setattr(
         github,
         "classic_branch_protection",
@@ -30,15 +31,74 @@ def test_apply_settings_fails_closed_on_unmodeled_protection(monkeypatch: pytest
         GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
 
 
-def test_apply_settings_proceeds_when_no_unmodeled_protection(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_apply_settings_fails_closed_on_unmodeled_ruleset_rule(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A branch RULESET carrying a rule the desired model doesn't represent must also
+    # fail closed — the classic PUT would leave a dual-control state the operator
+    # never reviewed (§2.4/§5.7), not just classic push restrictions.
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    monkeypatch.setattr(
+        github,
+        "active_branch_rules",
+        lambda repo, branch: [{"type": "commit_message_pattern", "parameters": {}}],
+    )
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT")))
+    with pytest.raises(UnmodeledProtectionError):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
+
+
+def test_apply_settings_puts_classic_protection_when_no_ruleset_rules(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No branch rules → protection is on the classic surface, so the classic PUT is the
+    # correct (only) surface to write.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
     calls: list[list[str]] = []
     monkeypatch.setattr(
         github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
     )
     GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "required_reviews": 1})
-    assert any("PUT" in c for c in calls)
+    assert any("PUT" in c and "protection" in " ".join(c) for c in calls)
+
+
+def test_apply_settings_fails_closed_when_ruleset_owns_protection_and_desired_differs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Branch protection is enforced by a RULESET (the bundled protect-default-branch),
+    # which this settings reconcile cannot write — it can only PUT classic protection.
+    # If the desired branch-protection state differs from what the ruleset enforces,
+    # writing classic protection would create an unreviewed dual-control divergence and
+    # could silently fail to apply a relaxation. Fail closed instead of reporting applied.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    monkeypatch.setattr(
+        github,
+        "active_branch_rules",
+        lambda repo, branch: [{"type": "pull_request", "parameters": {"required_approving_review_count": 1}}],
+    )
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+    )
+    with pytest.raises(UnmodeledProtectionError):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "required_reviews": 2})
+    assert not any("PUT" in c for c in calls), "must not write the wrong (classic) surface"
+
+
+def test_apply_settings_skips_classic_put_when_ruleset_already_matches(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The ruleset already enforces the desired branch protection → nothing to write on
+    # that surface (no false classic PUT), but the security toggles (a DIFFERENT surface)
+    # still reconcile.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [{"type": "pull_request"}])
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+    )
+    GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "secret_scanning": True})
+    assert not any("protection" in " ".join(c) for c in calls), "must not PUT classic protection"
+    assert any("PATCH" in c for c in calls), "security toggle (separate surface) must still apply"
 
 
 def test_apply_settings_tolerates_unavailable_security_feature(monkeypatch: pytest.MonkeyPatch) -> None:

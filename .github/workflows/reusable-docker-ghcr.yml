@@ -36,11 +36,8 @@ on:
         required: false
         type: boolean
         default: true
-      scan-image:
-        description: Scan the published image for high/critical vulnerabilities.
-        required: false
-        type: boolean
-        default: true
+      # §11.7: the published-artifact vulnerability scan is MANDATORY and always gates
+      # the publish — there is intentionally no opt-out input to disable it.
 
 permissions:
   contents: read
@@ -73,8 +70,8 @@ jobs:
         id: release
         shell: bash
         env:
-          TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
-          TAG_FORMAT_DESCRIPTION: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
+          TAG_PATTERN: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+          TAG_FORMAT_DESCRIPTION: 'N.N.N, N.N.N-alphaN, or N.N.N-betaN'
           RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
         run: |
           set -euo pipefail
@@ -131,13 +128,11 @@ jobs:
       # target platform locally first (no push) and scan it — so a high/critical
       # vulnerability on ANY published architecture blocks the push, not just amd64.
       - name: Install Trivy
-        if: ${{ inputs.scan-image }}
         uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
         with:
           version: v0.55.0
 
       - name: Build and scan each target platform (gate before publish)
-        if: ${{ inputs.scan-image }}
         shell: bash
         env:
           IMAGE: ${{ steps.vars.outputs.image }}
@@ -161,7 +156,7 @@ jobs:
           done
 
       - name: Upload image scan results
-        if: ${{ always() && inputs.scan-image }}
+        if: ${{ always() }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-sarif
@@ -234,4 +229,9 @@ jobs:
         env:
           IMAGE: ${{ steps.vars.outputs.image }}
           TAG: ${{ steps.vars.outputs.tag }}
+        # `latest` is a mutable ALIAS: imagetools copies the manifest so it points at the
+        # exact same digest as the versioned tag (which carries the provenance + SBOM
+        # attestations from the build step). No fresh attestation is emitted for the
+        # `latest` name itself — verifiers should attest against the immutable digest
+        # (or the versioned tag), not the floating `latest` (§11.7).
         run: docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}:${TAG}"

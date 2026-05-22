@@ -4,6 +4,8 @@
 # profile grants exactly what the pipeline needs (§8.9). Kept in sync with those
 # workflows (verified by test_pipeline_privileges_match_workflows).
 security-baseline:
+  # §2.13: always-on — there is no composition that silently omits security scanning.
+  always_on: true
   privileges: ["contents: read", "pull-requests: read", "security-events: write", "actions: read"]
   runner: linux
   status_check: "security / Security baseline heartbeat"

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from .ports import Platform
-from .settingsdrift import SettingsDiff, classify_settings
+from .settingsdrift import SettingsDiff, classify_settings, diff_identity
+
+# diff_identity now lives with SettingsDiff in settingsdrift; re-exported here so the
+# §6.4 consent binding is available to both this flow and reconcile.py without a cycle.
+__all__ = ["SettingsDriftOutcome", "diff_identity", "run_settings_drift"]
 
 Status = Literal["clean", "resolved", "reported"]
 
@@ -17,25 +19,6 @@ class SettingsDriftOutcome:
     destructive: bool = False
     consent_voided: bool = False
     diff_id: str | None = None
-
-
-def diff_identity(diff: SettingsDiff) -> str:
-    """A stable, content-bound identity for a settings diff (§6.4 consent binding).
-
-    Hashes the changed keys together with their classification AND their concrete
-    desired/live values, so consent for ``required_reviews: 1 -> 2`` does not match
-    ``required_reviews: 1 -> 5`` (a different change needs different consent, §8.3).
-    """
-    payload = {
-        key: {
-            "kind": kind,
-            "desired": diff.values.get(key, {}).get("desired"),
-            "live": diff.values.get(key, {}).get("live"),
-        }
-        for key, kind in diff.changes.items()
-    }
-    blob = json.dumps(payload, sort_keys=True, default=str)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 def _render_change(diff: SettingsDiff, key: str) -> str:
@@ -94,8 +77,15 @@ def run_settings_drift(
     current_id = diff_identity(diff)
     consent_voided = False
     if issue is not None and issue.consent_diff_id is not None and issue.consent_diff_id != current_id:
+        # Advisory only: we comment that the prior consent no longer applies, but we do
+        # NOT (and cannot, via the port) clear the stored consent record. The authoritative
+        # gate is §5.7's apply-time recompute, which refuses because the stored consent_diff_id
+        # no longer equals the recomputed current diff id — so a stale consent cannot apply.
         platform.comment_issue(
-            repo, issue_key, "Reported diff changed since consent was granted; prior consent is voided."
+            repo,
+            issue_key,
+            "Reported diff changed since consent was granted; prior consent no longer applies "
+            "(re-consent on the current diff to proceed).",
         )
         consent_voided = True
 

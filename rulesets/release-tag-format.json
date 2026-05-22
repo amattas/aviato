@@ -8,8 +8,8 @@
         "refs/tags/*"
       ],
       "exclude": [
-        "refs/tags/v[0-9]",
-        "refs/tags/v[0-9][0-9]"
+        "refs/tags/[0-9]",
+        "refs/tags/[0-9][0-9]"
       ]
     }
   },
@@ -26,7 +26,7 @@
         "name": "Release tag format",
         "negate": false,
         "operator": "regex",
-        "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(-(alpha|beta)[0-9]+)?$"
+        "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-(alpha|beta)[0-9]+)?$"
       }
     }
   ]

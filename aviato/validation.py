@@ -7,7 +7,7 @@ from typing import Any
 
 from .core.selfcheck import core_import_violations, denylist_violations, load_denylist
 from .paths import DENYLIST_FILE, REPO_ROOT
-from .policy import load_policy, load_ruleset_manifest, load_yaml, release_tag_pattern
+from .policy import default_required_approvals, load_policy, load_ruleset_manifest, load_yaml, release_tag_pattern
 from .rulesets import render_all_rulesets
 
 REQUIRED_FILES = [
@@ -64,10 +64,25 @@ def _check_release_pattern_drift(root: Path, policy: dict, errors: list[str]) ->
     if action_pattern != pattern:
         errors.append(".github/actions/validate-release-ref/action.yml tag-pattern default differs from policy.yml")
 
+    description = policy.get("release", {}).get("tag_format_description")
+    action_description = action.get("inputs", {}).get("tag-format-description", {}).get("default")
+    if action_description != description:
+        errors.append(
+            ".github/actions/validate-release-ref/action.yml tag-format-description default "
+            "differs from policy.yml (it can advertise a format the pattern rejects)"
+        )
+
     for rel_path in RELEASE_WORKFLOWS:
         workflow_text = (root / rel_path).read_text(encoding="utf-8")
-        if pattern not in workflow_text:
-            errors.append(f"{rel_path} does not embed the policy release tag pattern")
+        # Bind the check to the OPERATIVE assignment (the TAG_PATTERN env actually fed to
+        # the `=~` match), not just any occurrence — so the policy pattern sitting in a
+        # comment while a different literal is in use would not silently pass.
+        if f"TAG_PATTERN: '{pattern}'" not in workflow_text:
+            errors.append(f"{rel_path} does not embed the policy release tag pattern in its TAG_PATTERN env")
+        # The operator-facing description must match policy; otherwise the failure
+        # message can advertise a tag format the pattern rejects (e.g. a leading v).
+        if f"TAG_FORMAT_DESCRIPTION: '{description}'" not in workflow_text:
+            errors.append(f"{rel_path} TAG_FORMAT_DESCRIPTION env differs from policy.yml tag_format_description")
 
     rendered_tag_rulesets = [payload for payload in render_all_rulesets(root=root) if payload.get("target") == "tag"]
     for payload in rendered_tag_rulesets:
@@ -122,8 +137,32 @@ def _check_release_workflow_contract(root: Path, errors: list[str]) -> None:
             errors.append(
                 f"{rel_path} checks out Aviato by repository name; this can drift from the pinned workflow ref"
             )
-        if "GITHUB_REF_TYPE" not in text or "tag" not in text:
-            errors.append(f"{rel_path} does not visibly validate that it runs from a tag ref")
+        # Require the OPERATIVE guard (the shell comparison that actually gates publishing
+        # on a tag ref), not a bare GITHUB_REF_TYPE mention that could sit in a comment.
+        if '"${GITHUB_REF_TYPE}" != "tag"' not in text:
+            errors.append(f"{rel_path} does not gate publishing on a tag ref (missing GITHUB_REF_TYPE != tag guard)")
+
+
+def _check_baseline_settings_drift(root: Path, policy: dict, errors: list[str]) -> None:
+    """The desired-state baseline must not drift from policy.yml's required approvals.
+
+    ``policy.yml`` is the single source of truth for the default required PR approvals;
+    the settings baseline duplicates it as desired state, so it is drift-checked here
+    alongside the ruleset/action/workflow copies.
+    """
+    baseline_path = root / "aviato" / "library" / "bundles" / "settings" / "baseline.yaml"
+    if not baseline_path.is_file():
+        return
+    baseline = load_yaml(baseline_path)
+    default_branch = baseline.get("settings", {}).get("default_branch", {})
+    if "required_reviews" not in default_branch:
+        return
+    expected = default_required_approvals(policy)
+    if default_branch.get("required_reviews") != expected:
+        errors.append(
+            f"settings baseline required_reviews ({default_branch.get('required_reviews')}) differs from "
+            f"policy.yml required approvals ({expected})"
+        )
 
 
 def _check_core_agnosticism(core_dir: Path, denylist_file: Path, errors: list[str]) -> None:
@@ -220,6 +259,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_workflow_yaml(root, errors)
     _check_template_references(root, errors)
     _check_release_workflow_contract(root, errors)
+    _check_baseline_settings_drift(root, policy, errors)
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
     _check_action_pins(root, errors)
     _check_template_scaffold_parity(root, errors)

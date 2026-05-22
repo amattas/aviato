@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 from aviato.core.reconcile import ReconcileState, reconcile_decision
+from aviato.core.settingsdrift import classify_settings, diff_identity
+
+# The gate binds to the APPLY-TIME recomputed diff (§2.8/§6.4), so the consent and
+# confirmation ids must equal the real identity of the default desired/live diff.
+_DEFAULT_DIFF_ID = diff_identity(classify_settings(desired={"required_reviews": 2}, live={"required_reviews": 1}))
 
 
 def _state(**overrides) -> ReconcileState:
     base = dict(
         issue_open=True,
         consent_present=True,
-        consent_diff_id="abc",
-        current_diff_id="abc",
+        consent_diff_id=_DEFAULT_DIFF_ID,
+        current_diff_id=_DEFAULT_DIFF_ID,
         actor_type="User",
         role="admin",
         role_lookup_ok=True,
         issue_edited_by_nonhuman_since_grant=False,
-        confirmed_diff_id="abc",  # matches current_diff_id
+        confirmed_diff_id=_DEFAULT_DIFF_ID,  # matches the recomputed diff id
         desired_settings={"required_reviews": 2},
         live_settings={"required_reviews": 1},
         tool_version="1.0.0",
@@ -22,6 +27,21 @@ def _state(**overrides) -> ReconcileState:
     )
     base.update(overrides)
     return ReconcileState(**base)
+
+
+def test_gate_binds_to_recomputed_diff_id_not_state_field() -> None:
+    # Hardening: the consent/confirmation gate must bind to the diff RECOMPUTED at apply
+    # time, not a caller-supplied current_diff_id field that could diverge from it. Here
+    # the state field is stale/wrong but consent+confirmation match the real recomputed
+    # diff → the reconcile still applies.
+    outcome = reconcile_decision(
+        _state(
+            consent_diff_id=_DEFAULT_DIFF_ID,
+            confirmed_diff_id=_DEFAULT_DIFF_ID,
+            current_diff_id="STALE-WRONG-VALUE",
+        )
+    )
+    assert outcome.action == "apply"
 
 
 def test_apply_on_full_valid_path() -> None:

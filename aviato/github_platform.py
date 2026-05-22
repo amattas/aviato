@@ -117,6 +117,32 @@ def current_consent(events: list[dict[str, Any]]) -> ConsentGrant | None:
     return ConsentGrant(diff_id=diff_id, actor_type=actor_type, actor_login=actor_login)
 
 
+# Branch-ruleset rule types the desired settings model represents (§5.6). A live
+# rule of any OTHER type is unmodeled protection the reconcile must not silently
+# shadow (see apply_settings fail-closed guard).
+_MODELED_RULE_TYPES = frozenset({"pull_request", "non_fast_forward", "deletion", "required_status_checks"})
+
+# The flat desired keys that describe branch protection (vs the repo security toggles,
+# which live on a different API surface). Used to decide whether a desired change lands
+# on the classic-protection surface or the ruleset surface.
+_BRANCH_PROTECTION_KEYS = (
+    "requires_pull_request",
+    "required_reviews",
+    "dismiss_stale_reviews",
+    "require_thread_resolution",
+    "block_force_push",
+    "block_deletion",
+    "required_status_checks",
+)
+
+
+def _norm_setting(key: str, value: Any) -> Any:
+    """Normalize a flat setting value for comparison (status-check lists are order-insensitive)."""
+    if key == "required_status_checks" and isinstance(value, (list, tuple, set)):
+        return sorted({str(item) for item in value})
+    return value
+
+
 def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any]) -> dict[str, Any]:
     """Map live default-branch rules/protection into the flat comparable settings map (§5.6, §2.9).
 
@@ -373,6 +399,38 @@ class GitHubPlatform:
             self._gh("pr", "create", "--repo", repo, "--head", branch, "--base", base, "--title", title, "--body", body)
         return branch
 
+    def open_worktree_proposal(self, repo: str, branch: str, title: str, body: str) -> str:
+        """Commit ALL working-tree changes (incl. deletions) onto an identity-keyed
+        branch and open/update a PR (§5.13 offboarding).
+
+        Unlike :meth:`open_or_update_proposal` (which stages a known file set), the caller
+        has already mutated the checked-out tree — stripped markers, removed files, deleted
+        the declaration — so this stages everything with ``git add -A`` to capture deletions
+        too. Runs in ``workdir``; requires ``contents: write`` + ``pull-requests: write``.
+        """
+        base = github.default_branch(repo) or "main"
+        owner = repo.split("/", 1)[0]
+
+        self._git("switch", "-C", branch)
+        self._git("add", "-A")
+        self._git(
+            "-c",
+            "user.name=aviato-bot",
+            "-c",
+            "user.email=aviato-bot@users.noreply.github.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            title,
+        )
+        self._git("push", "--force", "origin", branch)
+
+        existing = github.gh_json(f"repos/{repo}/pulls?head={owner}:{branch}&state=open", default=[], allow_error=True)
+        if not (isinstance(existing, list) and existing):
+            self._gh("pr", "create", "--repo", repo, "--head", branch, "--base", base, "--title", title, "--body", body)
+        return branch
+
     def _git(self, *args: str) -> None:
         github.run(["git", *args], cwd=self.workdir)
 
@@ -389,16 +447,46 @@ class GitHubPlatform:
         branch = github.default_branch(repo)
         live = github.classic_branch_protection(repo, branch)
         # required_status_checks is now modeled (§10); only push restrictions remain
-        # unmodeled — fail closed rather than silently drop them.
+        # unmodeled in classic protection — fail closed rather than silently drop them.
         unmodeled = [k for k in ("restrictions",) if live.get(k)]
+        # Also inspect branch RULESETS: a rule type the desired model doesn't represent
+        # (e.g. commit_message_pattern, required_signatures, required_deployments) would
+        # leave a dual-control state the operator never reviewed when the classic PUT
+        # lands — fail closed there too (§2.4/§5.7), matching what read_settings reads.
+        rules = github.active_branch_rules(repo, branch)
+        unmodeled += sorted({str(rule.get("type")) for rule in rules if rule.get("type") not in _MODELED_RULE_TYPES})
         if unmodeled:
             raise UnmodeledProtectionError(
                 f"refusing to PUT branch protection on {repo}@{branch}: it carries unmodeled "
-                f"protection(s) {unmodeled} that this reconcile does not manage and would drop. "
-                f"Reconcile those manually, then re-run."
+                f"protection(s) {unmodeled} that this reconcile does not manage and would drop "
+                f"or shadow. Reconcile those manually, then re-run."
             )
-        api_payload = to_branch_protection_payload(payload)
-        self._gh_input(["--method", "PUT", f"repos/{repo}/branches/{branch}/protection"], api_payload)
+
+        # Branch protection may be authored on the RULESET surface (the bundled
+        # "protect default branch" ruleset) rather than classic protection. This
+        # settings reconcile can only write CLASSIC protection, so a classic PUT when a
+        # ruleset owns the branch-protection rules would create an unreviewed
+        # dual-control divergence — and could silently FAIL to apply a relaxation while
+        # reporting success. If the ruleset already enforces the desired branch state
+        # there is nothing to write on that surface; otherwise fail closed and direct
+        # the operator to the ruleset surface (§2.4/§2.9/§5.7).
+        if any(rule.get("type") in _MODELED_RULE_TYPES for rule in rules):
+            live_branch = map_branch_settings(rules, live)
+            drifted = sorted(
+                key
+                for key in _BRANCH_PROTECTION_KEYS
+                if key in payload and _norm_setting(key, payload[key]) != _norm_setting(key, live_branch.get(key))
+            )
+            if drifted:
+                raise UnmodeledProtectionError(
+                    f"refusing to PUT classic branch protection on {repo}@{branch}: its branch "
+                    f"protection is enforced by a ruleset, which this settings reconcile cannot "
+                    f"write. Reconcile the ruleset with `aviato apply-rulesets {repo}` for {drifted}, "
+                    f"then re-run."
+                )
+        else:
+            api_payload = to_branch_protection_payload(payload)
+            self._gh_input(["--method", "PUT", f"repos/{repo}/branches/{branch}/protection"], api_payload)
 
         # Apply the repo-level security toggles (§2.13) when present in the desired set.
         # These are §17 operator-prerequisite features that can be UNAVAILABLE (e.g.

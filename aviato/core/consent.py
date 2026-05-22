@@ -26,6 +26,10 @@ def authorize(
     """
     if actor_type != "User":
         return Decision(False, f"actor is not a real human (type={actor_type!r})")
+    if not consent_diff_id or not current_diff_id:
+        # An empty/None binding is not consent — never let two falsy ids compare equal
+        # and slip through the stale check (§5.8 fail-closed).
+        return Decision(False, "no diff-bound consent present")
     if consent_diff_id != current_diff_id:
         return Decision(False, "consent is stale: bound diff does not match the current diff")
     if not role_lookup_ok:

@@ -16,6 +16,18 @@ def test_resolve_applies_extends_add_remove_for_lists(module_root: Path) -> None
     assert rs.pipelines == ("b", "c")
 
 
+def test_always_on_security_baseline_cannot_be_composed_away() -> None:
+    # §2.13: there is NO composition that silently omits security scanning. The
+    # baseline pipeline is data-flagged always_on, and resolution refuses to drop it.
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    resolved = resolve_profile(registry, "python-library")
+    assert "security-baseline" in resolved.pipelines
+    with pytest.raises(CompositionError):
+        resolve_profile(registry, "python-library", overrides={"pipelines": {"remove": ["security-baseline"]}})
+
+
 def test_resolve_deep_merges_settings_maps(module_root: Path) -> None:
     rs = resolve_profile(Registry(module_root), "child")
     # leaf overridden, sibling preserved
@@ -43,6 +55,17 @@ def test_consumer_overrides_apply_same_semantics(module_root: Path) -> None:
     )
     assert rs.settings["pr"]["required_reviews"] == 0
     assert "d" in rs.pipelines
+
+
+def test_unknown_override_key_is_rejected(module_root: Path) -> None:
+    # §4.2: override application is explicit, never silent. A typo'd or unsupported
+    # override key must be a hard error, not silently dropped.
+    with pytest.raises(CompositionError):
+        resolve_profile(
+            Registry(module_root),
+            "child",
+            overrides={"setting": {"pr": {"required_reviews": 0}}},
+        )
 
 
 def test_resolution_is_pure_deterministic(module_root: Path) -> None:

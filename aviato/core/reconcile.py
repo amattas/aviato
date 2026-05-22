@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .consent import authorize
-from .settingsdrift import classify_settings
+from .settingsdrift import classify_settings, diff_identity
 from .version import is_compatible
 
 Action = Literal["apply", "noop", "abort", "refuse"]
@@ -79,13 +79,18 @@ def reconcile_decision(state: ReconcileState) -> ReconcileOutcome:
     if not diff.changes:
         return ReconcileOutcome("noop", "recomputed diff is empty; already converged")
 
-    if not state.consent_present or state.consent_diff_id != state.current_diff_id:
+    # Bind the gate to the identity of the diff RECOMPUTED here, not the caller-supplied
+    # state.current_diff_id — so consent/confirmation and the applied payload all derive
+    # from one apply-time source and a stale/divergent state field can't slip through (§2.8/§6.4).
+    current_diff_id = diff_identity(diff)
+
+    if not state.consent_present or state.consent_diff_id != current_diff_id:
         return ReconcileOutcome("refuse", "consent absent or not bound to the current diff; needs (re-)consent")
 
     decision = authorize(
         actor_type=state.actor_type,
         consent_diff_id=state.consent_diff_id,
-        current_diff_id=state.current_diff_id,
+        current_diff_id=current_diff_id,
         role_lookup_ok=state.role_lookup_ok,
         role=state.role,
     )
@@ -97,13 +102,13 @@ def reconcile_decision(state: ReconcileState) -> ReconcileOutcome:
 
     if state.confirmed_diff_id is None:
         return ReconcileOutcome(
-            "abort", f"operator did not confirm the apply-time diff; re-run with --confirm {state.current_diff_id}"
+            "abort", f"operator did not confirm the apply-time diff; re-run with --confirm {current_diff_id}"
         )
-    if state.confirmed_diff_id != state.current_diff_id:
+    if state.confirmed_diff_id != current_diff_id:
         return ReconcileOutcome(
             "abort",
             f"confirmed diff {state.confirmed_diff_id} no longer matches the apply-time diff "
-            f"{state.current_diff_id} (live state changed since review); re-review and re-confirm",
+            f"{current_diff_id} (live state changed since review); re-review and re-confirm",
         )
 
     pin_overridden = False

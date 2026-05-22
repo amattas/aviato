@@ -23,9 +23,9 @@ class RepoScan:
 
 
 def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[ExpectedArtifact]:
-    # Same resolution/rendering/conditional-filtering (pin, docs, type-check) as
-    # onboarding/doctor — so the fleet scan doesn't report false drift for JS
-    # consumers or miss docs-enabled artifacts (§5.11 parity).
+    # Same resolution/rendering/conditional-filtering (pin, docs, variant) as
+    # onboarding/doctor — so the fleet scan doesn't report false drift for
+    # variant-excluded consumers or miss docs-enabled artifacts (§5.11 parity).
     return [
         ExpectedArtifact(a.output, a.body if not a.seed_once else "", a.seed_once)
         for a in resolved_artifacts(

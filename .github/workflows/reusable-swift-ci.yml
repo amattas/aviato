@@ -65,6 +65,12 @@ on:
           else
             swift build
           fi
+      # §2.14 shared command contract: the five core inputs (working-directory,
+      # install/lint/test/build-command) and the run-* toggles below are identical
+      # across the python/node/swift reusable CI. Swift intentionally has no separate
+      # `format-command`/`run-format` or `typecheck-command`/`run-typecheck`: formatting
+      # (`swift-format lint`) is folded into `lint-command`, and Swift's build IS its
+      # type check — so those toggles would be permanently no-ops here.
       run-install:
         required: false
         type: boolean
@@ -111,20 +117,28 @@ jobs:
       - name: Install
         if: ${{ inputs.run-install && inputs.install-command != '' }}
         shell: bash
-        run: ${{ inputs.install-command }}
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        run: eval "$INSTALL_COMMAND"
 
       - name: Lint
         if: ${{ inputs.run-lint && inputs.lint-command != '' }}
         shell: bash
-        run: ${{ inputs.lint-command }}
+        env:
+          LINT_COMMAND: ${{ inputs.lint-command }}
+        run: eval "$LINT_COMMAND"
 
       - name: Test
         if: ${{ inputs.run-tests && inputs.test-command != '' }}
         shell: bash
-        run: ${{ inputs.test-command }}
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: eval "$TEST_COMMAND"
 
       - name: Build
         if: ${{ inputs.run-build && inputs.build-command != '' }}
         shell: bash
-        run: ${{ inputs.build-command }}
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: eval "$BUILD_COMMAND"
 

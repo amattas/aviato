@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .marker import parse_marker_from_text, strip_marker_from_text
+from .scaffold import _atomic_write
 
 BASELINE_REMOVAL_WARNING = (
     "Offboarding removes the always-on security baseline (§2.13) and all Aviato "
@@ -30,10 +31,21 @@ def offboard(root: Path, managed_outputs: Sequence[str], *, keep_files: bool) ->
     declaration and the seed-once sidecar. The result carries the §2.13 baseline
     removal warning. Only files that currently carry a valid marker are touched;
     operator-owned/unmanaged files are left as-is.
+
+    ``managed_outputs`` is the resolved managed-artifact set (it includes the
+    consumer drift/report automation caller, so removing it satisfies the §5.13
+    "remove the consumer automation" step). Marker parsing/classification happens
+    up front so a malformed input cannot leave the repo half-offboarded; strips use
+    an atomic write (§2.5), and the declaration/sidecar are removed last so a failed
+    file mutation never orphans the declaration.
     """
     root = Path(root)
     result = OffboardingResult()
 
+    # Classify everything first (no mutation), so a read/parse problem aborts before
+    # any file is changed rather than midway through (§2.5 managed-file safety).
+    to_strip: list[tuple[str, Path, str]] = []
+    to_remove: list[tuple[str, Path]] = []
     for output in managed_outputs:
         target = root / output
         if not target.is_file():
@@ -42,11 +54,16 @@ def offboard(root: Path, managed_outputs: Sequence[str], *, keep_files: bool) ->
         if parse_marker_from_text(text) is None:
             continue  # unmanaged / malformed — operator owns it, leave alone
         if keep_files:
-            target.write_text(strip_marker_from_text(text), encoding="utf-8")
-            result.stripped.append(output)
+            to_strip.append((output, target, strip_marker_from_text(text)))
         else:
-            target.unlink()
-            result.removed.append(output)
+            to_remove.append((output, target))
+
+    for output, target, stripped in to_strip:
+        _atomic_write(target, stripped)
+        result.stripped.append(output)
+    for output, target in to_remove:
+        target.unlink()
+        result.removed.append(output)
 
     declaration = root / ".github" / "aviato.yaml"
     if declaration.is_file():

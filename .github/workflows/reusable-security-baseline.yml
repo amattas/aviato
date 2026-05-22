@@ -177,6 +177,8 @@ jobs:
       DEPSCAN_RESULT: ${{ needs.dependency-scan.result }}
       SECRET_RESULT: ${{ needs.secret-scan.result }}
       DEPREVIEW_RESULT: ${{ needs.dependency-review.result }}
+      RUN_CODEQL: ${{ inputs.run-codeql }}
+      CODEQL_LANGUAGES: ${{ inputs.codeql-languages }}
     steps:
       - name: Emit heartbeat
         shell: bash
@@ -205,7 +207,16 @@ jobs:
               exit 1
             fi
           done
-          if [ "${CODEQL_RESULT}" = "failure" ]; then
-            echo "::error::CodeQL SAST reported failures."
-            exit 1
+          # SAST must not silently no-op: if CodeQL is enabled (run-codeql=true) it MUST
+          # have succeeded. A skipped CodeQL (e.g. run-codeql=true but codeql-languages
+          # left empty) is broken, not clean — absence reads as broken (§5.14/§8.16).
+          if [ "${RUN_CODEQL}" = "true" ]; then
+            if [ -z "${CODEQL_LANGUAGES}" ]; then
+              echo "::error::run-codeql is true but codeql-languages is empty; SAST cannot run. Set codeql-languages (§5.14/§8.16)."
+              exit 1
+            fi
+            if [ "${CODEQL_RESULT}" != "success" ]; then
+              echo "::error::CodeQL SAST was enabled but did not succeed (result=${CODEQL_RESULT}); broken (§5.14/§8.16)."
+              exit 1
+            fi
           fi

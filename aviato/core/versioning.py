@@ -4,7 +4,7 @@ import enum
 import re
 from collections.abc import Iterable
 
-from .version import parse_version
+from .errors import CompatibilityError
 
 _HEADER_RE = re.compile(r"^(?P<type>[a-zA-Z]+)(?P<scope>\([^)]*\))?(?P<bang>!)?:")
 _RELEASE_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(\d+))?$")
@@ -45,13 +45,22 @@ class BumpKind(enum.IntEnum):
     MAJOR = 3
 
 
+def _has_breaking_footer(message: str) -> bool:
+    """True iff a line is a ``BREAKING CHANGE:`` footer (per Conventional Commits).
+
+    The token must BEGIN a footer line — a mid-line mention in prose body text does
+    not count, so it cannot force an unintended major bump.
+    """
+    return any(line.lstrip().startswith(("BREAKING CHANGE:", "BREAKING-CHANGE:")) for line in message.splitlines())
+
+
 def _commit_bump(message: str) -> BumpKind:
     header = message.splitlines()[0] if message else ""
     match = _HEADER_RE.match(header.strip())
     if match is None:
         # Not a Conventional Commit header → not a releasable change.
         return BumpKind.NONE
-    if match.group("bang") or "BREAKING CHANGE:" in message or "BREAKING-CHANGE:" in message:
+    if match.group("bang") or _has_breaking_footer(message):
         return BumpKind.MAJOR
     commit_type = match.group("type").lower()
     if commit_type == "feat":
@@ -79,16 +88,26 @@ def classify_commits(commits: Iterable[str]) -> BumpKind:
 
 
 def next_version(current: str, bump: BumpKind) -> str:
-    """Apply ``bump`` to ``current`` → the next ``vX.Y.Z`` (§5.9, §6.1 pin format).
+    """Apply ``bump`` to ``current`` → the next bare ``X.Y.Z`` (§5.9, §6.1 pin format).
 
-    ``NONE`` returns the current version unchanged (normalized to ``vX.Y.Z``), so a
-    caller can detect "no release" by comparing to the current tag.
+    Tags and pins are bare SemVer (no leading ``v``); a legacy ``v``-prefixed
+    ``current`` still parses but the result is normalized to bare. ``current`` may
+    also be a policy-valid pre-release tag (``X.Y.Z-alphaN``/``-betaN``) — the
+    release workflow's ``git describe`` can select one — in which case a release
+    bump applies to the core ``X.Y.Z`` and drops the pre-release suffix. ``NONE``
+    returns the current version unchanged (suffix preserved, normalized to bare),
+    so a caller can detect "no release" by comparing to the current tag.
     """
-    major, minor, patch = parse_version(current)
+    match = _RELEASE_RE.match(current.strip())
+    if match is None:
+        raise CompatibilityError(f"not a release version: {current!r}")
+    major, minor, patch, pre, pre_num = match.groups()
+    major, minor, patch = int(major), int(minor), int(patch)
     if bump == BumpKind.MAJOR:
-        return f"v{major + 1}.0.0"
+        return f"{major + 1}.0.0"
     if bump == BumpKind.MINOR:
-        return f"v{major}.{minor + 1}.0"
+        return f"{major}.{minor + 1}.0"
     if bump == BumpKind.PATCH:
-        return f"v{major}.{minor}.{patch + 1}"
-    return f"v{major}.{minor}.{patch}"
+        return f"{major}.{minor}.{patch + 1}"
+    suffix = f"-{pre}{pre_num}" if pre is not None else ""
+    return f"{major}.{minor}.{patch}{suffix}"
