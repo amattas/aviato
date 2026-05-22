@@ -27,7 +27,9 @@ def discover_repos(root: Path) -> list[Path]:
     for dirpath, dirnames, filenames in os.walk(root):
         current = Path(dirpath)
         parts = set(current.parts)
-        if ".worktrees" in parts or "fixtures" in parts and "tests" in parts:
+        # Skip worktree checkouts and test fixtures (the and/or grouping is explicit:
+        # skip if under .worktrees, OR under a tests/.../fixtures path).
+        if ".worktrees" in parts or ("fixtures" in parts and "tests" in parts):
             dirnames[:] = []
             continue
 

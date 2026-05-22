@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .consent import authorize
+from .errors import CompatibilityError
 from .settingsdrift import classify_settings, diff_identity
 from .version import is_compatible
 
@@ -16,13 +17,17 @@ class ReconcileState:
 
     A thin platform adapter (around ``gh``) populates this from the live issue,
     its consent record, and live settings; the decision logic below is pure so
-    it can be exhaustively tested. ``current_diff_id`` and ``*_settings`` are the
-    apply-time **recomputed** values, never an earlier snapshot (§2.8).
+    it can be exhaustively tested. ``*_settings`` are the apply-time recomputed
+    values, never an earlier snapshot (§2.8).
     """
 
     issue_open: bool
     consent_present: bool
     consent_diff_id: str | None
+    # A caller-supplied diff id. The decision DELIBERATELY IGNORES this and recomputes
+    # the identity from live settings at apply time (§2.8) — a stale/forged value here
+    # must never influence the gate. Retained (not removed) precisely so a test can pass a
+    # wrong value and prove it has no effect (test_reconcile: STALE-WRONG-VALUE). Not dead.
     current_diff_id: str
     actor_type: str | None
     role: str | None
@@ -112,7 +117,14 @@ def reconcile_decision(state: ReconcileState) -> ReconcileOutcome:
         )
 
     pin_overridden = False
-    if not is_compatible(tool=state.tool_version, pinned=state.pin, recorded=state.recorded_version):
+    # An unparseable pin/recorded version (e.g. a corrupted or empty marker) must fail
+    # CLOSED to the same operator-gated "refuse" path, not crash out of the pure decision
+    # with a CompatibilityError that bypasses the §5.7 issue-audit comment (§2.6/§2.7).
+    try:
+        compatible = is_compatible(tool=state.tool_version, pinned=state.pin, recorded=state.recorded_version)
+    except CompatibilityError:
+        compatible = False
+    if not compatible:
         if not state.override_version_pin:
             return ReconcileOutcome(
                 "refuse", "version-pin mismatch (§2.6); re-run with --override-version-pin to proceed"

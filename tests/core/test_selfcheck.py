@@ -19,6 +19,19 @@ def test_denylist_is_the_maintained_list() -> None:
     # (version-source rewriters and the typecheck-variant rule live in plug-ins).
     for token in ("javascript", "typescript", "package.json", "pbxproj", "plist", "pyproject"):
         assert token in denylist
+    # Container/GHCR deploy-mechanism identifiers: the §11.3 action-pin logic that knows
+    # `docker run` lives in the plug-in tree, so core must never name these (§9b).
+    assert "docker" in denylist
+    assert "container" in denylist
+
+
+def test_unparseable_core_file_is_flagged_not_silently_skipped(tmp_path: Path) -> None:
+    # A core source file that fails to parse must NOT silently pass the §9b import-edge scan
+    # — that would let validate() falsely report clean. Flag it as a violation instead.
+    fake_core = tmp_path / "core"
+    fake_core.mkdir()
+    (fake_core / "broken.py").write_text("def f(:\n", encoding="utf-8")
+    assert core_import_violations(fake_core) != []
 
 
 def test_core_does_not_name_the_python_project_manifest() -> None:
@@ -49,12 +62,37 @@ def test_denylisted_token_detected_in_synthetic_core(tmp_path: Path) -> None:
     assert denylist_violations(fake_core, {"docusaurus"}) != []
 
 
+def test_multiword_denylist_token_matches_any_whitespace(tmp_path: Path) -> None:
+    # A multi-word token must match across any whitespace run, so incidental spacing/newlines
+    # cannot evade it (a literal-space pattern would only match a single ASCII space).
+    fake_core = tmp_path / "core"
+    fake_core.mkdir()
+    (fake_core / "single.py").write_text("X = 'app store'\n")
+    (fake_core / "double.py").write_text("X = 'app  store'\n")
+    (fake_core / "newline.py").write_text("X = '''app\nstore'''\n")
+    assert denylist_violations(fake_core, {"app store"}) != []
+    for name in ("single.py", "double.py", "newline.py"):
+        assert denylist_violations(tmp_path / "core", {"app store"}), name
+    # A genuinely unrelated word still does not trip (word boundaries preserved).
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "ok.py").write_text("X = 'appstore_helper'\n")
+    assert denylist_violations(other, {"app store"}) == []
+
+
 def test_dynamic_import_edge_detected_in_synthetic_core(tmp_path: Path) -> None:
-    # §9b: a string-assembled dynamic import of the plug-in tree (the exact evasion a
-    # line-regex would miss) must still be caught by the import-edge check.
+    # §9b: the check flags ANY dynamic import in core, not just one whose argument literally
+    # spells the plug-in tree. That breadth is the point — core has no legitimate dynamic-import
+    # need, so a string-assembled `import_module('aviato.'+'plugins')` (the evasion a line-regex
+    # would miss) cannot hide behind an opaque argument. Assert BOTH: the plugin-assembly case
+    # AND a benign-looking target are flagged (the latter pins the "any dynamic import" policy,
+    # so the test can't silently pass on argument-blindness alone).
     fake_core = tmp_path / "core"
     fake_core.mkdir()
     (fake_core / "sneaky.py").write_text("import importlib\nmod = importlib.import_module('aviato.' + 'plugins')\n")
+    assert core_import_violations(fake_core) != []
+    (fake_core / "sneaky.py").unlink()
+    (fake_core / "benign.py").write_text("import importlib\nmod = importlib.import_module('os')\n")
     assert core_import_violations(fake_core) != []
 
 

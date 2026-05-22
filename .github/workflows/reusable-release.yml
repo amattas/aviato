@@ -158,6 +158,18 @@ jobs:
           set -euo pipefail
           git config user.name aviato-bot
           git config user.email aviato-bot@users.noreply.github.com
+          # §5.9/§719: PROVE the merged commit actually wrote the version-source bump for
+          # NEXT before tagging. A commit whose subject claims `chore(release): NEXT` but
+          # never bumped the manifest must not be tagged/deployed. Re-running the bump is
+          # idempotent (§2.5): a no-op leaves the tree clean; any change means the manifest
+          # was NOT at NEXT, so fail closed. (Build number is per-run and omitted from the
+          # semantic-version proof.)
+          aviato bump-version "${NEXT}" . >/dev/null
+          if ! git diff --quiet; then
+            git checkout -- . 2>/dev/null || true
+            echo "::error::Release commit subject claims ${NEXT} but the version-source was not bumped to ${NEXT}; refusing to tag." >&2
+            exit 1
+          fi
           git tag "${NEXT}"
           # §5.9: advance the floating major (e.g. 1) to this release — a mutable
           # published pointer consumers pin with @N (§6.1/§11.3).

@@ -26,6 +26,26 @@ def test_gh_json_can_allow_error(monkeypatch: pytest.MonkeyPatch) -> None:
     assert github.gh_json("repos/amattas/aviato/rulesets", default=[], allow_error=True) == []
 
 
+def test_gh_json_optional_raises_on_non_404_containing_not_found_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A 403/auth/5xx whose stderr merely CONTAINS "not found"/"no such" must RAISE, not be
+    # read as an empty 404 — keying off the bare phrase re-opens the §2.7 fail-OPEN read
+    # (a falsely-"unprotected"/"no-issue" state). Only the HTTP 404 status is a genuine 404.
+    def fake_run(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(["gh"], 1, "", "gh: Resource not found or no such host (HTTP 403)")
+
+    monkeypatch.setattr(github, "run", fake_run)
+    with pytest.raises(github.GitHubAPIError):
+        github.gh_json_optional("repos/o/r/branches/main/protection", default={})
+
+
+def test_gh_json_optional_returns_default_on_genuine_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(["gh"], 1, "", "gh: Not Found (HTTP 404)")
+
+    monkeypatch.setattr(github, "run", fake_run)
+    assert github.gh_json_optional("repos/o/r/branches/main/protection", default={}) == {}
+
+
 def test_upsert_ruleset_posts_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: [])
     calls: list[list[str]] = []

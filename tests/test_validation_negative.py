@@ -118,3 +118,28 @@ def test_static_ruleset_pattern_drift_is_detected(repo_copy: Path) -> None:
     f.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     errors = validate(repo_copy)
     assert any("tag_name_pattern" in e and "policy.yml" in e for e in errors)
+
+
+def test_monotonic_alias_inline_drift_is_detected(repo_copy: Path) -> None:
+    # The deploy workflows embed a hand-copied `highest.py` that must agree with core's
+    # is_highest (§8.14/§13.2). Flip its prerelease rank so a final release no longer outranks
+    # its beta/alpha — validation must catch the divergence (else an alias could move backward).
+    f = repo_copy / ".github" / "workflows" / "reusable-docker-ghcr.yml"
+    text = f.read_text(encoding="utf-8")
+    drifted = text.replace('rank = {None: 2, "beta": 1, "alpha": 0}', 'rank = {None: 0, "beta": 1, "alpha": 2}')
+    assert drifted != text, "fixture did not contain the expected inline rank table"
+    f.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("is_highest" in e and "drifted" in e for e in errors)
+
+
+def test_monotonic_alias_inline_guard_removal_is_detected(repo_copy: Path) -> None:
+    # Deleting the inline guard entirely (no `<<'PY'` heredoc) must also fail — a removed guard
+    # is the most dangerous drift (the alias would move unconditionally).
+    f = repo_copy / ".github" / "workflows" / "reusable-docs-pages.yml"
+    text = f.read_text(encoding="utf-8")
+    # Drop every heredoc line so no PY block remains.
+    stripped = "\n".join(line for line in text.splitlines() if "<<'PY'" not in line and line.strip() != "PY")
+    f.write_text(stripped, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("monotonic-alias guard is missing" in e for e in errors)

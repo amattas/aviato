@@ -74,3 +74,18 @@ def test_diff_identity_is_bound_to_values_not_just_kind() -> None:
     id_to_2 = diff_identity(classify_settings(desired={"required_reviews": 2}, live={"required_reviews": 1}))
     id_to_5 = diff_identity(classify_settings(desired={"required_reviews": 5}, live={"required_reviews": 1}))
     assert id_to_2 != id_to_5
+
+
+def test_diff_identity_fits_consent_label_limit() -> None:
+    # §6.4/§5.7 consent binding: the identity is carried as a segment of the consent-grant
+    # label a human applies to the tracking issue. GitHub caps label names at 50 chars, so
+    # CONSENT_LABEL_PREFIX + diff_id MUST fit — otherwise the label can never be created and
+    # the reconcile gate is unreachable. (A regression here once shipped because the only
+    # assertion was len == 64; assert the actual round-trip invariant instead.)
+    from aviato.core.settings_drift_flow import diff_identity
+    from aviato.core.settingsdrift import CONSENT_ID_HEX_LEN, classify_settings
+    from aviato.github_platform import CONSENT_LABEL_PREFIX, GITHUB_LABEL_NAME_MAX
+
+    diff_id = diff_identity(classify_settings(desired={"required_reviews": 2}, live={"required_reviews": 1}))
+    assert len(diff_id) == CONSENT_ID_HEX_LEN
+    assert len(CONSENT_LABEL_PREFIX) + len(diff_id) <= GITHUB_LABEL_NAME_MAX

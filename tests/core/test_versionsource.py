@@ -93,6 +93,56 @@ def test_bump_unsupported_file_unchanged() -> None:
     assert bump_text("build.gradle", "version 1.0", "9.9.9") == "version 1.0"
 
 
+def test_bump_pbxproj_idempotent_when_already_at_target() -> None:
+    # Re-bumping a .pbxproj to the version it already holds is a successful no-op, not a
+    # "no MARKETING_VERSION found" error: the field IS present, the value is just unchanged.
+    text = "MARKETING_VERSION = 2.1.0;\n"
+    assert bump_text("project.pbxproj", text, "2.1.0") == text
+
+
+def test_bump_plist_idempotent_when_already_at_target() -> None:
+    text = "<key>CFBundleShortVersionString</key>\n<string>2.1.0</string>\n"
+    assert bump_text("Info.plist", text, "2.1.0") == text
+
+
+def test_bump_pbxproj_without_marketing_version_errors() -> None:
+    with pytest.raises(AviatoError):
+        bump_text("project.pbxproj", "OTHER_SETTING = 1;\n", "2.0.0")
+
+
+def test_bump_plist_without_short_version_errors() -> None:
+    with pytest.raises(AviatoError):
+        bump_text("Info.plist", "<key>Other</key>\n<string>x</string>\n", "2.0.0")
+
+
+def test_bump_pbxproj_build_number_required_when_supplied() -> None:
+    # A swift release supplies a build number; if CURRENT_PROJECT_VERSION is absent the
+    # bump MUST fail loudly, not silently drop the monotonic build number (§13.4). A
+    # silent drop ships a duplicate CFBundleVersion that App Store Connect rejects.
+    with pytest.raises(AviatoError):
+        bump_text("project.pbxproj", "MARKETING_VERSION = 1.0.0;\n", "2.0.0", build_number="42")
+
+
+def test_bump_plist_build_number_required_when_supplied() -> None:
+    text = "<key>CFBundleShortVersionString</key>\n<string>1.0.0</string>\n"
+    with pytest.raises(AviatoError):
+        bump_text("Info.plist", text, "2.0.0", build_number="42")
+
+
+def test_bump_pyproject_single_quoted_version() -> None:
+    # TOML allows single-quoted strings; a valid PEP 621 file using version = '1.2.3'
+    # must bump (preserving the quote style), not raise "no version field".
+    text = "[project]\nname = 'x'\nversion = '1.2.3'\n"
+    out = bump_text("pyproject.toml", text, "2.0.0")
+    assert "version = '2.0.0'" in out
+
+
+def test_bump_pbxproj_tolerates_alternate_spacing_around_equals() -> None:
+    # A hand-edited project.pbxproj may not use Xcode's canonical single spaces around
+    # '='; the rewriter must still find the field (preserving the original spacing).
+    assert "MARKETING_VERSION=2.0.0;" in bump_text("project.pbxproj", "MARKETING_VERSION=1.0.0;\n", "2.0.0")
+
+
 def test_bump_files_rewrites_existing_locations(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text('[project]\nversion = "1.0.0"\n', encoding="utf-8")
     changed = bump_files(tmp_path, ["pyproject.toml", "missing.toml"], "1.1.0")

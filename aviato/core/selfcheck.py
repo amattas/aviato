@@ -82,7 +82,10 @@ def core_import_violations(core_dir: Path | None = None) -> list[str]:
     for path in _core_files(core_dir):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except SyntaxError:
+        except SyntaxError as exc:
+            # A core file that does not parse must NOT silently pass the §9b scan — that
+            # would let validate() falsely report clean. Flag it as a violation.
+            violations.append(f"{path.name}: unparseable ({exc})")
             continue
         package_parts = _module_package(path, core_dir)
         for element in ast.walk(tree):
@@ -111,7 +114,10 @@ def denylist_violations(core_dir: Path | None = None, denylist: Iterable[str] | 
     """Return ``file:token`` strings where core source names a denylisted identifier (§9b).
 
     Matching is case-insensitive on word boundaries, so a substring inside an
-    unrelated word does not trip the check.
+    unrelated word does not trip the check. A token containing internal whitespace
+    matches across any run of whitespace (one space, several, or a newline), so adding
+    incidental spacing cannot evade it. (Examples are omitted here on purpose: this
+    module's own source must name no denylisted token, or it would trip its own scan.)
 
     Limitation (acknowledged): this is a text scan, so a token assembled at runtime
     (``"py" + "thon"``) is not detected. It is a lint, not a hard guarantee. The
@@ -124,7 +130,15 @@ def denylist_violations(core_dir: Path | None = None, denylist: Iterable[str] | 
         from ..paths import DENYLIST_FILE
 
         denylist = load_denylist(DENYLIST_FILE)
-    patterns = [(token, re.compile(rf"\b{re.escape(token)}\b", re.IGNORECASE)) for token in denylist]
+
+    def _token_pattern(token: str) -> re.Pattern[str]:
+        # Split on whitespace and rejoin with ``\s+`` so a multi-word token matches across any
+        # whitespace run (a literal-space pattern would only match one ASCII space). Built
+        # outside an f-string: a backslash in an f-string expression is a syntax error < 3.12.
+        body = r"\s+".join(re.escape(part) for part in token.split())
+        return re.compile(rf"\b{body}\b", re.IGNORECASE)
+
+    patterns = [(token, _token_pattern(token)) for token in denylist]
     violations: list[str] = []
     for path in _core_files(core_dir):
         text = path.read_text(encoding="utf-8")

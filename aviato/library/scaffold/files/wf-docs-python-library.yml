@@ -79,6 +79,7 @@ jobs:
       docs-source-directory: "."
       docs-emit-command: |
         # §12.1 Python API reference (docstrings -> markdown) into the docs source tree.
-        python3 -m pip install --quiet -e . pydoc-markdown
+        # §11.3: pin the pip-installed doc tool to an exact version (no floating latest).
+        python3 -m pip install --quiet -e . "pydoc-markdown==4.8.2"
         mkdir -p website/docs/api
         pydoc-markdown -I . -p {{ import-name }} > website/docs/api/reference.md

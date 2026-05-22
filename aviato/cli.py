@@ -7,6 +7,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .audit import audit_repos, discover_and_audit, render_json, render_tsv
@@ -15,12 +16,12 @@ from .core.bootstrap import is_library
 from .core.composition import resolve_profile
 from .core.declaration import Declaration, declaration_to_yaml, dump_declaration, load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
-from .core.errors import AviatoError, DeclarationError
+from .core.errors import AviatoError, CompatibilityError, DeclarationError
 from .core.file_drift_flow import _PROPOSABLE, run_file_drift
 from .core.fleet import scan_fleet
 from .core.marker import parse_marker_from_text
 from .core.offboarding import offboard as offboard_repo
-from .core.onboarding import materialize_items, plan_onboarding, resolved_artifacts
+from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, resolved_artifacts
 from .core.provision import provision_repo
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
@@ -28,9 +29,9 @@ from .core.repin import plan_repin
 from .core.scaffold import ScaffoldItem, render_managed, scaffold
 from .core.settings_drift_flow import run_settings_drift
 from .core.variables import resolve_variables, writeback_variables
-from .core.version import is_compatible, is_known_version_pin, normalize_pin
+from .core.version import is_compatible, is_known_version_pin, most_restrictive_recorded, normalize_pin
 from .core.versioning import classify_commits, is_highest, next_version
-from .github import GitHubAPIError
+from .github import GitHubAPIError, SettingsReadError
 from .github_platform import GitHubPlatform, UnmodeledProtectionError
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from .plugins.version_formats import bump_files
@@ -148,8 +149,13 @@ def cmd_validate(_: argparse.Namespace) -> int:
     return 0
 
 
-def _recorded_version(root: Path, expected: list[ExpectedArtifact]) -> str | None:
-    """Return the version recorded in the consumer's managed markers, if any (§2.6)."""
+def _recorded_versions(root: Path, expected: list[ExpectedArtifact]) -> list[str]:
+    """Every version recorded in the consumer's managed markers (§2.6).
+
+    ALL markers are returned (not just the first): mixed marker versions must each be
+    checked, or an incompatible one hiding behind a compatible first marker is missed.
+    """
+    versions: list[str] = []
     for artifact in expected:
         if artifact.seed_once:
             continue
@@ -157,8 +163,8 @@ def _recorded_version(root: Path, expected: list[ExpectedArtifact]) -> str | Non
         if path.is_file():
             info = parse_marker_from_text(path.read_text(encoding="utf-8"))
             if info is not None:
-                return info.version
-    return None
+                versions.append(info.version)
+    return versions
 
 
 def _version_pin_error(
@@ -167,17 +173,30 @@ def _version_pin_error(
     """Enforce §2.6 version-pin compatibility before a write/proposal; None if OK.
 
     Skipped in bootstrap (the Library resolves self-references locally, §2.10/§5.10).
-    Refuses on a mismatch unless ``override`` is set.
+    Refuses on a mismatch unless ``override`` is set. Fails CLOSED on an unparseable
+    recorded marker (a clean refusal, never an uncaught traceback) and checks EVERY
+    recorded marker, not just the first.
     """
     if override or is_library(root):
         return None
-    recorded = _recorded_version(root, expected) or declaration.version
-    if is_compatible(tool=__version__, pinned=declaration.version, recorded=recorded):
-        return None
-    return (
-        f"version-pin mismatch: tool {__version__} is incompatible with pin "
-        f"{declaration.version!r} (recorded {recorded!r}); pass --override-version-pin to proceed"
-    )
+    for recorded in _recorded_versions(root, expected) or [declaration.version]:
+        try:
+            compatible = is_compatible(tool=__version__, pinned=declaration.version, recorded=recorded)
+        except CompatibilityError as exc:
+            # is_compatible parses all three of tool / pin / recorded marker; any one being
+            # unparseable raises here. Surface the exact offending value (the exception names
+            # it) rather than always blaming the marker, which may be fine (§2.6 fail-closed).
+            return (
+                f"version-pin check failed ({exc}): cannot compare tool {__version__}, pin "
+                f"{declaration.version!r}, and recorded marker {recorded!r}; refusing to proceed "
+                "(pass --override-version-pin to force)"
+            )
+        if not compatible:
+            return (
+                f"version-pin mismatch: tool {__version__} is incompatible with pin "
+                f"{declaration.version!r} (recorded {recorded!r}); pass --override-version-pin to proceed"
+            )
+    return None
 
 
 def _tri(value: bool | None) -> str:
@@ -272,6 +291,10 @@ def _resolve_onboard_declaration(args: argparse.Namespace, registry: Registry, r
         flags=flags,
         declaration=(existing.variables if existing else {}),
         env=_env_vars(resolved.variables),
+        # §5.2 day-zero: the auto-detection tier is honored by resolve_variables but
+        # intentionally empty — day-zero profiles auto-map no identity-bearing variable,
+        # since a resolved value is PERSISTED into the declaration and a wrong guess (a
+        # directory name is not a PyPI distribution name) is worse than failing closed.
         autodetect={},
     )
     plan_onboarding(
@@ -439,12 +462,13 @@ def cmd_onboard(args: argparse.Namespace) -> int:
 
     print("templates:")
     # Apply the §12.2/§6.1 conditional filter so the preview lists the *exact* artifacts
-    # that would be written. ``docs`` is always known here, so docs-gated artifacts do not
-    # appear when docs is false; a ``when`` keyed on a not-yet-supplied --var stays visible.
-    known = {**_parse_var_flags(args.var), "docs": "true" if args.docs else "false"}
-    for template in resolved.templates:
-        if any(key in known and str(known[key]) != value for key, value in template.when):
-            continue
+    # --write would materialize — no over-reporting. The known variables are the profile's
+    # defaults plus any supplied --var (the same set --write resolves from), so a template
+    # gated on an unsupplied/unmatched variant is excluded, not shown alongside its sibling.
+    known: dict[str, Any] = {spec.name: spec.default for spec in resolved.variables if spec.default is not None}
+    known.update(_parse_var_flags(args.var))
+    known["docs"] = "true" if args.docs else "false"
+    for template in applicable_templates(resolved, known):
         kind = "seed-once" if template.seed_once else "managed"
         print(f"- {template.output_path} ({kind})")
 
@@ -490,6 +514,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         declaration_variables=declaration.variables,
         secret_var_names=secret_names,
         prerequisite_paths=prerequisite_paths,
+        profile=declaration.profile,
     )
 
     # Platform-dependent probes (§5.4/§5.14): issue-channel availability and the
@@ -618,7 +643,13 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
         raise AviatoError("could not determine OWNER/REPO from the repository remote")
     resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs)
     secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
-    report = diagnose(root, expected, declaration_variables=declaration.variables, secret_var_names=secret_names)
+    report = diagnose(
+        root,
+        expected,
+        declaration_variables=declaration.variables,
+        secret_var_names=secret_names,
+        profile=declaration.profile,
+    )
 
     managed_bodies: dict[str, str] = {}
     for artifact in resolved_artifacts(
@@ -667,8 +698,17 @@ def cmd_repin(args: argparse.Namespace) -> int:
         print(f"  newly-required variable (set before re-pinning): {name}")
     for key in plan.orphaned_overrides:
         print(f"  orphaned settings override (no longer in the profile): {key}")
+    for name in plan.conflicting_overrides:
+        print(f"  conflicting pipelines.add override (now bundled at the target): {name}")
     if not plan.ok:
-        print("re-pin blocked: supply the newly-required variables first.", file=sys.stderr)
+        if plan.conflicting_overrides:
+            print(
+                "re-pin blocked: remove the conflicting pipelines.add override(s) — the target "
+                "version already bundles them (§5.12/§4.2).",
+                file=sys.stderr,
+            )
+        if plan.newly_required:
+            print("re-pin blocked: supply the newly-required variables first.", file=sys.stderr)
         return 1
 
     if not args.write:
@@ -875,6 +915,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
             flags=_parse_var_flags(args.var),
             declaration={},
             env=_env_vars(resolved.variables),
+            # §5.2 day-zero: auto-detection tier intentionally empty — see _resolve_onboard_declaration.
             autodetect={},
         )
         persisted = writeback_variables(resolved.variables, variables)
@@ -974,62 +1015,94 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         print(pin_error, file=sys.stderr)
         return 2
 
-    secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
-    report = diagnose(root, expected, declaration_variables=declaration.variables, secret_var_names=secret_names)
-
-    # The proposal must write the SAME marker-stamped content scaffold() writes, so
-    # a merged PR is classified clean (not dirty for a missing marker, §6.2/§5.4).
-    managed_bodies: dict[str, str] = {}
-    for artifact in resolved_artifacts(
-        registry,
-        declaration.profile,
-        declaration.variables,
-        pin=declaration.version,
-        docs=declaration.docs,
-        overrides=declaration.overrides,
-    ):
-        if artifact.seed_once:
-            continue
-        item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
-        managed_bodies[artifact.output] = render_managed(item, profile=declaration.profile, version=declaration.version)
-
+    # §11.2/§5.6 least-privilege: file drift and settings drift use DIFFERENT privileges
+    # (contents/PR/issue write vs. the admin `administration` read). The consumer-automation
+    # workflow runs them as separate steps under separate tokens, so --file-only / --settings-
+    # only let each step carry only the token it needs; the default runs both (operator/local).
+    do_file = not args.settings_only
+    do_settings = not args.file_only
     platform = GitHubPlatform(workdir=root)
-    file_outcome = run_file_drift(
-        platform,
-        repo=slug,
-        profile=declaration.profile,
-        statuses=report.statuses,
-        expected_bodies=managed_bodies,
-        # Bootstrap (§2.10/§5.10): when the Library diagnoses itself it does not raise
-        # file-drift proposals against the remote-ref scaffold — its automation is
-        # self-applied/operator-maintained locally. Consistent with the pin-gate skip.
-        is_bootstrap=is_library(root),
-    )
-    print(f"file drift: proposed={file_outcome.proposed} dirty={file_outcome.dirty}")
-    # File drift uses contents:write (granted). Settings drift READS branch protection /
-    # rulesets, which the platform GITHUB_TOKEN cannot do (it has no administration scope).
-    # Without an operator-supplied admin `settings-token`, skip it — failing CLOSED (never
-    # computing from a falsely-unprotected read, §2.7/§5.6) instead of crashing the run.
-    try:
-        settings_outcome = run_settings_drift(
+
+    if do_file:
+        secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
+        report = diagnose(
+            root,
+            expected,
+            declaration_variables=declaration.variables,
+            secret_var_names=secret_names,
+            profile=declaration.profile,
+        )
+        # The proposal must write the SAME marker-stamped content scaffold() writes, so
+        # a merged PR is classified clean (not dirty for a missing marker, §6.2/§5.4).
+        managed_bodies: dict[str, str] = {}
+        for artifact in resolved_artifacts(
+            registry,
+            declaration.profile,
+            declaration.variables,
+            pin=declaration.version,
+            docs=declaration.docs,
+            overrides=declaration.overrides,
+        ):
+            if artifact.seed_once:
+                continue
+            item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+            managed_bodies[artifact.output] = render_managed(
+                item, profile=declaration.profile, version=declaration.version
+            )
+
+        file_outcome = run_file_drift(
             platform,
             repo=slug,
-            desired_settings=_desired_settings(resolved),
-            issue_key=SETTINGS_DRIFT_ISSUE_KEY,
+            profile=declaration.profile,
+            statuses=report.statuses,
+            expected_bodies=managed_bodies,
+            # Bootstrap (§2.10/§5.10): when the Library diagnoses itself it does not raise
+            # file-drift proposals against the remote-ref scaffold — its automation is
+            # self-applied/operator-maintained locally. Consistent with the pin-gate skip.
+            is_bootstrap=is_library(root),
         )
-        print(f"settings drift: {settings_outcome.status} (destructive={settings_outcome.destructive})")
-    except GitHubAPIError as exc:
-        print(
-            f"settings drift: skipped — could not read protected settings ({exc}); "
-            "supply an admin-capable `settings-token` secret to enable it (§5.6).",
-            file=sys.stderr,
-        )
+        print(f"file drift: proposed={file_outcome.proposed} dirty={file_outcome.dirty}")
+
+    # Settings drift READS branch protection / rulesets, which the platform GITHUB_TOKEN
+    # cannot do (it has no administration scope). §5.6 splits two failure modes that must
+    # NOT be conflated:
+    #   - a live-settings READ failure (no admin token) → skip fail-closed (never compute
+    #     from a falsely-unprotected read, §2.7); by default exits 0 so a scheduled run is
+    #     not failed by a missing token (--require-settings makes the skip fail);
+    #   - an ISSUE-CHANNEL failure (issues disabled / API error opening or commenting the
+    #     tracking issue) → FAIL LOUD (§5.6 "never silently drops the report"), exit non-zero.
+    if do_settings:
+        try:
+            settings_outcome = run_settings_drift(
+                platform,
+                repo=slug,
+                desired_settings=_desired_settings(resolved),
+                issue_key=SETTINGS_DRIFT_ISSUE_KEY,
+            )
+            print(f"settings drift: {settings_outcome.status} (destructive={settings_outcome.destructive})")
+        except SettingsReadError as exc:
+            print(
+                f"settings drift: skipped — could not read protected settings ({exc}); "
+                "supply an admin-capable `settings-token` secret to enable it (§5.6).",
+                file=sys.stderr,
+            )
+            if args.require_settings:
+                return 1
+        except GitHubAPIError as exc:
+            # The issue channel (not the settings read) failed. §5.6 requires this to fail
+            # loud — never a silent skip — so §5.4 diagnosis can flag the broken channel.
+            print(
+                f"settings drift: FAILED — the tracking-issue channel is unavailable ({exc}); "
+                "the drift report was not delivered (§5.6). This is not a settings-read skip.",
+                file=sys.stderr,
+            )
+            return 1
     return 0
 
 
 def cmd_lint_actions(args: argparse.Namespace) -> int:
     """Flag third-party actions not pinned by commit digest (§11.3); exit 1 on any."""
-    from .core.actionpins import action_pin_violations
+    from .plugins.actionpins import action_pin_violations
 
     violations = action_pin_violations(Path(args.path))
     for violation in violations:
@@ -1087,12 +1160,18 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
     if not locations:
         print("profile declares no version-source locations", file=sys.stderr)
         return 2
+    present = [loc for loc in locations if (root / loc).is_file()]
     changed = bump_files(root, locations, args.version, args.build_number)
     for location in changed:
         print(f"bumped {location} -> {args.version}")
-    if not changed:
+    if not present:
+        # No version-source file exists on disk at all — worth flagging (exit 1).
         print("no version-source files found to bump", file=sys.stderr)
         return 1
+    if not changed:
+        # Files exist but are already at the target: a successful idempotent no-op (§2.5),
+        # not a failure — re-running a release/bump must not error.
+        print(f"version-source already at {args.version}; nothing to bump")
     return 0
 
 
@@ -1120,8 +1199,16 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         return 2
 
     # The §2.6 lower bound comes from the consumer's own managed markers, not the
-    # installed tool version (an explicit --recorded-version still overrides).
-    recorded_version = args.recorded_version or _recorded_version(root, expected) or declaration.version
+    # installed tool version (an explicit --recorded-version still overrides). Use the
+    # MOST RESTRICTIVE marker (the highest recorded version), not the first — a later
+    # marker recording a higher/incompatible version must not hide behind a compatible
+    # first one (mirrors the all-markers gate in _version_pin_error).
+    recorded_markers = _recorded_versions(root, expected)
+    recorded_version = (
+        args.recorded_version
+        or (most_restrictive_recorded(recorded_markers) if recorded_markers else None)
+        or declaration.version
+    )
 
     desired = _desired_settings(resolved)
 
@@ -1306,6 +1393,26 @@ def build_parser() -> argparse.ArgumentParser:
     drift.add_argument("path", help="Path to the consumer repository.")
     drift.add_argument(
         "--override-version-pin", action="store_true", help="Proceed despite a version-pin mismatch (§2.6)."
+    )
+    drift_scope = drift.add_mutually_exclusive_group()
+    drift_scope.add_argument(
+        "--file-only",
+        action="store_true",
+        help="Run only file drift (platform token; no admin settings-token needed, §5.6).",
+    )
+    drift_scope.add_argument(
+        "--settings-only",
+        action="store_true",
+        help="Run only settings drift (admin settings-token; read-only, §5.6).",
+    )
+    drift.add_argument(
+        "--require-settings",
+        action="store_true",
+        help=(
+            "Exit non-zero if settings drift cannot be evaluated (unreadable settings). Without "
+            "this, an unreadable-settings skip exits 0 so a scheduled run is not failed by a "
+            "missing admin token; set it when gating CI on settings drift (§5.6)."
+        ),
     )
     drift.set_defaults(func=cmd_drift_report)
 

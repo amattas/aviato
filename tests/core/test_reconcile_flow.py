@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from aviato.core.ports import Issue
 from aviato.core.reconcile_flow import run_reconcile
 from aviato.core.settings_drift_flow import diff_identity
@@ -40,6 +42,38 @@ def test_apply_path_mutates_and_comments() -> None:
     assert "apply_settings" in names
     assert "comment_issue" in names
     assert platform.settings["required_reviews"] == 2
+
+
+def test_apply_succeeds_even_if_audit_comment_fails(capsys) -> None:
+    # §5.7 audit breadcrumb is best-effort: once apply_settings has landed, a transient failure
+    # posting the "Applied" comment must NOT raise out (which would make the operator think the
+    # privileged change failed and re-run it). The apply outcome is still returned; a warning is
+    # emitted so the missing breadcrumb is visible.
+    desired = {"required_reviews": 2}
+    live = {"required_reviews": 1}
+    diff_id = _current_diff_id(desired, live)
+    issue = Issue(
+        key="k",
+        open=True,
+        consent_diff_id=diff_id,
+        consent_actor_type="User",
+        consent_role="admin",
+        consent_role_lookup_ok=True,
+    )
+    platform = FakePlatform(settings=dict(live), issues={"k": issue}, fail_comment=True)
+    outcome = run_reconcile(
+        platform,
+        repo="o/r",
+        issue_key="k",
+        desired_settings=desired,
+        pin="v1",
+        tool_version="1.0.0",
+        recorded_version="1.0.0",
+        confirmed_diff_id=diff_id,
+    )
+    assert outcome.action == "apply"  # did not raise; outcome returned
+    assert platform.settings["required_reviews"] == 2  # apply landed
+    assert "could not be recorded" in capsys.readouterr().err
 
 
 def test_apply_passes_full_desired_state_to_binding() -> None:
@@ -107,6 +141,37 @@ def test_apply_audit_comment_includes_destructive_removals() -> None:
     assert outcome.action == "apply"
     comments = [args[2] for name, args in platform.calls if name == "comment_issue"]
     assert any("legacy_restriction" in body for body in comments), comments
+
+
+def test_apply_failure_is_recorded_on_issue_then_reraised() -> None:
+    # §5.7: an apply that throws mid-flight must still leave an audit record on the issue
+    # (the apply may have partially landed) and then propagate — never silently vanish with
+    # no breadcrumb. The mutation is the most sensitive op; its failure must be traceable.
+    desired = {"required_reviews": 2}
+    live = {"required_reviews": 1}
+    diff_id = _current_diff_id(desired, live)
+    issue = Issue(
+        key="k",
+        open=True,
+        consent_diff_id=diff_id,
+        consent_actor_type="User",
+        consent_role="admin",
+        consent_role_lookup_ok=True,
+    )
+    platform = FakePlatform(settings=dict(live), issues={"k": issue}, fail_apply=True)
+    with pytest.raises(RuntimeError):
+        run_reconcile(
+            platform,
+            repo="o/r",
+            issue_key="k",
+            desired_settings=desired,
+            pin="1",
+            tool_version="1.0.0",
+            recorded_version="1.0.0",
+            confirmed_diff_id=diff_id,
+        )
+    comments = [args[2] for name, args in platform.calls if name == "comment_issue"]
+    assert any("fail" in body.lower() for body in comments), comments
 
 
 def test_missing_issue_refused() -> None:

@@ -16,18 +16,37 @@ def _scaffold_one(root: Path, output: str, body: str) -> None:
 def test_diagnose_tolerates_non_utf8_workflow_file(tmp_path: Path) -> None:
     # A corrupted/non-UTF-8 workflow file in .github/workflows must not crash diagnosis
     # (and thus a whole fleet scan) with a UnicodeDecodeError when probing for the
-    # scheduled drift-automation caller (§5.4 robustness).
+    # scheduled drift-automation caller (§5.4 robustness). Place a VALID drift caller
+    # ALONGSIDE the bad file and assert it is still found — proving the bad file was
+    # tolerated and the scan continued, not that detection was silently disabled (which
+    # a bare `present is False` could not distinguish from "no caller present").
     workflows = tmp_path / ".github" / "workflows"
     workflows.mkdir(parents=True)
     (workflows / "bad.yml").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+    (workflows / "aviato-drift.yml").write_text(
+        "jobs:\n  drift:\n    uses: owner/aviato/.github/workflows/reusable-consumer-automation.yml@main\n",
+        encoding="utf-8",
+    )
     report = diagnose(tmp_path, [])
-    assert report.drift_automation_present is False
+    assert report.drift_automation_present is True  # bad file tolerated; valid caller still detected
 
 
 def test_clean_when_body_matches(tmp_path: Path) -> None:
     _scaffold_one(tmp_path, "cfg.py", "X = 1\n")
     report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])
     assert report.statuses["cfg.py"] == "clean"
+
+
+def test_marker_for_different_profile_is_dirty_drift(tmp_path: Path) -> None:
+    # §6.2: the marker's profile field is ENFORCED, not just recorded. A file stamped
+    # for profile "p" must not read clean under a declaration for profile "other" —
+    # even when the body matches — it needs human review (dirty-drift, §5.4).
+    _scaffold_one(tmp_path, "cfg.py", "X = 1\n")  # stamped profile="p"
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")], profile="other")
+    assert report.statuses["cfg.py"] == "dirty-drift"
+    # ...and matches clean when the profile agrees.
+    report_ok = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")], profile="p")
+    assert report_ok.statuses["cfg.py"] == "clean"
 
 
 def test_mergeable_drift_when_body_diverges_with_valid_marker(tmp_path: Path) -> None:
@@ -120,6 +139,17 @@ def test_seed_once_integrity_divergence_is_reported_not_overwritten(tmp_path: Pa
     report = diagnose(tmp_path, [ExpectedArtifact("Dockerfile", "", seed_once=True)])
     assert "Dockerfile" in report.seed_divergence
     assert (tmp_path / "Dockerfile").read_text() == "FROM tampered\n"  # never overwritten
+
+
+def test_seed_once_binary_file_does_not_crash_diagnosis(tmp_path: Path) -> None:
+    # §6.3 lists binaries among seed-once files. A seed-once file whose live bytes are
+    # not valid UTF-8 must not crash the integrity probe (which would crash a fleet scan);
+    # it is read leniently and simply reported as divergence (report-only).
+    scaffold(tmp_path, [ScaffoldItem("asset.bin", "placeholder\n", "#", True)], profile="p", version="v1")
+    (tmp_path / "asset.bin").write_bytes(b"\xff\xfe\x00\x80 binary \x81")
+    report = diagnose(tmp_path, [ExpectedArtifact("asset.bin", "", seed_once=True)])  # must not raise
+    assert "asset.bin" in report.seed_divergence
+    assert (tmp_path / "asset.bin").read_bytes() == b"\xff\xfe\x00\x80 binary \x81"  # never overwritten
 
 
 def test_probes_drift_automation_and_prerequisites(tmp_path: Path) -> None:

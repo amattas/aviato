@@ -94,6 +94,31 @@ def test_reconcile_matching_confirm_applies(tmp_path: Path, monkeypatch: pytest.
     assert platform.applied, "a confirmed, consented, in-version reconcile must apply"
 
 
+def test_reconcile_considers_all_markers_not_just_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # §2.6: a later marker recording a higher/incompatible version must not hide behind a
+    # compatible first marker. With the old `next(iter(...))` this applied; now it refuses.
+    root = _consumer(tmp_path)
+    live: dict[str, Any] = {}
+    current_id = _current_diff_id(live)
+    issue = Issue(
+        key="drift",
+        open=True,
+        consent_diff_id=current_id,
+        consent_actor_type="User",
+        consent_role="admin",
+        consent_role_lookup_ok=True,
+    )
+    platform = _FakePlatform(settings=live, issue=issue)
+    _wire(monkeypatch, platform)
+    higher_major = f"{int(__version__.split('.')[0]) + 1}.0.0"
+    # First marker is compatible (== tool); a later marker records a higher major.
+    monkeypatch.setattr(cli, "_recorded_versions", lambda root, expected: [__version__, higher_major])
+
+    rc = main(["reconcile", str(root), "drift", "--confirm", current_id])
+    assert rc == 1  # refused on the incompatible later marker
+    assert platform.applied == []  # no mutation
+
+
 def test_reconcile_missing_declaration_errors(tmp_path: Path) -> None:
     rc = main(["reconcile", str(tmp_path), "drift", "--confirm", "x"])
     assert rc == 2

@@ -449,7 +449,17 @@ secret-typed variable into the persisted set is a **hard error** (§8.15), so th
 declaration carries no secrets (§6.6/§11.4). "Auto-detection"
 derives from a **defined, enumerated** set of host sources (e.g. repository
 name, the platform's repository metadata, the operator's configured identity);
-nothing outside that enumerated set is auto-detected.
+nothing outside that enumerated set is auto-detected. **Day-zero scope:** the
+resolution honors the auto-detection tier (it is the lowest-precedence source in
+`resolve_variables`), but **day-zero profiles deliberately auto-map no
+identity-bearing variable** (distribution / import / image / project / bundle
+names). Because a resolved variable is **persisted into the declaration** (above),
+auto-detecting one would silently write a *guess* — and these identifiers need
+language-specific normalization (a directory name is not a PyPI distribution name),
+so a wrong guess is worse than failing closed. Day-zero therefore resolves these
+from flag / declaration / environment and **fails closed** (lists the missing
+variable) when unset; populating the auto-detection tier with safe, normalized
+sources is a post-day-zero refinement.
 **Preconditions:** every *required* variable resolves; for adopt, the working
 tree is clean unless overridden.
 **Two paths, one shape:**
@@ -625,7 +635,13 @@ changed, any prior consent record on the issue is voided with a comment** (the
 authoritative gate is still §5.7's apply-time recompute, but this surfaces
 staleness at report time). **If the issue channel is unavailable** (issues
 disabled), the automation **fails loud** in its log and §5.4 flags it — it never
-silently drops the report. The automation performs **no** settings mutation.
+silently drops the report. **If live settings cannot be read** (the platform token
+lacks the admin/read scope branch-protection and rulesets require), the automation
+**skips settings drift fail-closed** — it never computes a diff from a falsely
+"unprotected" read — and reports the skip; by default this is not a hard failure (so
+a scheduled run is not failed by a missing admin token), but an operator gating CI on
+settings drift can opt to treat the skip as a failure (`drift-report --require-settings`).
+The automation performs **no** settings mutation.
 **additive vs destructive (normative):** a change is **destructive** if it
 removes, weakens, or replaces an existing protection or any operator-relied-upon
 value (e.g. lowering a required-review count, removing a required check,
@@ -822,6 +838,13 @@ or behavior may be reduced" warning**.
 been repurposed to a different composition** (identity change), refuse and report.
 The upgrade/downgrade path is the **only** sanctioned way a pin moves; drift
 (§5.5) never advances it.
+**Day-zero limitation:** the repurpose (identity-change) refusal requires resolving
+the profile **at the target version**, which needs that version's definitions
+present. The operator's installed CLI carries **one** Library version, so the
+shipped re-pin confirms the profile still **resolves** but cannot compare its
+identity *across* versions; cross-version repurpose detection (fetching the target
+version's registry) is a post-day-zero refinement. The decision logic is implemented
+and tested against a second registry; it is dormant in the single-installed-CLI flow.
 
 ```mermaid
 flowchart TD
@@ -980,6 +1003,12 @@ operator edits that make these files operator-owned. (This replaces the earlier
   diff identity not later revoked.
 - A consent record whose bound diff identity does not match the current diff is
   **stale** → DENY (§5.8).
+- Because the record is carried as a hosting-platform label a **human must be able
+  to create**, the diff identity is constrained to fit the platform's label-name
+  limit (GitHub: 50 chars, including the binding's `aviato-consent:` prefix). The
+  identity is a truncated content hash (`settingsdrift.CONSENT_ID_HEX_LEN` hex
+  chars) — short enough to label, long enough to keep the content binding
+  collision-resistant. The binding guards this invariant at import.
 
 ### 6.5 Profile name stability
 
@@ -1063,7 +1092,10 @@ Each maps to a principle and must be designed out, not patched later.
   published alias (e.g. a `latest` image tag or docs alias) **backward** →
   prevented by a **per-alias deploy concurrency group** plus a **monotonic-version
   guard** that moves the alias only if the deploying tag is the highest released
-  version (§13.2, §13.3); the §2.12 recompute exemption does not cover this.
+  version (§13.2, §13.3); the §2.12 recompute exemption does not cover this. The
+  guard is inlined into the deploy workflows (to avoid a self-reference install) but
+  is **validation-checked against the core `is_highest` comparator** so the hand-copied
+  copy cannot silently drift from the tested implementation.
 - **§8.15** A `secret`-typed variable is persisted into the declaration → prevented
   by onboarding excluding secret-typed variables from the write-back as a hard
   error, and diagnosis flagging any present (§5.2, §5.4, §6.6).
@@ -1249,12 +1281,24 @@ on arbitrary push, pull_request, or fork events.
 - Prefer keyless/OIDC or the platform token for every target that supports it.
   PyPI uses OIDC Trusted Publishing; GHCR and Pages use the platform token. None
   store a long-lived secret.
-- Stored secrets are permitted **only** where the platform offers no OIDC path.
-  Day zero, that is **Apple App Store Connect alone**.
+- Stored secrets for **deployment** are permitted **only** where the platform offers
+  no OIDC path. Day zero, that is **Apple App Store Connect alone**.
 - The zero-stored-secret posture of all read/propose/report automation (§6.6) is
-  never weakened. Note: the platform-issued workflow token is **not** a stored
-  secret — it is ephemeral — so read automation that needs an elevated *read*
-  scope still carries no stored secret.
+  never weakened **on the write side**: no read/propose/report automation carries a
+  stored secret that can *mutate* anything. The platform-issued workflow token is
+  **not** a stored secret — it is ephemeral — so read automation that needs an
+  elevated *read* scope it can obtain from the workflow token carries no stored secret.
+- **One narrow read-side exception (settings-drift, §5.6/§11.3).** Reading branch
+  protection and rulesets requires the `administration` scope, which the platform's
+  ephemeral workflow token **does not and cannot** carry — so settings-drift detection
+  is the single place an operator may supply a stored **admin-scoped READ token**. This
+  exception is tightly bounded and does **not** weaken the posture above: the token is
+  **optional** (settings-drift skips fail-closed without it, §5.6), **read-only** (it
+  performs no mutation — apply is the separate operator-gated §5.7 path under the
+  operator's own credentials, never this automation), **scoped to its own step alone**
+  (§11.3 — never visible to the file-drift writes, the install step, or any deploy/PR/
+  fork-triggered workflow), and supplied by the operator, not embedded by the Library.
+  It is a read credential of last resort, not a deploy secret.
 
 ### 11.3 Privileges are declared and granted (read and deploy alike)
 
@@ -1265,9 +1309,15 @@ it **grants** exactly those (§8.9).
 
 | Automation | Required job privileges | Stored secrets |
 |---|---|---|
-| File-drift detection (§5.5) | `contents: read`, `pull-requests: write` | none (platform token) |
+| File-drift detection (§5.5) | `contents: write`, `pull-requests: write` | none (platform token) |
 | Settings-drift detection (§5.6) | settings **read** scope, `issues: write` | none (platform token) |
 | Security scanning (§5.14) | `contents: read`, `security-events: write`, `actions: read` | none (platform token) |
+
+File-drift proposes via a pull request, which requires **pushing an identity-keyed
+proposal branch** — hence `contents: write`, not `contents: read` (it never mutates
+the default branch directly; the PR remains the human gate). The two automations run
+as **separate steps under separate tokens** (§11.2): file-drift uses the platform
+token; settings-drift uses an operator-supplied admin token scoped to its step alone.
 
 **Deployment:**
 
@@ -1285,9 +1335,17 @@ the network is **checksum-verified** before execution; and a tool installed from
 package index that exposes no digest (e.g. a `pip`/`npm` package) is pinned to an
 **exact version**, never a floating latest. (Distro packages installed via the
 runner's system package manager inherit the pinned runner-image snapshot.) The
-agnostic checker (`aviato.core.actionpins`) and the in-CI gate enforce the
+agnostic checker (`aviato.plugins.actionpins`) and the in-CI gate enforce the
 digest-pinned classes (actions, images, curl-fetched binaries); exact-version tool
 pins are carried as workflow inputs (e.g. `actionlint-version`, `yamllint-version`).
+**First-party GitHub-owned actions** (the `actions/*` and `github/*` namespaces —
+e.g. `actions/checkout`, `actions/attest-build-provenance`, `github/codeql-action`)
+are exempt from the digest requirement and pinned at **major-tag** granularity: they
+share the same trust root as the runner image itself (GitHub maintains both), so a
+digest pin buys no additional supply-chain isolation while costing constant churn.
+**Third-party actions carry no such exemption** and are commit-digest pinned. The
+checker encodes this carve-out (`actionpins._FIRST_PARTY_OWNERS`); changing it is a
+deliberate policy decision, not a bug.
 For the Library reference a Consumer pulls, **digest-level verifiability holds only
 for exact-version pins** (`X.Y.Z`, resolved to a recorded digest / signed tag) —
 those **close the supply-chain delivery path**. A **floating major pin** (`X`,
@@ -1575,6 +1633,21 @@ site (versioning + local search index) → publish to Pages via the platform tok
 **move the `latest` alias only if this release is the highest released version**
 (monotonic guard), under a **per-alias deploy concurrency group** so a slower
 older-release deploy cannot regress `latest`/docs (§8.14).
+**Day-zero limitation (conservative monotonic gate):** the implementation gates the
+**entire** docs job — version-cut, build, and publish — on the monotonic
+"highest-released-version" guard, not just the `latest`-alias move. Consequence: a
+release that is **not** the highest (e.g. a backport patch to an older line published
+after a newer major already shipped) does **not** retroactively add its own docs
+version. This is deliberately conservative: publishing an older release's site without
+correctly merging it into the newer published version set risks regressing live docs,
+which has no apply-time recompute (§2.12) and is operator-verified only (§9.9). Adding
+a non-highest version *without* moving `latest` (a true §13.3 "every release adds a
+version") requires merging into the existing `gh-pages` version set and is a
+post-day-zero refinement. Likewise the version sources read forward between releases
+are persisted as a **time-bounded build artifact** rather than durably from the
+published `gh-pages` artifact; a release gap exceeding that window would lose prior
+snapshots — also a post-day-zero hardening. Day-zero releases are monotonic, so
+neither edge is exercised by the normal release cadence.
 **Auth:** platform token, `pages: write` + `id-token: write` + `contents: read`;
 **no stored secret**.
 **Why a deployment plug-in:** publishing to Pages is a privileged outward publish;
@@ -1633,6 +1706,17 @@ not blocked; a protected deployment environment with required reviewers.
 bundle identifier, app/scheme identifiers, export method, team/app identifiers,
 and the **monotonic build number** (distinct from the marketing version, §12.3) —
 App Store Connect rejects duplicate/non-increasing build numbers.
+**Where the build number is set and enforced.** The build number is written into the
+version-source (`CURRENT_PROJECT_VERSION`/`CFBundleVersion`) at the **release-proposal**
+step (§5.9): the bump **fails loud** if a build number is supplied but the version-source
+exposes no field to receive it (so a Swift release can never tag with an un-bumped build
+number). The agnostic release process derives the marketing version from SemVer and
+re-proves *that* at the tag step; the build number's value is supplied per-run (the run
+number, strictly increasing) and its **strict-increase invariant is enforced
+authoritatively by App Store Connect at upload** (it rejects duplicate/non-increasing
+build numbers). The agnostic tag step deliberately does **not** re-prove monotonicity
+(it would require language-specific knowledge of the build-number location and the prior
+value — neither belongs in the agnostic core, §9b); Apple is the authoritative gate.
 
 #### 13.4.7 Definition of done (operator-verified exception, §9.9)
 The system author cannot verify this. It is "done" only when the **operator**
@@ -1675,12 +1759,17 @@ Aviato-driven, operator-gated rollback flow is a candidate for a later version.
 | GHCR | platform token | **No** | `packages: write`, `contents: read` | Linux | Yes (test image) |
 | Docusaurus docs (Pages) | platform token | **No** | `pages: write`, `id-token: write`, `contents: read` | Linux | Yes |
 | App Store Connect | App Store Connect API key + signing assets | **Yes** | `contents: read` | macOS | **No — operator-verified** |
-| Read/report automation | platform token (ephemeral) | **No** | read scope + `issues`/`pull-requests: write` | Linux | Yes |
+| File-drift / report automation | platform token (ephemeral) | **No** | read scope + `issues`/`pull-requests: write` | Linux | Yes |
+| Settings-drift detection (§5.6) | operator-supplied admin **read** token | **Optional, read-only** | `administration: read` (read branch protection/rulesets) | Linux | Yes |
 | Security scanning (baseline, §2.13) | platform token + OIDC | **No** | `security-events: write`, `contents: read` | Linux/macOS | Yes |
 
-Read/propose/report automation carries **no stored secret** for any target.
-Stored secrets exist only in the App Store Connect deploy job, behind a protected
-environment.
+Read/propose/report automation carries **no write-capable stored secret** for any
+target. The single read-side exception is the **optional, read-only** settings-drift
+admin token (§11.2/§11.3): the platform's ephemeral workflow token cannot carry the
+`administration` scope branch-protection reads require, so an operator may supply an
+admin **read** token scoped to that step alone; it can mutate nothing (apply is the
+separate §5.7 operator-gated path). Write/deploy stored secrets exist **only** in the
+App Store Connect deploy job, behind a protected environment.
 
 ---
 

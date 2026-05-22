@@ -57,20 +57,50 @@ def test_consumer_automation_settings_drift_token_is_optional_and_read_only() ->
     assert "administration" not in wf["permissions"]
     assert wf["permissions"] == {"contents": "write", "pull-requests": "write", "issues": "write"}
 
-    # The optional admin token is declared (not required) and preferred over the platform
-    # token at runtime, so settings drift works when supplied and degrades when not.
+    # The optional admin token is declared (not required).
     # (YAML 1.1 parses the `on:` key as boolean True, hence wf.get(True).)
     on_block = wf.get("on") or wf.get(True)
     settings_secret = on_block["workflow_call"]["secrets"]["settings-token"]
     assert settings_secret.get("required") is False
-    gh_token = wf["jobs"]["drift-report"]["env"]["GH_TOKEN"]
-    assert "settings-token" in gh_token and "github.token" in gh_token
+
+    # §11.2/§5.6 least-privilege: the admin settings-token must NOT be a job-wide GH_TOKEN
+    # (that would expose it to the install step and the file-drift WRITES). It is scoped to
+    # the single read-only settings-drift step; file drift runs under the platform token.
+    job = wf["jobs"]["drift-report"]
+    assert "settings-token" not in str(job.get("env", {})), "admin token must not be job-wide env"
+    steps = job["steps"]
+    file_step = next(s for s in steps if "--file-only" in s.get("run", ""))
+    assert "github.token" in file_step.get("env", {}).get("GH_TOKEN", "")
+    assert "settings-token" not in str(file_step.get("env", {})), "file-drift step must not see the admin token"
+    settings_step = next(s for s in steps if "--settings-only" in s.get("run", ""))
+    assert "settings-token" in str(settings_step.get("env", {})), "settings-drift step must receive the admin token"
 
     # The scaffolded caller (read as text — it carries {{ }} placeholders) passes the
     # consumer's optional secret through to the reusable workflow.
     caller = (SCAFFOLD_FILES / "wf-drift.yml").read_text(encoding="utf-8")
     assert "settings-token: ${{ secrets.AVIATO_SETTINGS_TOKEN }}" in caller
     assert "administration:" not in caller
+
+
+def test_release_tag_phase_proves_version_source_was_bumped() -> None:
+    # §5.9/§719: the tag phase must PROVE the merged commit actually bumped the version-
+    # source to NEXT before tagging — a commit whose subject merely claims `chore(release):
+    # NEXT` but never bumped the manifest must not be tagged/deployed. The proof re-runs the
+    # idempotent bump and fails if it produces any change. Guard it structurally (the live
+    # gate is operator-verified; nothing else catches a regression here).
+    wf = _load("reusable-release.yml")
+    tag_step = next(
+        s
+        for j in wf["jobs"].values()
+        if isinstance(j, dict)
+        for s in j.get("steps", [])
+        if isinstance(s, dict) and s.get("id") == "tag"
+    )
+    run = tag_step["run"]
+    assert "aviato bump-version" in run, "tag phase must re-run the bump to verify it"
+    assert "git diff" in run, "tag phase must detect an un-bumped manifest via git diff"
+    # The verification must come BEFORE the actual `git tag`.
+    assert run.index("aviato bump-version") < run.index("git tag"), "verify the bump before tagging"
 
 
 def test_security_baseline_retains_fail_closed_structure() -> None:

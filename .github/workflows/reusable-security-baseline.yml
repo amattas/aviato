@@ -219,4 +219,10 @@ jobs:
               echo "::error::CodeQL SAST was enabled but did not succeed (result=${CODEQL_RESULT}); broken (§5.14/§8.16)."
               exit 1
             fi
+          else
+            # §2.13/§5.14: SAST is an ALWAYS-ON baseline — no profile may turn it off. A caller
+            # passing run-codeql=false would skip SAST and (previously) pass the gate silently.
+            # That is the §8.16 fail-open the baseline forbids: reject it.
+            echo "::error::SAST is disabled (run-codeql=${RUN_CODEQL}); the §2.13 security baseline is always-on and cannot be turned off (§5.14/§8.16)."
+            exit 1
           fi

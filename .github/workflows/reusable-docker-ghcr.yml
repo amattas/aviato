@@ -161,6 +161,14 @@ jobs:
         with:
           sarif_file: trivy-sarif
 
+      # NOTE (scan-vs-push image identity, §11.7): the scan above builds each platform
+      # with `--load` and the push below rebuilds via build-push-action. Both share the
+      # same Dockerfile, context, and `type=gha` build cache, so the pushed layers are the
+      # cached scanned layers — functionally equivalent, but NOT a proven byte-identical
+      # digest match. A stronger guarantee (build once to a local OCI store, scan, then push
+      # that exact artifact by digest) is a deferred hardening; it interacts with multi-arch
+      # `--load` limitations and cannot be exercised without a live registry (operator-verified
+      # DoD, §9.9). The gate still blocks publish on a HIGH/CRITICAL finding in those layers.
       - name: Build and push image
         id: build
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
@@ -188,7 +196,9 @@ jobs:
       # §8.14/§13.2: move the mutable `latest` tag only if this release is the
       # highest released version. The comparison mirrors aviato.core.versioning
       # .is_highest (which is unit-tested); kept inline to avoid a self-reference
-      # install in the deploy job.
+      # install in the deploy job. `aviato validate` (_check_monotonic_alias_parity)
+      # runs this snippet against a battery of cases and fails if it drifts from
+      # is_highest, so the inline copy cannot diverge silently.
       - name: Determine highest released version
         id: monotonic
         if: ${{ inputs.push }}

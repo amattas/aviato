@@ -21,10 +21,57 @@ from urllib.parse import quote
 from . import github
 from .command import CommandError
 from .core.ports import Issue
+from .core.settingsdrift import CONSENT_ID_HEX_LEN
 
 # A human grants consent by adding a label of this form to the tracking issue;
 # the diff identity it authorizes is encoded after the prefix (§6.4).
 CONSENT_LABEL_PREFIX = "aviato-consent:"
+
+# GitHub rejects label names longer than 50 characters. The consent-grant label is
+# CONSENT_LABEL_PREFIX + diff_identity(...), and a human must be able to create it for the
+# §5.7 reconcile gate to function — so the prefixed id MUST fit. Guard the invariant at import
+# time so a future change to either the prefix or the id length fails loud here rather than
+# silently making the gate unreachable (no test exercises the live label round-trip).
+GITHUB_LABEL_NAME_MAX = 50
+if len(CONSENT_LABEL_PREFIX) + CONSENT_ID_HEX_LEN > GITHUB_LABEL_NAME_MAX:
+    # An explicit raise (not assert) so the guard holds even under `python -O`.
+    raise RuntimeError(
+        f"consent label {CONSENT_LABEL_PREFIX!r}+{CONSENT_ID_HEX_LEN}-char id exceeds "
+        f"GitHub's {GITHUB_LABEL_NAME_MAX}-char label limit; the §5.7 reconcile gate "
+        "would be unreachable"
+    )
+
+
+def _select_issue(issues: Any, repo: str, key: str) -> dict[str, Any] | None:
+    """Pick the one tracking issue for ``key`` from a labels-filtered list, deterministically.
+
+    Exactly one issue should ever carry the consent/drift label. If more than one does
+    (a prior duplicate from a flaky run, or a human-opened lookalike), the three reads
+    (open-list / all-list) must agree on WHICH issue — otherwise consent could be read on one
+    and audited on another. Prefer an **open** issue (the actionable one), and among the chosen
+    state pick the oldest (lowest number); only fall back to a closed issue when none are open.
+    Preferring open keeps the all-state read (get_issue/comment_issue) agreeing with the
+    open-only read (open_or_update_issue) whenever an open issue exists, and stops a stale
+    *closed* duplicate from shadowing a live open issue (which would wrongly refuse reconcile).
+    Warn loudly on duplicates (§5.6). Returns the chosen issue dict, or ``None`` if the list is
+    empty/malformed.
+    """
+    if not isinstance(issues, list) or not issues:
+        return None
+    numbered = [i for i in issues if isinstance(i, dict) and isinstance(i.get("number"), int)]
+    if not numbered:
+        # No usable "number" — fall back to the first dict so callers can still create afresh.
+        return next((i for i in issues if isinstance(i, dict)), None)
+    # Prefer open issues; fall back to the full set only when none are open.
+    pool = [i for i in numbered if i.get("state") == "open"] or numbered
+    if len(pool) > 1:
+        print(
+            f"WARNING: {repo} has multiple issues labeled {key!r}; acting on the oldest "
+            f"(#{min(n['number'] for n in pool)}). Close the duplicates to restore a clean "
+            "consent/audit trail (§5.6).",
+            file=sys.stderr,
+        )
+    return min(pool, key=lambda i: i["number"])
 
 
 def _seg(value: str) -> str:
@@ -48,9 +95,17 @@ def _is_feature_unavailable(exc: CommandError) -> bool:
     These (secret scanning, push protection, Dependabot security updates) require the
     relevant features enabled at the org/repo level — an adoption prerequisite, not an
     apply failure.
+
+    Tightened to require an availability phrase **in a security-feature context** (or the
+    unambiguous "advanced security"), so an unrelated error that merely contains the words
+    "not enabled" is NOT misclassified as a benign adoption warning and is allowed to raise.
     """
     msg = exc.stderr.lower()
-    return "not available" in msg or "not enabled" in msg or "advanced security" in msg
+    if "advanced security" in msg:
+        return True
+    availability = "not available" in msg or "not enabled" in msg or "must be enabled" in msg
+    feature_context = "security" in msg or "scanning" in msg or "dependabot" in msg
+    return availability and feature_context
 
 
 @dataclass(frozen=True)
@@ -285,27 +340,46 @@ class GitHubPlatform:
         # Returns the flat default-branch settings map, matching the desired map
         # the CLI passes (resolved.settings["default_branch"]) so the diff compares
         # like-for-like (§5.6).
-        branch = github.default_branch(repo)
-        if not branch:
-            return {}
-        rules = github.active_branch_rules(repo, branch)
-        protection = github.classic_branch_protection(repo, branch)
-        security = map_security_settings(github.repo_security_settings(repo))
+        #
+        # A read failure here (e.g. the platform token lacks the admin scope branch
+        # protection/rulesets require) is raised as SettingsReadError so the caller can
+        # fail closed by SKIPPING settings drift (§5.6) — distinct from an issue-channel
+        # failure, which must fail loud. We never compute a diff from a falsely-
+        # "unprotected" read (§2.7): the gh_* readers already fail closed on ambiguity.
+        try:
+            branch = github.default_branch(repo)
+            if not branch:
+                return {}
+            rules = github.active_branch_rules(repo, branch)
+            protection = github.classic_branch_protection(repo, branch)
+            security = map_security_settings(github.repo_security_settings(repo))
+        except github.GitHubAPIError as exc:
+            raise github.SettingsReadError(exc.endpoint, exc.returncode, exc.stderr) from exc
         # Flat merge: branch-protection fields + repo security toggles, matching the
         # flat desired map the CLI passes (so security drift is visible, §5.6/§2.13).
         return {**map_branch_settings(rules, protection), **security}
 
     def get_issue(self, repo: str, key: str) -> Issue | None:
-        issues = github.gh_json(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[], allow_error=True)
-        if not isinstance(issues, list) or not issues:
+        # Fail-closed read (§2.7): the issues-list endpoint returns ``200 []`` when no
+        # issue carries the label, so a 404 is the repo itself being absent — both mean
+        # "no tracking issue" (default []). An auth/5xx/rate-limit error must RAISE, not
+        # masquerade as "no issue": reading it as absent would let run_settings_drift open
+        # a duplicate tracking issue (and silently violates its "fails loud" contract).
+        issues = github.gh_json_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
+        head = _select_issue(issues, repo, key)
+        if head is None:
             return None
-        head = issues[0]
         number = head.get("number")
         is_open = head.get("state") == "open"
+        if number is None:
+            # A 200 with a malformed issue (no number) → can't read the consent timeline;
+            # report the issue with no consent so reconcile refuses (fail-safe), never crash.
+            return Issue(key=key, open=is_open)
 
-        # Read the FULL (paginated) label-event history so a later revoke cannot
-        # be missed (§2.8/§6.4), then reduce to the active consent grant.
-        timeline = github.gh_json_paginated(f"repos/{repo}/issues/{number}/timeline", default=[], allow_error=True)
+        # Read the FULL (paginated) label-event history so a later revoke cannot be missed
+        # (§2.8/§6.4). FAIL CLOSED on a transient error (no allow_error): silently reading
+        # the authoritative consent history as [] would drop a real grant/revoke.
+        timeline = github.gh_json_paginated(f"repos/{repo}/issues/{number}/timeline", default=[])
         events = _label_events(timeline if isinstance(timeline, list) else [])
         grant = current_consent(events)
         if grant is None:
@@ -362,10 +436,15 @@ class GitHubPlatform:
         return (permission, True) if isinstance(permission, str) else (None, False)
 
     def open_or_update_issue(self, repo: str, key: str, title: str, body: str) -> str:
-        existing = github.gh_json(f"repos/{repo}/issues?state=open&labels={_seg(key)}", default=[], allow_error=True)
+        # Fail-closed read (§2.7): a transient auth/5xx must RAISE rather than read as "no
+        # existing issue", which would POST a DUPLICATE tracking issue every flaky run and
+        # fragment the consent/audit trail. A genuine ``200 []`` (no match) still creates one.
+        existing = github.gh_json_optional(f"repos/{repo}/issues?state=open&labels={_seg(key)}", default=[])
         # A malformed 200 (issue object without "number") must not crash the scheduled
-        # drift-report; fall through to creating a fresh issue rather than KeyError.
-        number = existing[0].get("number") if isinstance(existing, list) and existing else None
+        # drift-report; fall through to creating a fresh issue rather than KeyError. When
+        # several issues share the label, act on ONE deterministically (oldest), with a warn.
+        chosen = _select_issue(existing, repo, key)
+        number = chosen.get("number") if chosen else None
         if number is not None:
             self._gh_input(["--method", "PATCH", f"repos/{repo}/issues/{number}"], {"body": body})
             return str(number)
@@ -373,8 +452,12 @@ class GitHubPlatform:
         return key
 
     def comment_issue(self, repo: str, key: str, body: str) -> None:
-        existing = github.gh_json(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[], allow_error=True)
-        number = existing[0].get("number") if isinstance(existing, list) and existing else None
+        # Fail-closed read (§2.7): a transient auth/5xx must RAISE rather than silently drop
+        # the audit comment (the §5.7 record of a privileged change). A genuine ``200 []``
+        # (no issue to comment on) stays a no-op.
+        existing = github.gh_json_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
+        chosen = _select_issue(existing, repo, key)
+        number = chosen.get("number") if chosen else None
         if number is not None:
             self._gh_input(["--method", "POST", f"repos/{repo}/issues/{number}/comments"], {"body": body})
 

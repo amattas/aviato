@@ -61,6 +61,17 @@ def test_onboard_plan_hides_docs_artifacts_unless_opted_in(capsys: pytest.Captur
     assert "aviato-docs.yml" in out
 
 
+def test_onboard_plan_does_not_list_conflicting_variant_templates(capsys: pytest.CaptureFixture[str]) -> None:
+    # §6.1/§4.2: node-service has two templates writing package.json gated on mutually-
+    # exclusive language-variant. The plan must list the EXACT set --write materializes, so
+    # the top-level package.json must appear AT MOST once, never both variants at once.
+    rc = main(["onboard", "owner/repo", "--profile", "node-service"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    pkg_lines = [ln for ln in out.splitlines() if ln.strip().startswith("- package.json ")]
+    assert len(pkg_lines) <= 1, pkg_lines
+
+
 def test_reonboard_without_pin_preserves_existing(tmp_path: Path) -> None:
     # §5.12: onboarding is not a re-pin. A fresh adopt with a legacy ``v2.0.0`` is
     # canonicalized to bare on write (§6.1); re-onboarding without --pin must preserve it.

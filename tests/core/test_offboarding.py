@@ -13,6 +13,16 @@ def _setup_consumer(root: Path) -> None:
     scaffold(root, [ScaffoldItem("ruff.toml", "line-length = 120\n", "#", False)], profile="p", version="v1")
 
 
+def test_offboard_skips_non_utf8_file_instead_of_crashing(tmp_path: Path) -> None:
+    # A non-UTF-8 file cannot carry an Aviato marker (markers are UTF-8). It is operator-
+    # owned: skip it, never abort the whole offboard with UnicodeDecodeError mid-classify.
+    (tmp_path / "blob.bin").write_bytes(b"\xff\xfe not valid utf-8")
+    result = offboard(tmp_path, ["blob.bin"], keep_files=True)
+    assert "blob.bin" not in result.stripped
+    assert "blob.bin" not in result.removed
+    assert (tmp_path / "blob.bin").exists()  # left untouched
+
+
 def test_keep_files_strips_markers_and_deletes_declaration(tmp_path: Path) -> None:
     _setup_consumer(tmp_path)
     result = offboard(tmp_path, ["ruff.toml"], keep_files=True)

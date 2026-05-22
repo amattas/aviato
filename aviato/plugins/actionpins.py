@@ -36,9 +36,49 @@ def unpinned_third_party_uses(text: str) -> list[str]:
 _DOCKER_RUN_RE = re.compile(r"\bdocker\s+run\b(?P<rest>[^\n]*)")
 _FETCH_PIPE_RE = re.compile(r"\b(?:curl|wget)\b[^\n|]*\|[^\n]*\b(?:sh|bash|tar)\b")
 
+# §11.3: a tool installed from a package index that exposes no digest (a pip package)
+# must be pinned to an EXACT version, never a floating latest. Match a `pip install`
+# invocation and inspect the package tokens after it.
+_PIP_INSTALL_RE = re.compile(r"\bpip[0-9]*\s+install\b(?P<rest>[^\n]*)")
+# A bare PyPI package name (optionally with an extras spec), e.g. `build`, `pydoc-markdown`,
+# `pkg[extra]` — but NOT a version-pinned, path, VCS, wheel, or variable-bearing token.
+_PIP_PKG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]*(?:\[[A-Za-z0-9_,.-]+\])?$")
+
+
+def _unpinned_pip_packages(rest: str) -> list[str]:
+    """Floating (un-versioned) PyPI package tokens in a `pip install` argument list.
+
+    Excludes everything that is NOT an index-package-by-name-without-version: option
+    flags, the local project (`.`/`.[extra]`/`-e <path>`), requirements files (`-r ...`),
+    VCS installs (`git+...`), built wheels (`*.whl`), and any token carrying a version
+    specifier (`==`, `>=`, `~=`, …) or a shell variable (`${...}`). Conservative by design:
+    when in doubt it does NOT flag, so a legitimate local/locked install never trips it.
+    """
+    tokens = rest.split()
+    flagged: list[str] = []
+    skip_next = False
+    for token in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        stripped = token.strip("'\"")
+        if stripped in ("-r", "--requirement", "-c", "--constraint"):
+            skip_next = True  # the following token is a file path, not a package
+            continue
+        if stripped.startswith("-"):  # any other flag (-e, --quiet, --upgrade, …)
+            continue
+        # Already pinned, or not a plain index package: version spec, path, VCS, wheel, var.
+        if any(marker in stripped for marker in ("==", ">=", "<=", "~=", "!=", "@", "/", "$", "*", ":")):
+            continue
+        if stripped in (".", "") or stripped.startswith("."):
+            continue
+        if _PIP_PKG_RE.match(stripped):
+            flagged.append(stripped)
+    return flagged
+
 
 def unpinned_tool_invocations(text: str) -> list[str]:
-    """Return shell-invoked tools/images not pinned by digest/checksum (§11.3)."""
+    """Return shell-invoked tools/images not pinned by digest/checksum/version (§11.3)."""
     violations: list[str] = []
     for match in _DOCKER_RUN_RE.finditer(text):
         image = _docker_run_image(match.group("rest"))
@@ -46,6 +86,9 @@ def unpinned_tool_invocations(text: str) -> list[str]:
             violations.append(f"docker run image not digest-pinned: {image}")
     for match in _FETCH_PIPE_RE.finditer(text):
         violations.append(f"fetch-and-execute without checksum: {match.group(0).strip()}")
+    for match in _PIP_INSTALL_RE.finditer(text):
+        for pkg in _unpinned_pip_packages(match.group("rest")):
+            violations.append(f"pip-installed tool not pinned to an exact version: {pkg}")
     return violations
 
 

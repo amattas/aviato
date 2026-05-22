@@ -71,7 +71,10 @@ def offboard(root: Path, managed_outputs: Sequence[str], *, keep_files: bool) ->
         target = root / output
         if not target.is_file():
             continue
-        text = target.read_text(encoding="utf-8")
+        try:
+            text = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue  # not UTF-8 ⇒ cannot carry an Aviato marker ⇒ operator-owned, leave alone
         if parse_marker_from_text(text) is None:
             continue  # unmanaged / malformed — operator owns it, leave alone
         # Automation workflows are always removed (§5.13); only passive managed files

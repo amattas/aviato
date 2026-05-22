@@ -16,6 +16,17 @@ class GitHubAPIError(RuntimeError):
         super().__init__(f"gh api {endpoint} failed with exit code {returncode}: {self.stderr}")
 
 
+class SettingsReadError(GitHubAPIError):
+    """A live protected-settings read failed (e.g. the token lacks the admin scope).
+
+    Distinct subclass so settings-drift can fail closed by **skipping** a settings
+    read it cannot perform (§5.6) WITHOUT also swallowing an issue-channel failure —
+    which §5.6 requires to fail loud. It remains a :class:`GitHubAPIError`, so any
+    caller that does not care about the distinction (e.g. reconcile, which fails on
+    any read error) keeps its existing behavior.
+    """
+
+
 def gh_json(endpoint: str, *, default: Any = None, allow_error: bool = False) -> Any:
     result = run(["gh", "api", endpoint], check=False)
     if result.returncode != 0:
@@ -63,8 +74,10 @@ def gh_json_optional(endpoint: str, *, default: Any = None) -> Any:
     """
     result = run(["gh", "api", endpoint], check=False)
     if result.returncode != 0:
-        stderr = result.stderr.lower()
-        if "http 404" in stderr or "not found" in stderr or "no such" in stderr:
+        # Distinguish a genuine 404 ONLY by the HTTP status `gh` appends (``(HTTP 404)``).
+        # Keying off free-text like "not found"/"no such" would misread a 403/5xx whose
+        # body merely contains those words as an empty 404 — re-opening the §2.7 fail-OPEN.
+        if "http 404" in result.stderr.lower():
             return default
         raise GitHubAPIError(endpoint, result.returncode, result.stderr)
     if not result.stdout.strip():

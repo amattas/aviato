@@ -79,6 +79,7 @@ jobs:
       docs-source-directory: "."
       docs-emit-command: |
         # §12.2 Node API reference (TypeDoc -> markdown) into the docs source tree.
-        npx -y -p typedoc -p typedoc-plugin-markdown typedoc \
+        # §11.3: pin the npx-fetched tools to exact versions (no floating latest).
+        npx -y -p typedoc@0.27.9 -p typedoc-plugin-markdown@4.4.1 typedoc \
           --plugin typedoc-plugin-markdown --out website/docs/api \
           --entryPointStrategy expand src

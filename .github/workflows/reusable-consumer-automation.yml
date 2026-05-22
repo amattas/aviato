@@ -45,9 +45,9 @@ jobs:
     name: Drift detection (propose/report only)
     runs-on: ubuntu-latest
     env:
-      # Prefer the operator's admin token (enables settings-drift reads); fall back to
-      # the platform token (file drift only — settings drift then skips, §5.6).
-      GH_TOKEN: ${{ secrets.settings-token || github.token }}
+      # Only the non-sensitive ref is job-wide. Tokens are scoped PER STEP below (§11.2):
+      # the admin settings-token must never be visible to the install step or the file-drift
+      # writes — only to the read-only settings-drift step.
       AVIATO_REF: ${{ inputs.aviato-ref }}
     steps:
       - name: Jitter
@@ -66,6 +66,23 @@ jobs:
         shell: bash
         run: python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
 
-      - name: Report drift
+      - name: File drift (platform token; contents/PR/issue writes only)
         shell: bash
-        run: aviato drift-report .
+        # Least-privilege (§11.2/§5.6): file-drift proposals need only the platform token's
+        # contents/PR/issue write scope. The admin settings-token is NEVER exposed here.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: aviato drift-report . --file-only
+
+      - name: Settings drift (optional admin token; read-only)
+        shell: bash
+        # The admin settings-token is scoped to THIS step alone — it never reaches the
+        # file-drift writes or the install step. Omitted ⇒ settings drift skips (§5.6).
+        env:
+          SETTINGS_TOKEN: ${{ secrets.settings-token }}
+        run: |
+          if [ -z "${SETTINGS_TOKEN}" ]; then
+            echo "settings drift: skipped — no admin settings-token secret supplied (§5.6)."
+            exit 0
+          fi
+          GH_TOKEN="${SETTINGS_TOKEN}" aviato drift-report . --settings-only

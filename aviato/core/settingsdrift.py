@@ -8,6 +8,11 @@ from typing import Any
 ADDITIVE = "additive"
 DESTRUCTIVE = "destructive"
 
+# Length (in hex chars) of the truncated SHA-256 used as a settings-diff identity.
+# Bounded so the binding's consent label (prefix + id) fits the hosting platform's
+# label-name limit; see diff_identity. 128 bits is ample collision resistance here.
+CONSENT_ID_HEX_LEN = 32
+
 
 @dataclass
 class SettingsDiff:
@@ -38,7 +43,13 @@ def diff_identity(diff: SettingsDiff) -> str:
         for key, kind in diff.changes.items()
     }
     blob = json.dumps(payload, sort_keys=True, default=str)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+    # The identity is carried as a segment of the consent-grant label a human applies to the
+    # tracking issue (§6.4). Hosting platforms cap label-name length (GitHub: 50 chars), and
+    # the binding prefixes this id (e.g. "aviato-consent:"), so the id MUST stay short enough
+    # that prefix+id fits — otherwise the label can never be created and the §5.7 gate becomes
+    # unreachable. 32 hex chars = 128 bits keeps collision resistance far beyond what the tiny
+    # space of distinct settings diffs needs, while leaving ample room under the limit.
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:CONSENT_ID_HEX_LEN]
 
 
 def _hashable(value: Any) -> Any:

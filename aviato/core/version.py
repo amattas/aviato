@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 from .errors import CompatibilityError
 
@@ -66,6 +67,27 @@ def is_known_version_pin(value: str) -> bool:
         return True
     except CompatibilityError:
         return False
+
+
+def most_restrictive_recorded(values: Sequence[str]) -> str:
+    """The §2.6 lower bound across multiple recorded markers.
+
+    Compatibility requires the tool to be ``>=`` **every** marker's recorded
+    version, i.e. ``>=`` their maximum — so the binding lower bound is the
+    **highest** recorded version, not the first one encountered (which could hide
+    a higher, incompatible marker behind a compatible one). An **unrecognized**
+    marker is returned as-is so :func:`is_compatible` raises and the caller fails
+    closed on it (§2.6/§2.7), never silently dropping it from the comparison.
+
+    ``values`` must be non-empty; the caller falls back to the declared pin when
+    a Consumer has no managed markers.
+    """
+    if not values:
+        raise CompatibilityError("no recorded marker versions to compare")
+    unrecognized = [value for value in values if not is_known_version_pin(value)]
+    if unrecognized:
+        return unrecognized[0]
+    return max(values, key=_as_lower_bound)
 
 
 def is_compatible(*, tool: str, pinned: str, recorded: str) -> bool:

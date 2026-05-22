@@ -82,10 +82,12 @@ def test_audit_repo_flags_invalid_tags(monkeypatch: pytest.MonkeyPatch, tmp_path
     monkeypatch.setattr(audit, "current_branch", lambda repo: "main")
     monkeypatch.setattr(audit, "workflow_files", lambda repo: "")
     row = audit_repo(tmp_path, root=tmp_path, policy=_POLICY)
-    # 1.2.3 matches the bare pattern; v1.2.3 and nightly do not.
-    assert "v1.2.3" in row.invalid_tags
-    assert "nightly" in row.invalid_tags
-    assert "1.2.3" not in row.invalid_tags.replace("v1.2.3", "")
+    # 1.2.3 matches the bare pattern; v1.2.3 and nightly do not. invalid_tags is comma-joined,
+    # so split and assert exact membership (not substring — "1.2.3" is a substring of "v1.2.3").
+    flagged = row.invalid_tags.split(",")
+    assert "v1.2.3" in flagged
+    assert "nightly" in flagged
+    assert "1.2.3" not in flagged  # the valid tag is not flagged
 
 
 def test_render_tsv_has_header_and_row() -> None:

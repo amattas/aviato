@@ -3,7 +3,32 @@ from __future__ import annotations
 import pytest
 
 from aviato.core.errors import CompatibilityError
-from aviato.core.version import is_compatible, is_known_version_pin, normalize_pin, parse_version
+from aviato.core.version import (
+    is_compatible,
+    is_known_version_pin,
+    most_restrictive_recorded,
+    normalize_pin,
+    parse_version,
+)
+
+
+def test_most_restrictive_recorded_picks_highest() -> None:
+    # The lower bound is the MAX recorded version, so a higher marker is not hidden
+    # behind a lower first one (§2.6).
+    assert most_restrictive_recorded(["1.0.0", "1.5.0", "1.2.0"]) == "1.5.0"
+    assert most_restrictive_recorded(["1.5.0", "1.0.0"]) == "1.5.0"
+
+
+def test_most_restrictive_recorded_surfaces_unparseable_for_fail_closed() -> None:
+    # An unrecognized marker is returned so is_compatible raises and the caller refuses.
+    assert most_restrictive_recorded(["1.0.0", "garbage"]) == "garbage"
+    with pytest.raises(CompatibilityError):
+        is_compatible(tool="1.6.0", pinned="1", recorded=most_restrictive_recorded(["1.0.0", "garbage"]))
+
+
+def test_most_restrictive_recorded_empty_is_error() -> None:
+    with pytest.raises(CompatibilityError):
+        most_restrictive_recorded([])
 
 
 def test_parse_tolerates_leading_v() -> None:

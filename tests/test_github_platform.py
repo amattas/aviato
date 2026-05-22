@@ -32,7 +32,7 @@ def test_apply_settings_fails_closed_on_unresolved_default_branch(monkeypatch: p
 def test_open_or_update_issue_tolerates_missing_number(monkeypatch: pytest.MonkeyPatch) -> None:
     # A 200 response carrying a malformed issue object (no "number") must not crash the
     # scheduled drift-report with a KeyError; fall back to creating a fresh issue.
-    monkeypatch.setattr(github, "gh_json", lambda *a, **k: [{"title": "stale"}])
+    monkeypatch.setattr(github, "gh_json_optional", lambda *a, **k: [{"title": "stale"}])
     posted: list[list[str]] = []
     monkeypatch.setattr(GitHubPlatform, "_gh_input", lambda self, args, payload: posted.append(args))
     GitHubPlatform().open_or_update_issue("o/r", "k", "t", "b")
@@ -40,11 +40,77 @@ def test_open_or_update_issue_tolerates_missing_number(monkeypatch: pytest.Monke
 
 
 def test_comment_issue_tolerates_missing_number(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(github, "gh_json", lambda *a, **k: [{"title": "stale"}])
+    monkeypatch.setattr(github, "gh_json_optional", lambda *a, **k: [{"title": "stale"}])
     monkeypatch.setattr(
         GitHubPlatform, "_gh_input", lambda self, args, payload: (_ for _ in ()).throw(AssertionError("no number"))
     )
     GitHubPlatform().comment_issue("o/r", "k", "b")  # must be a no-op, not a KeyError
+
+
+def test_issue_reads_fail_closed_on_transient_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An auth/5xx/rate-limit error on the issues-list read must RAISE, not read as "no
+    # issue". get_issue masquerading as None lets run_settings_drift open a duplicate
+    # tracking issue and silently breaks its documented "fails loud" contract (§2.7/§5.6).
+    def boom(endpoint: str, **__: object) -> object:
+        raise github.GitHubAPIError(endpoint, 1, "HTTP 503: server error")
+
+    monkeypatch.setattr(github, "gh_json_optional", boom)
+    with pytest.raises(github.GitHubAPIError):
+        GitHubPlatform().get_issue("o/r", "k")
+    with pytest.raises(github.GitHubAPIError):
+        GitHubPlatform().open_or_update_issue("o/r", "k", "t", "b")
+    with pytest.raises(github.GitHubAPIError):
+        GitHubPlatform().comment_issue("o/r", "k", "b")
+
+
+def test_get_issue_fails_closed_on_timeline_read_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The consent timeline is the authoritative grant/revoke history (§2.8/§6.4). A transient
+    # auth/5xx on that read must RAISE — silently reading it as [] would drop a real consent
+    # grant. Consistent with the (already fail-closed) issues-list read on the line above it.
+    def fake_run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if "timeline" in " ".join(cmd):
+            return subprocess.CompletedProcess(cmd, 1, "", "gh: Server Error (HTTP 503)")
+        return subprocess.CompletedProcess(cmd, 0, '[{"number": 7, "state": "open"}]', "")
+
+    monkeypatch.setattr(github, "run", fake_run)
+    with pytest.raises(github.GitHubAPIError):
+        GitHubPlatform().get_issue("o/r", "k")
+
+
+def test_get_issue_warns_when_multiple_issues_share_label(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    # Two open issues carrying the consent/drift label is an anomaly: the three issue reads
+    # (list/open/all) could otherwise each take a different issues[0]. Pick deterministically
+    # (oldest = lowest number) and warn, so consent is read/updated/audited on ONE issue.
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        lambda endpoint, **__: [{"number": 9, "state": "open"}, {"number": 4, "state": "open"}],
+    )
+    monkeypatch.setattr(github, "gh_json_paginated", lambda endpoint, **__: [])
+    GitHubPlatform().get_issue("o/r", "aviato-settings-drift")
+    assert "multiple" in capsys.readouterr().err.lower()
+
+
+def test_get_issue_prefers_open_over_older_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # state=all returns a stale CLOSED duplicate (#4) and the live OPEN issue (#9). Selecting the
+    # oldest-overall would pick the closed one and wrongly refuse reconcile; prefer the open issue
+    # so its timeline (and open state) is what reconcile acts on.
+    seen: list[str] = []
+
+    def _paginated(endpoint: str, **__):
+        seen.append(endpoint)
+        return []
+
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        lambda endpoint, **__: [{"number": 4, "state": "closed"}, {"number": 9, "state": "open"}],
+    )
+    monkeypatch.setattr(github, "gh_json_paginated", _paginated)
+    issue = GitHubPlatform().get_issue("o/r", "aviato-settings-drift")
+    assert issue is not None
+    assert issue.open is True  # picked the open #9, not the closed #4
+    assert any("/issues/9/timeline" in e for e in seen)  # read #9's consent history
 
 
 def test_apply_settings_fails_closed_on_unmodeled_protection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -455,6 +521,8 @@ def test_read_settings_empty_when_no_default_branch(monkeypatch: pytest.MonkeyPa
 
 
 def test_get_issue_populates_consent_from_paginated_timeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The issues-list read is fail-closed (gh_json_optional); the permission lookup is gh_json.
+    monkeypatch.setattr(github, "gh_json_optional", lambda endpoint, **__: _route_gh_json(endpoint))
     monkeypatch.setattr(github, "gh_json", lambda endpoint, **__: _route_gh_json(endpoint))
     monkeypatch.setattr(
         github,
@@ -480,12 +548,9 @@ def _route_gh_json(endpoint: str):
 
 
 def test_get_issue_role_lookup_failure_is_not_authorized(monkeypatch: pytest.MonkeyPatch) -> None:
-    def gh_json(endpoint, **__):
-        if endpoint.startswith("repos/o/r/issues?"):
-            return [{"number": 7, "state": "open"}]
-        return None  # permission lookup fails
-
-    monkeypatch.setattr(github, "gh_json", gh_json)
+    # Issues-list read (fail-closed) succeeds; the permission lookup (gh_json) fails.
+    monkeypatch.setattr(github, "gh_json_optional", lambda endpoint, **__: [{"number": 7, "state": "open"}])
+    monkeypatch.setattr(github, "gh_json", lambda endpoint, **__: None)  # permission lookup fails
     monkeypatch.setattr(
         github,
         "gh_json_paginated",

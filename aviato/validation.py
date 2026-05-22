@@ -49,6 +49,11 @@ RELEASE_WORKFLOWS = [
     ".github/workflows/reusable-app-store-connect.yml",
 ]
 
+# This Library's own GitHub slug. Centralized (was duplicated as literals across the
+# template-reference and release-workflow-contract checks); it is the Library's own
+# repository identity, not consumer data, so a single constant is the source of truth.
+LIBRARY_SLUG = "amattas/aviato"
+
 
 def _check_policy_examples(policy: dict, errors: list[str]) -> None:
     pattern = re.compile(release_tag_pattern(policy))
@@ -123,7 +128,7 @@ def _check_workflow_yaml(root: Path, errors: list[str]) -> None:
 def _check_template_references(root: Path, errors: list[str]) -> None:
     workflow_dir = root / ".github/workflows"
     workflow_files = {path.name for path in _yaml_files(workflow_dir)}
-    reference_re = re.compile(r"^amattas/aviato/\.github/workflows/([^@]+)@(.+)$")
+    reference_re = re.compile(rf"^{re.escape(LIBRARY_SLUG)}/\.github/workflows/([^@]+)@(.+)$")
 
     for path in _yaml_files(root / "templates"):
         data = load_yaml(path)
@@ -146,7 +151,7 @@ def _check_release_workflow_contract(root: Path, errors: list[str]) -> None:
         text = (root / rel_path).read_text(encoding="utf-8")
         if "release/*" in text or "release/latest" in text:
             errors.append(f"{rel_path} contains legacy release branch support")
-        if "repository: amattas/aviato" in text:
+        if f"repository: {LIBRARY_SLUG}" in text:
             errors.append(
                 f"{rel_path} checks out Aviato by repository name; this can drift from the pinned workflow ref"
             )
@@ -189,7 +194,7 @@ def _check_core_agnosticism(core_dir: Path, denylist_file: Path, errors: list[st
 
 def _check_action_pins(root: Path, errors: list[str]) -> None:
     """§11.3: third-party actions/tools invoked by any pipeline are pinned by digest."""
-    from .core.actionpins import action_pin_violations
+    from .plugins.actionpins import action_pin_violations
 
     for violation in action_pin_violations(root):
         errors.append(f"unpinned third-party action/tool (§11.3): {violation}")
@@ -247,6 +252,98 @@ def _check_template_scaffold_parity(root: Path, errors: list[str]) -> None:
             )
 
 
+# Workflows that embed an inline `highest.py` reimplementation of the §8.14/§13.2 monotonic
+# alias guard (kept inline to avoid a self-reference install in the deploy job). The parity
+# check below proves each inline copy still agrees with aviato.core.versioning.is_highest, so a
+# silent divergence (e.g. prerelease ranking) cannot let an older release move `latest`/docs back.
+_MONOTONIC_ALIAS_WORKFLOWS = [
+    ".github/workflows/reusable-docker-ghcr.yml",
+    ".github/workflows/reusable-docs-pages.yml",
+]
+
+# (candidate, existing tags). Expected results are computed from is_highest itself, so the check
+# is "the inline copy agrees with core" — chosen to exercise the discriminating cases: ordering,
+# equality/ties, prerelease ranking (final > beta > alpha), v-prefix, and unparseable-tag skip.
+_MONOTONIC_CASES = [
+    ("1.2.3", ["1.0.0", "1.2.2"]),
+    ("1.2.3", ["1.2.3", "2.0.0"]),
+    ("1.2.3", []),
+    ("1.2.3", ["1.2.3"]),
+    ("1.0.0", ["1.0.0-beta1", "1.0.0-alpha1"]),
+    ("1.0.0-beta1", ["1.0.0"]),
+    ("1.0.0-beta2", ["1.0.0-beta1"]),
+    ("1.0.0-alpha1", ["1.0.0-beta1"]),
+    ("v1.2.3", ["1.2.2"]),
+    ("2.0.0", ["garbage", "not-a-tag", "1.9.9"]),
+    ("not-a-version", ["1.0.0"]),
+]
+
+
+def _extract_py_heredoc(run_text: str) -> str | None:
+    """Return the body of a ``<<'PY' ... PY`` heredoc in a parsed step ``run`` block, or None.
+
+    The YAML loader already dedents the block to its base indent, so the captured lines are
+    valid Python (relative indentation preserved).
+    """
+    lines = run_text.splitlines()
+    for i, line in enumerate(lines):
+        if "<<'PY'" in line:
+            body: list[str] = []
+            for sub in lines[i + 1 :]:
+                if sub.strip() == "PY":
+                    return "\n".join(body)
+                body.append(sub)
+            return None
+    return None
+
+
+def _check_monotonic_alias_parity(root: Path, errors: list[str]) -> None:
+    """The inline `highest.py` in the deploy workflows must match core's is_highest (§8.14/§13.2)."""
+    import subprocess
+    import sys
+
+    from .core.versioning import is_highest
+
+    for rel_path in _MONOTONIC_ALIAS_WORKFLOWS:
+        path = root / rel_path
+        if not path.exists():
+            continue  # absence already reported by REQUIRED_FILES
+        try:
+            doc = load_yaml(path)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{rel_path}: could not parse for monotonic-alias parity: {exc}")
+            continue
+        runs = [
+            step["run"]
+            for job in (doc.get("jobs") or {}).values()
+            if isinstance(job, dict)
+            for step in (job.get("steps") or [])
+            if isinstance(step, dict) and isinstance(step.get("run"), str)
+        ]
+        snippet = next((s for run in runs if (s := _extract_py_heredoc(run)) is not None), None)
+        if snippet is None:
+            errors.append(
+                f"{rel_path}: the inline `highest.py` monotonic-alias guard is missing "
+                "(§8.14/§13.2); an alias could move backward unchecked."
+            )
+            continue
+        for candidate, existing in _MONOTONIC_CASES:
+            result = subprocess.run(
+                [sys.executable, "-c", snippet, candidate],
+                input="\n".join(existing),
+                capture_output=True,
+                text=True,
+            )
+            inline = result.stdout.strip()
+            expected = "true" if is_highest(candidate, existing) else "false"
+            if inline != expected:
+                errors.append(
+                    f"{rel_path}: inline highest.py disagrees with core is_highest for "
+                    f"candidate={candidate!r} existing={existing!r} (inline={inline!r}, "
+                    f"core={expected!r}); the copy has drifted from aviato.core.versioning."
+                )
+
+
 def validate(root: Path = REPO_ROOT) -> list[str]:
     errors: list[str] = []
 
@@ -276,5 +373,6 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
     _check_action_pins(root, errors)
     _check_template_scaffold_parity(root, errors)
+    _check_monotonic_alias_parity(root, errors)
 
     return errors

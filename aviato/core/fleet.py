@@ -65,6 +65,7 @@ def scan_fleet(paths: Sequence[Path], registry: Registry) -> list[RepoScan]:
                 expected,
                 declaration_variables=declaration.variables,
                 secret_var_names=secret_names,
+                profile=declaration.profile,
             )
         except AviatoError as exc:
             scans.append(RepoScan(path=str(root), error=str(exc)))

@@ -245,7 +245,9 @@ Validation should cover:
 - GitHub Actions workflow linting;
 - YAML syntax for `policy.yml` and `rulesets.yml`;
 - JSON syntax for `rulesets/*.json`;
-- drift checks that compare embedded release tag patterns against `policy.yml`;
+- drift checks that compare embedded release tag patterns against `policy.yml`,
+  and that the inline `highest.py` monotonic-alias guards embedded in the deploy
+  workflows still agree with the core `is_highest` comparator (§8.14/§13.2);
 - Python tests once the CLI exists.
 
 CI should install required validation tools and run the validation script on

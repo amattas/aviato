@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from aviato.core.composition import _resolve_list, resolve_profile
+from aviato.core.composition import _resolve_list, _variable_spec, resolve_profile
 from aviato.core.errors import CompositionError
 from aviato.core.model import VersionSourceModule
 from aviato.core.registry import Registry
@@ -36,6 +36,25 @@ def test_always_on_security_baseline_cannot_be_composed_away() -> None:
     assert "security-baseline" in resolved.pipelines
     with pytest.raises(CompositionError):
         resolve_profile(registry, "python-library", overrides={"pipelines": {"remove": ["security-baseline"]}})
+
+
+def test_variable_spec_rejects_unknown_type() -> None:
+    # §6.6: a typo'd type (e.g. "bool") must fail loud, never silently render uncoerced.
+    with pytest.raises(CompositionError):
+        _variable_spec({"name": "flag", "type": "bool"})
+
+
+def test_variable_spec_enum_requires_domain() -> None:
+    # §6.6: an enum with no domain could never resolve any value (incl. its default).
+    with pytest.raises(CompositionError):
+        _variable_spec({"name": "variant", "type": "enum"})
+
+
+def test_variable_spec_accepts_valid_kinds() -> None:
+    assert _variable_spec({"name": "s", "type": "string"}).type == "string"
+    assert _variable_spec({"name": "b", "type": "boolean"}).type == "boolean"
+    spec = _variable_spec({"name": "v", "type": "enum", "domain": ["a", "b"]})
+    assert spec.domain == ("a", "b")
 
 
 def test_resolve_deep_merges_settings_maps(module_root: Path) -> None:

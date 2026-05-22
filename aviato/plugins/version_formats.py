@@ -5,18 +5,23 @@ import re
 from pathlib import Path
 
 from aviato.core.errors import AviatoError
+from aviato.core.scaffold import atomic_write
 
 # Per-format version-source rewriters (§3.3). Each rewriter names a concrete
 # manifest/project-file format (pyproject.toml, package.json, .pbxproj, .plist),
 # so this knowledge lives in the plug-in tree, not the agnostic core. The set of
 # *locations* a profile bumps is plug-in DATA (``version_source.locations``); this
 # module is the matching plug-in LOGIC that knows how to rewrite each format.
-_PYPROJECT_VERSION = re.compile(r'(?m)^(?P<prefix>version\s*=\s*)"[^"]*"')
+# Match either quote style (TOML/PEP 621 permits single OR double quotes); the closing
+# quote is a backreference so the original style is preserved on rewrite.
+_PYPROJECT_VERSION = re.compile(r'(?m)^(?P<prefix>version\s*=\s*)(?P<q>["\'])[^"\']*(?P=q)')
 # The package version lives only in [project] (PEP 621) or [tool.poetry]; a stray
 # version = "..." in another table (e.g. a bumpver/tool config) must not be touched.
 _PYPROJECT_VERSION_TABLES = ("project", "tool.poetry")
-_PBXPROJ_MARKETING = re.compile(r"(MARKETING_VERSION = )[^;]+;")
-_PBXPROJ_BUILD = re.compile(r"(CURRENT_PROJECT_VERSION = )[^;]+;")
+# Tolerate any spacing around '=' (a hand-edited pbxproj need not use Xcode's canonical
+# single spaces); the captured prefix preserves the file's original spacing on rewrite.
+_PBXPROJ_MARKETING = re.compile(r"(MARKETING_VERSION\s*=\s*)[^;]+;")
+_PBXPROJ_BUILD = re.compile(r"(CURRENT_PROJECT_VERSION\s*=\s*)[^;]+;")
 _PLIST_SHORT = re.compile(r"(<key>CFBundleShortVersionString</key>\s*<string>)[^<]*(</string>)")
 _PLIST_BUILD = re.compile(r"(<key>CFBundleVersion</key>\s*<string>)[^<]*(</string>)")
 
@@ -39,7 +44,12 @@ def _rewrite_toml_table_version(text: str, tables: tuple[str, ...], bare: str) -
         start = header.end()
         following = re.search(r"(?m)^\[", text[start:])
         end = start + following.start() if following else len(text)
-        segment, count = _PYPROJECT_VERSION.subn(rf'\g<prefix>"{bare}"', text[start:end], count=1)
+        # Function replacement (not a template string) so a version containing a regex
+        # backreference sequence (e.g. ``\g<...>``/``\1``) is spliced literally, never
+        # re-interpreted by ``re.sub``.
+        segment, count = _PYPROJECT_VERSION.subn(
+            lambda m: f"{m.group('prefix')}{m.group('q')}{bare}{m.group('q')}", text[start:end], count=1
+        )
         if count:
             return text[:start] + segment + text[end:], count
     return text, 0
@@ -115,19 +125,28 @@ def bump_text(filename: str, text: str, new_version: str, build_number: str | No
         return text[: span[0]] + f'"{bare}"' + text[span[1] :]
 
     if name.endswith(".pbxproj"):
-        new = _PBXPROJ_MARKETING.sub(rf"\g<1>{bare};", text)
-        if build_number is not None:
-            new = _PBXPROJ_BUILD.sub(rf"\g<1>{build_number};", new)
-        if new == text:
+        # Match COUNT (not text-equality) decides "found": an idempotent re-bump to the
+        # value the file already holds is a successful no-op, not a "field missing" error.
+        # Function replacements splice the version/build literally (no backreference re-parse).
+        new, count = _PBXPROJ_MARKETING.subn(lambda m: f"{m.group(1)}{bare};", text)
+        if count == 0:
             raise AviatoError(f"no MARKETING_VERSION found in {filename}")
+        if build_number is not None:
+            # A supplied build number MUST land somewhere — silently dropping it ships an
+            # unchanged CFBundleVersion that App Store Connect rejects (§13.4). Fail loud.
+            new, build_count = _PBXPROJ_BUILD.subn(lambda m: f"{m.group(1)}{build_number};", new)
+            if build_count == 0:
+                raise AviatoError(f"no CURRENT_PROJECT_VERSION found in {filename} to write build number")
         return new
 
     if name.endswith(".plist"):
-        new = _PLIST_SHORT.sub(rf"\g<1>{bare}\g<2>", text)
-        if build_number is not None:
-            new = _PLIST_BUILD.sub(rf"\g<1>{build_number}\g<2>", new)
-        if new == text:
+        new, count = _PLIST_SHORT.subn(lambda m: f"{m.group(1)}{bare}{m.group(2)}", text)
+        if count == 0:
             raise AviatoError(f"no CFBundleShortVersionString found in {filename}")
+        if build_number is not None:
+            new, build_count = _PLIST_BUILD.subn(lambda m: f"{m.group(1)}{build_number}{m.group(2)}", new)
+            if build_count == 0:
+                raise AviatoError(f"no CFBundleVersion found in {filename} to write build number")
         return new
 
     return text
@@ -146,6 +165,8 @@ def bump_files(root: Path, locations: list[str], new_version: str, build_number:
         text = path.read_text(encoding="utf-8")
         bumped = bump_text(location, text, new_version, build_number)
         if bumped != text:
-            path.write_text(bumped, encoding="utf-8")
+            # Atomic write (temp + swap): a crash mid-bump must never leave a half-written
+            # version manifest (§2.5/§5.3), consistent with the scaffolder.
+            atomic_write(path, bumped)
             changed.append(location)
     return changed

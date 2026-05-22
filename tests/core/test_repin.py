@@ -66,6 +66,17 @@ def test_repin_reports_orphaned_pipeline_override(module_root: Path) -> None:
     assert "ghost-pipeline" in plan.orphaned_overrides
 
 
+def test_repin_flags_pipeline_add_that_collides_at_target(module_root: Path) -> None:
+    # §5.12/§4.2: a consumer pipelines.add of a pipeline that the target version now BUNDLES
+    # collides (add-of-already-present). plan_repin must surface this at PLAN time and block
+    # the re-pin — not pass as ok and let the next `aviato sync` crash with CompositionError.
+    # The child profile resolves to pipelines [b, c]; adding 'c' collides with the base set.
+    decl = _decl(overrides={"pipelines": {"add": ["c"]}})
+    plan = plan_repin(Registry(module_root), decl, "v1.0.0")
+    assert plan.ok is False
+    assert "c" in plan.conflicting_overrides
+
+
 def test_repin_refuses_when_profile_repurposed_at_target(module_root: Path, tmp_path: Path) -> None:
     # §5.12/§6.5: a profile NAME is a stable public identity. If the same name maps to a
     # different composition at the target version (here: its version-source artifact kind

@@ -32,7 +32,10 @@ in consumer repositories rather than supported by release publish workflows.
 - `rulesets.yml` - ruleset manifest.
 - `rulesets/*.json` - GitHub ruleset templates.
 - `.github/workflows/reusable-*.yml` - reusable CI, release, deploy, and security workflows.
-- `templates/*.yml` - thin caller workflow templates for consumer repos.
+- `templates/profile-*.yml`, `templates/consumer-automation.yml` - composed, copyable
+  caller-workflow examples for consumer repos (rendered from the scaffold bundles; they
+  include the always-on security baseline, §2.13). Use these composed callers rather than
+  hand-wiring a single reusable workflow, which can omit the required baseline.
 - `aviato/` - Python CLI implementation.
 - `scripts/*.sh` - compatibility wrappers and validation entrypoints.
 

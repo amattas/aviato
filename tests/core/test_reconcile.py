@@ -126,3 +126,17 @@ def test_version_mismatch_applies_with_override() -> None:
     outcome = reconcile_decision(_state(tool_version="1.0.0", recorded_version="1.5.0", override_version_pin=True))
     assert outcome.action == "apply"
     assert "overridden" in outcome.reason
+
+
+def test_unparseable_recorded_version_refuses_not_crashes() -> None:
+    # A corrupted/empty marker yields an unparseable recorded version. is_compatible would
+    # raise CompatibilityError; the decision must fail CLOSED to the operator-gated "refuse"
+    # (so the §5.7 issue-audit path runs), not crash out of the pure decision (§2.6/§2.7).
+    outcome = reconcile_decision(_state(recorded_version=""))
+    assert outcome.action == "refuse"
+    assert "--override-version-pin" in outcome.reason
+
+
+def test_unparseable_recorded_version_applies_with_override() -> None:
+    outcome = reconcile_decision(_state(recorded_version="", override_version_pin=True))
+    assert outcome.action == "apply"

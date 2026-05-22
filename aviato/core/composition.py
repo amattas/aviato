@@ -15,6 +15,35 @@ from .model import (
 )
 from .registry import Registry
 
+_VARIABLE_TYPES = {"string", "boolean", "enum"}
+
+
+def _variable_spec(item: dict[str, Any]) -> VariableSpec:
+    """Build a typed VariableSpec, validating the §6.6 schema at composition time.
+
+    The variable ``type`` must be one of string/boolean/enum (a typo like ``bool``
+    must fail loud here, never silently render uncoerced), and an ``enum`` must
+    declare a non-empty ``domain`` (otherwise no value — including its own default —
+    could ever resolve, §6.6).
+    """
+    name = item.get("name")
+    var_type = item.get("type")
+    if var_type not in _VARIABLE_TYPES:
+        raise CompositionError(
+            f"variable {name!r} has unknown type {var_type!r}; must be one of {sorted(_VARIABLE_TYPES)} (§6.6)"
+        )
+    domain = tuple(item["domain"]) if item.get("domain") is not None else None
+    if var_type == "enum" and not domain:
+        raise CompositionError(f"enum variable {name!r} must declare a non-empty domain (§6.6)")
+    return VariableSpec(
+        name=item["name"],
+        type=var_type,
+        secret=bool(item.get("secret", False)),
+        required=bool(item.get("required", True)),
+        domain=domain,
+        default=item.get("default"),
+    )
+
 
 def _chain(load, name: str) -> list:
     """Walk an ``extends`` chain from ``name`` to its root, root-first.
@@ -135,17 +164,7 @@ def resolve_profile(
             f"composition drops always-on pipeline(s) {sorted(dropped)} that must be present in "
             f"every Aviato-managed repository (§2.13); they cannot be removed via profile or override"
         )
-    variables = tuple(
-        VariableSpec(
-            name=item["name"],
-            type=item["type"],
-            secret=bool(item.get("secret", False)),
-            required=bool(item.get("required", True)),
-            domain=tuple(item["domain"]) if item.get("domain") is not None else None,
-            default=item.get("default"),
-        )
-        for item in doc.get("variables", [])
-    )
+    variables = tuple(_variable_spec(item) for item in doc.get("variables", []))
     vs_doc = doc.get("version_source")
     version_source = VersionSourceModule(locations=tuple(vs_doc.get("locations", ()))) if vs_doc is not None else None
     toolchain = dict(doc.get("toolchain", {}))

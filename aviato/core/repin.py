@@ -19,11 +19,12 @@ class RepinPlan:
     target_version: str
     newly_required: list[str] = field(default_factory=list)
     orphaned_overrides: list[str] = field(default_factory=list)
+    conflicting_overrides: list[str] = field(default_factory=list)
     downgrade_warning: str | None = None
 
     @property
     def ok(self) -> bool:
-        return not self.newly_required
+        return not self.newly_required and not self.conflicting_overrides
 
 
 def _is_downgrade(current: str, target: str) -> bool:
@@ -64,6 +65,17 @@ def plan_repin(
     (settings keys no longer present). A move to a lower version is allowed but carries
     an explicit backward-movement warning. This is the only sanctioned way a pin moves;
     file drift never advances it.
+
+    **Day-zero limitation (§5.12/§6.5):** the §6.5 *repurpose* check (a profile name
+    rebound to a different composition at the target version) requires resolving the
+    profile **at both versions**, i.e. a distinct ``target_registry``. The operator's
+    installed CLI carries exactly **one** Library version, so the shipped ``aviato
+    repin`` path passes ``target_registry is registry`` and the identity comparison is
+    a structural no-op — it can still confirm the profile *resolves* at the target, but
+    cannot detect a cross-version repurpose. Detecting that needs the target version's
+    definitions present (a future fetch-the-target-registry step, or running the target
+    CLI). The cross-version logic is implemented and exercised by tests that supply a
+    second registry; it is dormant in the single-installed-CLI day-zero flow.
     """
     # Canonicalize the target to bare SemVer (§6.1): an operator may type a legacy
     # ``vX.Y.Z`` out of muscle memory, but re-pin is a *write* and must never emit a
@@ -102,6 +114,13 @@ def plan_repin(
     for name in pipeline_override.get("remove", ()):
         if name not in resolved.pipelines:
             plan.orphaned_overrides.append(name)
+    # A pipeline override that ADDS a pipeline the target version now bundles collides
+    # (add-of-already-present, §4.2). Surface it at PLAN time and block — otherwise the
+    # plan reports ok, the pin is written, and the next `aviato sync` (which resolves WITH
+    # overrides) crashes with CompositionError at a far more disruptive point (§5.12).
+    for name in pipeline_override.get("add", ()):
+        if name in resolved.pipelines:
+            plan.conflicting_overrides.append(name)
 
     if _is_downgrade(declaration.version, target_version):
         plan.downgrade_warning = DOWNGRADE_WARNING

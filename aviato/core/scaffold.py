@@ -34,7 +34,9 @@ def atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".aviato-", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        # newline="" disables platform newline translation so the bytes on disk are exactly
+        # the rendered string — byte-identical output across platforms (§5.3 determinism).
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
         os.replace(tmp_name, path)
     except BaseException:
