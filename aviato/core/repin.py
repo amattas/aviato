@@ -75,7 +75,11 @@ def plan_repin(
                 f"(version-source {list(target_identity)} vs {list(current_identity)}): it has been "
                 f"repurposed — refusing to re-pin (§5.12/§6.5). Treat it like a profile change."
             )
-    resolved = resolve_profile(target_registry, declaration.profile, overrides=declaration.overrides)
+    # Resolve the BASE profile at the target (no overrides): variables, settings, and the
+    # pipeline set are all override-independent here, and resolving without overrides lets
+    # us REPORT orphaned overrides (§5.12) rather than crash on a §4.2 remove-of-absent that
+    # an orphaned ``pipelines.remove`` would otherwise raise mid-plan.
+    resolved = resolve_profile(target_registry, declaration.profile)
 
     plan = RepinPlan(target_version=target_version)
 
@@ -83,10 +87,16 @@ def plan_repin(
         if spec.required and spec.default is None and spec.name not in declaration.variables:
             plan.newly_required.append(spec.name)
 
-    base_settings = resolve_profile(target_registry, declaration.profile).settings
     for key in declaration.overrides.get("settings", {}):
-        if key not in base_settings:
+        if key not in resolved.settings:
             plan.orphaned_overrides.append(key)
+
+    # A pipeline override that removes a pipeline no longer present at the target is
+    # orphaned — report it (don't let merge_list raise remove-of-absent, §5.12/§4.2).
+    pipeline_override = declaration.overrides.get("pipelines", {})
+    for name in pipeline_override.get("remove", ()):
+        if name not in resolved.pipelines:
+            plan.orphaned_overrides.append(name)
 
     if _is_downgrade(declaration.version, target_version):
         plan.downgrade_warning = DOWNGRADE_WARNING

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -321,6 +323,9 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved) ->
         return 2
 
     workdir = Path(tempfile.mkdtemp(prefix="aviato-onboard-"))
+    # The CLI runs one command per process; clean the full clone at exit so repeated runs
+    # don't leak hundreds of MB into the temp dir regardless of which return path is taken.
+    atexit.register(shutil.rmtree, workdir, True)
     clone = workdir / "repo"
     try:
         run(["gh", "repo", "clone", slug, str(clone)])
@@ -708,6 +713,7 @@ def _offboard_proposal(args: argparse.Namespace) -> int:
         return 2
 
     workdir = Path(tempfile.mkdtemp(prefix="aviato-offboard-"))
+    atexit.register(shutil.rmtree, workdir, True)  # clean the clone at exit (one command per process)
     clone = workdir / "repo"
     try:
         run(["gh", "repo", "clone", slug, str(clone)])
@@ -829,6 +835,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
         # write the declaration + scaffold managed files, commit, and push DIRECTLY to
         # the default branch — allowed because minimal protection has no PR gate (§2.11).
         workdir = Path(tempfile.mkdtemp(prefix="aviato-provision-"))
+        atexit.register(shutil.rmtree, workdir, True)  # clean the clone at exit (one command per process)
         clone = workdir / "repo"
         run(["gh", "repo", "clone", slug, str(clone)])
         decl_path = clone / ".github" / "aviato.yaml"

@@ -73,7 +73,10 @@ def run_reconcile(
         # what changed; unchanged desired fields equal live, so applying the full
         # desired state is equivalent to applying just the diff.
         platform.apply_settings(repo, desired_settings)
-        platform.comment_issue(repo, issue_key, f"Applied diff {current_diff_id} (changes: {outcome.payload})")
+        # Audit comment reports the COMPLETE recomputed change set (additive + destructive
+        # removals), not the additive-only write subset (outcome.payload) — a removed key is
+        # the most sensitive change and must appear in the audit trail (§5.7).
+        platform.comment_issue(repo, issue_key, f"Applied diff {current_diff_id} (changes: {outcome.changes})")
     else:
         platform.comment_issue(repo, issue_key, f"{outcome.action}: {outcome.reason}")
 

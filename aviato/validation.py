@@ -85,9 +85,15 @@ def _walk_jobs(data: dict[str, Any]) -> list[dict[str, Any]]:
     return [job for job in jobs.values() if isinstance(job, dict)]
 
 
+def _yaml_files(directory: Path) -> list[Path]:
+    """All YAML files in a directory. GitHub Actions accepts both extensions, so a
+    misnamed ``*.yaml`` workflow must not escape parse/drift/reference checks (M4)."""
+    return sorted(p for ext in ("*.yml", "*.yaml") for p in directory.glob(ext))
+
+
 def _check_workflow_yaml(root: Path, errors: list[str]) -> None:
     for rel_dir in (".github/workflows", "templates"):
-        for path in sorted((root / rel_dir).glob("*.yml")):
+        for path in _yaml_files(root / rel_dir):
             try:
                 load_yaml(path)
             except Exception as exc:  # noqa: BLE001
@@ -96,10 +102,10 @@ def _check_workflow_yaml(root: Path, errors: list[str]) -> None:
 
 def _check_template_references(root: Path, errors: list[str]) -> None:
     workflow_dir = root / ".github/workflows"
-    workflow_files = {path.name for path in workflow_dir.glob("*.yml")}
+    workflow_files = {path.name for path in _yaml_files(workflow_dir)}
     reference_re = re.compile(r"^amattas/aviato/\.github/workflows/([^@]+)@(.+)$")
 
-    for path in sorted((root / "templates").glob("*.yml")):
+    for path in _yaml_files(root / "templates"):
         data = load_yaml(path)
         for job in _walk_jobs(data):
             value = job.get("uses")

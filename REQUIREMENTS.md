@@ -752,9 +752,14 @@ flowchart TD
 **Trigger:** the Library applies its own conventions and runs its own
 pipelines before it has a release.
 **Structural predicate (normative):** a repository is *the Library* iff it
-contains all of: the core engine's source package, the `profiles/` and
-`bundles/` definition trees, and the Library's project manifest. Detection is by
-this structure, never by repository name (so forks/renames are unaffected).
+contains all of: the core engine's source package (`aviato/core/`), the
+module-source tree under `aviato/library/` (its `bundles/` and `scaffold/`
+definition trees), and the repo-root `policy.yml` — which serves as the
+manifest anchor *agnostically* (a language-specific build manifest cannot be
+named in the agnostic core, §9b; `policy.yml` is the distinctive Library
+artifact). Detection is by this structure, never by repository name (so
+forks/renames are unaffected), and an installed-as-dependency copy in
+site-packages — lacking a repo-root `policy.yml` — is correctly *not* the Library.
 **Rule:** in bootstrap state, **all** self-applied automation — scaffolding,
 verify, **and the release pipeline** — resolves its module/action references to
 self-contained local paths. The first release the pipeline produces is what makes
@@ -840,11 +845,17 @@ flowchart TD
 **Steps:** strip managed markers from managed files (converting them to plain
 operator-owned files) **or** remove them per operator choice → remove the
 Consumer automation (the scheduled drift/report workflows) → delete the
-declaration file → open a reviewable proposal capturing the removal. **The proposal
-must carry an explicit warning that offboarding removes the always-on §2.13
-security baseline and all Aviato protection** — mirroring the §5.12
-backward-movement warning, since offboarding is the *maximal* protection reduction.
-After offboarding, no Aviato automation runs and no markers remain to drift-check.
+declaration file. The change may be applied to a local checkout (`--write`) or
+surfaced as a reviewable removal proposal (`--open-pr`), mirroring onboarding.
+**The result must carry an explicit warning that offboarding removes the
+always-on §2.13 security-baseline automation and stops Aviato managing this
+repository's protection** — mirroring the §5.12 backward-movement warning, since
+offboarding is the *maximal* protection reduction. Note the scope precisely: any
+GitHub branch protection and rulesets Aviato applied **remain in place but become
+unmanaged**; offboarding does **not** tear them down (an unattended privileged
+teardown is out of scope, §2.x) — the operator removes them manually if full
+protection removal is desired. After offboarding, no Aviato automation runs and
+no markers remain to drift-check.
 
 ```mermaid
 flowchart TD
@@ -854,7 +865,7 @@ flowchart TD
     C --> E["Remove consumer drift/report automation"]
     D --> E
     E --> F["Delete declaration file"]
-    F --> G["Open reviewable proposal — WARN: removes §2.13 baseline + all protection"]
+    F --> G["Apply locally or open proposal — WARN: removes §2.13 baseline automation; GitHub protection remains but UNMANAGED"]
 ```
 
 ### 5.14 Security scanning (baseline)

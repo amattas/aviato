@@ -13,6 +13,17 @@ def _scaffold_one(root: Path, output: str, body: str) -> None:
     scaffold(root, [ScaffoldItem(output, body, "#", False)], profile="p", version="v1")
 
 
+def test_diagnose_tolerates_non_utf8_workflow_file(tmp_path: Path) -> None:
+    # A corrupted/non-UTF-8 workflow file in .github/workflows must not crash diagnosis
+    # (and thus a whole fleet scan) with a UnicodeDecodeError when probing for the
+    # scheduled drift-automation caller (§5.4 robustness).
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "bad.yml").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+    report = diagnose(tmp_path, [])
+    assert report.drift_automation_present is False
+
+
 def test_clean_when_body_matches(tmp_path: Path) -> None:
     _scaffold_one(tmp_path, "cfg.py", "X = 1\n")
     report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])

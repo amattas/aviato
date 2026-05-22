@@ -57,6 +57,15 @@ def test_repin_reports_orphaned_override(module_root: Path) -> None:
     assert "nonexistent_key" in plan.orphaned_overrides
 
 
+def test_repin_reports_orphaned_pipeline_override(module_root: Path) -> None:
+    # §5.12: a consumer pipeline override that removes a pipeline no longer present at
+    # the target must be REPORTED as orphaned, not crash the plan with a §4.2
+    # remove-of-absent CompositionError (which would make a clean re-pin un-plannable).
+    decl = _decl(overrides={"pipelines": {"remove": ["ghost-pipeline"]}})
+    plan = plan_repin(Registry(module_root), decl, "v1.0.0")
+    assert "ghost-pipeline" in plan.orphaned_overrides
+
+
 def test_repin_refuses_when_profile_repurposed_at_target(module_root: Path, tmp_path: Path) -> None:
     # §5.12/§6.5: a profile NAME is a stable public identity. If the same name maps to a
     # different composition at the target version (here: its version-source artifact kind

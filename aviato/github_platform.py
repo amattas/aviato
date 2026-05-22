@@ -363,8 +363,10 @@ class GitHubPlatform:
 
     def open_or_update_issue(self, repo: str, key: str, title: str, body: str) -> str:
         existing = github.gh_json(f"repos/{repo}/issues?state=open&labels={_seg(key)}", default=[], allow_error=True)
-        if isinstance(existing, list) and existing:
-            number = existing[0]["number"]
+        # A malformed 200 (issue object without "number") must not crash the scheduled
+        # drift-report; fall through to creating a fresh issue rather than KeyError.
+        number = existing[0].get("number") if isinstance(existing, list) and existing else None
+        if number is not None:
             self._gh_input(["--method", "PATCH", f"repos/{repo}/issues/{number}"], {"body": body})
             return str(number)
         self._gh_input(["--method", "POST", f"repos/{repo}/issues"], {"title": title, "body": body, "labels": [key]})
@@ -372,8 +374,8 @@ class GitHubPlatform:
 
     def comment_issue(self, repo: str, key: str, body: str) -> None:
         existing = github.gh_json(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[], allow_error=True)
-        if isinstance(existing, list) and existing:
-            number = existing[0]["number"]
+        number = existing[0].get("number") if isinstance(existing, list) and existing else None
+        if number is not None:
             self._gh_input(["--method", "POST", f"repos/{repo}/issues/{number}/comments"], {"body": body})
 
     def open_or_update_proposal(self, repo: str, branch: str, title: str, files: dict[str, str], body: str) -> str:
@@ -459,6 +461,14 @@ class GitHubPlatform:
         # restrictions): silently dropping them would mutate state the operator never
         # saw or consented to (§2.4/§5.7).
         branch = github.default_branch(repo)
+        if not branch:
+            # Empty branch ⇒ ambiguous/transient read. Proceeding would build a
+            # `branches//protection` URL that 404s to empty data, silently bypassing the
+            # fail-closed unmodeled-protection guards below before the wholesale PUT. Fail
+            # closed, mirroring read_settings (§2.7/§2.4).
+            raise github.GitHubAPIError(
+                f"repos/{repo}", 0, "could not resolve default branch; refusing to apply settings"
+            )
         live = github.classic_branch_protection(repo, branch)
         # required_status_checks is now modeled (§10); only push restrictions remain
         # unmodeled in classic protection — fail closed rather than silently drop them.

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
-from aviato.core.composition import resolve_profile
+from aviato.core.composition import _resolve_list, resolve_profile
 from aviato.core.errors import CompositionError
 from aviato.core.model import VersionSourceModule
 from aviato.core.registry import Registry
@@ -14,6 +15,15 @@ from aviato.core.registry import Registry
 def test_resolve_applies_extends_add_remove_for_lists(module_root: Path) -> None:
     rs = resolve_profile(Registry(module_root), "child")
     assert rs.pipelines == ("b", "c")
+
+
+def test_resolve_list_rejects_add_remove_on_resolution_root() -> None:
+    # §4.2: add/remove are relative to a base layer; the resolution root IS the base,
+    # so add/remove on it have no meaning. Silently ignoring them would let a data
+    # author's misplaced ``add:`` become a no-op. Fail loud instead.
+    root = SimpleNamespace(name="root", extends=None, pipelines=("a",), add=("b",), remove=())
+    with pytest.raises(CompositionError):
+        _resolve_list([root], "pipelines")
 
 
 def test_always_on_security_baseline_cannot_be_composed_away() -> None:

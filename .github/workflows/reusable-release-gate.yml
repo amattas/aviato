@@ -21,8 +21,8 @@ on:
       release-tag:
         description: >-
           The release tag to gate when invoked IN-RUN (branch context) by the release
-          job, e.g. v1.2.3. When empty the gate runs in the classic tag-ref context
-          and validates GITHUB_REF_NAME.
+          job, e.g. 1.2.3 (bare SemVer; the policy rejects a v-prefix). When empty the
+          gate runs in the classic tag-ref context and validates GITHUB_REF_NAME.
         required: false
         type: string
         default: ""

@@ -40,6 +40,12 @@ def _resolve_list(layers: list, base_attr: str) -> tuple[str, ...]:
     root = layers[0]
     if root.extends is not None:  # defensive; root by construction has no extends
         raise CompositionError(f"resolution root {root.name!r} unexpectedly extends another")
+    if root.add or root.remove:
+        # add/remove are relative to a base layer; the root IS the base, so they have no
+        # meaning here. Silently ignoring them would let a misplaced override no-op (§4.2).
+        raise CompositionError(
+            f"resolution root {root.name!r} declares add/remove, which only apply under extends (§4.2)"
+        )
     resolved = list(getattr(root, base_attr))
     for layer in layers[1:]:
         if getattr(layer, base_attr):

@@ -1,8 +1,25 @@
 from __future__ import annotations
 
+import pytest
+
+from aviato.core.errors import CompositionError
 from aviato.core.file_drift_flow import run_file_drift
 
 from .fakeplatform import FakePlatform
+
+
+def test_proposable_status_without_expected_body_raises_cleanly() -> None:
+    # A proposable artifact (mergeable-drift/missing) absent from expected_bodies must
+    # raise a classified CompositionError, not an opaque KeyError that crashes a fleet
+    # scan / scheduled drift run mid-flight.
+    with pytest.raises(CompositionError):
+        run_file_drift(
+            FakePlatform(),
+            repo="o/r",
+            profile="p",
+            statuses={"missing.cfg": "missing"},
+            expected_bodies={},  # no body for the proposable artifact
+        )
 
 
 def test_mergeable_drift_opens_identity_keyed_proposal() -> None:

@@ -23,6 +23,20 @@ def test_tag_ruleset_excludes_bare_floating_major_aliases() -> None:
     exclude = tag["conditions"]["ref_name"]["exclude"]
     assert "refs/tags/[0-9]" in exclude
     assert "refs/tags/[0-9][0-9]" in exclude
+
+
+def test_tag_ruleset_excludes_floating_major_aliases_for_realistic_widths() -> None:
+    # §5.9/§6.1: the floating-major alias is a BARE integer of arbitrary width
+    # (a 5-digit major like 10000 is valid SemVer). fnmatch cannot express
+    # "digits-only of any length" (``*`` also matches the dots in 1.2.3), so the
+    # exclude list enumerates a generous range of fixed widths. A previously-finite
+    # 1–4 digit list would reject a 10000.0.0 release's floating tag.
+    payloads = render_all_rulesets()
+    tag = next(p for p in payloads if p["target"] == "tag")
+    exclude = tag["conditions"]["ref_name"]["exclude"]
+    for width in range(1, 10):
+        pattern = "refs/tags/" + "[0-9]" * width
+        assert pattern in exclude, f"floating major width {width} not excluded ({pattern})"
     assert "refs/tags/v[0-9]" not in exclude
 
 

@@ -77,6 +77,38 @@ def test_apply_passes_full_desired_state_to_binding() -> None:
     assert outcome.payload == {"required_reviews": 2}
 
 
+def test_apply_audit_comment_includes_destructive_removals() -> None:
+    # §5.7: the audit comment must reflect the COMPLETE recomputed change set, including
+    # keys present in live but removed from desired (destructive). The additive-only write
+    # subset (outcome.payload) omits removals, leaving an incomplete audit trail for the
+    # most security-sensitive class of change.
+    desired = {"required_reviews": 2}
+    live = {"required_reviews": 1, "legacy_restriction": True}
+    diff_id = _current_diff_id(desired, live)
+    issue = Issue(
+        key="k",
+        open=True,
+        consent_diff_id=diff_id,
+        consent_actor_type="User",
+        consent_role="admin",
+        consent_role_lookup_ok=True,
+    )
+    platform = FakePlatform(settings=dict(live), issues={"k": issue})
+    outcome = run_reconcile(
+        platform,
+        repo="o/r",
+        issue_key="k",
+        desired_settings=desired,
+        pin="v1",
+        tool_version="1.0.0",
+        recorded_version="1.0.0",
+        confirmed_diff_id=diff_id,
+    )
+    assert outcome.action == "apply"
+    comments = [args[2] for name, args in platform.calls if name == "comment_issue"]
+    assert any("legacy_restriction" in body for body in comments), comments
+
+
 def test_missing_issue_refused() -> None:
     platform = FakePlatform(settings={"required_reviews": 1})
     outcome = run_reconcile(

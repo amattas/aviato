@@ -18,6 +18,35 @@ from aviato.github_platform import (
 )
 
 
+def test_apply_settings_fails_closed_on_unresolved_default_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    # default_branch() returns "" on an ambiguous/transient API read. apply_settings must
+    # NOT proceed with an empty branch: the resulting `branches//protection` URL would 404
+    # to empty data, silently bypassing the fail-closed unmodeled-protection guards before
+    # the wholesale PUT. read_settings already guards this; apply_settings must too (§2.7).
+    monkeypatch.setattr(github, "default_branch", lambda repo: "")
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not touch API")))
+    with pytest.raises(github.GitHubAPIError):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
+
+
+def test_open_or_update_issue_tolerates_missing_number(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A 200 response carrying a malformed issue object (no "number") must not crash the
+    # scheduled drift-report with a KeyError; fall back to creating a fresh issue.
+    monkeypatch.setattr(github, "gh_json", lambda *a, **k: [{"title": "stale"}])
+    posted: list[list[str]] = []
+    monkeypatch.setattr(GitHubPlatform, "_gh_input", lambda self, args, payload: posted.append(args))
+    GitHubPlatform().open_or_update_issue("o/r", "k", "t", "b")
+    assert any("POST" in arg for args in posted for arg in args)
+
+
+def test_comment_issue_tolerates_missing_number(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github, "gh_json", lambda *a, **k: [{"title": "stale"}])
+    monkeypatch.setattr(
+        GitHubPlatform, "_gh_input", lambda self, args, payload: (_ for _ in ()).throw(AssertionError("no number"))
+    )
+    GitHubPlatform().comment_issue("o/r", "k", "b")  # must be a no-op, not a KeyError
+
+
 def test_apply_settings_fails_closed_on_unmodeled_protection(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
     monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
