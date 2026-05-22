@@ -168,10 +168,10 @@ jobs:
           # Package version is the bare SemVer (strip the leading v from the tag).
           version="${RESOLVED_TAG#v}"
           name="$(python -c 'import tomllib,glob; print(tomllib.load(open("pyproject.toml","rb"))["project"]["name"])')"
-          extra=""
-          if [ -n "${INDEX_URL}" ]; then extra="--index-url ${INDEX_URL%/}/simple/"; fi
+          extra=()
+          if [ -n "${INDEX_URL}" ]; then extra=(--index-url "${INDEX_URL%/}/simple/"); fi
           for attempt in 1 2 3 4 5; do
-            if python -m pip download --no-deps --no-binary :all: ${extra} "${name}==${version}" -d /tmp/confirm 2>/dev/null; then
+            if python -m pip download --no-deps --no-binary :all: "${extra[@]}" "${name}==${version}" -d /tmp/confirm 2>/dev/null; then
               echo "Confirmed ${name}==${version} resolvable."; exit 0
             fi
             echo "Not yet resolvable (attempt ${attempt}); waiting..."; sleep 15
