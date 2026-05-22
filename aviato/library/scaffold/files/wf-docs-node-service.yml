@@ -1,0 +1,84 @@
+name: Aviato Docs
+
+# Multi-version Docusaurus docs publish (§13.3), opt-in via docs: true.
+#
+# Triggered by workflow_run on the main CI workflow completing on the default
+# branch — NOT by a tag push. The release job tags with GITHUB_TOKEN, which does
+# not re-trigger tag workflows (§11.2 forbids a stored PAT to work around that);
+# workflow_run is not subject to that suppression, so it reliably fires. We then
+# deploy docs only when the completed run SUCCEEDED and its head commit carries a
+# fresh release tag, gated by the release gate + a release-ref security baseline.
+on:
+  workflow_run:
+    workflows: ["Aviato Node Service"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+  actions: read
+  pages: write
+  id-token: write
+
+jobs:
+  # Resolve the release tag at the completed run's head commit; skip if none.
+  resolve:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      release: ${{ steps.tag.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - id: tag
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          tag="$(git tag --points-at "${HEAD_SHA}" --list 'v[0-9]*.[0-9]*.[0-9]*' | head -n1)"
+          if [ -n "${tag}" ]; then
+            echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+            echo "release=true" >> "${GITHUB_OUTPUT}"
+            echo "Resolved release tag ${tag} for docs deploy."
+          else
+            echo "release=false" >> "${GITHUB_OUTPUT}"
+            echo "No release tag at ${HEAD_SHA}; skipping docs deploy."
+          fi
+
+  release-gate:
+    needs: [resolve]
+    if: ${{ needs.resolve.outputs.release == 'true' }}
+    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@{{ aviato-ref }}
+    with:
+      default-branch: main
+      require-merged-pr: true
+      release-tag: ${{ needs.resolve.outputs.tag }}
+
+  security:
+    needs: [resolve]
+    if: ${{ needs.resolve.outputs.release == 'true' }}
+    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@{{ aviato-ref }}
+    with:
+      ref: ${{ needs.resolve.outputs.tag }}
+      codeql-languages: "javascript-typescript"
+
+  docs:
+    needs: [resolve, release-gate, security]
+    if: ${{ needs.resolve.outputs.release == 'true' }}
+    uses: amattas/aviato/.github/workflows/reusable-docs-pages.yml@{{ aviato-ref }}
+    with:
+      working-directory: website
+      release-tag: ${{ needs.resolve.outputs.tag }}
+      docs-source-directory: "."
+      docs-emit-command: |
+        # §12.2 Node API reference (TypeDoc -> markdown) into the docs source tree.
+        npx -y -p typedoc -p typedoc-plugin-markdown typedoc \
+          --plugin typedoc-plugin-markdown --out website/docs/api \
+          --entryPointStrategy expand src

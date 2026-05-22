@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  swift:
+    uses: amattas/aviato/.github/workflows/reusable-swift-ci.yml@main
+    with:
+      scheme: "App"
+      workspace: "App.xcworkspace"
+      project: ""
+      destination: "platform=iOS Simulator,name=iPhone 16"
+      install-command: "brew install swiftformat swiftlint"
+      run-install: true
+      run-lint: true
+      run-tests: true
+      run-build: true
+

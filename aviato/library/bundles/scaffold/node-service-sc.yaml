@@ -1,0 +1,13 @@
+name: node-service-sc
+# Adds the profile's caller workflows (verify/release/deploy/security + drift)
+# to the language scaffold, so a consumer actually receives them (§15).
+extends: node-sc
+add:
+  - wf-ci-node-service
+  - wf-drift
+  - wf-docs-node-service
+  - docusaurus-config
+  - docs-package
+  - docs-sidebars
+  - docs-intro
+remove: []

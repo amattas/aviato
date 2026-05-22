@@ -1,0 +1,13 @@
+name: swift-app-sc
+# Adds the profile's caller workflows (verify/release/deploy/security + drift)
+# to the language scaffold, so a consumer actually receives them (§15).
+extends: swift-sc
+add:
+  - wf-ci-swift-app
+  - wf-drift
+  - wf-docs-swift-app
+  - docusaurus-config
+  - docs-package
+  - docs-sidebars
+  - docs-intro
+remove: []

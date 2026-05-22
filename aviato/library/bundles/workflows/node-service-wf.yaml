@@ -1,0 +1,7 @@
+name: node-service-wf
+extends: base
+add:
+  - node-verify
+  - release
+  - ghcr-publish
+remove: []

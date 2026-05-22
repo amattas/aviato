@@ -1,0 +1,18 @@
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Build / dependency output
+dist/
+build/
+*.egg-info/
+node_modules/
+.venv/
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+coverage/
+.build/

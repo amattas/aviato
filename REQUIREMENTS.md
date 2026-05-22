@@ -1211,6 +1211,27 @@ flowchart TD
     G["Never triggered by: arbitrary push · pull_request · fork"] -.-> E
 ```
 
+**Trigger mechanism (platform constraint).** The conceptual trigger is the version
+tag. GitHub, however, does **not** start a new workflow run for a tag (or any event)
+pushed with the platform `GITHUB_TOKEN` — this is an anti-recursion guarantee, not an
+Aviato choice — and §11.2 forbids a stored PAT/App token to work around it. Two
+sanctioned mechanisms therefore realize "deploy on the tag" without a stored secret:
+
+- **Automated release (default):** the release job tags the merged release-bump
+  commit and then runs the deployment pipelines as **in-run downstream jobs of the
+  same run**, passing the just-created tag as `release-tag`. The deploy still builds
+  from the tag ref and is still gated by the release gate (merged-PR check) and the
+  release-ref security baseline. Docs publish, which is a separate workflow, is
+  triggered via `workflow_run` on the main pipeline's completion (not subject to the
+  token suppression) and likewise deploys only when the head commit carries a fresh
+  release tag.
+- **Manual tag push:** an operator pushing the tag with their own credentials (or via
+  out-of-band automation, §17) triggers the deploy workflows directly in the classic
+  tag-ref context. The same workflows accept this path with no `release-tag` input.
+
+Both paths converge on the same gated, tag-pinned deploy; deployments still never run
+on arbitrary push, pull_request, or fork events.
+
 ### 11.2 Credential posture: OIDC-first, stored secrets only where unavoidable
 
 - Prefer keyless/OIDC or the platform token for every target that supports it.

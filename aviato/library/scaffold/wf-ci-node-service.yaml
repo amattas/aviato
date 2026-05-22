@@ -1,0 +1,5 @@
+name: wf-ci-node-service
+output_path: .github/workflows/aviato-ci.yml
+source: files/wf-node-service.yml
+comment: "#"
+seed_once: false

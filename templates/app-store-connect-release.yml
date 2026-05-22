@@ -1,0 +1,34 @@
+name: Publish App Store Build
+
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  app-store-connect:
+    uses: amattas/aviato/.github/workflows/reusable-app-store-connect.yml@main
+    with:
+      environment-name: app-store-connect
+      scheme: "App"
+      workspace: "App.xcworkspace"
+      project: ""
+      bundle-identifier: "com.example.app"
+      team-id: "TEAMID1234"
+      configuration: Release
+      sdk: iphoneos
+      archive-path: build/App.xcarchive
+      export-path: build/export
+      export-options-plist: ExportOptions.plist
+      version-command: |
+        base_version="${RELEASE_TAG%%-*}"
+        agvtool new-marketing-version "${base_version}"
+        agvtool new-version -all "${BUILD_NUMBER}"
+      submit-for-review: false
+    secrets:
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+      APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}

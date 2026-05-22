@@ -1,0 +1,6 @@
+name: docs-sidebars
+output_path: website/sidebars.js
+source: files/docs-sidebars.js.txt
+seed_once: true
+when:
+  docs: "true"

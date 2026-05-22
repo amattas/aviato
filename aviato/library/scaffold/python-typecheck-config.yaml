@@ -1,0 +1,5 @@
+name: python-typecheck-config
+output_path: mypy.ini
+source: files/mypy.ini.txt
+comment: "#"
+seed_once: false

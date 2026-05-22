@@ -1,0 +1,211 @@
+name: Reusable Security Baseline
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: >-
+          Commit/tag to scan. Empty uses the triggering ref. Set this when the caller
+          runs out-of-band (e.g. the docs workflow_run path) so the release-ref
+          security baseline (§5.14) scans the released commit, not a later default-branch tip.
+        required: false
+        type: string
+        default: ""
+      codeql-languages:
+        description: Comma-separated CodeQL languages, for example python or javascript-typescript.
+        required: false
+        type: string
+        default: ""
+      run-codeql:
+        required: false
+        type: boolean
+        default: true
+      run-dependency-review:
+        required: false
+        type: boolean
+        default: true
+      dependency-review-fail-on-severity:
+        required: false
+        type: string
+        default: high
+      codeql-runner:
+        description: Runner used for CodeQL.
+        required: false
+        type: string
+        default: ubuntu-latest
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+  actions: read
+
+jobs:
+  # §8.16/§5.14: probe the findings-upload privilege at runtime and HARD-FAIL if a
+  # caller did not grant it — a missing scope must fail loud, never pass silently.
+  privilege-probe:
+    name: Probe findings-upload privilege
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify security-events scope
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          if gh api "repos/${REPO}/code-scanning/analyses?per_page=1" >/dev/null 2>err.txt; then
+            echo "security-events scope present."
+          elif grep -qiE '403|resource not accessible|forbidden|must have' err.txt; then
+            echo "::error::Missing security-events privilege required for SARIF upload (§8.16)."
+            cat err.txt
+            exit 1
+          else
+            echo "No analyses yet / code scanning not initialized; scope appears present."
+          fi
+
+  codeql:
+    name: CodeQL
+    needs: privilege-probe
+    if: ${{ inputs.run-codeql && inputs.codeql-languages != '' }}
+    runs-on: ${{ inputs.codeql-runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ inputs.codeql-languages }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+
+  # PR-only diff-based review (richer signal on pull requests).
+  dependency-review:
+    name: Dependency Review
+    needs: privilege-probe
+    if: ${{ inputs.run-dependency-review && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: ${{ inputs.dependency-review-fail-on-severity }}
+
+  # Dependency vulnerability scan on PRs, schedule, AND the release ref (§2.13/§5.14):
+  # gates high/critical and uploads SARIF to the Security surface.
+  dependency-scan:
+    name: Dependency vulnerability scan
+    needs: privilege-probe
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Scan dependencies
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          scan-type: fs
+          scan-ref: "."
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          scanners: vuln
+          format: sarif
+          output: trivy-deps.sarif
+
+      - name: Upload dependency findings
+        if: ${{ always() }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-deps.sarif
+          category: aviato-dependency-scan
+
+  # Secret scan (defense-in-depth alongside platform secret scanning + push
+  # protection, §2.13): any detected secret fails the pipeline; findings upload as SARIF.
+  secret-scan:
+    name: Secret scan
+    needs: privilege-probe
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Scan for secrets
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          scan-type: fs
+          scan-ref: "."
+          exit-code: "1"
+          scanners: secret
+          format: sarif
+          output: trivy-secrets.sarif
+
+      - name: Upload secret findings
+        if: ${{ always() }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-secrets.sarif
+          category: aviato-secret-scan
+
+  # Per-run heartbeat (§5.14): emit a durable artifact (even on zero findings) so
+  # diagnosis (§5.4) can distinguish "ran clean" from "never ran" by reading the
+  # artifact — not a stale CodeQL analysis. The required scans (SAST + dependency +
+  # secret) MUST have actually run; a skipped scan is treated as broken.
+  heartbeat:
+    name: Security baseline heartbeat
+    needs: [codeql, dependency-review, dependency-scan, secret-scan]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    env:
+      CODEQL_RESULT: ${{ needs.codeql.result }}
+      DEPSCAN_RESULT: ${{ needs.dependency-scan.result }}
+      SECRET_RESULT: ${{ needs.secret-scan.result }}
+      DEPREVIEW_RESULT: ${{ needs.dependency-review.result }}
+    steps:
+      - name: Emit heartbeat
+        shell: bash
+        run: |
+          mkdir -p heartbeat
+          printf '{"tool":"aviato-security-baseline","sast":"%s","dependency":"%s","secret":"%s","review":"%s","completed":true}\n' \
+            "${CODEQL_RESULT}" "${DEPSCAN_RESULT}" "${SECRET_RESULT}" "${DEPREVIEW_RESULT}" \
+            > heartbeat/aviato-security-heartbeat.json
+          cat heartbeat/aviato-security-heartbeat.json
+
+      - name: Upload heartbeat
+        uses: actions/upload-artifact@v4
+        with:
+          name: aviato-security-heartbeat
+          path: heartbeat/aviato-security-heartbeat.json
+          retention-days: 30
+
+      - name: Gate on required scans
+        shell: bash
+        run: |
+          # The gating scans must have SUCCEEDED (skipped/failed/cancelled = broken, §5.14).
+          for name in DEPSCAN SECRET; do
+            eval "result=\${${name}_RESULT}"
+            if [ "${result}" != "success" ]; then
+              echo "::error::${name} scan did not run successfully (result=${result}); broken (§5.14)."
+              exit 1
+            fi
+          done
+          if [ "${CODEQL_RESULT}" = "failure" ]; then
+            echo "::error::CodeQL SAST reported failures."
+            exit 1
+          fi

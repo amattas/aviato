@@ -1,0 +1,13 @@
+name: python-library-sc
+# Adds the profile's caller workflows (verify/release/deploy/security + drift)
+# to the language scaffold, so a consumer actually receives them (§15).
+extends: python-sc
+add:
+  - wf-ci-python-library
+  - wf-drift
+  - wf-docs-python-library
+  - docusaurus-config
+  - docs-package
+  - docs-sidebars
+  - docs-intro
+remove: []

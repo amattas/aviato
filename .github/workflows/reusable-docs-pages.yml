@@ -1,0 +1,250 @@
+name: Reusable Docusaurus Pages Publish
+
+on:
+  workflow_call:
+    inputs:
+      aviato-ref:
+        description: Deprecated. Release validation is embedded in this pinned workflow.
+        required: false
+        type: string
+        default: ""
+      node-version:
+        required: false
+        type: string
+        default: "22"
+      working-directory:
+        required: false
+        type: string
+        default: "."
+      release-tag:
+        description: >-
+          Tag to build/publish when invoked IN-RUN (branch context) by the release
+          job. When empty the workflow runs in the classic tag-ref context.
+        required: false
+        type: string
+        default: ""
+      install-command:
+        required: false
+        type: string
+        # Reproducible install when a lockfile is committed; falls back to a plain
+        # install on a freshly-scaffolded docs site that has none yet.
+        default: "if [ -f package-lock.json ]; then npm ci; else npm install; fi"
+      docs-emit-command:
+        description: >-
+          §12 language docs emission: a command that writes API/narrative md(x) into
+          the docs source tree (e.g. pdoc/pydoc-markdown for Python, TypeDoc markdown
+          for Node) before the Docusaurus version-cut + build. Empty = narrative-only
+          (Swift), where the scaffolded pages are the source.
+        required: false
+        type: string
+        default: ""
+      docs-source-directory:
+        description: Working directory for docs-emit-command (the project root, where source lives).
+        required: false
+        type: string
+        default: "."
+      build-command:
+        required: false
+        type: string
+        default: "npm run build"
+      artifact-path:
+        required: false
+        type: string
+        default: "build"
+      environment-name:
+        required: false
+        type: string
+        default: github-pages
+      docs-retention:
+        description: Number of most-recent versions to keep (§13.3 retention cap).
+        required: false
+        type: number
+        default: 10
+
+# §13.3/§1530 least privilege: Pages publish needs pages+id-token write and only
+# READ of contents. Prior doc-version SOURCES persist as a workflow ARTIFACT across
+# runs (read via actions:read) — never a source-branch push — so contents stays read.
+permissions:
+  contents: read
+  id-token: write
+  pages: write
+  actions: read
+
+# Per-alias deploy concurrency group so a slower, older-release docs deploy cannot
+# regress the published site / `latest` alias (§8.14). Queue rather than cancel.
+concurrency:
+  group: pages-latest-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  publish-docs:
+    name: Publish docs
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment-name }}
+      url: ${{ steps.deployment.outputs.page_url }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout consumer repository
+        uses: actions/checkout@v4
+        with:
+          # Build from the release tag — explicit in-run, or the tag ref otherwise.
+          ref: ${{ inputs.release-tag || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Validate release tag
+        id: release
+        shell: bash
+        env:
+          TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+          TAG_FORMAT_DESCRIPTION: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
+          RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RELEASE_TAG_INPUT}" ]; then
+            tag="${RELEASE_TAG_INPUT}"
+          else
+            if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+              echo "::error::Release workflows must run from a tag ref (or pass release-tag). Got ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}."
+              exit 1
+            fi
+            tag="${GITHUB_REF_NAME}"
+          fi
+          if [[ ! "${tag}" =~ ${TAG_PATTERN} ]]; then
+            echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${tag}"
+            exit 1
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Install
+        shell: bash
+        run: ${{ inputs.install-command }}
+
+      # §12: emit language API/narrative docs into the docs source tree BEFORE the
+      # version cut, so the generated reference is captured in the versioned snapshot
+      # and the published build. Runs from the project root (source lives there).
+      - name: Emit language API docs
+        if: ${{ inputs.docs-emit-command != '' }}
+        shell: bash
+        working-directory: ${{ inputs.docs-source-directory }}
+        run: ${{ inputs.docs-emit-command }}
+
+      # §13.3 multi-version: restore the accumulated Docusaurus version SOURCES from the
+      # prior run's `aviato-docs-versions` artifact (read-only; no source-branch push).
+      - name: Restore persisted doc versions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          aid="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=aviato-docs-versions&per_page=1" \
+            --jq '.artifacts[0].id' 2>/dev/null || true)"
+          if [ -n "${aid}" ] && [ "${aid}" != "null" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${aid}/zip" > /tmp/versions.zip || true
+            unzip -o /tmp/versions.zip -d . >/dev/null 2>&1 || true
+            echo "Restored prior doc versions from artifact ${aid}."
+          else
+            echo "No persisted versions artifact yet (first release)."
+          fi
+
+      # §8.14 monotonic guard (fail-closed): determine whether this release is the
+      # highest. When it is NOT (or the tag listing fails), the version cut, build,
+      # AND deploy are ALL skipped — so an older release cannot regress the published
+      # site / `latest` alias. Mirrors aviato.core.versioning.is_highest.
+      - name: Monotonic guard
+        id: guard
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/highest.py <<'PY'
+          import sys, re
+          rel = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(\d+))?$")
+          rank = {None: 2, "beta": 1, "alpha": 0}
+          def key(t):
+              m = rel.match(t.strip())
+              if not m:
+                  return None
+              a, b, c, pre, pren = m.groups()
+              return (int(a), int(b), int(c), rank[pre], int(pren or 0))
+          cand = sys.argv[1]
+          ck = key(cand)
+          keys = [k for k in (key(t) for t in sys.stdin) if k]
+          print("true" if ck and max(keys + [ck]) == ck else "false")
+          PY
+          if ! gh api --paginate "repos/${GITHUB_REPOSITORY}/tags" --jq '.[].name' > /tmp/tags.txt; then
+            echo "::warning::Could not list tags; skipping docs deploy (fail-closed, §8.14)."
+            echo "highest=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "highest=$(python3 /tmp/highest.py "${RELEASE_TAG}" < /tmp/tags.txt)" >> "${GITHUB_OUTPUT}"
+
+      - name: Cut new docs version + prune
+        if: ${{ steps.guard.outputs.highest == 'true' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RETENTION: ${{ inputs.docs-retention }}
+        run: |
+          set -euo pipefail
+          if ! npx --no-install docusaurus docs:version "${RELEASE_TAG}"; then
+            npx docusaurus docs:version "${RELEASE_TAG}"
+          fi
+          python3 - "${RETENTION}" <<'PY'
+          import json, sys, pathlib, shutil
+          cap = int(sys.argv[1])
+          vf = pathlib.Path("versions.json")
+          if not vf.is_file():
+              raise SystemExit(0)
+          versions = json.loads(vf.read_text())  # newest-first
+          keep, prune = versions[:cap], versions[cap:]
+          for v in prune:
+              shutil.rmtree(pathlib.Path("versioned_docs") / f"version-{v}", ignore_errors=True)
+              pathlib.Path("versioned_sidebars", f"version-{v}-sidebars.json").unlink(missing_ok=True)
+          vf.write_text(json.dumps(keep, indent=2) + "\n")
+          print(f"Kept {keep}; pruned {prune}")
+          PY
+
+      - name: Build docs
+        if: ${{ steps.guard.outputs.highest == 'true' }}
+        shell: bash
+        run: ${{ inputs.build-command }}
+
+      # Persist the updated version SOURCES as an artifact for the next release
+      # (read back above) — keeps the source branch untouched and contents read-only.
+      - name: Persist doc versions
+        if: ${{ steps.guard.outputs.highest == 'true' && hashFiles(format('{0}/versions.json', inputs.working-directory)) != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: aviato-docs-versions
+          path: |
+            ${{ inputs.working-directory }}/versioned_docs
+            ${{ inputs.working-directory }}/versioned_sidebars
+            ${{ inputs.working-directory }}/versions.json
+          retention-days: 90
+
+      - name: Upload Pages artifact
+        if: ${{ steps.guard.outputs.highest == 'true' }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
+
+      - name: Deploy Pages
+        id: deployment
+        if: ${{ steps.guard.outputs.highest == 'true' }}
+        uses: actions/deploy-pages@v4

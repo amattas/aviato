@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from .composition import resolve_profile
+from .declaration import Declaration, load_declaration
+from .diagnosis import ExpectedArtifact, diagnose
+from .errors import AviatoError
+from .onboarding import resolved_artifacts
+from .registry import Registry
+
+
+@dataclass
+class RepoScan:
+    path: str
+    profile: str | None = None
+    statuses: dict[str, str] = field(default_factory=dict)
+    seed_divergence: list[str] = field(default_factory=list)
+    secret_in_declaration: bool = False
+    error: str | None = None
+
+
+def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[ExpectedArtifact]:
+    # Same resolution/rendering/conditional-filtering (pin, docs, type-check) as
+    # onboarding/doctor — so the fleet scan doesn't report false drift for JS
+    # consumers or miss docs-enabled artifacts (§5.11 parity).
+    return [
+        ExpectedArtifact(a.output, a.body if not a.seed_once else "", a.seed_once)
+        for a in resolved_artifacts(
+            registry,
+            declaration.profile,
+            declaration.variables,
+            pin=declaration.version,
+            docs=declaration.docs,
+            overrides=declaration.overrides,
+        )
+    ]
+
+
+def scan_fleet(paths: Sequence[Path], registry: Registry) -> list[RepoScan]:
+    """Run §5.4 diagnosis across many local repositories, read-only (§5.11).
+
+    The repository list is resolved by the operator (here, explicit paths) — never
+    a Library-held registry (§2.2). Each repo is diagnosed independently; a repo
+    without a declaration is reported as an error rather than crashing the scan.
+    Nothing is mutated and no proposal is opened (that is ``scan --fix``, layered
+    on :func:`aviato.core.file_drift_flow.run_file_drift`).
+    """
+    scans: list[RepoScan] = []
+    for path in paths:
+        root = Path(path)
+        declaration_path = root / ".github" / "aviato.yaml"
+        if not declaration_path.is_file():
+            scans.append(RepoScan(path=str(root), error="no declaration"))
+            continue
+        try:
+            declaration = load_declaration(declaration_path)
+            expected = _expected_artifacts(registry, declaration)
+            resolved = resolve_profile(registry, declaration.profile, docs=declaration.docs)
+            secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
+            report = diagnose(
+                root,
+                expected,
+                declaration_variables=declaration.variables,
+                secret_var_names=secret_names,
+            )
+        except AviatoError as exc:
+            scans.append(RepoScan(path=str(root), error=str(exc)))
+            continue
+        scans.append(
+            RepoScan(
+                path=str(root),
+                profile=declaration.profile,
+                statuses=report.statuses,
+                seed_divergence=report.seed_divergence,
+                secret_in_declaration=report.secret_in_declaration,
+            )
+        )
+    return scans

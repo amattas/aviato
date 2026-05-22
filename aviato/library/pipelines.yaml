@@ -1,0 +1,52 @@
+# Typed pipeline modules (§3.2): each pipeline declares the job privileges it
+# needs (§11.3), its inputs, any stored secrets, and its runner. These mirror the
+# `permissions:` of the corresponding reusable workflow in .github/workflows/ so a
+# profile grants exactly what the pipeline needs (§8.9). Kept in sync with those
+# workflows (verified by test_pipeline_privileges_match_workflows).
+security-baseline:
+  privileges: ["contents: read", "pull-requests: read", "security-events: write", "actions: read"]
+  runner: linux
+  status_check: "security / Security baseline heartbeat"
+release-gate:
+  privileges: ["actions: read", "contents: read", "pull-requests: read"]
+  runner: linux
+common-lint:
+  privileges: ["contents: read"]
+  runner: linux
+  status_check: "common-lint / Common lint"
+release:
+  # §5.9 release: proposes the version-bump PR (pull-requests: write) and tags +
+  # publishes the GitHub release (contents: write). Mirrors reusable-release.yml.
+  privileges: ["contents: write", "pull-requests: write"]
+  runner: linux
+python-verify:
+  privileges: ["contents: read"]
+  runner: linux
+  status_check: "ci / Python CI"
+node-verify:
+  privileges: ["contents: read"]
+  runner: linux
+  status_check: "ci / Node CI"
+swift-verify:
+  privileges: ["contents: read"]
+  runner: macos
+  status_check: "ci / Swift CI"
+pypi-publish:
+  privileges: ["contents: read", "id-token: write", "attestations: write"]
+  runner: linux
+ghcr-publish:
+  privileges: ["contents: read", "packages: write", "security-events: write", "id-token: write", "attestations: write"]
+  runner: linux
+docs-pages:
+  privileges: ["contents: read", "id-token: write", "pages: write", "actions: read"]
+  runner: linux
+app-store-connect:
+  privileges: ["contents: read"]
+  secrets:
+    - APP_STORE_CONNECT_ISSUER_ID
+    - APP_STORE_CONNECT_KEY_ID
+    - APP_STORE_CONNECT_API_PRIVATE_KEY
+    - APPLE_CERTIFICATE_P12_BASE64
+    - APPLE_CERTIFICATE_PASSWORD
+    - APPLE_PROVISIONING_PROFILE_BASE64
+  runner: macos

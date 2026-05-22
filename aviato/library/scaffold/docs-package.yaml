@@ -1,0 +1,8 @@
+name: docs-package
+# Docusaurus site manifest (§13.3). Seed-once; the developer runs `npm install`
+# once to produce the lockfile the docs workflow's `npm ci` consumes.
+output_path: website/package.json
+source: files/docs-package.json.txt
+seed_once: true
+when:
+  docs: "true"

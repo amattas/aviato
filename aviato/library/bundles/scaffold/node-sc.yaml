@@ -1,0 +1,9 @@
+name: node-sc
+extends: common
+add:
+  - node-lint-config
+  - node-format-config
+  - node-tsconfig
+  - node-manifest
+  - node-manifest-js
+remove: []

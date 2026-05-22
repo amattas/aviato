@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+.aviato/
+_wheelout/
+catalog.md
+repos-*.txt
+

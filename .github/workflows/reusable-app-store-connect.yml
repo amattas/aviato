@@ -1,0 +1,324 @@
+name: Reusable App Store Connect Publish
+
+on:
+  workflow_call:
+    inputs:
+      aviato-ref:
+        description: Deprecated. Release validation is embedded in this pinned workflow.
+        required: false
+        type: string
+        default: ""
+      environment-name:
+        description: Protected deployment environment for Apple secrets.
+        required: false
+        type: string
+        default: app-store-connect
+      xcode-version:
+        required: false
+        type: string
+        default: ""
+      working-directory:
+        required: false
+        type: string
+        default: "."
+      release-tag:
+        description: >-
+          Tag to build/publish when invoked IN-RUN (branch context) by the release
+          job. When empty the workflow runs in the classic tag-ref context.
+        required: false
+        type: string
+        default: ""
+      scheme:
+        required: true
+        type: string
+      workspace:
+        required: false
+        type: string
+        default: ""
+      project:
+        required: false
+        type: string
+        default: ""
+      bundle-identifier:
+        required: false
+        type: string
+        default: ""
+      team-id:
+        required: false
+        type: string
+        default: ""
+      configuration:
+        required: false
+        type: string
+        default: Release
+      sdk:
+        required: false
+        type: string
+        default: iphoneos
+      archive-path:
+        required: false
+        type: string
+        default: build/App.xcarchive
+      export-path:
+        required: false
+        type: string
+        default: build/export
+      export-options-plist:
+        description: Path to an ExportOptions.plist. If empty, one is generated from export-method/team-id.
+        required: false
+        type: string
+        default: ""
+      export-method:
+        description: Export method (app-store, ad-hoc, or development) used to generate ExportOptions.plist.
+        required: false
+        type: string
+        default: app-store
+      version-command:
+        description: Optional command to set marketing/build version before archive.
+        required: false
+        type: string
+        default: ""
+      submit-for-review:
+        required: false
+        type: boolean
+        default: false
+      submit-for-review-command:
+        description: Optional command that submits the uploaded build for review.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      APP_STORE_CONNECT_ISSUER_ID:
+        required: true
+      APP_STORE_CONNECT_KEY_ID:
+        required: true
+      APP_STORE_CONNECT_API_PRIVATE_KEY:
+        required: true
+      APPLE_CERTIFICATE_P12_BASE64:
+        required: true
+      APPLE_CERTIFICATE_PASSWORD:
+        required: true
+      APPLE_PROVISIONING_PROFILE_BASE64:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  app-store-connect:
+    name: Publish to App Store Connect
+    runs-on: macos-latest
+    environment:
+      name: ${{ inputs.environment-name }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      SCHEME: ${{ inputs.scheme }}
+      WORKSPACE: ${{ inputs.workspace }}
+      PROJECT: ${{ inputs.project }}
+      BUNDLE_IDENTIFIER: ${{ inputs.bundle-identifier }}
+      TEAM_ID: ${{ inputs.team-id }}
+      CONFIGURATION: ${{ inputs.configuration }}
+      SDK: ${{ inputs.sdk }}
+      ARCHIVE_PATH: ${{ inputs.archive-path }}
+      EXPORT_PATH: ${{ inputs.export-path }}
+      EXPORT_OPTIONS_PLIST: ${{ inputs.export-options-plist }}
+      EXPORT_METHOD: ${{ inputs.export-method }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+      APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+    steps:
+      - name: Checkout consumer repository
+        uses: actions/checkout@v4
+        with:
+          # Build from the release tag — explicit in-run, or the tag ref otherwise.
+          ref: ${{ inputs.release-tag || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Validate release tag
+        id: release
+        shell: bash
+        env:
+          TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+          TAG_FORMAT_DESCRIPTION: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
+          RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RELEASE_TAG_INPUT}" ]; then
+            tag="${RELEASE_TAG_INPUT}"
+          else
+            if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+              echo "::error::Release workflows must run from a tag ref (or pass release-tag). Got ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}."
+              exit 1
+            fi
+            tag="${GITHUB_REF_NAME}"
+          fi
+          if [[ ! "${tag}" =~ ${TAG_PATTERN} ]]; then
+            echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${tag}"
+            exit 1
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Select Xcode
+        if: ${{ inputs.xcode-version != '' }}
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: ${{ inputs.xcode-version }}
+
+      - name: Install signing assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          decode_base64() {
+            local value="$1" output="$2"
+            if ! printf '%s' "${value}" | base64 --decode > "${output}" 2>/dev/null; then
+              printf '%s' "${value}" | base64 -D > "${output}"
+            fi
+          }
+
+          keychain_path="${RUNNER_TEMP}/app-signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          certificate_path="${RUNNER_TEMP}/certificate.p12"
+          profile_path="${RUNNER_TEMP}/profile.mobileprovision"
+          profile_plist="${RUNNER_TEMP}/profile.plist"
+
+          echo "::add-mask::${keychain_password}"
+          echo "KEYCHAIN_PATH=${keychain_path}" >> "${GITHUB_ENV}"
+          echo "KEYCHAIN_PASSWORD=${keychain_password}" >> "${GITHUB_ENV}"
+
+          decode_base64 "${APPLE_CERTIFICATE_P12_BASE64}" "${certificate_path}"
+          decode_base64 "${APPLE_PROVISIONING_PROFILE_BASE64}" "${profile_path}"
+
+          security create-keychain -p "${keychain_password}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+          security import "${certificate_path}" -k "${keychain_path}" -P "${APPLE_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain_path}"
+          security list-keychains -d user -s "${keychain_path}" login.keychain-db
+
+          mkdir -p "${HOME}/Library/MobileDevice/Provisioning Profiles"
+          security cms -D -i "${profile_path}" > "${profile_plist}"
+          profile_uuid="$(/usr/libexec/PlistBuddy -c 'Print UUID' "${profile_plist}")"
+          cp "${profile_path}" "${HOME}/Library/MobileDevice/Provisioning Profiles/${profile_uuid}.mobileprovision"
+
+          mkdir -p "${HOME}/.appstoreconnect/private_keys"
+          printf '%s' "${APP_STORE_CONNECT_API_PRIVATE_KEY}" > "${HOME}/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+          chmod 600 "${HOME}/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+
+      - name: Apply version command
+        if: ${{ inputs.version-command != '' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          MARKETING_VERSION: ${{ steps.release.outputs.tag }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: ${{ inputs.version-command }}
+
+      - name: Archive app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "${ARCHIVE_PATH}")"
+          team_args=()
+          if [ -n "${TEAM_ID}" ]; then
+            team_args=(DEVELOPMENT_TEAM="${TEAM_ID}")
+          fi
+
+          if [ -n "${WORKSPACE}" ]; then
+            xcodebuild archive -workspace "${WORKSPACE}" -scheme "${SCHEME}" -configuration "${CONFIGURATION}" -sdk "${SDK}" -archivePath "${ARCHIVE_PATH}" "${team_args[@]}"
+          elif [ -n "${PROJECT}" ]; then
+            xcodebuild archive -project "${PROJECT}" -scheme "${SCHEME}" -configuration "${CONFIGURATION}" -sdk "${SDK}" -archivePath "${ARCHIVE_PATH}" "${team_args[@]}"
+          else
+            echo "::error::Either workspace or project must be provided."
+            exit 1
+          fi
+
+      - name: Resolve export options
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Use the caller-supplied plist if given; otherwise generate one from the
+          # declared export-method + team-id (§13.4) so the consumer need not hand-author it.
+          if [ -n "${EXPORT_OPTIONS_PLIST}" ]; then
+            echo "RESOLVED_EXPORT_OPTIONS=${EXPORT_OPTIONS_PLIST}" >> "${GITHUB_ENV}"
+            exit 0
+          fi
+          case "${EXPORT_METHOD}" in
+            app-store|ad-hoc|development) ;;
+            *) echo "::error::Unsupported export-method '${EXPORT_METHOD}' (app-store, ad-hoc, development)."; exit 1 ;;
+          esac
+          generated="${RUNNER_TEMP}/ExportOptions.plist"
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+            echo '<plist version="1.0">'
+            echo '<dict>'
+            echo '  <key>method</key>'
+            printf '  <string>%s</string>\n' "${EXPORT_METHOD}"
+            if [ -n "${TEAM_ID}" ]; then
+              echo '  <key>teamID</key>'
+              printf '  <string>%s</string>\n' "${TEAM_ID}"
+            fi
+            echo '</dict>'
+            echo '</plist>'
+          } > "${generated}"
+          echo "RESOLVED_EXPORT_OPTIONS=${generated}" >> "${GITHUB_ENV}"
+
+      - name: Export signed app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath "${ARCHIVE_PATH}" \
+            -exportPath "${EXPORT_PATH}" \
+            -exportOptionsPlist "${RESOLVED_EXPORT_OPTIONS}"
+
+      - name: Upload to App Store Connect
+        shell: bash
+        run: |
+          set -euo pipefail
+          ipa_path="$(find "${EXPORT_PATH}" -maxdepth 1 -name '*.ipa' -print | head -n1)"
+          if [ -z "${ipa_path}" ]; then
+            echo "::error::No .ipa found in ${EXPORT_PATH}."
+            exit 1
+          fi
+
+          mkdir -p build
+          xcrun altool --upload-app \
+            --type ios \
+            --file "${ipa_path}" \
+            --apiKey "${APP_STORE_CONNECT_KEY_ID}" \
+            --apiIssuer "${APP_STORE_CONNECT_ISSUER_ID}" \
+            2>&1 | tee build/app-store-upload.log
+
+      - name: Submit for review
+        if: ${{ inputs.submit-for-review && inputs.submit-for-review-command != '' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: ${{ inputs.submit-for-review-command }}
+
+      - name: Upload App Store Connect receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-store-connect-upload
+          path: ${{ inputs.working-directory }}/build/app-store-upload.log
+          if-no-files-found: warn
+
+      - name: Cleanup signing assets
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "${KEYCHAIN_PATH}" || true
+          fi
+          rm -f "${HOME}/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"

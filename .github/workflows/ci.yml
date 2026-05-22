@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Aviato
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: python -m pip install -e .[dev]
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Install actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="1.7.4"
+          sha256="fc0a6886bbb9a23a39eeec4b176193cadb54ddbe77cdbb19b637933919545395"
+          tarball="${RUNNER_TEMP:-/tmp}/actionlint.tar.gz"
+          # §11.3: verify the shell-fetched tool by checksum before executing it.
+          curl -sSL "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz" -o "${tarball}"
+          echo "${sha256}  ${tarball}" | sha256sum -c -
+          sudo tar -xz -C /usr/local/bin -f "${tarball}" actionlint
+
+      - name: Validate
+        run: ./scripts/validate.sh
+

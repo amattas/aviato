@@ -1,0 +1,6 @@
+name: swift-sc
+extends: common
+add:
+  - swift-lint-config
+  - swift-format-config
+remove: []

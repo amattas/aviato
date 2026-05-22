@@ -1,0 +1,19 @@
+name: swift-app
+workflows: swift-app-wf
+scaffold: swift-app-sc
+settings: baseline
+requires_macos: true
+variables:
+  - {name: product-scheme, type: string}
+  - {name: bundle-identifier, type: string}
+  - {name: team-id, type: string}
+  - {name: export-method, type: enum, domain: [app-store, ad-hoc, development]}
+version_source:
+  locations: [project.pbxproj, Info.plist]
+toolchain:
+  linter: swiftlint
+  formatter: swift-format
+notes:
+  - "Apple App Store Connect deploy requires stored secrets behind a protected environment (§13.4)."
+  - "The deploy secrets are declared by the deploy plug-in, never in the declaration (§6.6)."
+docs_pipeline: docs-pages

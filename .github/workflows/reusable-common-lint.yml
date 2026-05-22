@@ -1,0 +1,120 @@
+name: Reusable Common Lint
+
+# Language-agnostic common verify lint, blocking on every profile (§12 intro):
+# actionlint + yamllint always; hadolint/shellcheck/helm-lint are no-ops when their
+# files are absent.
+
+on:
+  workflow_call:
+    inputs:
+      actionlint-version:
+        required: false
+        type: string
+        default: "1.7.4"
+      actionlint-sha256:
+        description: >-
+          SHA256 of actionlint_<version>_linux_amd64.tar.gz. The download is verified
+          against this checksum (§11.3 tool pinning) before execution; bump it with
+          the version.
+        required: false
+        type: string
+        default: "fc0a6886bbb9a23a39eeec4b176193cadb54ddbe77cdbb19b637933919545395"
+
+permissions:
+  contents: read
+
+jobs:
+  common-lint:
+    name: Common lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: yamllint (blocking)
+        shell: bash
+        run: |
+          python -m pip install --quiet yamllint
+          yamllint -s .
+
+      - name: actionlint (blocking)
+        shell: bash
+        env:
+          ACTIONLINT_VERSION: ${{ inputs.actionlint-version }}
+          ACTIONLINT_SHA256: ${{ inputs.actionlint-sha256 }}
+        run: |
+          set -euo pipefail
+          if [ ! -d .github/workflows ]; then
+            echo "No workflows to lint."; exit 0
+          fi
+          # §11.3: pin the shell-fetched tool by checksum, not by mutable version alone.
+          tarball="${RUNNER_TEMP:-/tmp}/actionlint.tar.gz"
+          curl -sSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o "${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          sudo tar -xz -C /usr/local/bin -f "${tarball}" actionlint
+          actionlint
+
+      # §11.3 (blocking): third-party actions MUST be pinned by 40-hex commit digest.
+      # First-party (actions/*, github/*), local (./...), and reusable-workflow refs
+      # (.github/workflows/...) are exempt. Mirrors aviato.core.actionpins so the
+      # convention is ENFORCED in every consumer's CI, not merely diagnosed.
+      - name: Third-party action digest pin (blocking)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d .github/workflows ]; then
+            echo "No workflows to check."; exit 0
+          fi
+          violations=0
+          while IFS= read -r line; do
+            ref="$(printf '%s' "${line}" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//; s/[[:space:]#].*$//')"
+            case "${ref}" in
+              ""|./*|actions/*|github/*) continue ;;
+              */.github/workflows/*) continue ;;
+            esac
+            case "${ref}" in *@*) ;; *) continue ;; esac
+            version="${ref#*@}"
+            if ! printf '%s' "${version}" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "::error::Unpinned third-party action (§11.3): ${ref} — pin to a 40-hex commit SHA (Dependabot keeps it current)."
+              violations=$((violations + 1))
+            fi
+          done < <(grep -rEh '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows || true)
+          if [ "${violations}" -gt 0 ]; then
+            echo "::error::${violations} third-party action(s) not digest-pinned."
+            exit 1
+          fi
+          echo "All third-party actions are digest-pinned."
+
+      - name: hadolint (blocking, where a Dockerfile exists)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t dockerfiles < <(find . -name 'Dockerfile' -not -path './node_modules/*')
+          if [ "${#dockerfiles[@]}" -eq 0 ]; then
+            echo "No Dockerfile."; exit 0
+          fi
+          # §11.3: pin the tool image by digest, not a mutable tag.
+          docker run --rm -i hadolint/hadolint@sha256:30a8fd2e785ab6176eed53f74769e04f125afb2f74a6c52aef7d463583b6d45e hadolint - < "${dockerfiles[0]}"
+
+      - name: shellcheck (blocking, where shell scripts exist)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(find . -name '*.sh' -not -path './node_modules/*')
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "No shell scripts."; exit 0
+          fi
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck "${scripts[@]}"
+
+      - name: helm lint (blocking, where a Chart.yaml exists)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t charts < <(find . -name 'Chart.yaml' -not -path './node_modules/*')
+          if [ "${#charts[@]}" -eq 0 ]; then
+            echo "No Helm charts."; exit 0
+          fi
+          for chart in "${charts[@]}"; do
+            helm lint "$(dirname "${chart}")"
+          done

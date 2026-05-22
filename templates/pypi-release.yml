@@ -1,0 +1,14 @@
+name: Publish Python Package
+
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  pypi:
+    uses: amattas/aviato/.github/workflows/reusable-pypi-publish.yml@main
+    with:
+      python-version: "3.12"
+      working-directory: "."
+      packages-dir: "dist"

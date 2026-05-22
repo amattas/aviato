@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aviato"
+version = "0.1.0"
+description = "Reusable GitHub policy, CI, release, and onboarding conventions."
+requires-python = ">=3.11"
+dependencies = [
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.8.0",
+]
+
+[project.scripts]
+aviato = "aviato.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["aviato*"]
+
+# Ship the module-source tree (profiles, bundles, scaffold templates) and the
+# agnosticism denylist inside the wheel so a pip-installed `aviato` (e.g. the
+# consumer drift automation) can resolve profiles without a source checkout.
+[tool.setuptools.package-data]
+aviato = ["library/**/*", "plugins/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]

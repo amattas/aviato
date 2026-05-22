@@ -1,0 +1,7 @@
+name: common
+# Shared managed/seed-once files every profile materializes (§12.1 common
+# scaffold). LICENSE is seed-once (non-annotatable, §6.3).
+templates:
+  - editorconfig
+  - gitignore-common
+  - license

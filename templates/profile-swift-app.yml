@@ -1,0 +1,86 @@
+name: Aviato Swift App
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags:
+      - "v*.*.*"
+  schedule:
+    - cron: "23 5 * * 1"
+
+# Granted to the UNION of every called reusable workflow's permissions: a caller
+# cannot elevate the token for a called workflow, so it must grant >= their needs
+# (release-gate: actions:read; GHCR/PyPI provenance: id-token+attestations:write).
+permissions:
+  contents: write
+  pull-requests: write
+  security-events: write
+  actions: read
+
+jobs:
+  ci:
+    if: ${{ github.ref_type != 'tag' && github.event_name != 'schedule' }}
+    uses: amattas/aviato/.github/workflows/reusable-swift-ci.yml@main
+    with:
+      scheme: "App"
+      workspace: "App.xcworkspace"
+      destination: "platform=iOS Simulator,name=iPhone 16"
+      install-command: "brew install swiftformat swiftlint"
+      run-install: true
+
+  security:
+    # Runs on PRs AND on the release tag, so source scans gate the verify pipeline
+    # and are re-run on the release ref before any deploy (§2.13/§5.14).
+    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@main
+    with:
+      codeql-languages: "swift"
+      codeql-runner: macos-latest
+
+  common-lint:
+    if: ${{ github.ref_type != 'tag' }}
+    uses: amattas/aviato/.github/workflows/reusable-common-lint.yml@main
+
+  release:
+    if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
+    needs: [ci, security, common-lint]
+    uses: amattas/aviato/.github/workflows/reusable-release.yml@main
+    with:
+      aviato-ref: main
+
+  # Gate before deploy. Two entry points: IN-RUN (release just tagged on this push;
+  # release-tag = its output) or a manual tag push (classic tag-ref context).
+  release-gate:
+    needs: [release]
+    if: ${{ always() && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
+    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@main
+    with:
+      default-branch: main
+      require-merged-pr: true
+      release-tag: ${{ needs.release.outputs.tag }}
+
+  app-store-connect:
+    needs: [release, release-gate, security]
+    if: ${{ always() && needs.release-gate.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
+    uses: amattas/aviato/.github/workflows/reusable-app-store-connect.yml@main
+    with:
+      release-tag: ${{ needs.release.outputs.tag }}
+      environment-name: app-store-connect
+      scheme: "App"
+      workspace: "App.xcworkspace"
+      bundle-identifier: "com.example.app"
+      team-id: "TEAMID1234"
+      export-method: "app-store"
+      # No version-command: the merged release PR already wrote the marketing version
+      # + monotonic build number into the version-source (§13.4), and this job builds
+      # from that exact tagged commit — re-deriving here (a different run, hence a
+      # different run number) would make the uploaded build disagree with the tag.
+    secrets:
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+      APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+
