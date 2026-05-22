@@ -53,6 +53,35 @@ def test_security_baseline_toggles_cannot_be_weakened_by_override() -> None:
             resolve_profile(registry, "python-library", overrides={"settings": {"security": {key: False}}})
 
 
+def test_non_dict_security_override_is_clean_composition_error() -> None:
+    # §2.13: replacing the security baseline with a non-mapping (e.g. `security: false`) is the
+    # maximal weakening — it must fail with a clean CompositionError, never a TypeError crash.
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    for bad in (False, None, "off", 0, []):
+        with pytest.raises(CompositionError):
+            resolve_profile(registry, "python-library", overrides={"settings": {"security": bad}})
+
+
+def test_undeclared_pipeline_reference_is_hard_error() -> None:
+    # §5.1: a referenced pipeline absent from the manifest is a typo and must hard-error, not
+    # silently resolve to a module-less pipeline. Gated on a manifest existing (test registries
+    # without one stay lenient).
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    with pytest.raises(CompositionError):
+        resolve_profile(registry, "python-library", overrides={"pipelines": {"add": ["bogus-pipeline"]}})
+
+
+def test_undeclared_pipeline_check_is_lenient_without_manifest(module_root: Path) -> None:
+    # A bare test registry with no pipelines.yaml declares no pipelines (declared_pipelines None);
+    # composition stays lenient there, exactly as before — the check only bites a real manifest.
+    assert Registry(module_root).declared_pipelines() is None
+    resolve_profile(Registry(module_root), "child")  # references a/b/c with no manifest → no raise
+
+
 def test_security_baseline_override_may_strengthen_or_leave_unchanged() -> None:
     # A no-op or strengthening override is allowed; only weakening/removal is refused (§2.13).
     from aviato.paths import MODULE_SOURCE_ROOT

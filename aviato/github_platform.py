@@ -189,6 +189,25 @@ def current_consent(events: list[dict[str, Any]]) -> ConsentGrant | None:
 # shadow (see apply_settings fail-closed guard).
 _MODELED_RULE_TYPES = frozenset({"pull_request", "non_fast_forward", "deletion", "required_status_checks"})
 
+# Classic-protection toggles the wholesale branch-protection PUT (to_branch_protection_payload)
+# does NOT carry, so if any is ENABLED live it would be silently dropped (§2.4/§2.9). Each is a
+# ``{"enabled": bool}`` object on the protection GET; we fail closed when enabled rather than drop.
+_UNMODELED_CLASSIC_FLAGS = (
+    "required_linear_history",
+    "lock_branch",
+    "block_creations",
+    "allow_fork_syncing",
+    "required_signatures",
+)
+# Review sub-fields the PUT rebuilds without (it hardcodes require_code_owner_reviews=False and
+# omits the rest), so an enabled one live would be dropped — fail closed (§2.4/§2.9).
+_UNMODELED_REVIEW_FIELDS = (
+    "require_code_owner_reviews",
+    "require_last_push_approval",
+    "dismissal_restrictions",
+    "bypass_pull_request_allowances",
+)
+
 # The flat desired keys that describe branch protection (vs the repo security toggles,
 # which live on a different API surface). Used to decide whether a desired change lands
 # on the classic-protection surface or the ruleset surface.
@@ -362,6 +381,20 @@ class GitHubPlatform:
         # Flat merge: branch-protection fields + repo security toggles, matching the
         # flat desired map the CLI passes (so security drift is visible, §5.6/§2.13).
         return {**map_branch_settings(rules, protection), **security}
+
+    def read_ruleset_names(self, repo: str) -> list[str]:
+        """Live repository ruleset names, for §5.6 ruleset-presence drift (read-only).
+
+        Reading rulesets needs the admin scope (like branch protection), so it runs under the
+        same read-only admin token (§11.2) and fails closed as a SettingsReadError — the caller
+        then SKIPS settings drift rather than treat a falsely-empty list as "all rulesets gone".
+        """
+        try:
+            with github.settings_read_token_scope():
+                rulesets = github.repository_rulesets(repo)
+        except github.GitHubAPIError as exc:
+            raise github.SettingsReadError(exc.endpoint, exc.returncode, exc.stderr) from exc
+        return [r["name"] for r in rulesets if isinstance(r, dict) and isinstance(r.get("name"), str)]
 
     def get_issue(self, repo: str, key: str) -> Issue | None:
         # Fail-closed read (§2.7): the issues-list endpoint returns ``200 []`` when no
@@ -590,9 +623,15 @@ class GitHubPlatform:
                 f"repos/{repo}", 0, "could not resolve default branch; refusing to apply settings"
             )
         live = github.classic_branch_protection(repo, branch)
-        # required_status_checks is now modeled (§10); only push restrictions remain
-        # unmodeled in classic protection — fail closed rather than silently drop them.
+        # The wholesale PUT carries only the modeled fields (PR reviews, status checks, force/
+        # delete, conversation resolution). Any OTHER classic protection enabled live — push
+        # restrictions, linear history, branch lock, code-owner/last-push-approval review gates,
+        # etc. — would be silently dropped by the replacement PUT, so fail closed and make the
+        # operator reconcile it manually rather than clobber it (§2.4/§2.9).
         unmodeled = [k for k in ("restrictions",) if live.get(k)]
+        unmodeled += [k for k in _UNMODELED_CLASSIC_FLAGS if isinstance(live.get(k), dict) and live[k].get("enabled")]
+        live_reviews = live.get("required_pull_request_reviews") or {}
+        unmodeled += [k for k in _UNMODELED_REVIEW_FIELDS if live_reviews.get(k)]
         # Also inspect branch RULESETS: a rule type the desired model doesn't represent
         # (e.g. commit_message_pattern, required_signatures, required_deployments) would
         # leave a dual-control state the operator never reviewed when the classic PUT

@@ -8,12 +8,22 @@ from aviato import cli
 
 
 class FakePlatform:
-    def __init__(self, *, settings=None):
+    def __init__(self, *, settings=None, ruleset_names=None):
         self.settings = settings or {}
+        # Default to the python-library baseline rulesets so these file/settings-drift tests
+        # see no MISSING rulesets (§5.6); a ruleset-drift test overrides this explicitly.
+        self.ruleset_names = (
+            ruleset_names
+            if ruleset_names is not None
+            else ["Common: protect default branch", "Common: release tag format"]
+        )
         self.calls: list[tuple] = []
 
     def read_settings(self, repo):
         return dict(self.settings)
+
+    def read_ruleset_names(self, repo):
+        return list(self.ruleset_names)
 
     def get_issue(self, repo, key):
         return None

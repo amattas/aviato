@@ -139,9 +139,14 @@ def scaffold(
                     result.skipped_foreign.append(output)
                     continue
                 body_hash = content_hash(strip_marker_from_text(existing))
-                # Body correct and marker hash current → no-op (marker version excluded,
-                # so a version-only move is not churn; matches diagnosis "clean", §5.5).
-                if body_hash == expected_hash and marker.hash == expected_hash:
+                # Body correct, marker hash current, AND marker version current → no-op. The drift
+                # hash excludes the version (§5.5), so a scheduled drift run never churns on a
+                # version move — but a §5.12 re-pin DELIBERATELY moves the pin, so when only the
+                # version differs this is False and we fall through to RESTAMP the marker (the
+                # rendered content carries the new version), so `repin` never leaves a stale
+                # `version=` on non-pin-bearing files. Not skipped_modified: the body matches
+                # expected, so the `body_hash != expected_hash` guard below is False.
+                if body_hash == expected_hash and marker.hash == expected_hash and marker.version == version:
                     result.unchanged.append(output)
                     continue
                 # Body matches neither expected nor what Aviato last wrote → the operator

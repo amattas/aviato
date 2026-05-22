@@ -99,3 +99,34 @@ def test_pip_install_local_vcs_wheel_and_requirements_are_skipped() -> None:
         '          python -m pip install --quiet "yamllint==${YAMLLINT_VERSION}"\n'
     )
     assert unpinned_tool_invocations(text) == []
+
+
+def test_pip_env_marker_is_not_flagged() -> None:
+    # §11.3: a PEP 508 environment marker is not a floating package — the exact-pinned spec is
+    # accepted and the marker fragment (quote-bearing) is ignored (no false positive).
+    text = "          python -m pip install \"foo==1.2.3; python_version<'3.9'\"\n"
+    assert unpinned_tool_invocations(text) == []
+
+
+def test_pip_direct_reference_is_not_flagged() -> None:
+    # `name @ url` is a direct reference (the URL pins it), not a floating index package.
+    text = "          python -m pip install foo @ git+https://example.com/foo.git\n"
+    assert unpinned_tool_invocations(text) == []
+
+
+def test_pip_env_marker_still_flags_a_floating_spec() -> None:
+    # The marker carve-out must not mask a genuinely floating spec on the same line.
+    text = "          python -m pip install \"foo>=1.0; python_version<'3.9'\"\n"
+    out = unpinned_tool_invocations(text)
+    assert any("foo>=1.0" in v for v in out)
+
+
+def test_action_pin_scan_covers_yaml_extension(tmp_path) -> None:
+    # §11.3: a `.yaml` workflow must not escape the digest-pin scan (GitHub accepts both exts).
+    from aviato.plugins.actionpins import action_pin_violations
+
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "build.yaml").write_text("jobs:\n  x:\n    steps:\n      - uses: other/action@main\n", encoding="utf-8")
+    violations = action_pin_violations(tmp_path)
+    assert any("other/action@main" in v for v in violations)

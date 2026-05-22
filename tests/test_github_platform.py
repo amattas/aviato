@@ -126,6 +126,41 @@ def test_apply_settings_fails_closed_on_unmodeled_protection(monkeypatch: pytest
         GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
 
 
+def test_apply_settings_fails_closed_on_unmodeled_classic_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    # §2.4/§2.9: classic protections the wholesale PUT would DROP (linear history, branch lock,
+    # code-owner / last-push-approval review gates) must fail closed, not be silently clobbered.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT")))
+    cases = [
+        {"required_linear_history": {"enabled": True}},
+        {"lock_branch": {"enabled": True}},
+        {"required_pull_request_reviews": {"require_code_owner_reviews": True}},
+        {"required_pull_request_reviews": {"require_last_push_approval": True}},
+    ]
+    for live in cases:
+        monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch, _l=live: _l)
+        with pytest.raises(UnmodeledProtectionError):
+            GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
+
+
+def test_apply_settings_ignores_disabled_classic_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A DISABLED unmodeled flag ({"enabled": false}) is not a live protection, so it must NOT
+    # block the PUT (no false fail-closed on the common GitHub shape where flags are present-but-off).
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(
+        github,
+        "classic_branch_protection",
+        lambda repo, branch: {"required_linear_history": {"enabled": False}, "lock_branch": {"enabled": False}},
+    )
+    puts: list = []
+    monkeypatch.setattr(GitHubPlatform, "_gh_input", lambda self, args, payload: puts.append(args))
+    monkeypatch.setattr(github, "run", lambda *a, **k: None)
+    GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
+    assert any("PUT" in a for a in puts)  # the PUT proceeds
+
+
 def test_apply_settings_fails_closed_on_unmodeled_ruleset_rule(monkeypatch: pytest.MonkeyPatch) -> None:
     # A branch RULESET carrying a rule the desired model doesn't represent must also
     # fail closed — the classic PUT would leave a dual-control state the operator

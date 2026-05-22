@@ -156,6 +156,13 @@ def resolve_profile(
         # or weaken one (true→false, etc.); doing so is a hard composition error, the
         # settings analogue of the always_on_pipelines guard below.
         resolved_security = settings.get("security", {})
+        if not isinstance(resolved_security, dict):
+            # A non-dict override (e.g. ``security: false``) replaces the whole baseline block
+            # wholesale — the maximal weakening. Treat it as a clean refusal, not a TypeError.
+            raise CompositionError(
+                "consumer override replaces the always-on security baseline with a non-mapping "
+                f"({resolved_security!r}); the security baseline cannot be disabled (§2.13)"
+            )
         weakened = [
             key
             for key, base_value in baseline_security.items()
@@ -176,6 +183,19 @@ def resolve_profile(
         docs_pipeline = doc.get("docs_pipeline")
         if docs_pipeline and docs_pipeline not in pipelines:
             pipelines = (*pipelines, docs_pipeline)
+
+    # §5.1: a referenced pipeline that the manifest does not declare is a hard error — a typo
+    # must fail loud, never silently resolve to a module-less pipeline (no privileges/checks).
+    # Gated on a manifest existing: a bare test/empty registry (declared_pipelines() is None)
+    # declares no pipelines and stays lenient, exactly as before.
+    declared = registry.declared_pipelines()
+    if declared is not None:
+        unknown = sorted(ref for ref in pipelines if ref not in declared)
+        if unknown:
+            raise CompositionError(
+                f"profile {name!r} references undeclared pipeline(s) {unknown}; every pipeline must be "
+                f"declared in the pipelines manifest (§5.1) — check for a typo or a missing declaration"
+            )
 
     # §2.13: no composition (profile or consumer override) may drop an always-on
     # pipeline (e.g. the security baseline). Which pipelines are mandatory is plug-in

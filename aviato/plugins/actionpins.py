@@ -65,11 +65,16 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
     (`.`/`.[extra]`/`-e <path>`), requirements/constraints files, VCS (`git+…`), built wheels
     (`*.whl`), URLs, and shell-variable tokens (`${…}`) — conservative, so a legitimate
     local/VCS install never trips it.
+
+    PEP 508 **environment markers** (``foo==1.0; python_version<'3.9'``) and **direct
+    references** (``foo @ git+…``) are NOT flagged: the marker fragment (a quote-bearing token)
+    is ignored, and a name immediately followed by ``@`` is a direct reference, not a floating
+    index package — both would otherwise be false positives.
     """
     tokens = rest.split()
     flagged: list[str] = []
     skip_next = False
-    for token in tokens:
+    for index, token in enumerate(tokens):
         if skip_next:
             skip_next = False
             continue
@@ -79,16 +84,26 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
             continue
         if stripped.startswith("-"):  # any other flag (-e, --quiet, --upgrade, …)
             continue
+        # A PEP 508 environment-marker fragment (e.g. `python_version<'3.9'`) carries an inner
+        # quote that survives the outer-quote strip — it is a marker, not a package. Skip it.
+        if "'" in stripped or '"' in stripped:
+            continue
+        # A PEP 508 direct reference `name @ url`: the next token is `@`. Not a floating index
+        # package (the URL/VCS ref pins it), so don't flag the bare name.
+        if index + 1 < len(tokens) and tokens[index + 1].strip("'\"") == "@":
+            continue
         # Not a plain index package: path, VCS/URL, wheel, or shell variable.
         if any(marker in stripped for marker in ("@", "/", "$", ":")) or stripped.endswith(".whl"):
             continue
         if stripped in (".", "") or stripped.startswith("."):
             continue
         # An EXACT pin (`name==X.Y.Z` / `===`) with no wildcard is the only acceptable form.
-        if ("==" in stripped or "===" in stripped) and "*" not in stripped:
+        # Strip a trailing `;` (an environment-marker separator left on the spec token) first.
+        spec = stripped.rstrip(";")
+        if ("==" in spec or "===" in spec) and "*" not in spec:
             continue
         # Bare name or a non-exact specifier (>=, ~=, <=, !=, ==1.*) → not exactly pinned.
-        name = _PIP_VERSION_OP_RE.split(stripped, 1)[0]
+        name = _PIP_VERSION_OP_RE.split(spec, 1)[0]
         if _PIP_PKG_RE.match(name):
             flagged.append(stripped)
     return flagged
@@ -129,9 +144,13 @@ def action_pin_violations(root: Path) -> list[str]:
     Returns ``file: ref`` strings. Placeholders like ``@{{ aviato-ref }}`` in scaffold
     bodies are skipped (they pin the Library, resolved at scaffold time).
     """
+    # GitHub Actions accepts BOTH .yml and .yaml, so an unpinned action in a `*.yaml`
+    # workflow must not escape the pin check (matches validation._yaml_files, §11.3).
     root = Path(root)
-    targets = list((root / ".github" / "workflows").glob("*.yml"))
-    targets += list((root / "aviato" / "library" / "scaffold" / "files").glob("wf-*.yml"))
+    workflow_dir = root / ".github" / "workflows"
+    scaffold_dir = root / "aviato" / "library" / "scaffold" / "files"
+    targets = sorted(p for ext in ("*.yml", "*.yaml") for p in workflow_dir.glob(ext))
+    targets += sorted(p for ext in ("wf-*.yml", "wf-*.yaml") for p in scaffold_dir.glob(ext))
     violations: list[str] = []
     for path in targets:
         text = path.read_text(encoding="utf-8")

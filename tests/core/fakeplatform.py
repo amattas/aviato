@@ -18,6 +18,7 @@ class FakePlatform:
         self,
         *,
         settings: dict[str, Any] | None = None,
+        ruleset_names: list[str] | None = None,
         issues: dict[str, Issue] | None = None,
         issues_disabled: bool = False,
         fail_full_protection: bool = False,
@@ -25,6 +26,7 @@ class FakePlatform:
         fail_comment: bool = False,
     ) -> None:
         self.settings = settings or {}
+        self.ruleset_names = ruleset_names if ruleset_names is not None else []
         self.issues = issues or {}
         self.issues_disabled = issues_disabled
         # When set, comment_issue raises (but reads/applies still work) — simulates a transient
@@ -41,6 +43,9 @@ class FakePlatform:
 
     def read_settings(self, repo: str) -> dict[str, Any]:
         return dict(self.settings)
+
+    def read_ruleset_names(self, repo: str) -> list[str]:
+        return list(self.ruleset_names)
 
     def get_issue(self, repo: str, key: str) -> Issue | None:
         return self.issues.get(key)

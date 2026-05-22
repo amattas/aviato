@@ -356,6 +356,8 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
         print(f"seeded {output}")
     for output in result.skipped_unmanaged + result.skipped_modified:
         print(f"SKIPPED (operator-owned) {output}")
+    for output in result.skipped_foreign:
+        print(f"SKIPPED (marker from a different profile or unknown version — use --force to overwrite) {output}")
     print(
         "next: review the changes, then apply protections with "
         f"`aviato apply-rulesets OWNER/REPO --apply --profile {args.profile}` "
@@ -770,6 +772,8 @@ def cmd_repin(args: argparse.Namespace) -> int:
         print(f"skipped (hand-edited; still at old pin — reconcile manually): {output}")
     for output in result.skipped_unmanaged:
         print(f"skipped (unmanaged file at this path — not re-pinned): {output}")
+    for output in result.skipped_foreign:
+        print(f"skipped (marker from a different profile or unknown version; still at old pin — use --force): {output}")
     print("next: review the re-pinned artifacts, commit on a branch, and open a PR (§5.2/§5.12).")
     return 0
 
@@ -1144,8 +1148,14 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
                 repo=slug,
                 desired_settings=_desired_settings(resolved),
                 issue_key=SETTINGS_DRIFT_ISSUE_KEY,
+                desired_rulesets=tuple(resolved.settings.get("rulesets", [])),
             )
             print(f"settings drift: {settings_outcome.status} (destructive={settings_outcome.destructive})")
+            if settings_outcome.missing_rulesets:
+                print(
+                    f"  missing rulesets (apply with `aviato apply-rulesets {slug} --apply`): "
+                    f"{list(settings_outcome.missing_rulesets)}"
+                )
         except SettingsReadError as exc:
             print(
                 f"settings drift: skipped — could not read protected settings ({exc}); "

@@ -94,6 +94,22 @@ def test_refuses_to_overwrite_marker_with_unknown_version_unless_forced(tmp_path
     assert "cfg.py" in forced.written
 
 
+def test_version_only_change_restamps_marker_not_left_stale(tmp_path: Path) -> None:
+    # §5.12: a re-pin moves the version; even when the body is unchanged the marker MUST be
+    # restamped to the new pin (the drift hash excludes the version, so without this the marker
+    # would silently keep the OLD version, breaking the §2.6 gate after a downgrade).
+    scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="1")
+    assert "version=1 " in (tmp_path / "cfg.py").read_text()
+
+    result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="2")
+    assert result.written == ["cfg.py"]  # restamped, not left "unchanged"
+    assert "version=2 " in (tmp_path / "cfg.py").read_text()
+
+    # Idempotent: re-running at the SAME version is a no-op (no churn).
+    again = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="2")
+    assert again.written == [] and again.unchanged == ["cfg.py"]
+
+
 def test_stale_marker_correct_body_is_regenerated_not_skipped(tmp_path: Path) -> None:
     # body already matches desired but marker hash is stale: scaffold must regenerate
     # (refresh the marker), agreeing with diagnosis "mergeable" rather than skipping

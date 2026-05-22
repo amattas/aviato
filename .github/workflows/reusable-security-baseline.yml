@@ -83,6 +83,13 @@ jobs:
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
 
+      # §2.13 SAST gate (note): `analyze` uploads SARIF and SUCCEEDS even with high/critical
+      # alerts — CodeQL has no in-workflow fail-on-severity input. The high/critical SAST gate
+      # is therefore realized by the platform's **code-scanning check** (configured to fail PR
+      # checks at the high/critical threshold), a §17 operator prerequisite ("enable code
+      # scanning", probeable by §5.4). The heartbeat gate below only proves CodeQL RAN (not that
+      # it found nothing); severity gating for SAST is the platform check, unlike the dependency/
+      # secret scans which gate in-workflow via Trivy exit-code.
       - name: Analyze
         uses: github/codeql-action/analyze@v3
 
@@ -115,13 +122,17 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      - name: Scan dependencies
+      # §2.13 report/gate split: REPORT all severities to the Security surface (no gate), then
+      # GATE separately on high/critical. A single `severity: HIGH,CRITICAL` step would filter
+      # the SARIF too, so medium/low would be neither blocked NOR reported — the §2.13 policy
+      # requires medium/low to be reported (without blocking).
+      - name: Report dependency findings (all severities, no gate)
         uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           scan-type: fs
           scan-ref: "."
-          severity: HIGH,CRITICAL
-          exit-code: "1"
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          exit-code: "0"
           ignore-unfixed: true
           scanners: vuln
           format: sarif
@@ -133,6 +144,17 @@ jobs:
         with:
           sarif_file: trivy-deps.sarif
           category: aviato-dependency-scan
+
+      - name: Gate on high/critical dependencies (§2.13)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          scan-type: fs
+          scan-ref: "."
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+          ignore-unfixed: true
+          scanners: vuln
+          format: table
 
   # Secret scan (defense-in-depth alongside platform secret scanning + push
   # protection, §2.13): any detected secret fails the pipeline; findings upload as SARIF.

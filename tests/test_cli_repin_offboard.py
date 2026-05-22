@@ -54,6 +54,11 @@ def test_repin_dry_run_then_write(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "@1.0.0" in ci  # the pin in `uses:` refs moved (bare)
     assert "version=1.0.0" in ci  # marker updated where the body changed (bare)
     assert "v1.0.0" not in ci  # no leading ``v`` is ever emitted (§6.1)
+    # §5.12/§2.6: a NON-pin-bearing managed file (body unchanged by the re-pin) must ALSO have
+    # its marker restamped to the new pin — not left stale (which would break the §2.6 gate on
+    # a later downgrade). This is the H2 regression guard.
+    assert "version=1.0.0" in (tmp_path / "ruff.toml").read_text()
+    assert "version=0" not in (tmp_path / "ruff.toml").read_text()
 
 
 def test_repin_reports_skipped_hand_edited_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

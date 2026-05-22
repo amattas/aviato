@@ -218,7 +218,15 @@ always blocks**, regardless of severity. The gate is applied where each scan is
 authoritative: **source scans (SAST, dependency) gate the verify pipeline on PRs
 and are re-run on the release ref before any deploy** (so the deploy gate is
 evaluated against the deployed code, not a stale PR head); **published-artifact
-scans gate the publish itself** (§11.7). **Enforcement is fail-closed:** a scan
+scans gate the publish itself** (§11.7). **Where each gate lives (GitHub binding):**
+the **dependency** and **secret** scans gate **in-workflow** (the scanner's
+exit-code fails the job on high/critical / any secret), and report **all severities**
+as SARIF (medium/low surfaced, not blocked); the **SAST (CodeQL)** high/critical gate
+is realized by the platform's **code-scanning check** evaluated against the uploaded
+SARIF (CodeQL has no in-workflow fail-on-severity input), which the operator enables
+at the high/critical threshold as a §17 prerequisite (probeable, §5.4) — the workflow
+proves CodeQL **ran**, the platform check enforces the **severity gate**.
+**Enforcement is fail-closed:** a scan
 whose required upload privilege is absent at runtime, or that cannot run, **fails
 the pipeline** — it never passes silently (§5.14, §5.4, §8.16). **No external
 service, no stored secret:** scans run on the platform token plus the
@@ -1352,6 +1360,14 @@ runner's system package manager inherit the pinned runner-image snapshot.) The
 agnostic checker (`aviato.plugins.actionpins`) and the in-CI gate enforce the
 digest-pinned classes (actions, images, curl-fetched binaries); exact-version tool
 pins are carried as workflow inputs (e.g. `actionlint-version`, `yamllint-version`).
+**Day-zero exception (macOS Homebrew tools, deferred):** the Swift verify install
+(`brew install swift-format swiftlint`, §12.3) is **not** version/checksum-pinned —
+neither tool ships a versioned Homebrew formula, and unlike a Linux distro package a
+`brew install` fetches the latest formula rather than the runner-image snapshot, so it
+does not cleanly fit either pinning class above. This is a **known day-zero gap**:
+the Swift toolchain path is operator-verified only (§13.4.7), and pinning these to
+checksum-verified release binaries is a post-day-zero hardening. It is called out so
+the gap is an explicit, traceable boundary, not a silent omission.
 **First-party GitHub-owned actions** (the `actions/*` and `github/*` namespaces —
 e.g. `actions/checkout`, `actions/attest-build-provenance`, `github/codeql-action`)
 are exempt from the digest requirement and pinned at **major-tag** granularity: they

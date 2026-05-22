@@ -150,8 +150,14 @@ jobs:
             echo "::group::Build + scan ${plat}"
             docker buildx build --platform "${plat}" --load \
               -t "${IMAGE}:scan-tmp" -f "${DOCKERFILE}" "${CONTEXT}"
-            trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
+            # §2.13 report/gate split: REPORT all severities to the Security surface (SARIF, no
+            # severity filter so medium/low are reported too), then GATE the publish on
+            # high/critical. A single --severity HIGH,CRITICAL run would drop medium/low from
+            # the SARIF entirely — §2.13 requires medium/low reported (without blocking).
+            trivy image --ignore-unfixed \
               --format sarif --output "trivy-sarif/${plat//\//-}.sarif" "${IMAGE}:scan-tmp"
+            trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
+              --format table "${IMAGE}:scan-tmp"
             echo "::endgroup::"
           done
 

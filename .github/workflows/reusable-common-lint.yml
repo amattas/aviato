@@ -64,9 +64,10 @@ jobs:
           actionlint
 
       # §11.3 (blocking): third-party actions MUST be pinned by 40-hex commit digest.
-      # First-party (actions/*, github/*), local (./...), and reusable-workflow refs
-      # (.github/workflows/...) are exempt. Mirrors aviato.core.actionpins so the
-      # convention is ENFORCED in every consumer's CI, not merely diagnosed.
+      # Exempt: first-party (actions/*, github/*), local (./...), and the consumer's own
+      # Aviato Library reusable refs (amattas/aviato/.github/workflows/*) — the one sanctioned
+      # mutable ref. A NON-Library reusable workflow is third-party and must be digest-pinned.
+      # Mirrors aviato.plugins.actionpins so the convention is ENFORCED in every consumer's CI.
       - name: Third-party action digest pin (blocking)
         shell: bash
         run: |

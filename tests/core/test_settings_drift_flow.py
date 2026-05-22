@@ -70,6 +70,55 @@ def test_consent_oscillation_back_to_old_diff_requires_fresh_consent() -> None:
     assert platform.get_issue("o/r", "k").consent_diff_id is None
 
 
+def test_missing_required_ruleset_is_reported_even_with_clean_settings() -> None:
+    # §5.6: a desired ruleset absent from the live platform must be reported (not "clean"),
+    # remediated via apply-rulesets — even when branch/security settings match.
+    platform = FakePlatform(settings={"required_reviews": 2}, ruleset_names=["Common: protect default branch"])
+    outcome = run_settings_drift(
+        platform,
+        repo="o/r",
+        desired_settings={"required_reviews": 2},  # no settings drift
+        issue_key="k",
+        desired_rulesets=("Common: protect default branch", "Common: release tag format"),
+    )
+    assert outcome.status == "reported"
+    assert outcome.missing_rulesets == ("Common: release tag format",)
+    assert outcome.diff_id is None  # no settings diff → no consent-bound id
+    assert "open_or_update_issue" in platform.call_names()
+    _, args = next(c for c in platform.calls if c[0] == "open_or_update_issue")
+    assert "apply-rulesets" in args[3] and "Common: release tag format" in args[3]
+
+
+def test_all_rulesets_present_with_clean_settings_is_clean() -> None:
+    # The ruleset surface is only read when rulesets are desired, and all-present + no settings
+    # drift stays clean (no false report).
+    platform = FakePlatform(
+        settings={"required_reviews": 2},
+        ruleset_names=["Common: protect default branch", "Common: release tag format"],
+    )
+    outcome = run_settings_drift(
+        platform,
+        repo="o/r",
+        desired_settings={"required_reviews": 2},
+        issue_key="k",
+        desired_rulesets=("Common: protect default branch", "Common: release tag format"),
+    )
+    assert outcome.status == "clean"
+    assert outcome.missing_rulesets == ()
+
+
+def test_ruleset_surface_not_read_when_no_rulesets_desired() -> None:
+    # Additive guarantee: callers that pass no desired_rulesets never trigger the (admin-scoped)
+    # ruleset read, so prior behavior is unchanged.
+    class _NoRulesetRead(FakePlatform):
+        def read_ruleset_names(self, repo):  # type: ignore[override]
+            raise AssertionError("must not read rulesets when none are desired")
+
+    platform = _NoRulesetRead(settings={"required_reviews": 2})
+    outcome = run_settings_drift(platform, repo="o/r", desired_settings={"required_reviews": 2}, issue_key="k")
+    assert outcome.status == "clean"
+
+
 def test_issue_channel_unavailable_fails_loud() -> None:
     platform = FakePlatform(settings={"required_reviews": 1}, issues_disabled=True)
     with pytest.raises(RuntimeError):
