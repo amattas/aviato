@@ -358,6 +358,10 @@ class GitHubPlatform:
             "user.name=aviato-bot",
             "-c",
             "user.email=aviato-bot@users.noreply.github.com",
+            # The bot commit must not depend on the operator's signing identity
+            # (a global commit.gpgsign would otherwise fail the push, §5.5).
+            "-c",
+            "commit.gpgsign=false",
             "commit",
             "-m",
             title,

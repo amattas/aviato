@@ -11,7 +11,7 @@ from .audit import audit_repos, discover_and_audit, render_json, render_tsv
 from .command import CommandError, run
 from .core.bootstrap import is_library
 from .core.composition import resolve_profile
-from .core.declaration import Declaration, dump_declaration, load_declaration
+from .core.declaration import Declaration, declaration_to_yaml, dump_declaration, load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
 from .core.errors import AviatoError
 from .core.file_drift_flow import run_file_drift
@@ -232,6 +232,36 @@ def _env_vars(specs) -> dict[str, str]:
     return env
 
 
+def _resolve_onboard_declaration(args: argparse.Namespace, registry: Registry, resolved, existing):
+    """Resolve variables (§5.2 precedence), enforce the migrate guard, and build the
+    declaration. Raises :class:`AviatoError` on a missing required var or a profile
+    change without --migrate-profile; the caller maps that to a clean CLI error."""
+    flags = _parse_var_flags(args.var)
+    variables = resolve_variables(
+        resolved.variables,
+        flags=flags,
+        declaration=(existing.variables if existing else {}),
+        env=_env_vars(resolved.variables),
+        autodetect={},
+    )
+    plan_onboarding(
+        registry,
+        profile=args.profile,
+        existing_declaration=existing,
+        variables=variables,
+        allow_migrate=args.migrate_profile,
+    )
+    persisted = writeback_variables(resolved.variables, variables)
+    declaration = Declaration(
+        profile=args.profile,
+        version=args.pin,
+        docs=args.docs,
+        variables=persisted,
+        overrides=(existing.overrides if existing else {}),
+    )
+    return declaration, variables
+
+
 def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> int:
     """Adopt a local repository (§5.2): resolve variables, write the declaration, scaffold."""
     target = Path(args.target)
@@ -252,33 +282,11 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
     existing = load_declaration(declaration_path) if declaration_path.is_file() else None
 
     try:
-        flags = _parse_var_flags(args.var)
-        variables = resolve_variables(
-            resolved.variables,
-            flags=flags,
-            declaration=(existing.variables if existing else {}),
-            env=_env_vars(resolved.variables),
-            autodetect={},
-        )
-        plan_onboarding(
-            registry,
-            profile=args.profile,
-            existing_declaration=existing,
-            variables=variables,
-            allow_migrate=args.migrate_profile,
-        )
-        persisted = writeback_variables(resolved.variables, variables)
+        declaration, variables = _resolve_onboard_declaration(args, registry, resolved, existing)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
-    declaration = Declaration(
-        profile=args.profile,
-        version=args.pin,
-        docs=args.docs,
-        variables=persisted,
-        overrides=(existing.overrides if existing else {}),
-    )
     declaration_path.parent.mkdir(parents=True, exist_ok=True)
     dump_declaration(declaration, declaration_path)
     print(f"wrote {declaration_path.relative_to(target)}")
@@ -297,6 +305,76 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
     return 0
 
 
+def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved) -> int:
+    """Adopt an EXISTING repository via a proposal (§5.2): scaffold the declaration +
+    managed artifacts onto a branch and open a PR, enumerating untouched seed-once /
+    operator-owned files. Non-destructive: works in a fresh temp clone, never the
+    operator's checkout."""
+    target = args.target
+    slug = target if ("/" in target and not Path(target).is_dir()) else normalize_slug(remote_url(Path(target)))
+    if not slug or "/" not in slug:
+        print("could not determine OWNER/REPO (pass a slug, or a local repo with a github remote)", file=sys.stderr)
+        return 2
+
+    workdir = Path(tempfile.mkdtemp(prefix="aviato-onboard-"))
+    clone = workdir / "repo"
+    try:
+        run(["gh", "repo", "clone", slug, str(clone)])
+    except CommandError as exc:
+        print(f"could not clone {slug}: {exc}", file=sys.stderr)
+        return 1
+
+    declaration_path = clone / ".github" / "aviato.yaml"
+    existing = load_declaration(declaration_path) if declaration_path.is_file() else None
+    try:
+        declaration, variables = _resolve_onboard_declaration(args, registry, resolved, existing)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    # Build the proposal file set: the declaration + managed (marker-stamped) bodies +
+    # seed-once bodies for files that DON'T already exist. Existing seed-once / operator
+    # files are left untouched and enumerated (§5.2).
+    files: dict[str, str] = {".github/aviato.yaml": declaration_to_yaml(declaration)}
+    untouched: list[str] = []
+    for artifact in resolved_artifacts(
+        registry, args.profile, variables, pin=args.pin, docs=args.docs, overrides=declaration.overrides
+    ):
+        present = (clone / artifact.output).exists()
+        if artifact.seed_once:
+            if present:
+                untouched.append(artifact.output)
+                continue
+            files[artifact.output] = artifact.body
+        else:
+            item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+            files[artifact.output] = render_managed(item, profile=args.profile, version=args.pin)
+
+    body_lines = [
+        "Aviato onboarding proposal (§5.2 adopt-existing).",
+        "",
+        f"Profile: `{args.profile}` · pin `{args.pin}` · docs={args.docs}",
+        "",
+        "Adds the declaration and managed artifacts on this branch for review.",
+    ]
+    if untouched:
+        body_lines += ["", "Left untouched (seed-once already present / operator-owned):"]
+        body_lines += [f"- `{p}`" for p in untouched]
+    branch = f"aviato/onboard-{args.profile}"
+    title = f"Adopt Aviato conventions ({args.profile})"
+    try:
+        GitHubPlatform(workdir=clone).open_or_update_proposal(slug, branch, title, files, "\n".join(body_lines))
+    except (GitHubAPIError, CommandError) as exc:
+        print(f"could not open onboarding proposal: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"opened onboarding proposal for {slug} on branch {branch} ({len(files)} files).")
+    for p in untouched:
+        print(f"untouched (left for the operator): {p}")
+    print("next: review + merge the PR, then apply protections (`aviato complete-protection` or `apply-rulesets`).")
+    return 0
+
+
 def cmd_onboard(args: argparse.Namespace) -> int:
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
@@ -305,6 +383,8 @@ def cmd_onboard(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    if args.open_pr:
+        return _onboard_proposal(args, registry, resolved)
     if args.write:
         return _onboard_write(args, registry, resolved)
 
@@ -972,6 +1052,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     onboard.add_argument(
         "--allow-dirty", action="store_true", help="Adopt even if the working tree is not clean (§5.2)."
+    )
+    onboard.add_argument(
+        "--open-pr",
+        action="store_true",
+        help="Adopt-existing via a proposal: scaffold onto a branch and open a PR (§5.2). "
+        "Accepts a local repo path or an OWNER/REPO slug; works in a fresh clone.",
     )
     onboard.set_defaults(func=cmd_onboard)
 

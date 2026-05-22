@@ -37,7 +37,8 @@ def load_declaration(path: Path) -> Declaration:
     )
 
 
-def dump_declaration(declaration: Declaration, path: Path) -> None:
+def declaration_to_yaml(declaration: Declaration) -> str:
+    """Serialize a declaration to its ``.github/aviato.yaml`` text (§6.1)."""
     payload: dict[str, Any] = {
         "profile": declaration.profile,
         "version": declaration.version,
@@ -47,4 +48,8 @@ def dump_declaration(declaration: Declaration, path: Path) -> None:
         payload["variables"] = declaration.variables
     if declaration.overrides:
         payload["overrides"] = declaration.overrides
-    Path(path).write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return yaml.safe_dump(payload, sort_keys=False)
+
+
+def dump_declaration(declaration: Declaration, path: Path) -> None:
+    Path(path).write_text(declaration_to_yaml(declaration), encoding="utf-8")
