@@ -2,7 +2,6 @@ name: python-library
 workflows: python-library-wf
 scaffold: python-library-sc
 settings: baseline
-requires_macos: false
 variables:
   - {name: distribution-name, type: string}
   - {name: import-name, type: string}

@@ -20,6 +20,7 @@ from urllib.parse import quote
 
 from . import github
 from .command import CommandError
+from .core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from .core.ports import Issue
 from .core.settingsdrift import CONSENT_ID_HEX_LEN
 
@@ -463,12 +464,15 @@ class GitHubPlatform:
 
         role, role_ok = self._actor_role(repo, grant.actor_login)
         raw_timeline = timeline if isinstance(timeline, list) else []
+        # review #16: map GitHub's actor-type/permission vocabulary to core's NEUTRAL constants at
+        # the port boundary, so core/consent.py carries no platform-specific strings (§2.14). A
+        # non-"User" type / non-"admin" role maps to a sentinel the gate denies (fail-closed).
         return Issue(
             key=key,
             open=is_open,
             consent_diff_id=grant.diff_id,
-            consent_actor_type=grant.actor_type,
-            consent_role=role,
+            consent_actor_type=ACTOR_HUMAN if grant.actor_type == "User" else "nonhuman",
+            consent_role=ROLE_PRIVILEGED if role == "admin" else role,
             consent_role_lookup_ok=role_ok,
             edited_by_nonhuman_since_grant=nonhuman_edit_after_grant(raw_timeline, grant.diff_id),
         )
@@ -487,15 +491,25 @@ class GitHubPlatform:
             repo_data = github.gh_json_optional(f"repos/{repo}", default=None)
             if isinstance(repo_data, dict) and "has_issues" in repo_data:
                 issue_channel = bool(repo_data["has_issues"])
-            # Read the per-run heartbeat the security baseline EMITS (§5.14) — the
-            # presence of a recent `aviato-security-heartbeat` artifact — not a stale
-            # CodeQL analysis that could read "present" even if this run never ran.
-            artifacts = github.gh_json_optional(
-                f"repos/{repo}/actions/artifacts?name=aviato-security-heartbeat&per_page=1", default=None
-            )
-            if isinstance(artifacts, dict) and "artifacts" in artifacts:
-                items = artifacts["artifacts"]
-                heartbeat = bool(items) and not all(a.get("expired") for a in items)
+            # The heartbeat must be CURRENT, not merely present (§5.14/§8.16). The baseline only
+            # uploads it on a CLEAN run (gate-before-upload), but the artifact lingers up to its
+            # retention window — so a "clean yesterday, broke today" repo would read clean for days
+            # if we checked mere presence. Tie freshness to the current default-branch HEAD: the
+            # baseline ran clean on the deployed code iff a non-expired heartbeat exists whose run's
+            # head_sha == HEAD. Absence (HEAD's run broke / never ran) reads as broken, not clean.
+            branch = repo_data.get("default_branch") if isinstance(repo_data, dict) else None
+            head = github.gh_json_optional(f"repos/{repo}/commits/{branch}", default=None) if branch else None
+            head_sha = head.get("sha") if isinstance(head, dict) else None
+            if head_sha:
+                artifacts = github.gh_json_optional(
+                    f"repos/{repo}/actions/artifacts?name=aviato-security-heartbeat&per_page=30", default=None
+                )
+                items = artifacts.get("artifacts", []) if isinstance(artifacts, dict) else []
+                heartbeat = any(
+                    not item.get("expired") and (item.get("workflow_run") or {}).get("head_sha") == head_sha
+                    for item in items
+                    if isinstance(item, dict)
+                )
         except github.GitHubAPIError:
             pass  # ambiguous read → leave unknown (None)
         return issue_channel, heartbeat
@@ -645,13 +659,24 @@ class GitHubPlatform:
     def _gh(self, *args: str) -> None:
         github.run(["gh", *args], cwd=self.workdir)
 
-    def apply_settings(self, repo: str, payload: dict[str, Any]) -> None:
+    def apply_settings(
+        self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
+    ) -> None:
         # ``payload`` is the flat desired default-branch state; translate it to the
         # branch-protection API shape before the PUT (§2.9). The PUT replaces
         # protection wholesale, so FAIL CLOSED if the live branch carries protections
         # the desired model does not cover (required status checks / push
         # restrictions): silently dropping them would mutate state the operator never
         # saw or consented to (§2.4/§5.7).
+        #
+        # ``expected_live`` (review #14): the flat live snapshot the consented diff was computed
+        # against (§2.8). The fail-closed guards below necessarily re-read live state fresh, which
+        # is a SEPARATE snapshot from the one the operator reviewed/consented to. If a MODELED
+        # branch-protection field changed between the decision and now, applying the (possibly
+        # stale-consented) desired state would write something the operator didn't review against
+        # current reality — so re-assert the modeled state is unchanged and abort if it drifted,
+        # tying "what is applied" to "what was consented". (Unmodeled protections newly added in
+        # the gap are caught by the guards below regardless.)
         branch = github.default_branch(repo)
         if not branch:
             # Empty branch ⇒ ambiguous/transient read. Proceeding would build a
@@ -683,6 +708,25 @@ class GitHubPlatform:
                 f"protection(s) {unmodeled} that this reconcile does not manage and would drop "
                 f"or shadow. Reconcile those manually, then re-run."
             )
+
+        # review #14: re-assert the modeled branch state hasn't drifted since the consented diff
+        # was computed (§2.8/§5.7). The decision snapshot (expected_live) and these guard reads are
+        # otherwise independent; a modeled-field change in between means the operator consented
+        # against stale reality — fail closed and make them re-run, rather than apply a diff that
+        # no longer reflects the live state.
+        if expected_live is not None:
+            fresh_branch = map_branch_settings(rules, live)
+            drifted_since = sorted(
+                key
+                for key in _BRANCH_PROTECTION_KEYS
+                if _norm_setting(key, expected_live.get(key)) != _norm_setting(key, fresh_branch.get(key))
+            )
+            if drifted_since:
+                raise UnmodeledProtectionError(
+                    f"refusing to apply settings on {repo}@{branch}: its branch protection changed "
+                    f"since the reviewed diff was computed ({drifted_since}); re-run reconcile so the "
+                    f"applied change reflects current state and your consent (§2.8/§5.7)."
+                )
 
         # Branch protection may be authored on the RULESET surface (the bundled
         # "protect default branch" ruleset) rather than classic protection. This

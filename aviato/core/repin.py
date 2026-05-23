@@ -6,7 +6,7 @@ from .composition import resolve_profile
 from .declaration import Declaration
 from .errors import CompositionError
 from .registry import Registry
-from .version import _pinned_major, normalize_pin, parse_version
+from .version import _as_lower_bound, normalize_pin
 
 DOWNGRADE_WARNING = (
     "You are moving backward to a lower version; protection or behavior may be "
@@ -28,13 +28,13 @@ class RepinPlan:
 
 
 def _is_downgrade(current: str, target: str) -> bool:
+    # review #21: coerce BOTH sides to a comparable lower bound (a floating major `N` floors to
+    # `N.0.0`) so a mixed exact→floating move like `1.5.0` → `1` is correctly flagged as backward
+    # — the old major-only fallback compared `1 < 1` and silently missed it.
     try:
-        return parse_version(target) < parse_version(current)
-    except Exception:  # noqa: BLE001 - fall back to major comparison for floating pins
-        try:
-            return _pinned_major(target) < _pinned_major(current)
-        except Exception:  # noqa: BLE001
-            return False
+        return _as_lower_bound(target) < _as_lower_bound(current)
+    except Exception:  # noqa: BLE001 - an unparseable pin can't be ranked; don't warn spuriously
+        return False
 
 
 def _profile_identity(registry: Registry, profile: str) -> tuple[str, ...]:

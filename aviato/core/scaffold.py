@@ -53,12 +53,25 @@ def read_sidecar(root: Path) -> dict[str, str]:
     path = Path(root) / SIDECAR_PATH
     if not path.is_file():
         return {}
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
+    # The sidecar is a report-only advisory record (§6.3); a corrupt/truncated/non-UTF-8 one
+    # (manual edit, half-written, merge-conflict markers) must degrade to "no recorded hashes",
+    # never crash diagnosis/scaffold — and thus never abort a whole fleet scan (the per-repo
+    # guard in scan_fleet catches only AviatoError, so a raw JSONDecodeError would escape).
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return {}
     return data if isinstance(data, dict) else {}
 
 
 def _write_sidecar(root: Path, data: dict[str, str]) -> None:
+    # review #31: each sidecar write is atomic (temp + os.replace via atomic_write), but the
+    # read-modify-write within scaffold() is not guarded against a SECOND concurrent scaffold of
+    # the SAME local tree (last-writer-wins on the merged dict). The CLI runs one command per
+    # process against an operator's local checkout, so concurrent scaffolds of one tree are not an
+    # expected workflow; the sidecar is report-only, so the worst case is a stale/incomplete record
+    # (no file is ever half-written), recovered on the next single-writer sync.
     path = Path(root) / SIDECAR_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
@@ -106,6 +119,20 @@ def scaffold(
 
         if item.seed_once:
             if target.exists():
+                # §6.3 seed-once: never overwrite an existing operator-owned file. But if the
+                # sidecar has NO recorded hash for it (the report-only integrity record was
+                # deleted/lost, or the file pre-existed adoption), re-establish the baseline from
+                # the file's CURRENT content so a deleted sidecar self-heals on the next sync and
+                # FUTURE tamper is again visible (§5.14 "absence reads as broken, never clean").
+                # This cannot retroactively detect tampering that happened before the heal — the
+                # sidecar is an advisory record, not a security boundary; once deleted, prior
+                # content is unknowable.
+                if output not in sidecar:
+                    try:
+                        sidecar[output] = content_hash(target.read_text(encoding="utf-8"))
+                        sidecar_changed = True
+                    except UnicodeDecodeError:
+                        pass  # binary seed-once file (§6.3) — no text hash to record
                 continue
             atomic_write(target, item.body)
             sidecar[output] = content_hash(item.body)
@@ -116,7 +143,16 @@ def scaffold(
         rendered = render_managed(item, profile=profile, version=version)
         expected_hash = content_hash(item.body)
         if target.exists():
-            existing = target.read_text(encoding="utf-8")
+            try:
+                existing = target.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                # A non-UTF-8 file cannot carry a valid Aviato marker, so it is operator-owned:
+                # never silently regenerate over it (mirrors diagnosis dirty-drift), and never
+                # crash a fleet sync. Treated exactly like a no-marker unmanaged file.
+                if not force:
+                    result.skipped_unmanaged.append(output)
+                    continue
+                existing = ""
             marker = parse_marker_from_text(existing)
             if marker is None:
                 if not force:

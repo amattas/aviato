@@ -98,7 +98,13 @@ docstrings — keep them accurate when changing behavior.
 
 ### policy.yml is the single source of truth
 
-`policy.yml` owns policy constants — most importantly the release tag pattern (`^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$`) and default required PR approvals. That pattern is **intentionally duplicated** into several places that need a literal at definition time:
+The policy/ruleset data lives **inside the package** at `aviato/library/policy.yml`,
+`aviato/library/rulesets.yml`, and `aviato/library/rulesets/*.json` (so it ships in the
+wheel and a pip-installed `aviato` can render rulesets — §5.6/§11.3). Loaders default to
+`paths.POLICY_DATA_ROOT` (= `aviato/library`); `is_library`/§5.10 keys off
+`aviato/library/policy.yml`. (`aviato validate` runs from a source checkout only.)
+
+`aviato/library/policy.yml` owns policy constants — most importantly the release tag pattern (`^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$`) and default required PR approvals. That pattern is **intentionally duplicated** into several places that need a literal at definition time:
 
 - every release workflow in `RELEASE_WORKFLOWS` (embeds the literal in its `TAG_PATTERN` env so validation is pinned to the same ref)
 - rendered ruleset payloads (injected at render time, not stored)
@@ -107,7 +113,7 @@ docstrings — keep them accurate when changing behavior.
 
 ### Rendering pipeline (policy → rulesets)
 
-`rulesets.yml` is a manifest mapping each ruleset JSON template in `rulesets/` to a target (`branch`/`tag`) and a `patch` of dotted policy paths to inject. `aviato/rulesets.py` deep-copies the JSON template and patches values from `policy.yml` (or a `--required-approvals` override) at render time. `apply_rulesets` then upserts each rendered payload to GitHub. To add a ruleset: add the JSON template, register it in `rulesets.yml`, and (if required) add it to `REQUIRED_FILES` in `validation.py`.
+`aviato/library/rulesets.yml` is a manifest mapping each ruleset JSON template in `aviato/library/rulesets/` to a target (`branch`/`tag`) and a `patch` of dotted policy paths to inject. `aviato/rulesets.py` deep-copies the JSON template and patches values from `policy.yml` (or a `--required-approvals` override) at render time. `apply_rulesets` then upserts each rendered payload to GitHub. To add a ruleset: add the JSON template under `aviato/library/rulesets/`, register it in `aviato/library/rulesets.yml`, and (if required) add it to `REQUIRED_FILES` in `validation.py`.
 
 ### GitHub access is via the `gh` CLI only
 

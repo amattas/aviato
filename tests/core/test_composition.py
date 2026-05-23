@@ -53,6 +53,26 @@ def test_security_baseline_toggles_cannot_be_weakened_by_override() -> None:
             resolve_profile(registry, "python-library", overrides={"settings": {"security": {key: False}}})
 
 
+def test_settings_override_rejects_bare_list_restatement() -> None:
+    # §4.2/§5.1 (FIX-2): a list-valued settings override (e.g. emptying `rulesets` or
+    # `required_status_checks`) must be REJECTED, not silently accepted-and-ignored — list
+    # properties need explicit add/remove, which the settings deep-merge doesn't provide.
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    for bad in (
+        {"settings": {"rulesets": []}},
+        {"settings": {"default_branch": {"required_status_checks": ["x"]}}},
+    ):
+        with pytest.raises(CompositionError):
+            resolve_profile(registry, "python-library", overrides=bad)
+    # A non-list (scalar/map) settings override still works.
+    resolved = resolve_profile(
+        registry, "python-library", overrides={"settings": {"default_branch": {"required_reviews": 2}}}
+    )
+    assert resolved.settings["default_branch"]["required_reviews"] == 2
+
+
 def test_non_dict_security_override_is_clean_composition_error() -> None:
     # §2.13: replacing the security baseline with a non-mapping (e.g. `security: false`) is the
     # maximal weakening — it must fail with a clean CompositionError, never a TypeError crash.

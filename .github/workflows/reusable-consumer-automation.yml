@@ -36,6 +36,14 @@ on:
 # rulesets. Full settings-drift detection therefore requires an operator-supplied
 # admin-capable token (PAT / GitHub App) passed as the `settings-token` secret
 # below; without it, file drift still runs and settings reads degrade (skipped).
+# §5.5 (review #4): the scheduled drift/report run, plus any operator workflow_dispatch or
+# re-run, must SERIALIZE per repo — two concurrent runs would force-push the SAME deterministic
+# proposal branch and race (lost updates, non-deterministic PR contents). Queue, never cancel
+# (a cancelled mid-push run can leave a dangling ref).
+concurrency:
+  group: aviato-drift-${{ github.repository }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write

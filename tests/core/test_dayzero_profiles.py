@@ -87,8 +87,11 @@ def test_services_deploy_ghcr(registry: Registry) -> None:
 
 def test_swift_app_requires_macos_and_deploys_app_store(registry: Registry) -> None:
     rs = resolve_profile(registry, "swift-app")
-    assert registry.profile("swift-app").requires_macos is True
     assert "app-store-connect" in rs.pipelines
+    # review #17: macOS-requirement is derived from the resolved pipelines' data-driven runner,
+    # not a profile-level flag — swift-app composes at least one macos pipeline.
+    runners = {registry.pipeline_module(p).runner for p in rs.pipelines if registry.pipeline_module(p)}
+    assert "macos" in runners
 
 
 @pytest.mark.parametrize("name", DAYZERO)

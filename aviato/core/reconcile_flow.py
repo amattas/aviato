@@ -75,7 +75,9 @@ def run_reconcile(
         # what changed; unchanged desired fields equal live, so applying the full
         # desired state is equivalent to applying just the diff.
         try:
-            platform.apply_settings(repo, desired_settings)
+            # Pass the decision-time live snapshot so the binding can fail closed if the modeled
+            # branch state drifted since the diff/consent were computed (§2.8/§5.7, review #14).
+            platform.apply_settings(repo, desired_settings, expected_live=live)
         except Exception as exc:
             # §5.7 audit: an apply that throws mid-flight may have PARTIALLY landed, so it
             # must leave a record on the issue, then propagate (fail-closed) — never vanish

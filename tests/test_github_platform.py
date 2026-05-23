@@ -6,11 +6,15 @@ from pathlib import Path
 import pytest
 
 from aviato import github
+from aviato.command import CommandError
+from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from aviato.core.ports import Platform
 from aviato.github_platform import (
     GitHubPlatform,
     UnmodeledProtectionError,
+    _is_feature_unavailable,
     _label_events,
+    _select_issue,
     current_consent,
     map_branch_settings,
     nonhuman_edit_after_grant,
@@ -159,6 +163,32 @@ def test_apply_settings_ignores_disabled_classic_flags(monkeypatch: pytest.Monke
     monkeypatch.setattr(github, "run", lambda *a, **k: None)
     GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
     assert any("PUT" in a for a in puts)  # the PUT proceeds
+
+
+def test_apply_settings_aborts_when_modeled_state_drifted_since_decision(monkeypatch: pytest.MonkeyPatch) -> None:
+    # review #14: if a MODELED branch field changed between the consented diff and the apply, fail
+    # closed — the operator consented against stale reality; writing the diff anyway is unsafe.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})  # live: no PR requirement
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT")))
+    stale = dict(map_branch_settings([], {}))
+    stale["requires_pull_request"] = True  # decision snapshot saw PR required; live no longer does
+    with pytest.raises(UnmodeledProtectionError, match="changed since the reviewed diff"):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True}, expected_live=stale)
+
+
+def test_apply_settings_proceeds_when_modeled_state_matches_decision(monkeypatch: pytest.MonkeyPatch) -> None:
+    # review #14: when the live modeled state still equals the decision snapshot, apply proceeds.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    puts: list = []
+    monkeypatch.setattr(GitHubPlatform, "_gh_input", lambda self, args, payload: puts.append(args))
+    monkeypatch.setattr(github, "run", lambda *a, **k: None)
+    matching = dict(map_branch_settings([], {}))  # exactly the live snapshot the decision used
+    GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True}, expected_live=matching)
+    assert any("PUT" in a for a in puts)
 
 
 def test_apply_settings_fails_closed_on_unmodeled_ruleset_rule(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -540,42 +570,62 @@ def test_to_security_payload_api_shape() -> None:
     assert payload["secret_scanning_push_protection"] == {"status": "disabled"}
 
 
-def test_probe_health_reads_issue_channel_and_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
+def _probe_optional(*, has_issues, head_sha, artifacts):
     def optional(endpoint, **__):
         if endpoint == "repos/o/r":
-            return {"has_issues": True}
+            return {"has_issues": has_issues, "default_branch": "main"}
+        if endpoint == "repos/o/r/commits/main":
+            return {"sha": head_sha}
         if endpoint.startswith("repos/o/r/actions/artifacts"):
-            return {"artifacts": [{"id": 1, "expired": False}]}
+            return {"artifacts": artifacts}
         return None
 
-    monkeypatch.setattr(github, "gh_json_optional", optional)
+    return optional
+
+
+def test_probe_health_heartbeat_true_only_for_current_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    # §5.14/§8.16: heartbeat is healthy only when a non-expired one exists for the CURRENT
+    # default-branch HEAD (the deployed code ran clean) — mere presence is not enough.
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(
+            has_issues=True, head_sha="abc", artifacts=[{"expired": False, "workflow_run": {"head_sha": "abc"}}]
+        ),
+    )
     issue_channel, heartbeat = GitHubPlatform().probe_health("o/r")
     assert issue_channel is True
     assert heartbeat is True
 
 
-def test_probe_health_heartbeat_false_when_no_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
-    def optional(endpoint, **__):
-        if endpoint == "repos/o/r":
-            return {"has_issues": False}
-        return {"artifacts": []}
-
-    monkeypatch.setattr(github, "gh_json_optional", optional)
-    issue_channel, heartbeat = GitHubPlatform().probe_health("o/r")
-    assert issue_channel is False
-    assert heartbeat is False  # no heartbeat artifact → never ran → broken (§5.14)
-
-
-def test_probe_health_heartbeat_false_when_expired(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_probe_health_heartbeat_false_when_stale_for_old_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The FIX-3 regression: a non-expired heartbeat from a PRIOR (clean) commit must NOT read as
+    # healthy once HEAD moved to a commit whose run broke (no heartbeat for HEAD).
     monkeypatch.setattr(
         github,
         "gh_json_optional",
-        lambda endpoint, **__: (
-            {"has_issues": True} if endpoint == "repos/o/r" else {"artifacts": [{"id": 1, "expired": True}]}
+        _probe_optional(
+            has_issues=True, head_sha="newsha", artifacts=[{"expired": False, "workflow_run": {"head_sha": "oldsha"}}]
         ),
     )
     _, heartbeat = GitHubPlatform().probe_health("o/r")
     assert heartbeat is False
+
+
+def test_probe_health_heartbeat_false_when_no_artifact_or_expired(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github, "gh_json_optional", _probe_optional(has_issues=False, head_sha="abc", artifacts=[]))
+    issue_channel, heartbeat = GitHubPlatform().probe_health("o/r")
+    assert issue_channel is False
+    assert heartbeat is False
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(
+            has_issues=True, head_sha="abc", artifacts=[{"expired": True, "workflow_run": {"head_sha": "abc"}}]
+        ),
+    )
+    _, heartbeat = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is False  # expired heartbeat for HEAD → broken
 
 
 def test_read_settings_includes_security(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -625,8 +675,9 @@ def test_get_issue_populates_consent_from_paginated_timeline(monkeypatch: pytest
     issue = GitHubPlatform().get_issue("o/r", "aviato-settings-drift")
     assert issue is not None
     assert issue.consent_diff_id == "abc"
-    assert issue.consent_actor_type == "User"
-    assert issue.consent_role == "admin"
+    # review #16: the binding maps GitHub's "User"/"admin" to core's neutral vocabulary at the port.
+    assert issue.consent_actor_type == ACTOR_HUMAN
+    assert issue.consent_role == ROLE_PRIVILEGED
     assert issue.consent_role_lookup_ok is True
 
 
@@ -636,6 +687,23 @@ def _route_gh_json(endpoint: str):
     if endpoint.endswith("/permission"):
         return {"permission": "admin"}
     return None
+
+
+def test_get_issue_maps_nonhuman_grantor_to_denied_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
+    # review #16: a non-"User" grantor (Bot/App) must map to a NON-human sentinel at the port, so
+    # core's gate denies it without ever seeing GitHub's "Bot"/"User" vocabulary.
+    monkeypatch.setattr(github, "gh_json_optional", lambda endpoint, **__: [{"number": 7, "state": "open"}])
+    monkeypatch.setattr(github, "gh_json", lambda endpoint, **__: {"permission": "write"})  # non-admin
+    monkeypatch.setattr(
+        github,
+        "gh_json_paginated",
+        lambda endpoint, **__: [
+            {"event": "labeled", "label": {"name": "aviato-consent:abc"}, "actor": {"login": "bot", "type": "Bot"}}
+        ],
+    )
+    issue = GitHubPlatform().get_issue("o/r", "k")
+    assert issue.consent_actor_type != ACTOR_HUMAN  # mapped to the non-human sentinel
+    assert issue.consent_role != ROLE_PRIVILEGED  # non-admin → not privileged
 
 
 def test_get_issue_role_lookup_failure_is_not_authorized(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -757,3 +825,49 @@ def test_read_rulesets_returns_full_payloads(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(github, "repository_ruleset", lambda repo, rid: {"id": rid, "name": "X", "rules": []})
     payloads = GitHubPlatform().read_rulesets("o/r")
     assert payloads == [{"id": 7, "name": "X", "rules": []}]  # the id-less summary is skipped
+
+
+def test_is_feature_unavailable_requires_security_context() -> None:
+    # review #15: the predicate must NOT swallow an availability phrase that lacks a security
+    # context — otherwise a genuine apply failure ("Branch protection is not enabled") would be
+    # misclassified as a benign adoption warning and apply_settings would report success (fail-OPEN).
+    assert _is_feature_unavailable(CommandError(["gh"], 1, "Branch protection is not enabled")) is False
+    assert _is_feature_unavailable(CommandError(["gh"], 1, "Webhooks are not enabled (HTTP 422)")) is False
+    # A real security-feature-unavailable message IS recognized (benign adoption warning).
+    assert _is_feature_unavailable(CommandError(["gh"], 1, "Secret scanning is not available")) is True
+    assert _is_feature_unavailable(CommandError(["gh"], 1, "GitHub Advanced Security must be enabled")) is True
+
+
+def test_apply_settings_reraises_security_patch_error_without_security_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    # review #15: end-to-end — a security-PATCH CommandError whose message has an availability
+    # phrase but NO security context must RE-RAISE (not be swallowed as an adoption warning).
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+
+    def fake_gh_input(self, args, payload):
+        if any("PATCH" in a for a in args):
+            raise CommandError(["gh"], 1, "Repository is not enabled for this operation")
+        # the branch-protection PUT succeeds
+
+    monkeypatch.setattr(GitHubPlatform, "_gh_input", fake_gh_input)
+    monkeypatch.setattr(github, "run", lambda *a, **k: None)
+    with pytest.raises(CommandError):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "secret_scanning": True})
+
+
+def test_get_issue_malformed_issue_returns_consentless(monkeypatch: pytest.MonkeyPatch) -> None:
+    # review #15: a 200 issue object lacking a `number` must yield a consent-LESS Issue (so
+    # reconcile fails closed), never crash and never fabricate consent.
+    monkeypatch.setattr(github, "gh_json_optional", lambda endpoint, **__: [{"title": "no number"}])
+    issue = GitHubPlatform().get_issue("o/r", "k")
+    assert issue is not None
+    assert issue.consent_diff_id is None  # no consent → reconcile refuses
+
+
+def test_select_issue_handles_non_list_and_numberless(monkeypatch: pytest.MonkeyPatch) -> None:
+    # review #15: the malformed-API-shape fail-safes feeding every issue read.
+    assert _select_issue("garbage", "o/r", "k") is None
+    assert _select_issue([], "o/r", "k") is None
+    # No usable int number → fall back to the first dict (so callers can still open afresh).
+    assert _select_issue([{"title": "x"}], "o/r", "k") == {"title": "x"}

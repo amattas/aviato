@@ -18,3 +18,12 @@ def test_release_outranks_prerelease() -> None:
 
 def test_no_existing_tags_is_highest() -> None:
     assert main(["is-highest", "1.0.0"]) == 0
+
+
+def test_unparseable_candidate_warns_and_fails_closed(capsys) -> None:
+    # review #28: an unparseable candidate is fail-closed (exit 1) like "not highest", but emits a
+    # stderr note so an operator can distinguish a malformed tag from a genuinely-older one.
+    rc = main(["is-highest", "not-a-version", "1.0.0"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "not a parseable version" in err

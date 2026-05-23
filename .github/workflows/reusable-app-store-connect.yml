@@ -101,6 +101,13 @@ on:
       APPLE_PROVISIONING_PROFILE_BASE64:
         required: true
 
+# review #26: serialize App Store uploads per repo for parity with the other deploys — a re-run
+# should queue, not race a parallel upload. Bounded anyway by App Store Connect rejecting a
+# duplicate build number.
+concurrency:
+  group: aviato-app-store-${{ github.repository }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

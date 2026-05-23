@@ -35,20 +35,28 @@ class DiagnosisReport:
     scan_heartbeat_present: bool | None = None
 
 
-def _has_drift_automation(root: Path) -> bool:
-    """True if a consumer workflow wires the scheduled drift/report automation (§5.5/§5.6)."""
+def _has_drift_automation(root: Path, markers: Sequence[str]) -> bool:
+    """True if a consumer workflow references one of the drift-automation ``markers`` (§5.5/§5.6).
+
+    review #18: the marker(s) — the Library's automation-workflow identifier — are plug-in DATA
+    supplied by the caller, NOT a hardcoded library artifact name in core (§9b), exactly like
+    ``prerequisite_paths``. With no markers the probe is not meaningful and reports absent.
+    """
+    if not markers:
+        return False
     workflows = root / ".github" / "workflows"
     if not workflows.is_dir():
         return False
-    # errors="replace": a corrupted/non-UTF-8 workflow file must not crash diagnosis (and
-    # thus a whole fleet scan); the check is a substring search, so replacement is harmless.
-    # GitHub Actions accepts BOTH .yml and .yaml, so a consumer using aviato-drift.yaml must
-    # not read as "drift automation absent" (matches validation/actionpins dual-extension scans).
-    return any(
-        "reusable-consumer-automation" in path.read_text(encoding="utf-8", errors="replace")
-        for ext in ("*.yml", "*.yaml")
-        for path in workflows.glob(ext)
-    )
+    # errors="replace": a corrupted/non-UTF-8 workflow file must not crash diagnosis (and thus a
+    # whole fleet scan); the check is a substring search, so replacement is harmless. GitHub
+    # Actions accepts BOTH .yml and .yaml, so a consumer using aviato-drift.yaml must not read as
+    # "drift automation absent" (matches validation/actionpins dual-extension scans).
+    for ext in ("*.yml", "*.yaml"):
+        for path in workflows.glob(ext):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if any(marker in text for marker in markers):
+                return True
+    return False
 
 
 def _probe_prerequisites(root: Path, prerequisite_paths: Mapping[str, Sequence[str]]) -> dict[str, bool]:
@@ -78,7 +86,15 @@ def _live_body(text: str) -> str:
 def _classify_managed(target: Path, expected_body: str, *, profile: str | None = None) -> ArtifactStatus:
     if not target.exists():
         return "missing"
-    text = target.read_text(encoding="utf-8")
+    try:
+        text = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        # A non-UTF-8 file at a managed path cannot carry a valid marker → operator-owned,
+        # dirty-drift (never silently regenerated). Must not crash diagnosis — a raw
+        # UnicodeDecodeError (a ValueError, not AviatoError) would escape scan_fleet's
+        # per-repo guard and abort the whole fleet scan. Mirrors the errors="replace"/
+        # except-UnicodeDecodeError handling used elsewhere for the same condition.
+        return "dirty-drift"
     marker = parse_marker_from_text(text)
     if marker is None:
         # No marker, or malformed marker → never silently regenerated (§5.4).
@@ -119,6 +135,7 @@ def diagnose(
     declaration_variables: Mapping[str, object] | None = None,
     secret_var_names: Sequence[str] = (),
     prerequisite_paths: Mapping[str, Sequence[str]] | None = None,
+    drift_automation_markers: Sequence[str] = (),
     profile: str | None = None,
     is_library: bool = False,
     bootstrap_declared: bool = False,
@@ -161,7 +178,7 @@ def diagnose(
     declaration_variables = declaration_variables or {}
     report.secret_in_declaration = any(name in declaration_variables for name in secret_var_names)
 
-    report.drift_automation_present = _has_drift_automation(root)
+    report.drift_automation_present = _has_drift_automation(root, drift_automation_markers)
     report.prerequisites = _probe_prerequisites(root, prerequisite_paths or {})
 
     return report

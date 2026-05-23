@@ -61,6 +61,18 @@ def test_docker_run_image_with_digest_is_ok() -> None:
     assert unpinned_tool_invocations(text) == []
 
 
+def test_docker_sha256_in_other_arg_does_not_mask_unpinned_image() -> None:
+    # review #9: an `@sha256:` in an unrelated arg (e.g. --label) must NOT mask an unpinned image.
+    text = "          docker run evil:latest --label x@sha256:" + "a" * 64 + "\n"
+    assert unpinned_tool_invocations(text) == ["docker run image not digest-pinned: evil:latest"]
+
+
+def test_docker_value_taking_flag_does_not_shift_detected_image() -> None:
+    # review #D: a value-taking flag (`-e VAR=x`) must not shift the detected image token.
+    text = "          docker run --rm -e FOO=bar -v /a:/b alpine:3.19 echo\n"
+    assert unpinned_tool_invocations(text) == ["docker run image not digest-pinned: alpine:3.19"]
+
+
 def test_flags_curl_piped_to_shell_or_tar() -> None:
     text = "          curl -sSL https://example.com/releases/download/v1/tool.tar.gz | sudo tar -xz -C /usr/local/bin\n"
     out = unpinned_tool_invocations(text)

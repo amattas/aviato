@@ -45,6 +45,27 @@ def test_onboard_unknown_profile_fails(capsys: pytest.CaptureFixture[str]) -> No
     assert rc != 0
 
 
+def test_onboard_plan_echoes_and_validates_pin(capsys: pytest.CaptureFixture[str]) -> None:
+    # review #29: the dry-run plan must preview the canonical pin --write would record (legacy v
+    # stripped), and a malformed --pin must be rejected (exit 2), not silently ignored.
+    rc = main(["onboard", "owner/repo", "--profile", "python-library", "--pin", "v1.2.3"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "version pin: 1.2.3" in out  # canonicalized (no leading v)
+    rc = main(["onboard", "owner/repo", "--profile", "python-library", "--pin", "not-a-pin"])
+    assert rc == 2  # malformed pin rejected on the plan path too
+
+
+def test_malformed_var_on_plan_path_is_clean_error_not_traceback(capsys: pytest.CaptureFixture[str]) -> None:
+    # review #8: a malformed --var on the (unguarded) plan path used to escape as a raw traceback
+    # + exit 1. The top-level main() safety net must turn ANY leaked AviatoError into a clean
+    # stderr message + exit 2 — no command path may ever surface a stack trace.
+    rc = main(["onboard", "owner/repo", "--profile", "python-library", "--var", "novalue"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "KEY=VALUE" in err or "novalue" in err
+
+
 def test_onboard_plan_hides_docs_artifacts_unless_opted_in(capsys: pytest.CaptureFixture[str]) -> None:
     # §6.1: the plan must list the EXACT artifacts that would be written. With docs off
     # (the default) the docs caller workflow and website artifacts must not appear.
@@ -126,3 +147,19 @@ def test_doctor_reports_clean_and_missing(tmp_path: Path, capsys: pytest.Capture
     assert ".editorconfig" in out
     assert "clean" in out
     assert "missing" in out  # other managed files are absent
+
+
+def test_doctor_rejects_bootstrap_declaration_in_non_library(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # §5.4/§5.10: a `bootstrap: true` declaration is only valid in the Library itself (detected by
+    # structure). In any other repo, doctor must reject it with a clean error (exit 2), not a
+    # traceback. This proves the diagnose() bootstrap guard is actually WIRED from the CLI — the
+    # tmp_path repo has no aviato/library structure, so is_library(root) is False.
+    github = tmp_path / ".github"
+    github.mkdir()
+    (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\nbootstrap: true\n", encoding="utf-8")
+    rc = main(["doctor", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "bootstrap" in err.lower() and "library" in err.lower()

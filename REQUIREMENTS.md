@@ -809,12 +809,17 @@ pipelines before it has a release.
 **Structural predicate (normative):** a repository is *the Library* iff it
 contains all of: the core engine's source package (`aviato/core/`), the
 module-source tree under `aviato/library/` (its `bundles/` and `scaffold/`
-definition trees), and the repo-root `policy.yml` — which serves as the
-manifest anchor *agnostically* (a language-specific build manifest cannot be
-named in the agnostic core, §9b; `policy.yml` is the distinctive Library
-artifact). Detection is by this structure, never by repository name (so
-forks/renames are unaffected), and an installed-as-dependency copy in
-site-packages — lacking a repo-root `policy.yml` — is correctly *not* the Library.
+definition trees), and the packaged `policy.yml` (`aviato/library/policy.yml`) —
+which serves as the manifest anchor *agnostically* (a language-specific build
+manifest cannot be named in the agnostic core, §9b; `policy.yml` is the
+distinctive Library artifact). `policy.yml` and the ruleset manifest/templates
+live **inside** `aviato/library/` (not the repo root) so they ship in the wheel
+for installed ruleset rendering (§5.6/§11.3). Detection is by this structure,
+never by repository name (so forks/renames are unaffected): a **Consumer**
+repository never vendors the `aviato/` package tree, so the predicate is false
+for it. (The predicate is only ever evaluated against the operated-on repository
+root — never the installed package in site-packages — so the fact that a
+site-packages copy also contains `aviato/library/policy.yml` is immaterial.)
 **Rule:** in bootstrap state, **all** self-applied automation — scaffolding,
 verify, **and the release pipeline** — resolves its module/action references to
 self-contained local paths. The first release the pipeline produces is what makes
@@ -1573,7 +1578,13 @@ exists for Swift API reference but produces an *archive*, not md/mdx — see Doc
 
 **Version-source module:** the marketing version **and** a monotonic build number
 (see deploy, §13.4) — the release process derives marketing version from SemVer
-and ensures the build number is strictly increasing.
+and ensures the build number is strictly increasing. The day-zero `swift-app`
+version-source `locations` are a **placeholder** (`project.pbxproj`/`Info.plist` at
+the root); a real Xcode project keeps these in `<Scheme>.xcodeproj/project.pbxproj`,
+whose path varies, so the operator **overrides `version_source.locations`** in the
+declaration to point at their actual file(s). `bump-version` names the expected
+locations and exits non-zero if none exist (it never silently no-ops), so a wrong
+default fails loud — consistent with the §13.4.7 operator-verified Swift DoD.
 
 **Workflows bundle (pipelines):**
 - **Verify** (**macOS**): swift-format `--lint` + SwiftLint `--strict` + build +

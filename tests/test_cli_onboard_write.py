@@ -67,6 +67,34 @@ def test_reonboard_preserves_docs_opt_in(tmp_path: Path) -> None:
     assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["docs"] is True
 
 
+def test_reonboard_docs_true_also_scaffolds_docs_workflow(tmp_path: Path) -> None:
+    # §5.2/§6.1/§13.3 (FIX-1): a docs:true declaration re-onboarded WITHOUT --docs must keep
+    # docs:true AND scaffold the docs workflow — the artifacts must match the declaration, not
+    # silently omit docs (the partial-fix bug where scaffold used args.docs).
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "aviato.yaml").write_text(
+        "profile: python-library\nversion: '0'\ndocs: true\nvariables:\n  distribution-name: a\n  import-name: a\n",
+        encoding="utf-8",
+    )
+    rc = main(
+        [
+            "onboard",
+            str(tmp_path),
+            "--profile",
+            "python-library",
+            "--write",
+            "--allow-dirty",
+            "--var",
+            "distribution-name=a",
+            "--var",
+            "import-name=a",
+        ]  # NO --docs
+    )
+    assert rc == 0
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["docs"] is True
+    assert list((tmp_path / ".github" / "workflows").glob("*docs*")), "docs:true must scaffold the docs workflow"
+
+
 def test_onboard_write_fails_on_missing_required_var(tmp_path: Path) -> None:
     rc = main(["onboard", str(tmp_path), "--profile", "python-library", "--write"])
     assert rc == 2

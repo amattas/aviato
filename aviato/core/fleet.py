@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .bootstrap import is_library
 from .composition import resolve_profile
 from .declaration import Declaration, load_declaration
 from .diagnosis import ExpectedArtifact, diagnose
@@ -84,6 +85,8 @@ def scan_fleet(
                 declaration_variables=declaration.variables,
                 secret_var_names=secret_names,
                 profile=declaration.profile,
+                is_library=is_library(root),
+                bootstrap_declared=declaration.bootstrap,
             )
         except AviatoError as exc:
             scans.append(RepoScan(path=str(root), error=str(exc)))

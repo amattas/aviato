@@ -53,6 +53,13 @@ on:
         type: string
         default: "2.7.3"
 
+# review #26: serialize publishes per repo for parity with the GHCR/Pages deploys — a re-run or
+# two near-simultaneous in-run deploys for the same tag should queue, not race. Bounded anyway by
+# PyPI rejecting a duplicate version upload.
+concurrency:
+  group: aviato-pypi-${{ github.repository }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   id-token: write

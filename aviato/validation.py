@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from .core.selfcheck import core_import_violations, denylist_violations, load_denylist
 from .paths import DENYLIST_FILE, REPO_ROOT
 from .policy import (
@@ -83,24 +85,33 @@ def _check_release_pattern_drift(root: Path, data_root: Path, policy: dict, erro
             errors.append(f"{rel_path} TAG_FORMAT_DESCRIPTION env differs from policy.yml tag_format_description")
 
     # Drift-check the STATIC ruleset templates, not the rendered output. Rendering injects
-    # the policy pattern (rulesets._patch_tag_ruleset), so comparing the rendered payload
-    # to policy is a tautology that can never fail — the literal in the JSON file could
-    # drift to anything and stay green. Comparing the on-disk literal to policy makes it a
-    # genuine "every embedded copy stays in sync" guard (§9), even though render re-injects it.
+    # the policy value (rulesets._patch_*), so comparing the rendered payload to policy is a
+    # tautology that can never fail — the literal in the JSON file could drift to anything and
+    # stay green. Comparing the on-disk literal to policy makes it a genuine "every embedded copy
+    # stays in sync" guard (§9), even though render re-injects it. review #24: this covers EVERY
+    # patched path (the branch ruleset's required_approving_review_count too), not just the tag
+    # pattern — the branch approval literal in protect-default-branch.json was previously unchecked.
+    # patch key -> (rule type carrying it, parameter name within that rule).
+    _PATCH_RULE_PARAM = {
+        "tag_name_pattern": ("tag_name_pattern", "pattern"),
+        "required_approving_review_count": ("pull_request", "required_approving_review_count"),
+    }
     for item in load_ruleset_manifest(data_root).get("rulesets", []):
-        tag_path = item.get("patch", {}).get("tag_name_pattern")
-        if item.get("target") != "tag" or not tag_path:
-            continue
-        expected = str(get_path(policy, tag_path))
         raw = json.loads((data_root / item["file"]).read_text(encoding="utf-8"))
-        for rule in raw.get("rules", []):
-            if rule.get("type") == "tag_name_pattern":
-                actual = rule.get("parameters", {}).get("pattern")
-                if actual != expected:
-                    errors.append(
-                        f"{item['file']} tag_name_pattern {actual!r} differs from policy.yml "
-                        f"({tag_path} = {expected!r}); keep the static ruleset template in sync with policy"
-                    )
+        for patch_key, policy_path in item.get("patch", {}).items():
+            mapping = _PATCH_RULE_PARAM.get(patch_key)
+            if mapping is None or not policy_path:
+                continue
+            rule_type, param_name = mapping
+            expected = get_path(policy, policy_path)
+            for rule in raw.get("rules", []):
+                if rule.get("type") == rule_type:
+                    actual = rule.get("parameters", {}).get(param_name)
+                    if actual != expected:
+                        errors.append(
+                            f"{item['file']} {patch_key} {actual!r} differs from policy.yml "
+                            f"({policy_path} = {expected!r}); keep the static ruleset template in sync with policy"
+                        )
 
 
 def _walk_jobs(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -262,6 +273,55 @@ def _rendered_caller(root: Path, profile: str, output: str) -> str | None:
     return next((a.body for a in artifacts if a.output == output), None)
 
 
+def _check_scaffold_workflow_yaml(root: Path, errors: list[str]) -> None:
+    """Each RENDERED scaffold workflow body must be valid YAML (§16).
+
+    The scaffold ``wf-*.yml`` bodies carry ``{{ var }}`` placeholders, so they aren't valid YAML
+    until rendered — `_check_workflow_yaml` only parses committed `.github/workflows`/`templates`.
+    Render each profile's caller workflows (docs off AND on) with the example vars and parse them,
+    so a syntax error in a scaffolded caller is caught here, not first in a consumer's repo.
+    """
+    from .core.onboarding import resolved_artifacts
+    from .core.registry import Registry
+
+    # review #25: the docs callers (rendered only with docs=True) have NO committed template, so
+    # _check_template_references never validates their `uses:` targets. Verify here that every
+    # reusable-workflow ref in a rendered caller resolves to a workflow that actually exists, so a
+    # renamed/deleted reusable workflow can't ship a broken caller to consumers undetected.
+    workflow_files = {path.name for path in _yaml_files(root / ".github/workflows")}
+    reference_re = re.compile(rf"^{re.escape(LIBRARY_SLUG)}/\.github/workflows/([^@]+)@(.+)$")
+
+    registry = Registry(root / "aviato" / "library")
+    for profile, example_vars in _TEMPLATE_EXAMPLE_VARS.items():
+        for docs in (False, True):
+            try:
+                artifacts = resolved_artifacts(registry, profile, example_vars, pin="main", docs=docs)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"scaffold render failed for {profile!r} (docs={docs}): {exc}")
+                continue
+            for artifact in artifacts:
+                if artifact.seed_once or not artifact.output.startswith(".github/workflows/"):
+                    continue
+                if not artifact.output.endswith((".yml", ".yaml")):
+                    continue
+                try:
+                    doc = yaml.safe_load(artifact.body)
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(
+                        f"rendered scaffold workflow {artifact.output} ({profile!r}, docs={docs}) "
+                        f"is invalid YAML: {exc}"
+                    )
+                    continue
+                for job in _walk_jobs(doc if isinstance(doc, dict) else {}):
+                    uses = job.get("uses")
+                    match = reference_re.match(uses) if isinstance(uses, str) else None
+                    if match and match.group(1) not in workflow_files:
+                        errors.append(
+                            f"rendered scaffold workflow {artifact.output} ({profile!r}, docs={docs}) "
+                            f"references missing reusable workflow {match.group(1)}"
+                        )
+
+
 def _check_template_scaffold_parity(root: Path, errors: list[str]) -> None:
     """Documented caller templates must equal the rendered scaffold output (no drift)."""
     checks = [(p, f, ".github/workflows/aviato-ci.yml") for p, f in _PROFILE_TEMPLATE_FILES.items()]
@@ -304,6 +364,17 @@ _MONOTONIC_CASES = [
     ("v1.2.3", ["1.2.2"]),
     ("2.0.0", ["garbage", "not-a-tag", "1.9.9"]),
     ("not-a-version", ["1.0.0"]),
+    # review #10: MULTI-DIGIT components in every position, so a string-vs-int comparator drift in
+    # an inline copy (e.g. ranking "1.0.0-beta10" BELOW "1.0.0-beta2", or "1.10.0" below "1.2.0")
+    # is caught — single-digit cases give the same answer under string and int comparison and
+    # would let that exact backward-alias regression slip through the parity check.
+    ("1.0.0-beta10", ["1.0.0-beta2"]),
+    ("1.0.0-beta2", ["1.0.0-beta10"]),
+    ("1.10.0", ["1.2.0"]),
+    ("1.2.0", ["1.10.0"]),
+    ("1.0.10", ["1.0.2"]),
+    ("10.0.0", ["9.0.0"]),
+    ("9.0.0", ["10.0.0"]),
 ]
 
 
@@ -405,6 +476,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
     _check_action_pins(root, errors)
     _check_template_scaffold_parity(root, errors)
+    _check_scaffold_workflow_yaml(root, errors)
     _check_monotonic_alias_parity(root, errors)
 
     return errors

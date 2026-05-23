@@ -27,7 +27,7 @@ def test_diagnose_tolerates_non_utf8_workflow_file(tmp_path: Path) -> None:
         "jobs:\n  drift:\n    uses: owner/aviato/.github/workflows/reusable-consumer-automation.yml@main\n",
         encoding="utf-8",
     )
-    report = diagnose(tmp_path, [])
+    report = diagnose(tmp_path, [], drift_automation_markers=("reusable-consumer-automation",))
     assert report.drift_automation_present is True  # bad file tolerated; valid caller still detected
 
 
@@ -164,8 +164,9 @@ def test_seed_once_binary_file_does_not_crash_diagnosis(tmp_path: Path) -> None:
 
 def test_probes_drift_automation_and_prerequisites(tmp_path: Path) -> None:
     prereqs = {"container_build_definition": ["Dockerfile"]}
+    markers = ("reusable-consumer-automation",)  # review #18: marker is caller-supplied data
     # no drift workflow, no Dockerfile → probes false
-    report = diagnose(tmp_path, [], prerequisite_paths=prereqs)
+    report = diagnose(tmp_path, [], prerequisite_paths=prereqs, drift_automation_markers=markers)
     assert report.drift_automation_present is False
     assert report.prerequisites["container_build_definition"] is False
 
@@ -174,8 +175,12 @@ def test_probes_drift_automation_and_prerequisites(tmp_path: Path) -> None:
     wf.mkdir(parents=True)
     (wf / "drift.yml").write_text("uses: amattas/aviato/.github/workflows/reusable-consumer-automation.yml@main\n")
     (tmp_path / "Dockerfile").write_text("FROM scratch\n")
-    report2 = diagnose(tmp_path, [], prerequisite_paths=prereqs)
+    report2 = diagnose(tmp_path, [], prerequisite_paths=prereqs, drift_automation_markers=markers)
     assert report2.drift_automation_present is True
+
+    # review #18: with NO markers supplied the probe is not meaningful → reports absent (the literal
+    # is no longer hardcoded in core, so an empty marker set cannot detect anything).
+    assert diagnose(tmp_path, [], prerequisite_paths=prereqs).drift_automation_present is False
     assert report2.prerequisites["container_build_definition"] is True
 
 
@@ -184,6 +189,15 @@ def test_platform_probes_default_unknown(tmp_path: Path) -> None:
     report = diagnose(tmp_path, [])
     assert report.issue_channel_available is None
     assert report.scan_heartbeat_present is None
+
+
+def test_non_utf8_managed_file_classifies_dirty_drift_without_crashing(tmp_path: Path) -> None:
+    # review #6: a non-UTF-8 file at a managed path must classify dirty-drift (operator-owned,
+    # never silently regenerated), NOT raise a UnicodeDecodeError that escapes scan_fleet's
+    # AviatoError-only guard and aborts the whole fleet scan.
+    (tmp_path / "cfg.py").write_bytes(b"\xff\xfe\x00 binary")
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])
+    assert report.statuses["cfg.py"] == "dirty-drift"
 
 
 def test_bootstrap_declaration_rejected_outside_library(tmp_path: Path) -> None:

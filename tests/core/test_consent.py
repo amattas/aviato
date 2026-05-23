@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from aviato.core.consent import authorize
+from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED, authorize
 
 
 def _ok(**overrides):
+    # review #16: core's authorize sees the NEUTRAL vocabulary the binding maps platform values to.
     base = dict(
-        actor_type="User",
+        actor_type=ACTOR_HUMAN,
         consent_diff_id="abc",
         current_diff_id="abc",
         role_lookup_ok=True,
-        role="admin",
+        role=ROLE_PRIVILEGED,
     )
     base.update(overrides)
     return authorize(**base)

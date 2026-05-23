@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import contextlib
 import os
 import shutil
 import sys
@@ -39,6 +40,24 @@ from .policy import load_policy
 from .repos import git_root, normalize_slug, remote_url, working_tree_clean
 from .rulesets import apply_rulesets, render_all_rulesets
 from .validation import validate
+
+# The Library's scheduled drift/report automation workflow identifier (§5.5/§5.6). This is a
+# Library artifact name, so it lives OUTSIDE the agnostic core (review #18) and is passed into
+# diagnose() as data — core never hardcodes a specific library workflow name.
+DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
+
+
+def _non_negative_int(value: str) -> int:
+    """argparse type for counts that must be >= 0 (review #11).
+
+    ``--required-approvals`` is injected verbatim into the ruleset payload's
+    ``required_approving_review_count``; a negative renders an invalid payload that
+    GitHub rejects only at apply time (after work is done), so reject it at parse time.
+    """
+    parsed = int(value)  # ValueError → argparse reports "invalid _non_negative_int value"
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {parsed}")
+    return parsed
 
 
 def _read_repos_file(path: Path) -> list[str]:
@@ -140,6 +159,18 @@ def cmd_render_rulesets(args: argparse.Namespace) -> int:
 
 
 def cmd_validate(_: argparse.Namespace) -> int:
+    # `aviato validate` is the LIBRARY's own CI gate (§9/§16): it checks the source tree's
+    # workflows/templates/policy infra. From a pip-installed wheel, REPO_ROOT is site-packages —
+    # which ships the package data but NOT .github/workflows or templates/ — so refuse with a
+    # clear message instead of emitting a pile of spurious "missing required file" errors. (The
+    # consumer/operator commands use the packaged data root and work fine when installed.)
+    if not (REPO_ROOT / ".github" / "workflows").is_dir():
+        print(
+            "`aviato validate` runs from a source checkout of the Library (it validates the "
+            "policy/workflow infra). It is not meaningful from an installed package.",
+            file=sys.stderr,
+        )
+        return 2
     errors = validate(REPO_ROOT)
     if errors:
         for error in errors:
@@ -373,8 +404,10 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
     dump_declaration(declaration, declaration_path)
     print(f"wrote {declaration_path.relative_to(target)}")
 
+    # Scaffold with the RESOLVED declaration.docs (the preserved/effective value), so the docs
+    # artifacts always match what the declaration records (§5.2/§6.1/§13.3) — never args.docs.
     items = materialize_items(
-        registry, args.profile, variables, pin=args.pin, docs=args.docs, overrides=declaration.overrides
+        registry, args.profile, variables, pin=args.pin, docs=declaration.docs, overrides=declaration.overrides
     )
     result = scaffold(target, items, profile=args.profile, version=args.pin)
     for output in result.written:
@@ -382,7 +415,10 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
     for output in result.seeded:
         print(f"seeded {output}")
     for output in result.skipped_unmanaged + result.skipped_modified:
-        print(f"SKIPPED (operator-owned) {output}")
+        # review #30: a marker-less file at a managed output path (e.g. a formerly-managed file left
+        # by `offboard --keep-files`, or a hand-edited one) is never silently clobbered; surface it
+        # and tell the operator how to (re-)adopt it as managed, so the orphaned state isn't hidden.
+        print(f"SKIPPED (operator-owned; --force to (re-)adopt as managed) {output}")
     for output in result.skipped_foreign:
         print(f"SKIPPED (marker from a different profile or unknown version — use --force to overwrite) {output}")
     print(
@@ -428,8 +464,10 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved) ->
     # files are left untouched and enumerated (§5.2).
     files: dict[str, str] = {".github/aviato.yaml": declaration_to_yaml(declaration)}
     untouched: list[str] = []
+    # Use the RESOLVED declaration.docs (preserved from the clone's existing declaration), so the
+    # proposed docs artifacts match the declaration written above — never the raw args.docs (§13.3).
     for artifact in resolved_artifacts(
-        registry, args.profile, variables, pin=args.pin, docs=args.docs, overrides=declaration.overrides
+        registry, args.profile, variables, pin=args.pin, docs=declaration.docs, overrides=declaration.overrides
     ):
         present = (clone / artifact.output).exists()
         if artifact.seed_once:
@@ -444,7 +482,7 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved) ->
     body_lines = [
         "Aviato onboarding proposal (§5.2 adopt-existing).",
         "",
-        f"Profile: `{args.profile}` · pin `{args.pin}` · docs={args.docs}",
+        f"Profile: `{args.profile}` · pin `{args.pin}` · docs={declaration.docs}",
         "",
         "Adds the declaration and managed artifacts on this branch for review.",
     ]
@@ -473,6 +511,15 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     if args.write and args.open_pr:
         print("--write and --open-pr are mutually exclusive (local adoption vs. a PR proposal)", file=sys.stderr)
         return 2
+    # §5.2/§6.1: re-onboarding an already-adopted repo PRESERVES its opt-in docs choice — --docs
+    # only ENABLES, a re-run without it must not silently drop docs:true (and then write a docs:true
+    # declaration with no docs artifacts). Apply it to the resolved set + plan here for a LOCAL
+    # target; the --open-pr path reads the existing from its clone and uses declaration.docs.
+    if not args.docs:
+        decl_path = Path(args.target) / ".github" / "aviato.yaml"
+        if decl_path.is_file():
+            with contextlib.suppress(AviatoError):
+                args.docs = load_declaration(decl_path).docs
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
         resolved = resolve_profile(registry, args.profile, docs=args.docs)
@@ -487,6 +534,11 @@ def cmd_onboard(args: argparse.Namespace) -> int:
 
     print(f"Onboarding plan for {args.target}")
     print(f"profile: {resolved.profile}")
+    if args.pin is not None:
+        # review #29: validate + echo the pin in dry-run so the plan previews exactly what --write
+        # would record (§6.1), and a malformed --pin is rejected here too (normalize_pin raises an
+        # AviatoError → clean exit 2 via the top-level handler), not silently ignored.
+        print(f"version pin: {normalize_pin(args.pin)}")
 
     print("pipelines:")
     for pipeline in resolved.pipelines:
@@ -539,20 +591,24 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
         expected = _expected_artifacts(registry, declaration)
+        secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
+        prerequisite_paths = registry.profile_doc(declaration.profile).get("prerequisites", {})
+        # diagnose() rejects a bootstrap declaration in a non-Library repo (§5.4/§5.10); keep it
+        # inside the handler so that rejection surfaces as a clean operator error, not a traceback.
+        report = diagnose(
+            root,
+            expected,
+            declaration_variables=declaration.variables,
+            secret_var_names=secret_names,
+            prerequisite_paths=prerequisite_paths,
+            drift_automation_markers=DRIFT_AUTOMATION_MARKERS,
+            profile=declaration.profile,
+            is_library=is_library(root),
+            bootstrap_declared=declaration.bootstrap,
+        )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-
-    secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
-    prerequisite_paths = registry.profile_doc(declaration.profile).get("prerequisites", {})
-    report = diagnose(
-        root,
-        expected,
-        declaration_variables=declaration.variables,
-        secret_var_names=secret_names,
-        prerequisite_paths=prerequisite_paths,
-        profile=declaration.profile,
-    )
 
     # Platform-dependent probes (§5.4/§5.14): issue-channel availability and the
     # per-run scan heartbeat. Best-effort — populated only if a repo slug resolves.
@@ -665,11 +721,20 @@ def cmd_scan(args: argparse.Namespace) -> int:
             print(f"{scan.path}\tSKIPPED: archived (pass --include-archived to scan it)")
             continue
         if scan.error:
-            print(f"{scan.path}\tERROR: {scan.error}")
+            # A per-repo error must make the exit code non-zero (rc=1): operators gate CI on
+            # `aviato scan` over a fleet, and an all-errors run reporting success would mask a
+            # broken fleet. Error rows go to stderr so the stdout TSV stays machine-parseable.
+            print(f"{scan.path}\tERROR: {scan.error}", file=sys.stderr)
+            rc = 1
             continue
         summary = ", ".join(f"{output}={status}" for output, status in sorted(scan.statuses.items())) or "—"
         flags = " [secret-in-declaration]" if scan.secret_in_declaration else ""
         print(f"{scan.path}\t{scan.profile}\t{summary}{flags}")
+        # §6.3 seed-once integrity divergence (tamper/deletion) must surface in the fleet sweep,
+        # not only in `doctor` — otherwise the scale-out command silently drops the one signal
+        # seed-once tracking exists to provide.
+        if scan.seed_divergence:
+            print(f"  seed divergence: {', '.join(sorted(scan.seed_divergence))}", file=sys.stderr)
         if args.fix and _scan_has_file_drift(scan):
             try:
                 outcome = _propose_file_drift(registry, Path(scan.path), override_version_pin=args.override_version_pin)
@@ -712,6 +777,8 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
         declaration_variables=declaration.variables,
         secret_var_names=secret_names,
         profile=declaration.profile,
+        is_library=is_library(root),
+        bootstrap_declared=declaration.bootstrap,
     )
 
     managed_bodies: dict[str, str] = {}
@@ -728,8 +795,22 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
         item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
         managed_bodies[artifact.output] = render_managed(item, profile=declaration.profile, version=declaration.version)
 
+    # review #5: drift is DIAGNOSED against the operator's local tree (above), but the proposal
+    # must be pushed from a FRESH CLONE — never the operator's live checkout. open_or_update_proposal
+    # does `git switch -C` + `git push --force` in its workdir; doing that in `root` would rip the
+    # operator's checkout onto the proposal branch and clobber uncommitted work (and race a second
+    # scan). The regenerated bodies come from the library, so they're identical regardless of which
+    # tree they're written into. Mirrors the onboard/offboard --open-pr isolation.
+    workdir = Path(tempfile.mkdtemp(prefix="aviato-scanfix-"))
+    atexit.register(shutil.rmtree, workdir, True)
+    clone = workdir / "repo"
+    try:
+        run(["gh", "repo", "clone", slug, str(clone)])
+    except CommandError as exc:
+        raise AviatoError(f"could not clone {slug} to propose a fix: {exc}") from exc
+
     return run_file_drift(
-        GitHubPlatform(workdir=root),
+        GitHubPlatform(workdir=clone),
         repo=slug,
         profile=declaration.profile,
         statuses=report.statuses,
@@ -1133,13 +1214,21 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
 
     if do_file:
         secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
-        report = diagnose(
-            root,
-            expected,
-            declaration_variables=declaration.variables,
-            secret_var_names=secret_names,
-            profile=declaration.profile,
-        )
+        # diagnose() rejects a bootstrap declaration in a non-Library repo (§5.4/§5.10) — surface
+        # that as a clean operator error (exit 2), not an uncaught traceback.
+        try:
+            report = diagnose(
+                root,
+                expected,
+                declaration_variables=declaration.variables,
+                secret_var_names=secret_names,
+                profile=declaration.profile,
+                is_library=is_library(root),
+                bootstrap_declared=declaration.bootstrap,
+            )
+        except AviatoError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         # The proposal must write the SAME marker-stamped content scaffold() writes, so
         # a merged PR is classified clean (not dirty for a missing marker, §6.2/§5.4).
         managed_bodies: dict[str, str] = {}
@@ -1236,6 +1325,16 @@ def cmd_lint_actions(args: argparse.Namespace) -> int:
 
 def cmd_is_highest(args: argparse.Namespace) -> int:
     """Exit 0 iff CANDIDATE is the highest released version (§8.14 monotonic alias guard)."""
+    from .core.versioning import _release_key
+
+    # review #28: exit 1 is fail-closed for BOTH "not highest" and "unparseable candidate"; emit a
+    # stderr note in the unparseable case so an operator debugging a workflow can tell a malformed
+    # tag from a genuinely-older one (the gate behavior is unchanged — still exit 1).
+    if _release_key(args.candidate) is None:
+        print(
+            f"is-highest: candidate {args.candidate!r} is not a parseable version (treated as not highest)",
+            file=sys.stderr,
+        )
     return 0 if is_highest(args.candidate, args.existing) else 1
 
 
@@ -1281,8 +1380,15 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
     for location in changed:
         print(f"bumped {location} -> {args.version}")
     if not present:
-        # No version-source file exists on disk at all — worth flagging (exit 1).
-        print("no version-source files found to bump", file=sys.stderr)
+        # No version-source file exists on disk at all — flag it and NAME the expected locations
+        # so the operator can override `version_source.locations` for their real layout (e.g. a
+        # Swift repo's Xcode project lives at <Scheme>.xcodeproj/project.pbxproj, not the day-zero
+        # placeholder paths). §3.3/§12.3/§13.4.6.
+        print(
+            f"no version-source file found among {locations}; set `overrides` / the profile's "
+            "version_source.locations to your project's actual version file(s).",
+            file=sys.stderr,
+        )
         return 1
     if not changed:
         # Files exist but are already at the target: a successful idempotent no-op (§2.5),
@@ -1389,7 +1495,9 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--repo", action="append", help="Repository slug, for example OWNER/REPO.")
     apply.add_argument("--repos-file", help="Optional newline-delimited list of repository slugs.")
     apply.add_argument("--apply", action="store_true", help="Apply changes instead of dry-running.")
-    apply.add_argument("--required-approvals", type=int, help="Override required PR approval count.")
+    apply.add_argument(
+        "--required-approvals", type=_non_negative_int, help="Override required PR approval count (>= 0)."
+    )
     apply.add_argument(
         "--profile",
         help="Inject the profile's language verify status checks (e.g. ci / Python CI) into the branch ruleset.",
@@ -1397,7 +1505,9 @@ def build_parser() -> argparse.ArgumentParser:
     apply.set_defaults(func=cmd_apply_rulesets)
 
     render = subparsers.add_parser("render-rulesets", help="Render configured ruleset payloads.")
-    render.add_argument("--required-approvals", type=int, help="Override required PR approval count.")
+    render.add_argument(
+        "--required-approvals", type=_non_negative_int, help="Override required PR approval count (>= 0)."
+    )
     render.add_argument(
         "--profile",
         help="Inject the profile's language verify status checks into the rendered branch ruleset.",
@@ -1591,7 +1701,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    # Top-level safety net (review #8): per-command handlers map the EXPECTED error families to
+    # specific exit codes (1 vs 2), but the contract is "never leak a raw traceback." If any path
+    # forgets to guard an AviatoError/GitHubAPIError/CommandError, fail closed to a clean stderr
+    # message + exit 2 instead of a stack trace. (Genuinely unexpected exceptions still propagate
+    # — those are bugs we WANT to see, not operator errors.)
+    try:
+        return int(args.func(args))
+    except (AviatoError, GitHubAPIError, CommandError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

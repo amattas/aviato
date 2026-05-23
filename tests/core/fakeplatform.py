@@ -81,13 +81,15 @@ class FakePlatform:
         self.calls.append(("open_or_update_proposal", (repo, branch, title, files, body)))
         return branch
 
-    def apply_settings(self, repo: str, payload: dict[str, Any]) -> None:
+    def apply_settings(
+        self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
+    ) -> None:
         self._apply_count += 1
         if self.fail_apply:
             raise RuntimeError("settings apply rejected by platform")
         if self.fail_full_protection and self._apply_count >= 2:
             raise RuntimeError("full protection rejected by platform")
-        self.calls.append(("apply_settings", (repo, payload)))
+        self.calls.append(("apply_settings", (repo, payload, expected_live)))
         self.settings.update(payload)
 
     def create_repo(self, repo: str, *, private: bool) -> None:

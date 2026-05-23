@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from aviato.core.reconcile import ReconcileState, reconcile_decision
 from aviato.core.settingsdrift import classify_settings, diff_identity
 
@@ -14,8 +15,8 @@ def _state(**overrides) -> ReconcileState:
         consent_present=True,
         consent_diff_id=_DEFAULT_DIFF_ID,
         current_diff_id=_DEFAULT_DIFF_ID,
-        actor_type="User",
-        role="admin",
+        actor_type=ACTOR_HUMAN,
+        role=ROLE_PRIVILEGED,
         role_lookup_ok=True,
         issue_edited_by_nonhuman_since_grant=False,
         confirmed_diff_id=_DEFAULT_DIFF_ID,  # matches the recomputed diff id

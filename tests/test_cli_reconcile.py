@@ -9,6 +9,7 @@ from aviato import __version__, cli
 from aviato.cli import _desired_settings, main
 from aviato.command import CommandError
 from aviato.core.composition import resolve_profile
+from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from aviato.core.ports import Issue
 from aviato.core.registry import Registry
 from aviato.core.settings_drift_flow import diff_identity
@@ -30,7 +31,9 @@ class _FakePlatform:
     def get_issue(self, repo: str, key: str) -> Issue | None:
         return self.issue
 
-    def apply_settings(self, repo: str, payload: dict[str, Any]) -> None:
+    def apply_settings(
+        self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
+    ) -> None:
         self.applied.append(payload)
 
     def comment_issue(self, repo: str, key: str, body: str) -> None:
@@ -63,8 +66,8 @@ def test_reconcile_stale_confirm_aborts_without_mutation(tmp_path: Path, monkeyp
         key="drift",
         open=True,
         consent_diff_id=_current_diff_id(live),
-        consent_actor_type="User",
-        consent_role="admin",
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
         consent_role_lookup_ok=True,
     )
     platform = _FakePlatform(settings=live, issue=issue)
@@ -83,8 +86,8 @@ def test_reconcile_matching_confirm_applies(tmp_path: Path, monkeypatch: pytest.
         key="drift",
         open=True,
         consent_diff_id=current_id,
-        consent_actor_type="User",
-        consent_role="admin",
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
         consent_role_lookup_ok=True,
     )
     platform = _FakePlatform(settings=live, issue=issue)
@@ -105,8 +108,8 @@ def test_reconcile_considers_all_markers_not_just_first(tmp_path: Path, monkeypa
         key="drift",
         open=True,
         consent_diff_id=current_id,
-        consent_actor_type="User",
-        consent_role="admin",
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
         consent_role_lookup_ok=True,
     )
     platform = _FakePlatform(settings=live, issue=issue)
@@ -137,13 +140,13 @@ def test_reconcile_apply_write_failure_is_clean_failure_not_traceback(
         key="drift",
         open=True,
         consent_diff_id=current_id,
-        consent_actor_type="User",
-        consent_role="admin",
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
         consent_role_lookup_ok=True,
     )
     platform = _FakePlatform(settings=live, issue=issue)
 
-    def _boom(repo: str, payload: dict[str, Any]) -> None:
+    def _boom(repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None) -> None:
         raise CommandError(["gh", "api", "--method", "PUT", "..."], 1, "protection PUT rejected")
 
     platform.apply_settings = _boom  # type: ignore[method-assign]

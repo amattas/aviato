@@ -96,7 +96,8 @@ logic.
 
 ### Rulesets
 
-Ruleset payloads live in `rulesets/`.
+Ruleset payloads live in `aviato/library/rulesets/` (inside the package, so they
+ship in the wheel for installed rendering).
 
 - `protect-default-branch.json` protects the repository default branch.
 - `release-tag-format.json` protects release tags and enforces the release tag
@@ -108,9 +109,9 @@ unattended automation.
 
 The near-term shape is:
 
-- `policy.yml` owns policy constants such as the release tag pattern.
-- `rulesets.yml` declares which ruleset templates exist and how policy values
-  are injected into them.
+- `aviato/library/policy.yml` owns policy constants such as the release tag pattern.
+- `aviato/library/rulesets.yml` declares which ruleset templates exist and how policy
+  values are injected into them.
 - ruleset JSON files remain readable templates.
 
 ### Core Engine
@@ -176,7 +177,7 @@ Rejected examples:
 - `1.2.3-beta.1`
 - `build-20260519.0215`
 
-The canonical file is `policy.yml`. Ruleset rendering derives from it, and
+The canonical file is `aviato/library/policy.yml`. Ruleset rendering derives from it, and
 validation checks any embedded copies needed by GitHub Actions defaults.
 Documentation may describe policy, but documentation must not become the source
 of truth.
@@ -243,8 +244,8 @@ Validation should cover:
 
 - shell syntax and linting while shell scripts remain;
 - GitHub Actions workflow linting;
-- YAML syntax for `policy.yml` and `rulesets.yml`;
-- JSON syntax for `rulesets/*.json`;
+- YAML syntax for `aviato/library/policy.yml` and `aviato/library/rulesets.yml`;
+- JSON syntax for `aviato/library/rulesets/*.json`;
 - drift checks that compare embedded release tag patterns against `policy.yml`,
   and that the inline `highest.py` monotonic-alias guards embedded in the deploy
   workflows still agree with the core `is_highest` comparator (§8.14/§13.2);

@@ -2,13 +2,17 @@ name: swift-app
 workflows: swift-app-wf
 scaffold: swift-app-sc
 settings: baseline
-requires_macos: true
 variables:
   - {name: product-scheme, type: string}
   - {name: bundle-identifier, type: string}
   - {name: team-id, type: string}
   - {name: export-method, type: enum, domain: [app-store, ad-hoc, development]}
 version_source:
+  # DAY-ZERO PLACEHOLDER (§12.3/§13.4.6): a real Xcode app keeps the marketing version +
+  # CURRENT_PROJECT_VERSION/CFBundleVersion in <Scheme>.xcodeproj/project.pbxproj (and/or an
+  # Info.plist), whose path varies per project. The operator OVERRIDES version_source.locations
+  # in their declaration to point at their actual file(s); `bump-version` names the expected
+  # locations and exits non-zero if none exist, so a wrong default fails loud, never silently.
   locations: [project.pbxproj, Info.plist]
 toolchain:
   linter: swiftlint
@@ -16,4 +20,5 @@ toolchain:
 notes:
   - "Apple App Store Connect deploy requires stored secrets behind a protected environment (§13.4)."
   - "The deploy secrets are declared by the deploy plug-in, never in the declaration (§6.6)."
+  - "version_source.locations is a day-zero placeholder; override it for your Xcode layout (§12.3)."
 docs_pipeline: docs-pages

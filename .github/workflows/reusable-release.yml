@@ -45,6 +45,13 @@ on:
         description: The released tag (X.Y.Z), set only when released is true.
         value: ${{ jobs.release.outputs.tag }}
 
+# §5.9 (review #4): serialize release runs per repo. Two near-simultaneous default-branch runs
+# (a release-bump merge + a follow-on push, or a re-run) could both reach the TAG phase and race
+# the floating-major `git push -f`, briefly regressing the major pointer. Queue, never cancel.
+concurrency:
+  group: aviato-release-${{ github.repository }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
@@ -170,17 +177,34 @@ jobs:
             echo "::error::Release commit subject claims ${NEXT} but the version-source was not bumped to ${NEXT}; refusing to tag." >&2
             exit 1
           fi
-          git tag "${NEXT}"
+          # Idempotent re-run (§5.9): a transient failure AFTER the tag/release was created must be
+          # retriable, so create the immutable version tag + release only if absent (never -f the
+          # release tag — it's an immutable published ref). The floating major IS force-moved (it's
+          # the mutable pointer). `gh release create` likewise skipped if the release already exists.
+          if ! git rev-parse -q --verify "refs/tags/${NEXT}" >/dev/null; then
+            git tag "${NEXT}"
+            git push origin "${NEXT}"
+          fi
           # §5.9: advance the floating major (e.g. 1) to this release — a mutable
           # published pointer consumers pin with @N (§6.1/§11.3).
           major="$(printf '%s' "${NEXT}" | sed -E 's/^([0-9]+).*/\1/')"
-          git tag -f "${major}"
-          git push origin "${NEXT}"
-          git push -f origin "${major}"
+          # review (floating-major monotonicity): only advance @N if NEXT is the HIGHEST release
+          # in that major line — an out-of-order or re-run release of an OLDER patch must never
+          # regress the mutable pointer (mirrors the GHCR/Pages `is_highest` latest-alias guard).
+          # NEXT was just tagged above, so it is included in the candidate set.
+          mapfile -t major_tags < <(git tag --list "${major}.*.*")
+          if aviato is-highest "${NEXT}" "${major_tags[@]}"; then
+            git tag -f "${major}"
+            git push -f origin "${major}"
+          else
+            echo "Not advancing floating major ${major}: ${NEXT} is not the highest ${major}.x.y release."
+          fi
           range="${LAST}..HEAD"
           if ! git rev-parse "${LAST}" >/dev/null 2>&1; then range="HEAD"; fi
           git log "${range}" --pretty=format:'- %s' > /tmp/changelog.md || true
-          gh release create "${NEXT}" --title "${NEXT}" --notes-file /tmp/changelog.md
+          if ! gh release view "${NEXT}" >/dev/null 2>&1; then
+            gh release create "${NEXT}" --title "${NEXT}" --notes-file /tmp/changelog.md
+          fi
           # Signal the caller to run deploy as in-run downstream jobs for this tag.
           echo "released=true" >> "${GITHUB_OUTPUT}"
           echo "Tagged and published ${NEXT}; deploy runs in-run from caller."

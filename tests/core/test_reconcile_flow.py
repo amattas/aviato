@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from aviato.core.ports import Issue
 from aviato.core.reconcile_flow import run_reconcile
 from aviato.core.settings_drift_flow import diff_identity
@@ -22,8 +23,8 @@ def test_apply_path_mutates_and_comments() -> None:
         key="k",
         open=True,
         consent_diff_id=diff_id,
-        consent_actor_type="User",
-        consent_role="admin",
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
         consent_role_lookup_ok=True,
     )
     platform = FakePlatform(settings=dict(live), issues={"k": issue})
@@ -56,8 +57,8 @@ def test_apply_succeeds_even_if_audit_comment_fails(capsys) -> None:
         key="k",
         open=True,
         consent_diff_id=diff_id,
-        consent_actor_type="User",
-        consent_role="admin",
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
         consent_role_lookup_ok=True,
     )
     platform = FakePlatform(settings=dict(live), issues={"k": issue}, fail_comment=True)
@@ -89,8 +90,8 @@ def test_apply_passes_full_desired_state_to_binding() -> None:
         key="k",
         open=True,
         consent_diff_id=diff_id,
-        consent_actor_type="User",
-        consent_role="admin",
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
         consent_role_lookup_ok=True,
     )
     platform = FakePlatform(settings=dict(live), issues={"k": issue})
@@ -123,8 +124,8 @@ def test_apply_audit_comment_includes_destructive_removals() -> None:
         key="k",
         open=True,
         consent_diff_id=diff_id,
-        consent_actor_type="User",
-        consent_role="admin",
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
         consent_role_lookup_ok=True,
     )
     platform = FakePlatform(settings=dict(live), issues={"k": issue})
@@ -154,8 +155,8 @@ def test_apply_failure_is_recorded_on_issue_then_reraised() -> None:
         key="k",
         open=True,
         consent_diff_id=diff_id,
-        consent_actor_type="User",
-        consent_role="admin",
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
         consent_role_lookup_ok=True,
     )
     platform = FakePlatform(settings=dict(live), issues={"k": issue}, fail_apply=True)
@@ -197,8 +198,8 @@ def test_empty_diff_noop_does_not_mutate() -> None:
         key="k",
         open=True,
         consent_diff_id=empty_id,
-        consent_actor_type="User",
-        consent_role="admin",
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
         consent_role_lookup_ok=True,
     )
     platform = FakePlatform(settings={"x": 1}, issues={"k": issue})
@@ -224,7 +225,7 @@ def test_non_human_consent_refused_no_mutation() -> None:
         open=True,
         consent_diff_id=_current_diff_id(desired, live),
         consent_actor_type="Bot",
-        consent_role="admin",
+        consent_role=ROLE_PRIVILEGED,
         consent_role_lookup_ok=True,
     )
     platform = FakePlatform(settings=dict(live), issues={"k": issue})

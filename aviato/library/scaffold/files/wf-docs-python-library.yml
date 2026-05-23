@@ -25,7 +25,12 @@ permissions:
 jobs:
   # Resolve the release tag at the completed run's head commit; skip if none.
   resolve:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # review #27: a workflow_run fires from the BASE repo with full privileges even when the
+    # triggering CI ran on a fork PR. Gate the privileged checkout to runs that originated in
+    # THIS repo so fork-PR head code is never checked out here (deploy is also release-tag-gated).
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}

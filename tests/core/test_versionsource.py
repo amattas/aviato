@@ -20,6 +20,14 @@ def test_manifests_get_bare_semver_not_v_prefixed() -> None:
     assert json.loads(bump_text("package.json", '{"version": "0.1.0"}', "v0.2.0"))["version"] == "0.2.0"
 
 
+def test_malformed_package_json_raises_aviato_error_not_raw_jsondecode() -> None:
+    # review #23: an invalid package.json must surface as AviatoError (the caller-consistent
+    # contract), never a raw json.JSONDecodeError that bypasses the error handling.
+    with pytest.raises(AviatoError) as exc:
+        bump_text("package.json", "{not valid json", "1.0.0")
+    assert "not valid JSON" in str(exc.value)
+
+
 def test_bump_swift_pbxproj_marketing_and_build() -> None:
     text = "MARKETING_VERSION = 1.0.0;\nCURRENT_PROJECT_VERSION = 1;\n"
     out = bump_text("project.pbxproj", text, "v2.1.0", build_number="42")

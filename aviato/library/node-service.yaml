@@ -2,7 +2,6 @@ name: node-service
 workflows: node-service-wf
 scaffold: node-service-sc
 settings: baseline
-requires_macos: false
 variables:
   - {name: project-name, type: string}
   - {name: language-variant, type: enum, domain: [typescript, javascript]}

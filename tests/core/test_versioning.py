@@ -50,6 +50,15 @@ def test_breaking_change_in_prose_does_not_bump_major() -> None:
     assert classify_commits(commits) == BumpKind.MINOR
 
 
+def test_indented_breaking_change_is_not_a_footer() -> None:
+    # review #22: a Conventional Commits footer is at column 0; an INDENTED "BREAKING CHANGE:"
+    # (e.g. inside a quoted block / code fence in the body) must NOT force a major bump.
+    commits = ["feat: x\n\n    BREAKING CHANGE: this is indented, not a footer"]
+    assert classify_commits(commits) == BumpKind.MINOR
+    # A genuine column-0 footer still bumps major.
+    assert classify_commits(["feat: x\n\nBREAKING CHANGE: real footer"]) == BumpKind.MAJOR
+
+
 def test_feature_bumps_minor() -> None:
     assert classify_commits(["fix: a", "feat: b", "chore: c"]) == BumpKind.MINOR
 

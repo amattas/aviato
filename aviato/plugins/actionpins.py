@@ -127,15 +127,58 @@ def unpinned_tool_invocations(text: str) -> list[str]:
     return violations
 
 
-def _docker_run_image(rest: str) -> str | None:
-    """The image argument of a ``docker run`` invocation: the first non-flag token.
+# docker run/pull flags that consume a SEPARATE following token as their value (review #D): the
+# token right after one of these is the flag's argument, NOT the image — e.g. in
+# `docker run -e FOO=bar alpine:3.19`, `FOO=bar` must be skipped so `alpine:3.19` is evaluated.
+# A `--flag=value` form carries its own value and needs no skip.
+_DOCKER_VALUE_FLAGS = frozenset(
+    {
+        "-e",
+        "--env",
+        "-v",
+        "--volume",
+        "-p",
+        "--publish",
+        "-w",
+        "--workdir",
+        "--mount",
+        "-l",
+        "--label",
+        "--name",
+        "--network",
+        "--net",
+        "-u",
+        "--user",
+        "--entrypoint",
+        "--add-host",
+        "--device",
+        "--tmpfs",
+        "--cap-add",
+        "--cap-drop",
+        "--platform",
+        "-h",
+        "--hostname",
+        "--env-file",
+        "--restart",
+        "--pull",
+    }
+)
 
-    Skips option flags (``--rm``, ``-i``) — valueless flags only; a flag taking a
-    separate value (``-e VAR``) would shift the image, so the detector is a best-effort
-    guard for the common pinning mistake, paired with the digest check above.
+
+def _docker_run_image(rest: str) -> str | None:
+    """The image argument of a ``docker run``/``docker pull`` invocation.
+
+    Skips both valueless option flags (``--rm``, ``-i``) and value-taking flags together with
+    the separate token they consume (``-e VAR=x``, ``-v a:b``), so the first remaining bare
+    token is the actual image — closing the token-shift false-negative (review #D).
     """
-    for token in rest.split():
+    tokens = rest.split()
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
         if token.startswith("-"):
+            # A bare value-taking flag consumes the next token; `--flag=value` carries its own.
+            i += 2 if ("=" not in token and token in _DOCKER_VALUE_FLAGS) else 1
             continue
         return token
     return None

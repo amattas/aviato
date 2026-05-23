@@ -81,3 +81,17 @@ def test_comment_for_path_maps_extensions() -> None:
     assert comment_for_path("a.swift") == "//"
     assert comment_for_path("a.unknownext") is None
     assert ".py" in COMMENT_SYNTAX
+
+
+def test_control_byte_prefix_is_not_a_valid_marker_lead() -> None:
+    # review #19: the lead must be comment punctuation, never control bytes — a NUL/control-byte
+    # prefix used to satisfy `[^\sA-Za-z0-9]+` and let a binary blob spoof the marker lead.
+    from aviato.core.marker import parse_marker, parse_marker_from_text
+
+    spoof = "\x00\x00# aviato:managed profile=p version=1.0.0 hash=ab"
+    assert parse_marker(spoof) is None
+    assert parse_marker_from_text(spoof) is None
+    # Real comment leads still parse (regression guard).
+    for lead in ("#", "//", "/*", "<!--", ";", "%"):
+        ok = f"{lead} aviato:managed profile=p version=1.0.0 hash=ab"
+        assert parse_marker(ok) is not None, lead

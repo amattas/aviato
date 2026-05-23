@@ -10,7 +10,8 @@ keeping a committed inventory of consumer repositories.
 
 ## Policy
 
-`policy.yml` is the canonical source for policy constants.
+`aviato/library/policy.yml` is the canonical source for policy constants (it lives
+inside the package so it ships in the wheel for installed ruleset rendering).
 
 Release tags must match:
 
@@ -28,9 +29,9 @@ in consumer repositories rather than supported by release publish workflows.
 
 ## What Is Here
 
-- `policy.yml` - canonical policy constants.
-- `rulesets.yml` - ruleset manifest.
-- `rulesets/*.json` - GitHub ruleset templates.
+- `aviato/library/policy.yml` - canonical policy constants (packaged; ships in the wheel).
+- `aviato/library/rulesets.yml` - ruleset manifest.
+- `aviato/library/rulesets/*.json` - GitHub ruleset templates.
 - `.github/workflows/reusable-*.yml` - reusable CI, release, deploy, and security workflows.
 - `templates/profile-*.yml`, `templates/consumer-automation.yml` - composed, copyable
   caller-workflow examples for consumer repos (rendered from the scaffold bundles; they

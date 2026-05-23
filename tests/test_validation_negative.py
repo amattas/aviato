@@ -132,6 +132,25 @@ def test_static_ruleset_pattern_drift_is_detected(repo_copy: Path) -> None:
     assert any("tag_name_pattern" in e and "policy.yml" in e for e in errors)
 
 
+def test_branch_ruleset_approval_literal_drift_is_detected(repo_copy: Path) -> None:
+    # review #24: the branch ruleset's required_approving_review_count is render-injected from
+    # policy, but the static literal must ALSO be drift-checked (the tag-pattern check was, the
+    # branch approval one was not). Mutating it must turn validation red.
+    import json
+
+    f = repo_copy / "aviato" / "library" / "rulesets" / "protect-default-branch.json"
+    payload = json.loads(f.read_text(encoding="utf-8"))
+    mutated = False
+    for rule in payload["rules"]:
+        if rule.get("type") == "pull_request":
+            rule["parameters"]["required_approving_review_count"] = 99
+            mutated = True
+    assert mutated, "fixture did not contain a pull_request rule"
+    f.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("required_approving_review_count" in e and "policy.yml" in e for e in errors)
+
+
 def test_monotonic_alias_inline_drift_is_detected(repo_copy: Path) -> None:
     # The deploy workflows embed a hand-copied `highest.py` that must agree with core's
     # is_highest (§8.14/§13.2). Flip its prerelease rank so a final release no longer outranks

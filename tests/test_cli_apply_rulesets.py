@@ -74,3 +74,20 @@ def test_apply_rulesets_unknown_profile_exits_2(
     monkeypatch.setattr(cli, "apply_rulesets", must_not_run)
     rc = cli.main(["apply-rulesets", "o/r", "--profile", "no-such-profile", "--apply"])
     assert rc == 2
+
+
+def test_negative_required_approvals_is_rejected_at_parse_time(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # review #11: a negative --required-approvals would render an invalid ruleset payload
+    # (required_approving_review_count: -5) that GitHub rejects only at apply time. argparse must
+    # reject it up front (SystemExit(2)), never reaching render/apply.
+    for cmd in (
+        ["render-rulesets", "--required-approvals", "-5"],
+        ["apply-rulesets", "o/r", "--required-approvals", "-1", "--apply"],
+    ):
+        with pytest.raises(SystemExit) as exc:
+            cli.main(cmd)
+        assert exc.value.code == 2
+    # 0 (the documented solo-repo override) is still accepted by the type.
+    assert cli._non_negative_int("0") == 0

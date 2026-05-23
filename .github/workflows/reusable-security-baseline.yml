@@ -47,6 +47,16 @@ jobs:
     name: Probe findings-upload privilege
     runs-on: ubuntu-latest
     steps:
+      # §5.14/§5.5: scheduled scans are jittered so a fleet of consumers on the same weekly
+      # cron does not stampede the platform. Gated to schedule only — PR and release-ref runs
+      # must stay immediate (no added latency on the deploy gate or PR feedback). This is the
+      # single chokepoint: every scan job `needs: privilege-probe`, so delaying it here defers
+      # the whole baseline by one random window.
+      - name: Jitter (scheduled runs only)
+        if: ${{ github.event_name == 'schedule' }}
+        shell: bash
+        run: sleep $((RANDOM % 120))
+
       - name: Verify security-events scope
         shell: bash
         env:

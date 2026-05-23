@@ -98,7 +98,9 @@ class Profile:
     workflows: str
     scaffold: str
     settings: str
-    requires_macos: bool = False
+    # review #17: a profile carries NO runner-OS flag. "Does this need a macOS runner?" is derived
+    # from the resolved pipelines' data-driven PipelineModule.runner (§11.5), not a target-OS
+    # boolean baked into the agnostic core model (adding e.g. a Windows target must never edit core).
 
 
 @dataclass(frozen=True)

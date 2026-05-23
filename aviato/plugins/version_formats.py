@@ -116,7 +116,12 @@ def bump_text(filename: str, text: str, new_version: str, build_number: str | No
         # that string in place — never reserialize the whole file (that would churn the
         # operator-owned, seed-once manifest's formatting/key order, §3.3/§6.3). The span
         # is found structurally so a nested object's version key is never rewritten.
-        data = json.loads(text)
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            # review #23: surface a malformed manifest as an AviatoError (the caller-consistent
+            # contract every other version-source path uses), never a raw JSONDecodeError.
+            raise AviatoError(f"{filename} is not valid JSON: {exc}") from exc
         if not isinstance(data.get("version"), str):
             raise AviatoError(f"no top-level version string found in {filename}")
         span = _top_level_json_string_span(text, "version")

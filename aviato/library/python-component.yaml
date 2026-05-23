@@ -3,7 +3,6 @@ name: python-component
 workflows: python-component-wf
 scaffold: python-component-sc
 settings: baseline
-requires_macos: false
 variables:
   # §12.1 Python plug-in vars: the wheel/distribution name (the pyproject [project] name) and
   # the import package name. (A component publishes no index artifact, but it still builds a

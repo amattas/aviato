@@ -140,3 +140,37 @@ def test_seed_once_writes_when_absent_records_sidecar_and_never_overwrites(tmp_p
     result2 = scaffold(tmp_path, plan, profile="p", version="v1")
     assert (tmp_path / "Dockerfile").read_text() == "FROM y\n"  # never overwritten
     assert result2.seeded == []
+
+
+def test_seed_once_heals_lost_sidecar_entry_so_future_tamper_is_visible(tmp_path: Path) -> None:
+    # §6.3/§5.14 (review #1): the sidecar is the SOLE seed-once integrity record. If it is
+    # deleted/lost, a re-scaffold must re-establish the baseline from the current file so a
+    # deleted sidecar SELF-HEALS and future tamper is again detectable — never silently leave the
+    # file unprotected forever. (Cannot retroactively detect tamper before the heal — advisory.)
+    plan = [ScaffoldItem("Dockerfile", "FROM x\n", "#", seed_once=True)]
+    scaffold(tmp_path, plan, profile="p", version="v1")
+    (tmp_path / ".github" / "aviato.seed.json").unlink()  # operator/attacker deletes the record
+    assert read_sidecar(tmp_path) == {}
+
+    result = scaffold(tmp_path, plan, profile="p", version="v1")
+    assert result.seeded == []  # existing file is NEVER overwritten
+    assert read_sidecar(tmp_path)["Dockerfile"] == content_hash("FROM x\n")  # baseline recovered
+
+
+def test_corrupt_sidecar_does_not_crash_scaffold_or_read(tmp_path: Path) -> None:
+    # review #7: a truncated/corrupt report-only sidecar must degrade to "no recorded hashes",
+    # never raise (a raw JSONDecodeError would escape scan_fleet's AviatoError-only guard).
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "aviato.seed.json").write_text("{ this is not json", encoding="utf-8")
+    assert read_sidecar(tmp_path) == {}
+    result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="v1")
+    assert result.written == ["cfg.py"]
+
+
+def test_non_utf8_managed_file_is_skipped_not_crashed(tmp_path: Path) -> None:
+    # review #6: a non-UTF-8 file at a managed path can't carry a marker → operator-owned; scaffold
+    # must skip it (never regenerate, never crash a fleet sync with a raw UnicodeDecodeError).
+    (tmp_path / "cfg.py").write_bytes(b"\xff\xfe\x00 binary")
+    result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="v1")
+    assert result.skipped_unmanaged == ["cfg.py"]
+    assert (tmp_path / "cfg.py").read_bytes() == b"\xff\xfe\x00 binary"  # untouched

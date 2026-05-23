@@ -46,6 +46,22 @@ def _variable_spec(item: dict[str, Any]) -> VariableSpec:
     )
 
 
+def _settings_override_lists(override: dict[str, Any], _prefix: str = "") -> list[str]:
+    """Dotted paths of any list-valued key in a settings override (§4.2 bare-list guard).
+
+    Recurses nested maps; a list value at any depth is a bare-list restatement the settings
+    deep-merge would silently replace, which §4.2 forbids (lists need explicit add/remove).
+    """
+    found: list[str] = []
+    for key, value in override.items():
+        path = f"{_prefix}{key}"
+        if isinstance(value, list):
+            found.append(path)
+        elif isinstance(value, dict):
+            found.extend(_settings_override_lists(value, f"{path}."))
+    return found
+
+
 def _chain(load, name: str) -> list:
     """Walk an ``extends`` chain from ``name`` to its root, root-first.
 
@@ -150,6 +166,19 @@ def resolve_profile(
     if settings_override is not None:
         if not isinstance(settings_override, dict):
             raise CompositionError("settings override must be a mapping (§4.2)")
+        # §4.2/§5.1: a list-valued property is modified by EXPLICIT add/remove only — a child must
+        # never restate a bare list (which would silently replace, e.g. emptying `rulesets` or
+        # `required_status_checks`). Settings overrides are map deep-merges with no add/remove
+        # semantics, so a bare list in the override is rejected rather than silently accepted-and-
+        # ignored (the actual ruleset apply/drift derive from the manifest + composed checks, so a
+        # replaced list would have no effect — a silent no-op the spec forbids).
+        bare_lists = _settings_override_lists(settings_override)
+        if bare_lists:
+            raise CompositionError(
+                f"settings override restates list-valued key(s) {sorted(bare_lists)} as a bare list "
+                "(§4.2); list-valued settings are not consumer-overridable via a bare list — they "
+                "are derived from the composed pipelines (status checks) and the ruleset manifest"
+            )
         settings = deep_merge(settings, settings_override)
         # §2.13: the security baseline is always-on — "there is no composition that
         # silently omits it." An override may strengthen a toggle but may never remove

@@ -2,7 +2,6 @@ name: python-service
 workflows: python-service-wf
 scaffold: python-service-sc
 settings: baseline
-requires_macos: false
 variables:
   # §12.1 Python plug-in vars: the wheel/distribution name (the pyproject [project] name) and
   # the import package name. image-name (§13.2) is the GHCR target. All are non-secret.

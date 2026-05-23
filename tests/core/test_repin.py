@@ -51,6 +51,16 @@ def test_repin_no_downgrade_warning_on_upgrade(module_root: Path) -> None:
     assert plan.downgrade_warning is None
 
 
+def test_repin_warns_on_exact_to_floating_major_downgrade(module_root: Path) -> None:
+    # review #21: moving from exact 1.5.0 down to floating "1" (floor 1.0.0) is a real backward
+    # move; the old major-only fallback compared 1<1 and missed it. Now both sides floor to a
+    # comparable lower bound so (1,0,0) < (1,5,0) is correctly flagged.
+    plan = plan_repin(Registry(module_root), _decl(version="1.5.0"), "1")
+    assert plan.downgrade_warning is not None
+    # Exact 1.0.0 → floating "1" is NOT a downgrade (floating 1 tracks >= 1.0.0).
+    assert plan_repin(Registry(module_root), _decl(version="1.0.0"), "1").downgrade_warning is None
+
+
 def test_repin_reports_orphaned_override(module_root: Path) -> None:
     decl = _decl(overrides={"settings": {"nonexistent_key": 1}})
     plan = plan_repin(Registry(module_root), decl, "v1.0.0")

@@ -48,10 +48,11 @@ class BumpKind(enum.IntEnum):
 def _has_breaking_footer(message: str) -> bool:
     """True iff a line is a ``BREAKING CHANGE:`` footer (per Conventional Commits).
 
-    The token must BEGIN a footer line — a mid-line mention in prose body text does
-    not count, so it cannot force an unintended major bump.
+    The token must begin a footer line **at column 0** (review #22): per the
+    Conventional Commits spec a footer is not indented, so an indented mention (e.g.
+    inside a code block or quoted prose in the body) must NOT force a major bump.
     """
-    return any(line.lstrip().startswith(("BREAKING CHANGE:", "BREAKING-CHANGE:")) for line in message.splitlines())
+    return any(line.startswith(("BREAKING CHANGE:", "BREAKING-CHANGE:")) for line in message.splitlines())
 
 
 def _commit_bump(message: str) -> BumpKind:

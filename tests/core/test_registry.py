@@ -13,7 +13,6 @@ def test_loads_profile(module_root: Path) -> None:
     profile = Registry(module_root).profile("child")
     assert isinstance(profile, Profile)
     assert profile.workflows == "child-wf"
-    assert profile.requires_macos is False
 
 
 def test_loads_workflows_bundle(module_root: Path) -> None:

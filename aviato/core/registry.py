@@ -50,7 +50,6 @@ class Registry:
                 workflows=doc["workflows"],
                 scaffold=doc["scaffold"],
                 settings=doc["settings"],
-                requires_macos=bool(doc.get("requires_macos", False)),
             )
         except KeyError as exc:
             raise CompositionError(f"profile {name!r} missing field: {exc}") from exc
