@@ -85,6 +85,29 @@ def test_services_deploy_ghcr(registry: Registry) -> None:
     assert "ghcr-publish" in resolve_profile(registry, "node-service").pipelines
 
 
+def test_python_service_is_a_container_service_not_a_library(registry: Registry) -> None:
+    # The Python container-service model: the build artifact is the Docker image, so the profile
+    # declares ONLY the GHCR image target — no wheel/import packaging vars (§13.2) — and versions
+    # via a packaging-free VERSION file (not pyproject.toml). Mirrors node-service.
+    rs = resolve_profile(registry, "python-service")
+    var_names = {v.name for v in rs.variables}
+    assert var_names == {"image-name"}, var_names
+    assert "distribution-name" not in var_names and "import-name" not in var_names
+    assert rs.version_source.locations == ("VERSION",)
+    # The scaffold seeds VERSION + requirements-dev.txt and does NOT seed a pyproject.toml.
+    from aviato.core.onboarding import resolved_artifacts
+
+    arts = resolved_artifacts(registry, "python-service", {"image-name": "o/img"}, pin="1", docs=False)
+    outputs = {a.output for a in arts}
+    seed_once = {a.output for a in arts if a.seed_once}
+    assert "VERSION" in seed_once and "requirements-dev.txt" in seed_once
+    assert "pyproject.toml" not in outputs
+    # The CI caller installs from requirements, never `pip install -e .`, and builds no wheel.
+    ci = next(a.body for a in arts if a.output == ".github/workflows/aviato-ci.yml")
+    assert "pip install -e ." not in ci
+    assert "requirements-dev.txt" in ci and "run-build: false" in ci
+
+
 def test_swift_app_requires_macos_and_deploys_app_store(registry: Registry) -> None:
     rs = resolve_profile(registry, "swift-app")
     assert "app-store-connect" in rs.pipelines

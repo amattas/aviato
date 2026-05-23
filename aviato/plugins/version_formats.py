@@ -105,6 +105,13 @@ def bump_text(filename: str, text: str, new_version: str, build_number: str | No
     name = Path(filename).name
     bare = _bare(new_version)
 
+    if name == "VERSION":
+        # A plain-text version file: the packaging-free version-source for a container service
+        # (§13.2) whose build artifact is its Dockerfile image, not a wheel — so it carries no
+        # [project]/package metadata, just the bare SemVer. The whole file IS the version; rewrite
+        # it wholesale (idempotent: a re-bump to the same value yields identical text → no change).
+        return f"{bare}\n"
+
     if name == "pyproject.toml":
         new, count = _rewrite_toml_table_version(text, _PYPROJECT_VERSION_TABLES, bare)
         if count == 0:

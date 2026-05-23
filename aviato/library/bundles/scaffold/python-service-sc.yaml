@@ -3,6 +3,10 @@ name: python-service-sc
 # to the language scaffold, so a consumer actually receives them (§15).
 extends: python-sc
 add:
+  # A container service has no wheel: swap the pyproject manifest (removed below) for a
+  # packaging-free VERSION version-source + a requirements-dev.txt the CI installs (§13.2).
+  - python-version-file
+  - python-dev-deps
   - wf-ci-python-service
   - wf-drift
   - wf-docs-python-service
@@ -10,4 +14,7 @@ add:
   - docs-package
   - docs-sidebars
   - docs-intro
-remove: []
+remove:
+  # python-sc seeds pyproject.toml (the library packaging manifest); a container service that
+  # builds via its Dockerfile and installs from requirements.txt does not use it (§13.2).
+  - python-manifest

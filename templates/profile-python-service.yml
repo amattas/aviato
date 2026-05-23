@@ -28,9 +28,24 @@ jobs:
     uses: amattas/aviato/.github/workflows/reusable-python-ci.yml@main
     with:
       python-version: "3.12"
-      install-command: "python -m pip install -e .[dev]"
+      # A container service installs its runtime deps from requirements.txt (the same file the
+      # Dockerfile uses) plus the seeded dev tools — NO editable/package install (no wheel,
+      # §13.2). Each install reads a requirements file (which pins its own versions, §11.3) and
+      # sits alone on its line so the supply-chain pin scan stays clean. The runtime step is
+      # conditional so a deps-less service still works.
+      install-command: |
+        python -m pip install -r requirements-dev.txt
+        if [ -f requirements.txt ]; then
+          python -m pip install -r requirements.txt
+        fi
       lint-command: "python -m ruff check ."
+      # Non-strict type-check for a service (lower adoption friction than the library default's
+      # mypy --strict); still typed, just not strict-mode.
+      typecheck-command: "python -m mypy ."
       test-command: "python -m pytest --cov --cov-report=term-missing"
+      # The build artifact is the Docker image (the `docker` job below), not a wheel — so the
+      # source-CI wheel build is disabled (mirrors node-service, §13.2).
+      run-build: false
 
   security:
     # Runs on PRs AND on the release tag, so source scans gate the verify pipeline

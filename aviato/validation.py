@@ -241,11 +241,8 @@ def _check_action_pins(root: Path, errors: list[str]) -> None:
 # regenerate (scripts/regen-templates.py).
 _TEMPLATE_EXAMPLE_VARS: dict[str, dict[str, str]] = {
     "python-library": {"distribution-name": "your-distribution", "import-name": "your_package"},
-    "python-service": {
-        "distribution-name": "your-distribution",
-        "image-name": "your-image",
-        "import-name": "your_package",
-    },
+    # A container service declares only the GHCR image target — no wheel/import name (§13.2).
+    "python-service": {"image-name": "your-image"},
     "python-component": {"distribution-name": "your-distribution", "import-name": "your_package"},
     "node-service": {"project-name": "your-app", "language-variant": "typescript"},
     "swift-app": {
