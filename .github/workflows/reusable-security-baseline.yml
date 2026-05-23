@@ -86,12 +86,12 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ inputs.codeql-languages }}
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@v4
 
       # §2.13 SAST gate (note): `analyze` uploads SARIF and SUCCEEDS even with high/critical
       # alerts — CodeQL has no in-workflow fail-on-severity input. The high/critical SAST gate
@@ -101,7 +101,7 @@ jobs:
       # it found nothing); severity gating for SAST is the platform check, unlike the dependency/
       # secret scans which gate in-workflow via Trivy exit-code.
       - name: Analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
 
   # PR-only diff-based review (richer signal on pull requests).
   dependency-review:
@@ -150,7 +150,7 @@ jobs:
 
       - name: Upload dependency findings
         if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-deps.sarif
           category: aviato-dependency-scan
@@ -190,7 +190,7 @@ jobs:
 
       - name: Upload secret findings
         if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-secrets.sarif
           category: aviato-secret-scan
