@@ -200,3 +200,31 @@ def test_drifted_ruleset_names_flags_missing_and_drifted() -> None:
     assert drifted_missing == [tag["name"]]
     # All present + clean → none.
     assert drifted_ruleset_names([branch, tag], [copy.deepcopy(branch), copy.deepcopy(tag)]) == []
+
+
+def test_ruleset_content_drift_detects_added_bypass_actor() -> None:
+    # §5.6 (M-B): a live ruleset that adds a bypass_actor (skips ALL rules) must drift — Aviato's
+    # rulesets grant none, so any live bypass is a weakening.
+    import copy
+
+    from aviato.rulesets import ruleset_content_drift
+
+    branch, _ = _branch_and_tag()
+    live = copy.deepcopy(branch)
+    live["bypass_actors"] = [{"actor_id": 1, "actor_type": "OrganizationAdmin", "bypass_mode": "always"}]
+    assert ruleset_content_drift(branch, live) is True
+    # No bypass on either side → no false drift.
+    assert ruleset_content_drift(branch, copy.deepcopy(branch)) is False
+
+
+def test_policy_ruleset_data_ships_in_the_package() -> None:
+    # H-A: the policy/ruleset DATA must live inside the package (POLICY_DATA_ROOT) so it ships in
+    # the wheel — a pip-installed aviato renders rulesets without a source checkout (§5.6/§11.3).
+    from aviato.paths import POLICY_DATA_ROOT
+    from aviato.rulesets import render_all_rulesets
+
+    assert (POLICY_DATA_ROOT / "policy.yml").is_file()
+    assert (POLICY_DATA_ROOT / "rulesets.yml").is_file()
+    assert list((POLICY_DATA_ROOT / "rulesets").glob("*.json"))
+    # And rendering resolves entirely from the packaged location (no repo-root dependency).
+    assert len(render_all_rulesets()) == 2

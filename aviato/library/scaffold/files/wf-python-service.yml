@@ -66,6 +66,7 @@ jobs:
     if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@{{ aviato-ref }}
     with:
+      image-name: "{{ image-name }}"
       context: "."
       dockerfile: "Dockerfile"
       platforms: "linux/amd64"

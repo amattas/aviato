@@ -119,7 +119,7 @@ def test_static_ruleset_pattern_drift_is_detected(repo_copy: Path) -> None:
     # leaves validation green. Regression guard for the previously-tautological check.
     import json
 
-    f = repo_copy / "rulesets" / "release-tag-format.json"
+    f = repo_copy / "aviato" / "library" / "rulesets" / "release-tag-format.json"
     payload = json.loads(f.read_text(encoding="utf-8"))
     mutated = False
     for rule in payload["rules"]:

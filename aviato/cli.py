@@ -51,7 +51,7 @@ def _read_repos_file(path: Path) -> list[str]:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    policy = load_policy(REPO_ROOT)
+    policy = load_policy()  # packaged data root (ships in the wheel; works installed)
     if args.repo:
         repos = []
         for value in args.repo:
@@ -330,10 +330,14 @@ def _resolve_onboard_declaration(args: argparse.Namespace, registry: Registry, r
     pin = _resolve_onboard_pin(args, existing)
     args.pin = pin  # propagate the canonical pin to materialize/scaffold/marker rendering
     persisted = writeback_variables(resolved.variables, variables)
+    # §5.2/§6.1: re-onboarding an already-adopted repo must PRESERVE its opt-in docs choice (like
+    # overrides). --docs only ever ENABLES; a re-run without it must not silently flip docs:true
+    # back to false. (Disabling docs is a deliberate reduction the operator makes in the file.)
+    docs = args.docs or (existing.docs if existing else False)
     declaration = Declaration(
         profile=args.profile,
         version=pin,
-        docs=args.docs,
+        docs=docs,
         variables=persisted,
         overrides=(existing.overrides if existing else {}),
     )
@@ -508,8 +512,13 @@ def cmd_onboard(args: argparse.Namespace) -> int:
             print(f"- {variable.name} ({variable.type}{optional}{secret})")
 
     print("settings:")
-    for ruleset in resolved.settings.get("rulesets", []):
-        print(f"- ruleset: {ruleset}")
+    # List the rulesets `apply-rulesets` will actually apply — the rendered MANIFEST, the single
+    # source of truth — not resolved.settings["rulesets"] (a consumer override deep-merges that
+    # list, §4.2, and it would otherwise mislead the plan without affecting what is applied).
+    from .rulesets import render_all_rulesets
+
+    for payload in render_all_rulesets(extra_status_checks=_profile_status_checks(args.profile)):
+        print(f"- ruleset: {payload['name']}")
 
     print("next command:")
     print(f"aviato apply-rulesets {args.target} --apply --profile {args.profile}")

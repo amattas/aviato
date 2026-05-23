@@ -17,8 +17,8 @@ from .policy import (
 )
 
 REQUIRED_FILES = [
-    "policy.yml",
-    "rulesets.yml",
+    "aviato/library/policy.yml",
+    "aviato/library/rulesets.yml",
     ".github/dependabot.yml",
     ".github/workflows/ci.yml",
     ".github/workflows/reusable-python-ci.yml",
@@ -66,7 +66,7 @@ def _check_policy_examples(policy: dict, errors: list[str]) -> None:
             errors.append(f"policy invalid release example matches tag_pattern: {value}")
 
 
-def _check_release_pattern_drift(root: Path, policy: dict, errors: list[str]) -> None:
+def _check_release_pattern_drift(root: Path, data_root: Path, policy: dict, errors: list[str]) -> None:
     pattern = release_tag_pattern(policy)
     description = policy.get("release", {}).get("tag_format_description")
 
@@ -87,12 +87,12 @@ def _check_release_pattern_drift(root: Path, policy: dict, errors: list[str]) ->
     # to policy is a tautology that can never fail — the literal in the JSON file could
     # drift to anything and stay green. Comparing the on-disk literal to policy makes it a
     # genuine "every embedded copy stays in sync" guard (§9), even though render re-injects it.
-    for item in load_ruleset_manifest(root).get("rulesets", []):
+    for item in load_ruleset_manifest(data_root).get("rulesets", []):
         tag_path = item.get("patch", {}).get("tag_name_pattern")
         if item.get("target") != "tag" or not tag_path:
             continue
         expected = str(get_path(policy, tag_path))
-        raw = json.loads((root / item["file"]).read_text(encoding="utf-8"))
+        raw = json.loads((data_root / item["file"]).read_text(encoding="utf-8"))
         for rule in raw.get("rules", []):
             if rule.get("type") == "tag_name_pattern":
                 actual = rule.get("parameters", {}).get("pattern")
@@ -230,8 +230,12 @@ def _check_action_pins(root: Path, errors: list[str]) -> None:
 # regenerate (scripts/regen-templates.py).
 _TEMPLATE_EXAMPLE_VARS: dict[str, dict[str, str]] = {
     "python-library": {"distribution-name": "your-distribution", "import-name": "your_package"},
-    "python-service": {"image-name": "your-image", "import-name": "your_package"},
-    "python-component": {"import-name": "your_package"},
+    "python-service": {
+        "distribution-name": "your-distribution",
+        "image-name": "your-image",
+        "import-name": "your_package",
+    },
+    "python-component": {"distribution-name": "your-distribution", "import-name": "your_package"},
     "node-service": {"project-name": "your-app", "language-variant": "typescript"},
     "swift-app": {
         "product-scheme": "App",
@@ -375,13 +379,16 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
         if not (root / rel_path).exists():
             errors.append(f"missing required file: {rel_path}")
 
+    # Policy + ruleset DATA now lives in the package (`aviato/library`) so it ships in the wheel
+    # (§5.6/§11.3); validate the IN-REPO copy under the operated root.
+    data_root = root / "aviato" / "library"
     try:
-        policy = load_policy(root)
-        load_ruleset_manifest(root)
+        policy = load_policy(data_root)
+        load_ruleset_manifest(data_root)
     except Exception as exc:  # noqa: BLE001 - report validation failures without hiding context
         return [f"failed to load policy/manifest: {exc}"]
 
-    for ruleset_path in sorted((root / "rulesets").glob("*.json")):
+    for ruleset_path in sorted((data_root / "rulesets").glob("*.json")):
         try:
             with ruleset_path.open("r", encoding="utf-8") as handle:
                 json.load(handle)
@@ -389,7 +396,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
             errors.append(f"invalid JSON in {ruleset_path}: {exc}")
 
     _check_policy_examples(policy, errors)
-    _check_release_pattern_drift(root, policy, errors)
+    _check_release_pattern_drift(root, data_root, policy, errors)
     _check_workflow_yaml(root, errors)
     _check_template_references(root, errors)
     _check_release_workflow_contract(root, errors)

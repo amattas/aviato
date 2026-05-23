@@ -211,13 +211,11 @@ jobs:
             > heartbeat/aviato-security-heartbeat.json
           cat heartbeat/aviato-security-heartbeat.json
 
-      - name: Upload heartbeat
-        uses: actions/upload-artifact@v4
-        with:
-          name: aviato-security-heartbeat
-          path: heartbeat/aviato-security-heartbeat.json
-          retention-days: 30
-
+      # GATE BEFORE UPLOAD (§5.14/§8.16): the heartbeat artifact must mean "the baseline RAN
+      # CLEAN", so it is uploaded ONLY when the gate passes. A broken/skipped scan fails the gate
+      # here, the upload step (default `if: success()`) is skipped, and §5.4 then correctly reads
+      # the ABSENT heartbeat as "broken" — not "clean". Were upload to run unconditionally, a red
+      # run would still leave a present heartbeat and read clean (the §8.16 fail-open).
       - name: Gate on required scans
         shell: bash
         run: |
@@ -248,3 +246,12 @@ jobs:
             echo "::error::SAST is disabled (run-codeql=${RUN_CODEQL}); the §2.13 security baseline is always-on and cannot be turned off (§5.14/§8.16)."
             exit 1
           fi
+
+      # Only reached when the gate above passed (default step success-gating) → the heartbeat
+      # signals a CLEAN run. A broken run skips this, leaving no fresh artifact (absent = broken).
+      - name: Upload heartbeat
+        uses: actions/upload-artifact@v4
+        with:
+          name: aviato-security-heartbeat
+          path: heartbeat/aviato-security-heartbeat.json
+          retention-days: 30

@@ -737,3 +737,23 @@ def test_read_settings_raises_settings_read_error_on_admin_scope_failure(monkeyp
     monkeypatch.setattr(github, "active_branch_rules", _forbidden)
     with pytest.raises(github.SettingsReadError):
         GitHubPlatform().read_settings("o/r")
+
+
+def test_read_rulesets_fails_closed_on_per_id_get_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # §5.6/§2.7 (L-D): a per-id ruleset GET that errors must surface as SettingsReadError so the
+    # caller SKIPS settings drift fail-closed — never read a partial/empty ruleset set as "clean".
+    monkeypatch.setattr(github, "repository_rulesets", lambda repo: [{"id": 7, "name": "X"}])
+
+    def _boom(repo, ruleset_id):
+        raise github.GitHubAPIError(f"repos/{repo}/rulesets/{ruleset_id}", 1, "HTTP 403")
+
+    monkeypatch.setattr(github, "repository_ruleset", _boom)
+    with pytest.raises(github.SettingsReadError):
+        GitHubPlatform().read_rulesets("o/r")
+
+
+def test_read_rulesets_returns_full_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github, "repository_rulesets", lambda repo: [{"id": 7, "name": "X"}, {"name": "no-id"}])
+    monkeypatch.setattr(github, "repository_ruleset", lambda repo, rid: {"id": rid, "name": "X", "rules": []})
+    payloads = GitHubPlatform().read_rulesets("o/r")
+    assert payloads == [{"id": 7, "name": "X", "rules": []}]  # the id-less summary is skipped

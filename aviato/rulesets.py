@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from . import github
-from .paths import REPO_ROOT
+from .paths import POLICY_DATA_ROOT
 from .policy import default_required_approvals, get_path, load_policy, load_ruleset_manifest
 
 
@@ -47,7 +47,7 @@ def _patch_status_checks(payload: dict[str, Any], extra_contexts: list[str]) -> 
 def render_ruleset(
     item: dict[str, Any],
     *,
-    root: Path = REPO_ROOT,
+    root: Path = POLICY_DATA_ROOT,
     policy: dict[str, Any] | None = None,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,
@@ -96,13 +96,21 @@ def ruleset_content_drift(desired: dict[str, Any], live: dict[str, Any]) -> bool
     """True if a live ruleset has drifted from the rendered desired payload (§5.6).
 
     Catches the security-relevant divergences: a DISABLED/evaluate ruleset (``enforcement`` no
-    longer ``active``), a MISSING required rule type, and a WEAKENED rule parameter (e.g. a
-    permissive ``tag_name_pattern`` or a lowered ``required_approving_review_count``). Conditions
-    (the ref-name scope) are deliberately NOT compared: GitHub may normalize the ``~DEFAULT_BRANCH``
-    token, which would risk false drift; scope changes are a documented day-zero detection gap.
-    Robust against GitHub metadata via :func:`_subset_match`.
+    longer ``active``), an added ``bypass_actors`` entry (an actor that can skip ALL rules — incl.
+    admin enforcement, so this also backs the §2.13 enforce_admins posture), a MISSING required
+    rule type, and a WEAKENED rule parameter (e.g. a permissive ``tag_name_pattern`` or a lowered
+    ``required_approving_review_count``). Conditions (the ref-name scope) are deliberately NOT
+    compared: GitHub may normalize the ``~DEFAULT_BRANCH`` token, which would risk false drift;
+    scope changes are a documented day-zero detection gap. Robust against GitHub metadata via
+    :func:`_subset_match`.
     """
     if desired.get("enforcement") != live.get("enforcement"):
+        return True
+    # bypass_actors: any actor that can skip the rules. Aviato's rulesets grant NONE, so any live
+    # bypass not explicitly desired weakens the ruleset (§5.6). Subset-match keeps it robust to
+    # GitHub-added actor fields when a future desired ruleset DOES grant a bypass.
+    desired_bypass = desired.get("bypass_actors") or []
+    if any(not any(_subset_match(d, actor) for d in desired_bypass) for actor in (live.get("bypass_actors") or [])):
         return True
     live_rule_by_type: dict[Any, dict[str, Any]] = {}
     for rule in live.get("rules", []):
@@ -133,7 +141,7 @@ def drifted_ruleset_names(desired_payloads: list[dict[str, Any]], live_payloads:
 
 def render_all_rulesets(
     *,
-    root: Path = REPO_ROOT,
+    root: Path = POLICY_DATA_ROOT,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,
 ) -> list[dict[str, Any]]:

@@ -144,16 +144,16 @@ def diagnose(
     for artifact in expected:
         target = root / artifact.output_path
         if artifact.seed_once:
+            # A recorded seed-once file diverges if it is now MISSING (deleted — §6.3 tamper
+            # visibility, e.g. a removed Dockerfile) OR its content changed. The `and`/`or`
+            # short-circuit so a missing file is never read. errors="replace": a seed-once file
+            # may be binary (§6.3); read leniently so the probe never crashes a fleet scan — a
+            # binary just won't match its text hash. Reported, never overwritten.
             recorded = sidecar.get(artifact.output_path)
-            if (
-                target.exists()
-                and recorded is not None
-                # errors="replace": a seed-once file may be binary (§6.3 lists binaries).
-                # Reading it leniently keeps the integrity probe from CRASHING on
-                # undecodable bytes; a binary will simply not match its text sidecar hash
-                # and is reported as divergence (report-only, never overwritten, §6.3).
-                and content_hash(target.read_text(encoding="utf-8", errors="replace")) != recorded
-            ):
+            diverged = recorded is not None and (
+                not target.exists() or content_hash(target.read_text(encoding="utf-8", errors="replace")) != recorded
+            )
+            if diverged:
                 report.seed_divergence.append(artifact.output_path)
             continue
         report.statuses[artifact.output_path] = _classify_managed(target, artifact.body, profile=profile)

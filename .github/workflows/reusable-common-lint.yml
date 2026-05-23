@@ -112,16 +112,22 @@ jobs:
             echo "No workflows to check."; exit 0
           fi
           violations=0
-          # A `docker run`/`docker pull` image MUST be digest-pinned (@sha256:…).
+          # A `docker run`/`docker pull` image MUST be digest-pinned (@sha256:…). A line ending
+          # in a backslash is a shell line-continuation (the image is on a following line), so it
+          # is skipped to avoid a false positive on a multi-line, validly-pinned invocation —
+          # matching the same-line scope of the aviato.plugins.actionpins checker.
           while IFS= read -r line; do
             case "${line}" in *@sha256:*) continue ;; esac
+            case "${line}" in *\\) continue ;; esac
             echo "::error::Container image not digest-pinned (§11.3): ${line# } — pin to @sha256:<digest>."
             violations=$((violations + 1))
           done < <(grep -rhE '\bdocker[[:space:]]+(run|pull)\b' .github/workflows || true)
-          # A network download piped straight into a shell/extractor has no checksum gate.
-          if grep -rqE '\b(curl|wget)\b[^|]*\|[^|]*\b(sh|bash|tar)\b' .github/workflows; then
+          # A network download piped straight into a shell/extractor has no checksum gate. The
+          # `[^|;]*` (no semicolon) keeps the fetch and the pipe in ONE command, so an unrelated
+          # later `; … | bash` on the same line is not a false positive.
+          if grep -rqE '\b(curl|wget)\b[^|;]*\|[^|]*\b(sh|bash|tar)\b' .github/workflows; then
             echo "::error::Fetch-and-execute without a checksum (§11.3): download to a file, verify with sha256sum -c, then run."
-            grep -rnE '\b(curl|wget)\b[^|]*\|[^|]*\b(sh|bash|tar)\b' .github/workflows
+            grep -rnE '\b(curl|wget)\b[^|;]*\|[^|]*\b(sh|bash|tar)\b' .github/workflows
             violations=$((violations + 1))
           fi
           if [ "${violations}" -gt 0 ]; then

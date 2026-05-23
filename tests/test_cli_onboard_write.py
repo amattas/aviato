@@ -45,6 +45,28 @@ def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureF
     assert "wrote .github/aviato.yaml" in out
 
 
+def test_reonboard_preserves_docs_opt_in(tmp_path: Path) -> None:
+    # §5.2/§6.1 (M-D): re-onboarding an adopted docs:true repo WITHOUT --docs must NOT silently
+    # flip docs back to false. --docs only enables; a re-run preserves the existing choice.
+    base = [
+        "onboard",
+        str(tmp_path),
+        "--profile",
+        "python-library",
+        "--write",
+        "--allow-dirty",
+        "--var",
+        "distribution-name=acme",
+        "--var",
+        "import-name=acme",
+    ]
+    assert main(base + ["--docs"]) == 0
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["docs"] is True
+    # Re-onboard WITHOUT --docs → docs must stay true (preserved like overrides).
+    assert main(base) == 0
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["docs"] is True
+
+
 def test_onboard_write_fails_on_missing_required_var(tmp_path: Path) -> None:
     rc = main(["onboard", str(tmp_path), "--profile", "python-library", "--write"])
     assert rc == 2

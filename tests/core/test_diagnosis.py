@@ -141,6 +141,16 @@ def test_seed_once_integrity_divergence_is_reported_not_overwritten(tmp_path: Pa
     assert (tmp_path / "Dockerfile").read_text() == "FROM tampered\n"  # never overwritten
 
 
+def test_seed_once_deletion_is_reported_as_divergence(tmp_path: Path) -> None:
+    # §6.3 (L-B): a recorded seed-once file that is later DELETED (e.g. a removed Dockerfile) is a
+    # divergence too — tamper visibility, not just a hash change. Reported, never re-created.
+    scaffold(tmp_path, [ScaffoldItem("Dockerfile", "FROM x\n", "#", True)], profile="p", version="v1")
+    (tmp_path / "Dockerfile").unlink()
+    report = diagnose(tmp_path, [ExpectedArtifact("Dockerfile", "", seed_once=True)])
+    assert "Dockerfile" in report.seed_divergence
+    assert not (tmp_path / "Dockerfile").exists()  # not re-created (seed-once is write-when-absent)
+
+
 def test_seed_once_binary_file_does_not_crash_diagnosis(tmp_path: Path) -> None:
     # §6.3 lists binaries among seed-once files. A seed-once file whose live bytes are
     # not valid UTF-8 must not crash the integrity probe (which would crash a fleet scan);

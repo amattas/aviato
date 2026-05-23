@@ -1389,6 +1389,14 @@ does not cleanly fit either pinning class above. This is a **known day-zero gap*
 the Swift toolchain path is operator-verified only (§13.4.7), and pinning these to
 checksum-verified release binaries is a post-day-zero hardening. It is called out so
 the gap is an explicit, traceable boundary, not a silent omission.
+**Scope boundary (seeded consumer manifests vs. Aviato's pipeline tooling):** this exact/digest
+pinning rule governs **Aviato's own pipeline supply chain** — the actions, container images,
+fetched binaries, and pip/npm tools the reusable workflows invoke (all pinned). It does **not**
+dictate the version ranges in a **seeded consumer project manifest** (`pyproject.toml`'s
+`[project.optional-dependencies]`, `package.json` deps): those are **seed-once, operator-owned**
+(§6.3) — the consumer's own project dependencies, conventionally expressed as ranges and kept
+current by Dependabot, which the operator owns and tunes after seeding. Aviato pins the *tools it
+runs*, not the *consumer's project deps*.
 **First-party GitHub-owned actions** (the `actions/*` and `github/*` namespaces —
 e.g. `actions/checkout`, `actions/attest-build-provenance`, `github/codeql-action`)
 are exempt from the digest requirement and pinned at **major-tag** granularity: they

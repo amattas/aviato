@@ -279,6 +279,9 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     # has none). Reading it both ways keeps it in the §5.7 diff (§2.9 — never silently forced)
     # WITHOUT false-drifting/locking out the normal ruleset-protected repo, where classic
     # protection is empty (its rules live on the ruleset). A classic-only repo reads the toggle.
+    # A protecting ruleset enforces on admins unless it grants a bypass actor — and an added
+    # bypass IS detected as ruleset content drift (rulesets.ruleset_content_drift, the §5.6 path),
+    # so treating a ruleset-owned branch as enforce_admins-satisfied here does not hide a bypass.
     classic_enforce_admins = bool((protection.get("enforce_admins") or {}).get("enabled", False))
     ruleset_owns_branch = any(rule.get("type") in _MODELED_RULE_TYPES for rule in rules)
     enforce_admins = classic_enforce_admins or ruleset_owns_branch
