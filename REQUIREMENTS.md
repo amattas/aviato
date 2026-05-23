@@ -660,6 +660,16 @@ lacks the admin/read scope branch-protection and rulesets require), the automati
 a scheduled run is not failed by a missing admin token), but an operator gating CI on
 settings drift can opt to treat the skip as a failure (`drift-report --require-settings`).
 The automation performs **no** settings mutation.
+**Rulesets (presence + content):** the desired **named rulesets** (§3.2 settings bundle)
+are also protected settings, so drift detection covers them: a desired ruleset that is
+**missing**, **disabled** (enforcement no longer `active`), or **content-weakened** (e.g. a
+permissive `tag_name_pattern`, a lowered required-approval count, a dropped required check, a
+removed rule) is reported on the same tracking issue. The live ruleset is compared to the
+**rendered desired payload** (the GitHub-specific comparison lives in the binding, not the
+agnostic flow); GitHub-added metadata and benign live additions are ignored (no false drift),
+the ref-name scope is conservatively not compared (the platform may normalize `~DEFAULT_BRANCH`).
+**Ruleset remediation is the operator-direct `apply-rulesets` path, NOT the §5.7 consent gate**
+(see §5.7) — so the report directs the operator to `apply-rulesets … --apply --profile <p>`.
 **additive vs destructive (normative):** a change is **destructive** if it
 removes, weakens, or replaces an existing protection or any operator-relied-upon
 value (e.g. lowering a required-review count, removing a required check,
@@ -690,6 +700,17 @@ sequenceDiagram
 
 **Trigger:** operator runs the reconcile command against a tracking issue.
 **Actor:** operator, own elevated credentials.
+**Scope (branch protection + repo security toggles):** this consent-gated path reconciles the
+**flat default-branch protection and repo security toggles** only. **Named rulesets are
+reconciled by the distinct operator-direct `apply-rulesets` command** — itself operator-gated
+(§2.3: the operator runs it with their own credentials, with a dry-run preview before `--apply`),
+and **idempotent** (it re-asserts the rendered desired payload, so it fixes both missing and
+content-drifted rulesets). Rulesets are deliberately **not** folded into this consent-issue flow:
+the two use different platform write surfaces (a wholesale branch-protection `PUT` vs a ruleset
+upsert), and the dry-run-reviewed `apply-rulesets` is the sanctioned operator gate for them
+(the same way provisioning/`complete-protection` apply protection operator-direct, outside the
+consent-issue mechanism). §5.6 detects ruleset drift (presence + content) and directs the operator
+to `apply-rulesets … --apply --profile <p>`.
 **Steps:** fetch the issue; refuse if closed → confirm the consent record is
 present and **bound to the current diff** (§6.4) → identify the human who granted
 consent via the issue's authoritative event history (most recent grant not later
@@ -1582,6 +1603,12 @@ only where unavoidable — secrets), triggered on a release tag (§11.1).
 provenance/attestation, scan dependencies (gate on high/critical, §11.7)** →
 publish via **OIDC Trusted Publishing** with SBOM/provenance attached → confirm
 the version is resolvable.
+**Resolvability confirmation is best-effort, not a gate (deliberate):** the publish itself is
+the authoritative success; the post-publish "version resolvable on the index" check retries and
+then **warns rather than fails**, because PyPI index propagation has a real, unbounded delay and
+failing the run on propagation latency would falsely mark a *successful* publish as failed (and a
+re-run cannot re-upload an immutable version, §11.6). The DoD (§11.6) is operator-verified, which
+is where resolvability is actually confirmed; the in-run check is an advisory signal.
 **Auth:** OIDC; `id-token: write` + `contents: read`; **no stored secret**.
 **Prerequisite (out-of-band):** register the repo + workflow as a trusted
 publisher on PyPI (and TestPyPI for verification).

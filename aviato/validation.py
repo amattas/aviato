@@ -183,6 +183,30 @@ def _check_baseline_settings_drift(root: Path, policy: dict, errors: list[str]) 
         )
 
 
+def _check_baseline_settings_keys(root: Path, errors: list[str]) -> None:
+    """Every baseline default-branch/security key must be one the apply path can WRITE (§5.1).
+
+    A key the binding's payload builders don't consume would be silently ignored at apply time
+    yet still surface as drift — never-converging phantom drift. Catch a Library-side typo or an
+    unmodeled key here, loudly, at CI time (consumer-override typos are filtered at runtime by
+    ``_desired_settings``).
+    """
+    baseline_path = root / "aviato" / "library" / "bundles" / "settings" / "baseline.yaml"
+    if not baseline_path.is_file():
+        return
+    from .github_platform import RECONCILABLE_SETTING_KEYS
+
+    settings = load_yaml(baseline_path).get("settings", {})
+    declared = set(settings.get("default_branch", {})) | set(settings.get("security", {}))
+    unknown = sorted(declared - set(RECONCILABLE_SETTING_KEYS))
+    if unknown:
+        errors.append(
+            f"settings baseline declares unreconcilable key(s) {unknown}: the apply path "
+            f"(to_branch_protection_payload / to_security_payload) does not write them, so they "
+            f"would be phantom drift. Add them to the binding or remove the typo (§5.1)."
+        )
+
+
 def _check_core_agnosticism(core_dir: Path, denylist_file: Path, errors: list[str]) -> None:
     """Enforce the §9b falsifiable agnosticism: no plug-in import edge, no denylisted token."""
     for violation in core_import_violations(core_dir):
@@ -370,6 +394,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_template_references(root, errors)
     _check_release_workflow_contract(root, errors)
     _check_baseline_settings_drift(root, policy, errors)
+    _check_baseline_settings_keys(root, errors)
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
     _check_action_pins(root, errors)
     _check_template_scaffold_parity(root, errors)

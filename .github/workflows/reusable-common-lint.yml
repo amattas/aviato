@@ -99,6 +99,37 @@ jobs:
           fi
           echo "All third-party actions are digest-pinned."
 
+      # §11.3: the in-CI gate enforces the digest-pinned classes — actions (above), container
+      # IMAGES, and curl-fetched BINARIES. (Exact pip/tool-version pins are carried as workflow
+      # inputs, e.g. yamllint-version/actionlint-version, not greppable here.) Mirrors the
+      # remaining aviato.plugins.actionpins.unpinned_tool_invocations checks so a consumer's own
+      # workflow cannot run an unpinned image or pipe a download straight into a shell.
+      - name: Container image + fetched-binary pin (blocking)
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [ ! -d .github/workflows ]; then
+            echo "No workflows to check."; exit 0
+          fi
+          violations=0
+          # A `docker run`/`docker pull` image MUST be digest-pinned (@sha256:…).
+          while IFS= read -r line; do
+            case "${line}" in *@sha256:*) continue ;; esac
+            echo "::error::Container image not digest-pinned (§11.3): ${line# } — pin to @sha256:<digest>."
+            violations=$((violations + 1))
+          done < <(grep -rhE '\bdocker[[:space:]]+(run|pull)\b' .github/workflows || true)
+          # A network download piped straight into a shell/extractor has no checksum gate.
+          if grep -rqE '\b(curl|wget)\b[^|]*\|[^|]*\b(sh|bash|tar)\b' .github/workflows; then
+            echo "::error::Fetch-and-execute without a checksum (§11.3): download to a file, verify with sha256sum -c, then run."
+            grep -rnE '\b(curl|wget)\b[^|]*\|[^|]*\b(sh|bash|tar)\b' .github/workflows
+            violations=$((violations + 1))
+          fi
+          if [ "${violations}" -gt 0 ]; then
+            echo "::error::${violations} unpinned image/fetch invocation(s) (§11.3)."
+            exit 1
+          fi
+          echo "Container images digest-pinned; no unchecked fetch-and-execute."
+
       - name: hadolint (blocking, where a Dockerfile exists)
         shell: bash
         run: |

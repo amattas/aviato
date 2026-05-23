@@ -141,25 +141,38 @@ jobs:
           CONTEXT: ${{ inputs.context }}
           DOCKERFILE: ${{ inputs.dockerfile }}
         run: |
-          set -euo pipefail
+          # NOTE: deliberately NOT `set -e` — the high/critical GATE failure is ACCUMULATED so
+          # every platform is still report-scanned (its SARIF written) before we fail. A build or
+          # report-scan ERROR still hard-fails via explicit `|| exit 1`.
+          set -uo pipefail
           mkdir -p trivy-sarif
+          gate_failed=0
           IFS=',' read -ra plats <<< "${PLATFORMS}"
           for raw in "${plats[@]}"; do
             plat="$(echo "${raw}" | xargs)"
             [ -z "${plat}" ] && continue
             echo "::group::Build + scan ${plat}"
             docker buildx build --platform "${plat}" --load \
-              -t "${IMAGE}:scan-tmp" -f "${DOCKERFILE}" "${CONTEXT}"
+              -t "${IMAGE}:scan-tmp" -f "${DOCKERFILE}" "${CONTEXT}" || exit 1
             # §2.13 report/gate split: REPORT all severities to the Security surface (SARIF, no
             # severity filter so medium/low are reported too), then GATE the publish on
             # high/critical. A single --severity HIGH,CRITICAL run would drop medium/low from
             # the SARIF entirely — §2.13 requires medium/low reported (without blocking).
             trivy image --ignore-unfixed \
-              --format sarif --output "trivy-sarif/${plat//\//-}.sarif" "${IMAGE}:scan-tmp"
-            trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
-              --format table "${IMAGE}:scan-tmp"
+              --format sarif --output "trivy-sarif/${plat//\//-}.sarif" "${IMAGE}:scan-tmp" || exit 1
+            # Accumulate the gate (don't abort), so a high/critical on an early platform doesn't
+            # skip scanning/reporting later platforms (§2.13 medium/low reporting completeness).
+            if ! trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
+              --format table "${IMAGE}:scan-tmp"; then
+              gate_failed=1
+            fi
             echo "::endgroup::"
           done
+          # All platforms scanned + their SARIFs written (the upload step runs next, always()).
+          if [ "${gate_failed}" -ne 0 ]; then
+            echo "::error::HIGH/CRITICAL image vulnerabilities found; blocking publish (§2.13/§11.7)."
+            exit 1
+          fi
 
       - name: Upload image scan results
         if: ${{ always() }}

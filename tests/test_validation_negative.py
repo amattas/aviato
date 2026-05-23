@@ -92,6 +92,18 @@ def test_baseline_required_reviews_drift_is_detected(repo_copy: Path) -> None:
     assert any("required_reviews" in e or "required approvals" in e.lower() for e in errors)
 
 
+def test_unreconcilable_baseline_settings_key_is_detected(repo_copy: Path) -> None:
+    # §5.1 (M-1): a baseline default-branch key the apply path can't write would be phantom drift
+    # — `validate` must flag a Library-side typo/unmodeled key loudly.
+    baseline = repo_copy / "aviato" / "library" / "bundles" / "settings" / "baseline.yaml"
+    text = baseline.read_text(encoding="utf-8")
+    drifted = text.replace("block_force_push: true", "block_force_push: true\n    block_force_pushh: true")
+    assert drifted != text, "fixture did not contain the expected key literal"
+    baseline.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("unreconcilable" in e and "block_force_pushh" in e for e in errors)
+
+
 def test_template_scaffold_parity_drift_is_detected(repo_copy: Path) -> None:
     templates = sorted((repo_copy / "templates").glob("profile-*.yml"))
     assert templates, "expected committed template examples"

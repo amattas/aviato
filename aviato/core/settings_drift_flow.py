@@ -19,9 +19,11 @@ class SettingsDriftOutcome:
     destructive: bool = False
     consent_voided: bool = False
     diff_id: str | None = None
-    # Desired rulesets absent from the live platform (§5.6). Report-only and remediated by
-    # `apply-rulesets` (NOT the consent-gated §5.7 reconcile, which only writes branch/security).
-    missing_rulesets: tuple[str, ...] = ()
+    # Desired rulesets MISSING from, or content-DRIFTED on, the live platform (§5.6). Report-only
+    # and remediated by `apply-rulesets` (NOT the consent-gated §5.7 reconcile, which only writes
+    # branch/security). The caller (CLI/binding) computes these — the core flow stays agnostic of
+    # GitHub ruleset shape and just reports the names.
+    drifted_rulesets: tuple[str, ...] = ()
 
 
 def _render_change(diff: SettingsDiff, key: str) -> str:
@@ -30,7 +32,9 @@ def _render_change(diff: SettingsDiff, key: str) -> str:
     return f"- {key}: {kind} ({vals.get('live')!r} -> {vals.get('desired')!r})"
 
 
-def _render_issue_body(diff: SettingsDiff, missing_rulesets: list[str], repo: str, issue_key: str) -> str:
+def _render_issue_body(
+    diff: SettingsDiff, drifted_rulesets: list[str], repo: str, issue_key: str, profile: str | None
+) -> str:
     lines = ["Aviato detected settings drift."]
     if diff.changes:
         diff_id = diff_identity(diff)
@@ -50,17 +54,21 @@ def _render_issue_body(diff: SettingsDiff, missing_rulesets: list[str], repo: st
             "It re-reads live settings at apply time, re-classifies, and applies only if the "
             "recomputed diff still matches the id you confirmed — otherwise it aborts.)",
         ]
-    if missing_rulesets:
-        # Rulesets are remediated by `apply-rulesets`, NOT reconcile (which writes only branch/
-        # security). Reported here so a deleted/missing required ruleset is not invisible (§5.6).
+    if drifted_rulesets:
+        # Rulesets are remediated by the operator-direct, idempotent `apply-rulesets` (which
+        # re-asserts the rendered desired content), NOT the §5.7 reconcile (branch/security only).
+        # Reported here so a missing OR content-weakened (disabled / permissive pattern / lowered
+        # approvals) required ruleset is not invisible (§5.6). `--profile` is REQUIRED so the
+        # restored ruleset includes the profile's language verify status checks (§10.3).
+        profile_flag = f" --profile {profile}" if profile else ""
         lines += [
             "",
-            "Missing required rulesets (apply separately — NOT via reconcile):",
+            "Missing or drifted required rulesets (apply separately — NOT via reconcile):",
         ]
-        lines += [f"- {name}" for name in sorted(missing_rulesets)]
+        lines += [f"- {name}" for name in sorted(drifted_rulesets)]
         lines += [
             "",
-            f"To restore them, an operator runs:    aviato apply-rulesets {repo} --apply",
+            f"To restore them, an operator runs:    aviato apply-rulesets {repo} --apply{profile_flag}",
         ]
     lines += ["", "No settings mutation has been performed (report-only, §5.6)."]
     return "\n".join(lines)
@@ -72,7 +80,8 @@ def run_settings_drift(
     repo: str,
     desired_settings: dict[str, Any],
     issue_key: str,
-    desired_rulesets: tuple[str, ...] = (),
+    drifted_rulesets: tuple[str, ...] = (),
+    profile: str | None = None,
 ) -> SettingsDriftOutcome:
     """Report (never apply) settings drift (§5.6).
 
@@ -80,13 +89,14 @@ def run_settings_drift(
     destructive), and on a non-empty diff opens/updates the tracking issue with
     the diff and the operator reconcile command. An empty diff comments "resolved
     — verify before closing" on an open issue (never auto-closes). If a prior
-    consent record is bound to a different diff, it is voided with a comment.
+    consent record no longer matches the current diff (changed OR resolved), it is
+    voided (label removed), so a later reappearance needs fresh consent (§8.3).
 
-    Also reports **missing required rulesets** (§5.6): any name in
-    ``desired_rulesets`` absent from the live platform is surfaced on the same
-    tracking issue, remediated by ``apply-rulesets`` (NOT the consent-gated reconcile,
-    which writes only branch/security). When ``desired_rulesets`` is empty the ruleset
-    surface is not read at all, so behavior is unchanged for callers that omit it.
+    Also reports **missing or content-drifted required rulesets** (§5.6): the caller
+    passes ``drifted_rulesets`` (computed from the rendered desired vs the live payloads —
+    the GitHub-specific comparison lives outside this agnostic flow), surfaced on the same
+    tracking issue and remediated by ``apply-rulesets --apply --profile`` (NOT the
+    consent-gated reconcile, which writes only branch/security).
 
     The issue channel being unavailable fails loud (the platform raises); an
     unreadable settings surface fails closed as SettingsReadError. No settings
@@ -94,47 +104,49 @@ def run_settings_drift(
     """
     live = platform.read_settings(repo)
     diff = classify_settings(desired=desired_settings, live=live)
-    # Ruleset presence is admin-scoped like settings; only read it when rulesets are desired,
-    # so callers that pass none keep the exact prior read/branch behavior (additive).
-    live_rulesets = platform.read_ruleset_names(repo) if desired_rulesets else []
-    missing_rulesets = [name for name in desired_rulesets if name not in live_rulesets]
     issue = platform.get_issue(repo, issue_key)
 
-    if not diff.changes and not missing_rulesets:
-        if issue is not None and issue.open:
-            platform.comment_issue(
-                repo, issue_key, "Drift resolved — verify before closing (Aviato will not auto-close)."
-            )
-            return SettingsDriftOutcome(status="resolved")
-        return SettingsDriftOutcome(status="clean")
-
     current_id = diff_identity(diff) if diff.changes else None
-    consent_voided = False
-    # Consent voiding is tied to the SETTINGS diff only (rulesets carry no consent). Skip when
-    # there is no settings diff to compare against.
-    if diff.changes and issue is not None and issue.consent_diff_id is not None and issue.consent_diff_id != current_id:
-        # The reported diff changed since consent was granted: VOID the prior consent by
-        # removing its grant record, not merely commenting (§5.6:633/§6.4). A comment alone
-        # would leave the old grant label in place, so if drift later oscillates BACK to the
-        # old diff id the stale label would re-authorize without fresh human consent. Revoke
-        # first (it fails loud on a real error), then comment. The §5.7 apply-time recompute
-        # remains the authoritative gate; this closes the oscillation gap at report time.
+    # §5.6:633/§6.4/§8.3: VOID any prior consent that no longer matches the current SETTINGS diff
+    # — whether the diff CHANGED to a different id OR RESOLVED to empty (current_id is None). A
+    # comment alone would leave the grant label in place, so a later reappearance of the old diff
+    # (incl. an A→∅→A oscillation) would re-authorize without fresh human consent. Removing the
+    # label is the actual void; §5.7 apply-time recompute remains the authoritative gate. Rulesets
+    # carry no consent, so this is settings-only. Computed BEFORE the resolved branch so a
+    # resolved-to-empty diff also voids its stale consent.
+    consent_voided = issue is not None and issue.consent_diff_id is not None and issue.consent_diff_id != current_id
+    if consent_voided:
         platform.revoke_consent(repo, issue_key, issue.consent_diff_id)
+
+    if not diff.changes and not drifted_rulesets:
+        if issue is not None and issue.open:
+            note = " The prior consent has been voided (re-consent on a new diff)." if consent_voided else ""
+            platform.comment_issue(
+                repo,
+                issue_key,
+                f"Drift resolved — verify before closing (Aviato will not auto-close).{note}",
+            )
+            return SettingsDriftOutcome(status="resolved", consent_voided=consent_voided)
+        return SettingsDriftOutcome(status="clean", consent_voided=consent_voided)
+
+    if consent_voided:
         platform.comment_issue(
             repo,
             issue_key,
-            "Reported diff changed since consent was granted; the prior consent has been voided "
-            "(re-consent on the current diff to proceed).",
+            "Reported settings diff changed (or resolved) since consent was granted; the prior "
+            "consent has been voided (re-consent on the current diff to proceed).",
         )
-        consent_voided = True
 
     platform.open_or_update_issue(
-        repo, issue_key, "Aviato: settings drift", _render_issue_body(diff, missing_rulesets, repo, issue_key)
+        repo,
+        issue_key,
+        "Aviato: settings drift",
+        _render_issue_body(diff, list(drifted_rulesets), repo, issue_key, profile),
     )
     return SettingsDriftOutcome(
         status="reported",
         destructive=diff.destructive,
         consent_voided=consent_voided,
         diff_id=current_id,
-        missing_rulesets=tuple(sorted(missing_rulesets)),
+        drifted_rulesets=tuple(sorted(drifted_rulesets)),
     )

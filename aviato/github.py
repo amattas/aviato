@@ -173,6 +173,16 @@ def tag_ruleset_names(slug: str) -> list[str]:
     return [name for name in names if isinstance(name, str)]
 
 
+def repository_ruleset(slug: str, ruleset_id: Any) -> dict[str, Any]:
+    """Full payload (incl. rules + conditions) of one ruleset by id (§5.6 content drift).
+
+    The list endpoint returns only summaries (no rules), so content drift needs this per-id GET.
+    Fails CLOSED (no allow_error): an auth/5xx must raise, never read as an empty/clean ruleset.
+    """
+    response = gh_json(f"repos/{slug}/rulesets/{ruleset_id}")
+    return response if isinstance(response, dict) else {}
+
+
 def repository_rulesets(slug: str) -> list[dict[str, Any]]:
     # Paginate: upsert_ruleset decides PUT-vs-POST by finding an existing ruleset by
     # name here, so a match on a later page must not be hidden (else it POSTs a duplicate).

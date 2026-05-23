@@ -84,28 +84,31 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
             continue
         if stripped.startswith("-"):  # any other flag (-e, --quiet, --upgrade, …)
             continue
-        # A PEP 508 environment-marker fragment (e.g. `python_version<'3.9'`) carries an inner
-        # quote that survives the outer-quote strip — it is a marker, not a package. Skip it.
-        if "'" in stripped or '"' in stripped:
+        # Drop any PEP 508 environment marker BEFORE evaluating — the spec is everything before
+        # the `;`. This handles both the spaced (`foo>=1.0; python_version<'3.9'`, marker is a
+        # separate token) and GLUED (`foo>=1.0;python_version<'3.9'`, one token) forms, so a
+        # genuinely floating spec glued to a marker is not silently dropped by the quote-skip.
+        spec = stripped.split(";", 1)[0].strip().strip("'\"")
+        # A marker fragment (the part after `;`, surfacing as its own token in the spaced form)
+        # carries an inner quote that survives the outer-quote strip — not a package. Skip it.
+        if "'" in spec or '"' in spec:
             continue
         # A PEP 508 direct reference `name @ url`: the next token is `@`. Not a floating index
         # package (the URL/VCS ref pins it), so don't flag the bare name.
         if index + 1 < len(tokens) and tokens[index + 1].strip("'\"") == "@":
             continue
         # Not a plain index package: path, VCS/URL, wheel, or shell variable.
-        if any(marker in stripped for marker in ("@", "/", "$", ":")) or stripped.endswith(".whl"):
+        if any(marker in spec for marker in ("@", "/", "$", ":")) or spec.endswith(".whl"):
             continue
-        if stripped in (".", "") or stripped.startswith("."):
+        if spec in (".", "") or spec.startswith("."):
             continue
         # An EXACT pin (`name==X.Y.Z` / `===`) with no wildcard is the only acceptable form.
-        # Strip a trailing `;` (an environment-marker separator left on the spec token) first.
-        spec = stripped.rstrip(";")
         if ("==" in spec or "===" in spec) and "*" not in spec:
             continue
         # Bare name or a non-exact specifier (>=, ~=, <=, !=, ==1.*) → not exactly pinned.
         name = _PIP_VERSION_OP_RE.split(spec, 1)[0]
         if _PIP_PKG_RE.match(name):
-            flagged.append(stripped)
+            flagged.append(spec)
     return flagged
 
 
@@ -158,6 +161,18 @@ def action_pin_violations(root: Path) -> list[str]:
             if "{{" in ref:  # scaffold placeholder, not a real mutable tag
                 continue
             violations.append(f"{path.name}: {ref}")
+        # The in-CI lint definition itself embeds the docker/fetch DETECTOR patterns (as grep
+        # arguments + comments), which this text scan cannot distinguish from real invocations.
+        # Its actual tool invocations (hadolint's @sha256:-pinned image, actionlint's
+        # download-to-file-then-checksum) are pinned and reviewed, so skip the tool-invocation
+        # text scan for it (the `uses:` digest check above still applies). § _LINT_DEFINITION_FILE.
+        if path.name == _LINT_DEFINITION_FILE:
+            continue
         for tool in unpinned_tool_invocations(text):
             violations.append(f"{path.name}: {tool}")
     return violations
+
+
+# The workflow that DEFINES the in-CI pin gate — it necessarily embeds the docker/fetch detector
+# patterns, so it is exempt from the tool-invocation TEXT scan (but not the uses: digest check).
+_LINT_DEFINITION_FILE = "reusable-common-lint.yml"

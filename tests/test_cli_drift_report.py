@@ -8,22 +8,23 @@ from aviato import cli
 
 
 class FakePlatform:
-    def __init__(self, *, settings=None, ruleset_names=None):
+    def __init__(self, *, settings=None, rulesets=None):
         self.settings = settings or {}
-        # Default to the python-library baseline rulesets so these file/settings-drift tests
-        # see no MISSING rulesets (§5.6); a ruleset-drift test overrides this explicitly.
-        self.ruleset_names = (
-            ruleset_names
-            if ruleset_names is not None
-            else ["Common: protect default branch", "Common: release tag format"]
-        )
+        # Default: live rulesets equal the rendered desired (no missing/drifted rulesets) so these
+        # file/settings-drift tests aren't perturbed; a ruleset-drift test passes explicit payloads.
+        self._rulesets = rulesets
         self.calls: list[tuple] = []
 
     def read_settings(self, repo):
         return dict(self.settings)
 
-    def read_ruleset_names(self, repo):
-        return list(self.ruleset_names)
+    def read_rulesets(self, repo):
+        if self._rulesets is not None:
+            return self._rulesets
+        from aviato.cli import _profile_status_checks
+        from aviato.rulesets import render_all_rulesets
+
+        return render_all_rulesets(extra_status_checks=_profile_status_checks("python-library"))
 
     def get_issue(self, repo, key):
         return None
@@ -75,6 +76,32 @@ def test_drift_report_proposes_missing_files_and_reports_settings(
     assert all("aviato:managed" in body for body in files.values())
     # settings drift reported (never applied)
     assert "apply_settings" not in fake.call_names()
+
+
+def test_drift_report_reports_content_drifted_ruleset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # §5.6 (H-1): a CONTENT-drifted ruleset (same name, weakened) — not just a missing one — is
+    # detected end-to-end and surfaced with the --profile remediation guidance.
+    import copy
+
+    from aviato.cli import _profile_status_checks
+    from aviato.rulesets import render_all_rulesets
+
+    live = copy.deepcopy(render_all_rulesets(extra_status_checks=_profile_status_checks("python-library")))
+    for ruleset in live:
+        if ruleset["target"] == "tag":
+            ruleset["enforcement"] = "disabled"  # same name, but disabled = drift
+    consumer = _consumer(tmp_path)
+    fake = FakePlatform(settings={"required_reviews": 1}, rulesets=live)
+    monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
+    monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:owner/repo.git")
+
+    rc = cli.main(["drift-report", str(consumer), "--settings-only"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Common: release tag format" in out
+    assert "--profile python-library" in out
 
 
 def test_drift_report_file_only_skips_settings(

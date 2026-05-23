@@ -373,6 +373,7 @@ def test_map_branch_settings_from_rules_matches_desired_shape() -> None:
         "require_thread_resolution": True,
         "block_force_push": True,
         "block_deletion": True,
+        "enforce_admins": True,  # a modeled ruleset owns protection ⇒ admins are subject to it
         "required_status_checks": [],
     }
 
@@ -434,6 +435,61 @@ def test_map_branch_settings_unprotected() -> None:
     assert mapped["requires_pull_request"] is False
     assert mapped["block_force_push"] is False
     assert mapped["block_deletion"] is False
+
+
+def test_map_branch_settings_reads_enforce_admins_from_classic() -> None:
+    # §2.9: enforce_admins must be READ so it appears in the §5.7 diff, not silently forced.
+    # Classic-only repo (no ruleset rules): the toggle value is read directly.
+    assert map_branch_settings([], {"enforce_admins": {"enabled": True}})["enforce_admins"] is True
+    assert map_branch_settings([], {"enforce_admins": {"enabled": False}})["enforce_admins"] is False
+    assert map_branch_settings([], {})["enforce_admins"] is False
+
+
+def test_enforce_admins_satisfied_by_ruleset_no_false_drift_or_lockout() -> None:
+    # Regression (H-2): on the NORMAL ruleset-protected repo (branch protection via the
+    # "protect default branch" ruleset, empty classic), enforce_admins must read True — the
+    # ruleset enforces on admins. Otherwise it phantom-drifts and the ruleset-owned guard would
+    # lock out complete-protection/reconcile (apply-rulesets can't set a classic-only toggle).
+    ruleset_rules = [
+        {"type": "pull_request", "parameters": {"required_approving_review_count": 1}},
+        {"type": "non_fast_forward"},
+        {"type": "deletion"},
+    ]
+    assert map_branch_settings(ruleset_rules, {})["enforce_admins"] is True
+
+
+def test_apply_settings_ruleset_owned_no_false_enforce_admins_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The ruleset-owned guard must NOT refuse on enforce_admins for a clean ruleset-protected repo
+    # (desired enforce_admins True, ruleset owns protection → satisfied), so a desired set that
+    # otherwise matches the ruleset is a no-op, not an UnmodeledProtectionError.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    monkeypatch.setattr(
+        github,
+        "active_branch_rules",
+        lambda repo, branch: [
+            {"type": "pull_request", "parameters": {"required_approving_review_count": 1}},
+            {"type": "non_fast_forward"},
+            {"type": "deletion"},
+        ],
+    )
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT classic")))
+    # Desired matches the ruleset's branch state AND includes enforce_admins: True.
+    desired = {
+        "requires_pull_request": True,
+        "required_reviews": 1,
+        "block_force_push": True,
+        "block_deletion": True,
+        "enforce_admins": True,
+    }
+    GitHubPlatform().apply_settings("o/r", desired)  # no raise, no classic PUT
+
+
+def test_to_branch_protection_payload_honors_desired_enforce_admins() -> None:
+    # The PUT now reflects the modeled desired value (default True), not a hardcoded force (§2.9).
+    assert to_branch_protection_payload({})["enforce_admins"] is True
+    assert to_branch_protection_payload({"enforce_admins": True})["enforce_admins"] is True
+    assert to_branch_protection_payload({"enforce_admins": False})["enforce_admins"] is False
 
 
 def test_to_branch_protection_payload_api_shape() -> None:

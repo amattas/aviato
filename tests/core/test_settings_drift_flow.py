@@ -70,53 +70,66 @@ def test_consent_oscillation_back_to_old_diff_requires_fresh_consent() -> None:
     assert platform.get_issue("o/r", "k").consent_diff_id is None
 
 
-def test_missing_required_ruleset_is_reported_even_with_clean_settings() -> None:
-    # §5.6: a desired ruleset absent from the live platform must be reported (not "clean"),
-    # remediated via apply-rulesets — even when branch/security settings match.
-    platform = FakePlatform(settings={"required_reviews": 2}, ruleset_names=["Common: protect default branch"])
+def test_drifted_ruleset_is_reported_even_with_clean_settings() -> None:
+    # §5.6: a ruleset that is missing OR content-drifted (computed by the caller) must be reported
+    # (not "clean"), remediated via apply-rulesets WITH --profile — even when settings match.
+    platform = FakePlatform(settings={"required_reviews": 2})
     outcome = run_settings_drift(
         platform,
         repo="o/r",
         desired_settings={"required_reviews": 2},  # no settings drift
         issue_key="k",
-        desired_rulesets=("Common: protect default branch", "Common: release tag format"),
+        drifted_rulesets=("Common: release tag format",),
+        profile="python-library",
     )
     assert outcome.status == "reported"
-    assert outcome.missing_rulesets == ("Common: release tag format",)
+    assert outcome.drifted_rulesets == ("Common: release tag format",)
     assert outcome.diff_id is None  # no settings diff → no consent-bound id
-    assert "open_or_update_issue" in platform.call_names()
     _, args = next(c for c in platform.calls if c[0] == "open_or_update_issue")
-    assert "apply-rulesets" in args[3] and "Common: release tag format" in args[3]
+    body = args[3]
+    assert "apply-rulesets o/r --apply --profile python-library" in body  # M-2: --profile included
+    assert "Common: release tag format" in body
 
 
-def test_all_rulesets_present_with_clean_settings_is_clean() -> None:
-    # The ruleset surface is only read when rulesets are desired, and all-present + no settings
-    # drift stays clean (no false report).
-    platform = FakePlatform(
-        settings={"required_reviews": 2},
-        ruleset_names=["Common: protect default branch", "Common: release tag format"],
-    )
+def test_no_drifted_rulesets_with_clean_settings_is_clean() -> None:
+    platform = FakePlatform(settings={"required_reviews": 2})
     outcome = run_settings_drift(
         platform,
         repo="o/r",
         desired_settings={"required_reviews": 2},
         issue_key="k",
-        desired_rulesets=("Common: protect default branch", "Common: release tag format"),
+        drifted_rulesets=(),
+        profile="python-library",
     )
     assert outcome.status == "clean"
-    assert outcome.missing_rulesets == ()
+    assert outcome.drifted_rulesets == ()
 
 
-def test_ruleset_surface_not_read_when_no_rulesets_desired() -> None:
-    # Additive guarantee: callers that pass no desired_rulesets never trigger the (admin-scoped)
-    # ruleset read, so prior behavior is unchanged.
-    class _NoRulesetRead(FakePlatform):
-        def read_ruleset_names(self, repo):  # type: ignore[override]
-            raise AssertionError("must not read rulesets when none are desired")
-
-    platform = _NoRulesetRead(settings={"required_reviews": 2})
+def test_resolved_empty_diff_voids_stale_consent() -> None:
+    # §5.6/§8.3: when a previously-consented diff RESOLVES to empty, the stale consent must be
+    # VOIDED — not left to re-authorize if the same diff later reappears (the A→∅→A oscillation).
+    platform = FakePlatform(
+        settings={"required_reviews": 2},  # live already matches desired → empty diff
+        issues={"k": Issue(key="k", open=True, consent_diff_id="STALE")},
+    )
     outcome = run_settings_drift(platform, repo="o/r", desired_settings={"required_reviews": 2}, issue_key="k")
-    assert outcome.status == "clean"
+    assert outcome.status == "resolved"
+    assert outcome.consent_voided is True
+    assert "revoke_consent" in platform.call_names()
+    # And the in-memory issue now carries no consent → a reappearance needs fresh consent.
+    assert platform.get_issue("o/r", "k").consent_diff_id is None
+
+
+def test_resolved_empty_diff_without_consent_does_not_revoke() -> None:
+    # No stale consent → resolved comment only, no revoke (no false void).
+    platform = FakePlatform(
+        settings={"required_reviews": 2},
+        issues={"k": Issue(key="k", open=True)},
+    )
+    outcome = run_settings_drift(platform, repo="o/r", desired_settings={"required_reviews": 2}, issue_key="k")
+    assert outcome.status == "resolved"
+    assert outcome.consent_voided is False
+    assert "revoke_consent" not in platform.call_names()
 
 
 def test_issue_channel_unavailable_fails_loud() -> None:

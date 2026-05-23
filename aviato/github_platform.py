@@ -216,6 +216,7 @@ _BRANCH_PROTECTION_KEYS = (
     "required_reviews",
     "dismiss_stale_reviews",
     "require_thread_resolution",
+    "enforce_admins",
     "block_force_push",
     "block_deletion",
     "required_status_checks",
@@ -272,6 +273,16 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
         rule_checks = rsc_rule.get("parameters", {}).get("required_status_checks", [])
         contexts += [c.get("context") for c in rule_checks if isinstance(c, dict) and c.get("context")]
 
+    # enforce_admins = "are admins subject to branch protection?". It's satisfied EITHER by the
+    # classic toggle ({"enabled": true}) OR by a branch RULESET owning protection — a ruleset
+    # enforces on everyone, including admins, absent a bypass actor (the Aviato baseline ruleset
+    # has none). Reading it both ways keeps it in the §5.7 diff (§2.9 — never silently forced)
+    # WITHOUT false-drifting/locking out the normal ruleset-protected repo, where classic
+    # protection is empty (its rules live on the ruleset). A classic-only repo reads the toggle.
+    classic_enforce_admins = bool((protection.get("enforce_admins") or {}).get("enabled", False))
+    ruleset_owns_branch = any(rule.get("type") in _MODELED_RULE_TYPES for rule in rules)
+    enforce_admins = classic_enforce_admins or ruleset_owns_branch
+
     return {
         "requires_pull_request": requires_pr,
         "required_reviews": required_reviews,
@@ -279,6 +290,7 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
         "require_thread_resolution": require_threads,
         "block_force_push": block_force_push,
         "block_deletion": block_deletion,
+        "enforce_admins": enforce_admins,
         "required_status_checks": sorted(set(contexts)),
     }
 
@@ -306,6 +318,14 @@ def map_security_settings(security_and_analysis: dict[str, Any]) -> dict[str, An
     return out
 
 
+# The flat repo-security toggle keys this binding reconciles (the to_security_payload mapping
+# keys). Combined with _BRANCH_PROTECTION_KEYS below into RECONCILABLE_SETTING_KEYS — the full
+# set of desired keys the apply path actually writes. A desired key OUTSIDE this set would be
+# silently ignored by the writers (phantom drift that "applies" but never converges), so callers
+# filter to it and `aviato validate` asserts the baseline declares only recognized keys (§5.1).
+_SECURITY_SETTING_KEYS = ("secret_scanning", "secret_push_protection", "dependency_scanning")
+
+
 def to_security_payload(desired: dict[str, Any]) -> dict[str, Any]:
     """Build a ``security_and_analysis`` PATCH from the flat desired settings (§2.9)."""
     mapping = {
@@ -318,6 +338,12 @@ def to_security_payload(desired: dict[str, Any]) -> dict[str, Any]:
         if desired_key in desired:
             payload[api_key] = {"status": "enabled" if desired[desired_key] else "disabled"}
     return payload
+
+
+# Every flat desired key the apply path can actually write (branch protection + repo security).
+# A desired key outside this set is unreconcilable: filtered out before the diff so a typo can't
+# masquerade as never-converging "drift", and asserted against the baseline by `aviato validate`.
+RECONCILABLE_SETTING_KEYS = frozenset(_BRANCH_PROTECTION_KEYS) | frozenset(_SECURITY_SETTING_KEYS)
 
 
 def to_branch_protection_payload(desired: dict[str, Any]) -> dict[str, Any]:
@@ -340,7 +366,9 @@ def to_branch_protection_payload(desired: dict[str, Any]) -> dict[str, Any]:
     status_checks = {"strict": True, "contexts": contexts} if contexts else None
     return {
         "required_status_checks": status_checks,
-        "enforce_admins": True,
+        # Default True (admins subject to protection), but driven by the modeled desired value
+        # so the apply matches the §5.7-reviewed diff rather than blindly forcing it (§2.9).
+        "enforce_admins": bool(desired.get("enforce_admins", True)),
         "required_pull_request_reviews": reviews,
         "restrictions": None,
         "allow_force_pushes": not bool(desired.get("block_force_push", False)),
@@ -382,19 +410,27 @@ class GitHubPlatform:
         # flat desired map the CLI passes (so security drift is visible, §5.6/§2.13).
         return {**map_branch_settings(rules, protection), **security}
 
-    def read_ruleset_names(self, repo: str) -> list[str]:
-        """Live repository ruleset names, for §5.6 ruleset-presence drift (read-only).
+    def read_rulesets(self, repo: str) -> list[dict[str, Any]]:
+        """Full live ruleset payloads (incl. rules), for §5.6 presence + CONTENT drift (read-only).
 
-        Reading rulesets needs the admin scope (like branch protection), so it runs under the
-        same read-only admin token (§11.2) and fails closed as a SettingsReadError — the caller
-        then SKIPS settings drift rather than treat a falsely-empty list as "all rulesets gone".
+        The list endpoint returns only summaries, so each ruleset is fetched by id for its rules/
+        enforcement. Reading rulesets needs the admin scope (like branch protection), so it runs
+        under the same read-only admin token (§11.2) and fails closed as a SettingsReadError — the
+        caller then SKIPS settings drift rather than treat a falsely-empty/partial read as "all
+        rulesets gone or clean".
         """
         try:
             with github.settings_read_token_scope():
-                rulesets = github.repository_rulesets(repo)
+                summaries = github.repository_rulesets(repo)
+                payloads: list[dict[str, Any]] = []
+                for summary in summaries:
+                    ruleset_id = summary.get("id") if isinstance(summary, dict) else None
+                    if ruleset_id is None:
+                        continue
+                    payloads.append(github.repository_ruleset(repo, ruleset_id))
         except github.GitHubAPIError as exc:
             raise github.SettingsReadError(exc.endpoint, exc.returncode, exc.stderr) from exc
-        return [r["name"] for r in rulesets if isinstance(r, dict) and isinstance(r.get("name"), str)]
+        return payloads
 
     def get_issue(self, repo: str, key: str) -> Issue | None:
         # Fail-closed read (§2.7): the issues-list endpoint returns ``200 []`` when no

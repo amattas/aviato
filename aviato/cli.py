@@ -208,11 +208,34 @@ def _desired_settings(resolved) -> dict:
 
     Rulesets are applied separately (`apply-rulesets`) and are not part of the
     branch-protection/security reconcile diff.
+
+    Filtered to the keys the apply path actually writes (``RECONCILABLE_SETTING_KEYS``): an
+    unrecognized key (e.g. a typo in a consumer override) is dropped here so it cannot surface
+    as never-converging "phantom drift" that reports + "applies" but changes nothing. The
+    Library's own baseline keys are additionally asserted recognized by ``aviato validate``.
     """
-    return {
+    from .github_platform import RECONCILABLE_SETTING_KEYS
+
+    flat = {
         **resolved.settings.get("default_branch", {}),
         **resolved.settings.get("security", {}),
     }
+    return {key: value for key, value in flat.items() if key in RECONCILABLE_SETTING_KEYS}
+
+
+def _drifted_rulesets(slug: str, platform, profile: str) -> tuple[str, ...]:
+    """Names of desired rulesets MISSING from, or content-DRIFTED on, the live platform (§5.6).
+
+    The GitHub-specific work (render the desired payloads with the profile's verify checks, read
+    the live payloads, compare presence + content) lives here in the binding layer, NOT the
+    agnostic flow. Reads are admin-scoped and fail closed (SettingsReadError) like other settings
+    reads, so the caller's existing fail-closed/fail-loud handling covers them.
+    """
+    from .rulesets import drifted_ruleset_names, render_all_rulesets
+
+    desired = render_all_rulesets(extra_status_checks=_profile_status_checks(profile))
+    live = platform.read_rulesets(slug)
+    return tuple(drifted_ruleset_names(desired, live))
 
 
 def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[ExpectedArtifact]:
@@ -920,8 +943,14 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
     desired = _desired_settings(resolved)
     try:
         GitHubPlatform().apply_settings(slug, desired)
-    except GitHubAPIError as exc:
-        print(f"GitHub API error applying protection: {exc}", file=sys.stderr)
+    except UnmodeledProtectionError as exc:
+        # The live protection surface carries something this reconcile cannot safely write
+        # (unmodeled classic protection, or ruleset-owned branch protection). Fail closed with
+        # a clean operator error, never a traceback (§2.4/§5.7) — mirrors cmd_reconcile.
+        print(f"complete-protection aborted (fail-closed): {exc}", file=sys.stderr)
+        return 1
+    except (GitHubAPIError, CommandError) as exc:
+        print(f"error applying protection: {exc}", file=sys.stderr)
         return 1
     print(f"applied full protection to {slug} (idempotent, §5.2 complete-protection).")
     return 0
@@ -1143,18 +1172,20 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
     #     tracking issue) → FAIL LOUD (§5.6 "never silently drops the report"), exit non-zero.
     if do_settings:
         try:
+            drifted_rulesets = _drifted_rulesets(slug, platform, declaration.profile)
             settings_outcome = run_settings_drift(
                 platform,
                 repo=slug,
                 desired_settings=_desired_settings(resolved),
                 issue_key=SETTINGS_DRIFT_ISSUE_KEY,
-                desired_rulesets=tuple(resolved.settings.get("rulesets", [])),
+                drifted_rulesets=drifted_rulesets,
+                profile=declaration.profile,
             )
             print(f"settings drift: {settings_outcome.status} (destructive={settings_outcome.destructive})")
-            if settings_outcome.missing_rulesets:
+            if settings_outcome.drifted_rulesets:
                 print(
-                    f"  missing rulesets (apply with `aviato apply-rulesets {slug} --apply`): "
-                    f"{list(settings_outcome.missing_rulesets)}"
+                    f"  missing/drifted rulesets (apply with `aviato apply-rulesets {slug} "
+                    f"--apply --profile {declaration.profile}`): {list(settings_outcome.drifted_rulesets)}"
                 )
         except SettingsReadError as exc:
             print(

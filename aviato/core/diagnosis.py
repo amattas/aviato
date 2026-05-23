@@ -42,9 +42,12 @@ def _has_drift_automation(root: Path) -> bool:
         return False
     # errors="replace": a corrupted/non-UTF-8 workflow file must not crash diagnosis (and
     # thus a whole fleet scan); the check is a substring search, so replacement is harmless.
+    # GitHub Actions accepts BOTH .yml and .yaml, so a consumer using aviato-drift.yaml must
+    # not read as "drift automation absent" (matches validation/actionpins dual-extension scans).
     return any(
         "reusable-consumer-automation" in path.read_text(encoding="utf-8", errors="replace")
-        for path in workflows.glob("*.yml")
+        for ext in ("*.yml", "*.yaml")
+        for path in workflows.glob(ext)
     )
 
 

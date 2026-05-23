@@ -130,3 +130,33 @@ def test_action_pin_scan_covers_yaml_extension(tmp_path) -> None:
     (wf / "build.yaml").write_text("jobs:\n  x:\n    steps:\n      - uses: other/action@main\n", encoding="utf-8")
     violations = action_pin_violations(tmp_path)
     assert any("other/action@main" in v for v in violations)
+
+
+def test_pip_glued_env_marker_still_flags_floating_spec() -> None:
+    # §11.3: a floating spec GLUED to its marker with no space (`foo>=1.0;python_version<'3.9'`)
+    # must still be flagged — the marker is split off before the quote-skip (L-3 regression).
+    text = "          python -m pip install \"foo>=1.0;python_version<'3.9'\"\n"
+    out = unpinned_tool_invocations(text)
+    assert out == ["pip-installed tool not pinned to an exact version: foo>=1.0"]
+
+
+def test_pip_glued_exact_pin_with_marker_is_ok() -> None:
+    text = "          python -m pip install \"foo==1.2.3;python_version<'3.9'\"\n"
+    assert unpinned_tool_invocations(text) == []
+
+
+def test_lint_definition_file_exempt_from_tool_invocation_scan(tmp_path) -> None:
+    # §11.3: the in-CI lint DEFINITION embeds the docker/fetch detector patterns (grep args +
+    # comments); the text scan can't tell those from real invocations, so reusable-common-lint.yml
+    # is exempt from the tool-invocation scan (its real invocations are pinned + reviewed). A
+    # DIFFERENT file with the same content is still flagged.
+    from aviato.plugins.actionpins import action_pin_violations
+
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    body = "jobs:\n  x:\n    steps:\n      - run: |\n          docker run hadolint/hadolint hadolint -\n"
+    (wf / "reusable-common-lint.yml").write_text(body, encoding="utf-8")
+    (wf / "other.yml").write_text(body, encoding="utf-8")
+    violations = action_pin_violations(tmp_path)
+    assert not any("reusable-common-lint.yml" in v and "docker run" in v for v in violations)
+    assert any("other.yml" in v and "docker run" in v for v in violations)
