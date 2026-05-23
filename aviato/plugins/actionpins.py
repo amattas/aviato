@@ -38,9 +38,12 @@ def unpinned_third_party_uses(text: str) -> list[str]:
 
 
 # §11.3 covers shell-fetched tools/images too, not just `uses:` refs. Two well-defined
-# anti-patterns are detected: a `docker run` image without an `@sha256:` digest, and a
-# remote artifact fetched and piped straight into a shell/extractor (no checksum gate).
-_DOCKER_RUN_RE = re.compile(r"\bdocker\s+run\b(?P<rest>[^\n]*)")
+# anti-patterns are detected: a `docker run`/`docker pull` image without an `@sha256:` digest, and
+# a remote artifact fetched and piped straight into a shell/extractor (no checksum gate).
+# CX#7: match BOTH run and pull so `aviato validate` agrees with the in-CI reusable-common-lint
+# gate (which already scans `docker (run|pull)`) — an unpinned `docker pull alpine:3.19` is just as
+# much a mutable-image supply-chain risk as `docker run`.
+_DOCKER_RUN_RE = re.compile(r"\bdocker\s+(?:run|pull)\b(?P<rest>[^\n]*)")
 _FETCH_PIPE_RE = re.compile(r"\b(?:curl|wget)\b[^\n|]*\|[^\n]*\b(?:sh|bash|tar)\b")
 
 # §11.3: a tool installed from a package index that exposes no digest (a pip package)
@@ -118,7 +121,7 @@ def unpinned_tool_invocations(text: str) -> list[str]:
     for match in _DOCKER_RUN_RE.finditer(text):
         image = _docker_run_image(match.group("rest"))
         if image is not None and "@sha256:" not in image:
-            violations.append(f"docker run image not digest-pinned: {image}")
+            violations.append(f"docker image not digest-pinned: {image}")
     for match in _FETCH_PIPE_RE.finditer(text):
         violations.append(f"fetch-and-execute without checksum: {match.group(0).strip()}")
     for match in _PIP_INSTALL_RE.finditer(text):
