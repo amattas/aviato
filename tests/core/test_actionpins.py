@@ -53,7 +53,7 @@ def test_exact_pip_pin_is_ok() -> None:
 
 def test_flags_docker_run_image_without_digest() -> None:
     text = "          docker run --rm -i hadolint/hadolint hadolint -\n"
-    assert unpinned_tool_invocations(text) == ["docker run image not digest-pinned: hadolint/hadolint"]
+    assert unpinned_tool_invocations(text) == ["docker image not digest-pinned: hadolint/hadolint"]
 
 
 def test_docker_run_image_with_digest_is_ok() -> None:
@@ -61,16 +61,25 @@ def test_docker_run_image_with_digest_is_ok() -> None:
     assert unpinned_tool_invocations(text) == []
 
 
+def test_flags_docker_pull_image_without_digest() -> None:
+    # CX#7: `docker pull` is just as much a mutable-image risk as `docker run`; the checker must
+    # flag it too (it previously only matched `docker run`, diverging from the in-CI shell gate).
+    assert unpinned_tool_invocations("          docker pull alpine:3.19\n") == [
+        "docker image not digest-pinned: alpine:3.19"
+    ]
+    assert unpinned_tool_invocations("          docker pull alpine@sha256:" + "a" * 64 + "\n") == []
+
+
 def test_docker_sha256_in_other_arg_does_not_mask_unpinned_image() -> None:
     # review #9: an `@sha256:` in an unrelated arg (e.g. --label) must NOT mask an unpinned image.
     text = "          docker run evil:latest --label x@sha256:" + "a" * 64 + "\n"
-    assert unpinned_tool_invocations(text) == ["docker run image not digest-pinned: evil:latest"]
+    assert unpinned_tool_invocations(text) == ["docker image not digest-pinned: evil:latest"]
 
 
 def test_docker_value_taking_flag_does_not_shift_detected_image() -> None:
     # review #D: a value-taking flag (`-e VAR=x`) must not shift the detected image token.
     text = "          docker run --rm -e FOO=bar -v /a:/b alpine:3.19 echo\n"
-    assert unpinned_tool_invocations(text) == ["docker run image not digest-pinned: alpine:3.19"]
+    assert unpinned_tool_invocations(text) == ["docker image not digest-pinned: alpine:3.19"]
 
 
 def test_flags_curl_piped_to_shell_or_tar() -> None:
@@ -170,5 +179,5 @@ def test_lint_definition_file_exempt_from_tool_invocation_scan(tmp_path) -> None
     (wf / "reusable-common-lint.yml").write_text(body, encoding="utf-8")
     (wf / "other.yml").write_text(body, encoding="utf-8")
     violations = action_pin_violations(tmp_path)
-    assert not any("reusable-common-lint.yml" in v and "docker run" in v for v in violations)
-    assert any("other.yml" in v and "docker run" in v for v in violations)
+    assert not any("reusable-common-lint.yml" in v and "docker image" in v for v in violations)
+    assert any("other.yml" in v and "docker image" in v for v in violations)

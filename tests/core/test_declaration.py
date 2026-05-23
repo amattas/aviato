@@ -77,6 +77,23 @@ def test_unquoted_float_version_is_rejected_not_silently_corrupted(tmp_path: Pat
         assert load_declaration(path).profile == "p"
 
 
+def test_boolean_fields_are_parsed_by_value_not_truthiness(tmp_path: Path) -> None:
+    # CX#3: a QUOTED `docs: "false"` / `bootstrap: "false"` must load as False (bool("false") is
+    # truthy — the bug), and a non-boolean must fail loud per §6.1's typed contract.
+    path = tmp_path / "aviato.yaml"
+    path.write_text('profile: p\nversion: 1\ndocs: "false"\nbootstrap: "false"\n', encoding="utf-8")
+    decl = load_declaration(path)
+    assert decl.docs is False and decl.bootstrap is False
+    # unquoted true / quoted "true" both read True
+    path.write_text('profile: p\nversion: 1\ndocs: true\nbootstrap: "TRUE"\n', encoding="utf-8")
+    decl = load_declaration(path)
+    assert decl.docs is True and decl.bootstrap is True
+    # a non-boolean value fails loud
+    path.write_text("profile: p\nversion: 1\ndocs: maybe\n", encoding="utf-8")
+    with pytest.raises(DeclarationError):
+        load_declaration(path)
+
+
 def test_non_mapping_variables_or_overrides_raise_declaration_error(tmp_path: Path) -> None:
     # review #13: a non-mapping `variables:`/`overrides:` must raise the module's DeclarationError
     # (which every caller catches), not a raw ValueError from dict() that escapes the contract.

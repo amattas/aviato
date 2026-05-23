@@ -62,6 +62,28 @@ def _settings_override_lists(override: dict[str, Any], _prefix: str = "") -> lis
     return found
 
 
+def _unknown_settings_override_paths(
+    override: dict[str, Any], baseline: dict[str, Any], _prefix: str = ""
+) -> list[str]:
+    """Dotted paths in a settings override that are absent from the baseline schema (§4.2, CX#4).
+
+    The composed baseline is the authoritative schema of managed settings — every reconcilable key
+    appears in it. A consumer override key NOT present in the baseline is a typo (e.g.
+    ``required_reveiws``) that the deep-merge would accept and the apply path then silently drop,
+    so it is rejected here rather than becoming a silent no-op. Recurses only where the baseline
+    also nests a map (so a leaf override of a known key is fine); list values are handled by the
+    separate bare-list guard.
+    """
+    unknown: list[str] = []
+    for key, value in override.items():
+        path = f"{_prefix}{key}"
+        if key not in baseline:
+            unknown.append(path)
+        elif isinstance(value, dict) and isinstance(baseline.get(key), dict):
+            unknown.extend(_unknown_settings_override_paths(value, baseline[key], f"{path}."))
+    return unknown
+
+
 def _chain(load, name: str) -> list:
     """Walk an ``extends`` chain from ``name`` to its root, root-first.
 
@@ -128,11 +150,11 @@ def resolve_profile(
     ``extends``/override, or an add/remove edge violation.
     """
     overrides = overrides or {}
-    unknown = set(overrides) - {"pipelines", "settings"}
+    unknown = set(overrides) - {"pipelines", "settings", "version_source"}
     if unknown:
         raise CompositionError(
-            f"unknown override key(s) {sorted(unknown)}; only 'pipelines' and 'settings' "
-            f"are supported (§4.2 — overrides are explicit, never silently dropped)"
+            f"unknown override key(s) {sorted(unknown)}; only 'pipelines', 'settings', and "
+            f"'version_source' are supported (§4.2 — overrides are explicit, never silently dropped)"
         )
     profile = registry.profile(name)
 
@@ -178,6 +200,17 @@ def resolve_profile(
                 f"settings override restates list-valued key(s) {sorted(bare_lists)} as a bare list "
                 "(§4.2); list-valued settings are not consumer-overridable via a bare list — they "
                 "are derived from the composed pipelines (status checks) and the ruleset manifest"
+            )
+        # CX#4: a settings-override key absent from the composed baseline schema is a typo (e.g.
+        # `required_reveiws`) the deep-merge would accept and the apply path then silently drop.
+        # Reject it — §4.2 overrides are explicit, never a silent no-op. (The baseline carries every
+        # reconcilable key, so a legitimate override is never wrongly rejected.)
+        unknown_keys = _unknown_settings_override_paths(settings_override, settings)
+        if unknown_keys:
+            raise CompositionError(
+                f"settings override has unknown key(s) {sorted(unknown_keys)} not present in the "
+                "managed settings baseline (§4.2) — likely a typo; it would be silently dropped at "
+                "apply time. Use an exact baseline key."
             )
         settings = deep_merge(settings, settings_override)
         # §2.13: the security baseline is always-on — "there is no composition that
@@ -238,6 +271,22 @@ def resolve_profile(
     variables = tuple(_variable_spec(item) for item in doc.get("variables", []))
     vs_doc = doc.get("version_source")
     version_source = VersionSourceModule(locations=tuple(vs_doc.get("locations", ()))) if vs_doc is not None else None
+    # CX#2/§12.3: a consumer may OVERRIDE version_source.locations in its declaration — the
+    # documented path when a profile's day-zero placeholder locations do not match the project's
+    # actual layout. `locations` is config data (WHERE the version is written), not a composed
+    # module list, so the override REPLACES it (an explicit operator choice, §4.2) rather than
+    # using add/remove. Only valid when the profile actually declares a version_source. (No
+    # language/target identifier appears here — the example path is generic — to keep core agnostic.)
+    vs_override = overrides.get("version_source")
+    if vs_override is not None:
+        if not isinstance(vs_override, dict) or not isinstance(vs_override.get("locations"), list):
+            raise CompositionError(
+                "version_source override must be a mapping with a 'locations' list (§12.3) — "
+                "e.g. version_source: {locations: ['path/to/your/version-file']}"
+            )
+        if version_source is None:
+            raise CompositionError(f"profile {name!r} declares no version_source, so it cannot be overridden (§12.3)")
+        version_source = VersionSourceModule(locations=tuple(vs_override["locations"]))
     toolchain = dict(doc.get("toolchain", {}))
 
     # Resolve each pipeline reference to its typed module (privileges/inputs/

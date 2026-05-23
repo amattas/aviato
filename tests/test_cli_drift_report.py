@@ -227,3 +227,18 @@ def test_drift_report_rejects_file_only_with_require_settings(tmp_path) -> None:
 
     rc = main(["drift-report", str(tmp_path), "--file-only", "--require-settings"])
     assert rc == 2
+
+
+def test_drifted_rulesets_honors_required_reviews_override() -> None:
+    # CX#1: the ruleset render used for drift must honor the consumer's required_reviews override,
+    # so the ruleset surface agrees with the classic-protection reconcile (no phantom drift / no
+    # apply that resets approvals). Live rulesets carry approvals=2 (the overridden value).
+    from aviato.cli import _drifted_rulesets, _profile_status_checks
+    from aviato.rulesets import render_all_rulesets
+
+    live = render_all_rulesets(required_approvals=2, extra_status_checks=_profile_status_checks("python-library"))
+    platform = FakePlatform(rulesets=live)
+    # With the override threaded through, desired==live → NO drift.
+    assert _drifted_rulesets("o/r", platform, "python-library", required_approvals=2) == ()
+    # Without it (policy default 1), desired (1) != live (2) → the branch ruleset reports drift.
+    assert _drifted_rulesets("o/r", platform, "python-library") != ()
