@@ -22,6 +22,23 @@ class Declaration:
     overrides: dict[str, Any] = field(default_factory=dict)
 
 
+def _as_bool(value: object, field_name: str, path: Path) -> bool:
+    """Strictly coerce a declared boolean field (§6.1, review #3).
+
+    YAML parses an UNQUOTED ``docs: false`` as the bool ``False`` already; the bug is a QUOTED
+    ``docs: "false"`` (a string), which ``bool(...)`` would render truthy → silently enable docs /
+    mark a repo bootstrap. Accept only a real bool or the case-insensitive strings ``true``/
+    ``false`` (a quoted value is tolerated but read by VALUE); anything else fails loud.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise DeclarationError(f"declaration field {field_name!r} must be a boolean (true/false), got {value!r}: {path}")
+
+
 def load_declaration(path: Path) -> Declaration:
     with Path(path).open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle)
@@ -57,8 +74,8 @@ def load_declaration(path: Path) -> Declaration:
     return Declaration(
         profile=str(data["profile"]),
         version=version,
-        docs=bool(data.get("docs", False)),
-        bootstrap=bool(data.get("bootstrap", False)),
+        docs=_as_bool(data.get("docs", False), "docs", path),
+        bootstrap=_as_bool(data.get("bootstrap", False), "bootstrap", path),
         variables=dict(data.get("variables", {})),
         overrides=dict(data.get("overrides", {})),
     )

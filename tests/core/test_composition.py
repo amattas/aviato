@@ -73,6 +73,36 @@ def test_settings_override_rejects_bare_list_restatement() -> None:
     assert resolved.settings["default_branch"]["required_reviews"] == 2
 
 
+def test_unknown_settings_override_key_is_rejected_not_silently_dropped() -> None:
+    # CX#4: a typo'd settings-override key (absent from the baseline schema) used to deep-merge in
+    # then get silently filtered out at apply time — a silent no-op §4.2 forbids. Reject it.
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    with pytest.raises(CompositionError):
+        resolve_profile(registry, "python-library", overrides={"settings": {"default_branch": {"required_reveiws": 2}}})
+    # A correctly-spelled baseline key still applies.
+    ok = resolve_profile(
+        registry, "python-library", overrides={"settings": {"default_branch": {"required_reviews": 2}}}
+    )
+    assert ok.settings["default_branch"]["required_reviews"] == 2
+
+
+def test_version_source_locations_are_overridable() -> None:
+    # CX#2/§12.3: the documented Swift override path must be real — a consumer overrides
+    # version_source.locations for a real Xcode layout (the day-zero locations are a placeholder).
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    overridden = resolve_profile(
+        registry, "swift-app", overrides={"version_source": {"locations": ["App.xcodeproj/project.pbxproj"]}}
+    )
+    assert overridden.version_source.locations == ("App.xcodeproj/project.pbxproj",)
+    # Malformed override (no locations list) and overriding a profile with no version_source fail loud.
+    with pytest.raises(CompositionError):
+        resolve_profile(registry, "swift-app", overrides={"version_source": {"locations": "nope"}})
+
+
 def test_non_dict_security_override_is_clean_composition_error() -> None:
     # §2.13: replacing the security baseline with a non-mapping (e.g. `security: false`) is the
     # maximal weakening — it must fail with a clean CompositionError, never a TypeError crash.

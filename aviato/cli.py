@@ -254,17 +254,24 @@ def _desired_settings(resolved) -> dict:
     return {key: value for key, value in flat.items() if key in RECONCILABLE_SETTING_KEYS}
 
 
-def _drifted_rulesets(slug: str, platform, profile: str) -> tuple[str, ...]:
+def _drifted_rulesets(slug: str, platform, profile: str, *, required_approvals: int | None = None) -> tuple[str, ...]:
     """Names of desired rulesets MISSING from, or content-DRIFTED on, the live platform (§5.6).
 
     The GitHub-specific work (render the desired payloads with the profile's verify checks, read
     the live payloads, compare presence + content) lives here in the binding layer, NOT the
     agnostic flow. Reads are admin-scoped and fail closed (SettingsReadError) like other settings
     reads, so the caller's existing fail-closed/fail-loud handling covers them.
+
+    CX#1: ``required_approvals`` is the consumer's resolved ``required_reviews`` override (§4.2). It
+    must flow into the rendered ruleset so the RULESET surface and the classic branch-protection
+    reconcile (which already honors the override) agree on the approval count — otherwise a
+    consumer that overrides required_reviews sees phantom ruleset drift / an apply that resets it.
     """
     from .rulesets import drifted_ruleset_names, render_all_rulesets
 
-    desired = render_all_rulesets(extra_status_checks=_profile_status_checks(profile))
+    desired = render_all_rulesets(
+        required_approvals=required_approvals, extra_status_checks=_profile_status_checks(profile)
+    )
     live = platform.read_rulesets(slug)
     return tuple(drifted_ruleset_names(desired, live))
 
@@ -1270,7 +1277,14 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
     #     tracking issue) → FAIL LOUD (§5.6 "never silently drops the report"), exit non-zero.
     if do_settings:
         try:
-            drifted_rulesets = _drifted_rulesets(slug, platform, declaration.profile)
+            # CX#1: pass the consumer's resolved required_reviews override so the ruleset render
+            # matches the classic-protection desired state (both express the same approval count).
+            drifted_rulesets = _drifted_rulesets(
+                slug,
+                platform,
+                declaration.profile,
+                required_approvals=resolved.settings.get("default_branch", {}).get("required_reviews"),
+            )
             settings_outcome = run_settings_drift(
                 platform,
                 repo=slug,
