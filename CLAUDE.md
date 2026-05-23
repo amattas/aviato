@@ -31,14 +31,14 @@ aviato onboard PATH --profile python-library [--write --allow-dirty --var k=v]  
 aviato doctor /path/to/consumer              # classify managed artifacts + probe health (§5.4)
 aviato sync /path/to/consumer                # materialize managed artifacts incl. caller workflows (§5.3/§15)
 aviato scan /path/a /path/b [--fix]          # fleet diagnosis; --fix opens managed-file proposals (§5.11/§5.5)
-aviato drift-report /path/to/consumer        # consumer automation: file + settings drift (§5.5/§5.6)
+aviato drift-report /path/to/consumer [--file-only|--settings-only] [--require-settings]  # file + settings drift (§5.5/§5.6); --require-settings exits non-zero if settings can't be read
 aviato reconcile /path/to/consumer <issue> --confirm <diff-id>  # operator-gated settings apply, diff-bound (§5.7)
 aviato complete-protection /path/to/consumer # idempotently (re-)apply full branch protection (§5.2 recovery)
-aviato repin /path/to/consumer vX.Y.Z [--write]  # move the Library version pin (§5.12)
-aviato offboard /path/to/consumer [--write --delete-files]  # remove from Aviato management (§5.13)
+aviato repin /path/to/consumer X.Y.Z [--write]  # move the Library version pin (§5.12)
+aviato offboard /path/to/consumer [--write --delete-files | --open-pr]  # remove from Aviato mgmt; --open-pr opens a reviewable removal proposal (§5.13)
 aviato next-version --current 1.2.3 --commit "feat: x"  # SemVer from Conventional Commits (§5.9)
 aviato bump-version 1.3.0 /path/to/consumer  # write version into version-source locations (§3.3)
-aviato validate                              # validate policy infra + agnosticism + digest pins + template parity
+aviato validate                              # validate policy infra + agnosticism + digest pins + template parity + inline monotonic-alias parity
 ```
 
 **Onboarding materializes the caller workflows.** A profile's scaffold bundle includes
@@ -98,17 +98,22 @@ docstrings — keep them accurate when changing behavior.
 
 ### policy.yml is the single source of truth
 
-`policy.yml` owns policy constants — most importantly the release tag pattern (`^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$`) and default required PR approvals. That pattern is **intentionally duplicated** into several places that need a literal at definition time:
+The policy/ruleset data lives **inside the package** at `aviato/library/policy.yml`,
+`aviato/library/rulesets.yml`, and `aviato/library/rulesets/*.json` (so it ships in the
+wheel and a pip-installed `aviato` can render rulesets — §5.6/§11.3). Loaders default to
+`paths.POLICY_DATA_ROOT` (= `aviato/library`); `is_library`/§5.10 keys off
+`aviato/library/policy.yml`. (`aviato validate` runs from a source checkout only.)
 
-- `.github/actions/validate-release-ref/action.yml` (the `tag-pattern` input default)
-- every release workflow in `RELEASE_WORKFLOWS` (embeds the literal so validation is pinned to the same ref)
+`aviato/library/policy.yml` owns policy constants — most importantly the release tag pattern (`^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$`) and default required PR approvals. That pattern is **intentionally duplicated** into several places that need a literal at definition time:
+
+- every release workflow in `RELEASE_WORKFLOWS` (embeds the literal in its `TAG_PATTERN` env so validation is pinned to the same ref)
 - rendered ruleset payloads (injected at render time, not stored)
 
 `aviato/validation.py` enforces these copies stay in sync via drift checks. **When you change the tag pattern or any embedded constant, update `policy.yml` and let validation tell you every copy that drifted — never treat docs or a workflow as the source of truth.** Docs (`README.md`, `ARCHITECTURE.md`, `REQUIREMENTS.md`) describe policy but are not authoritative.
 
 ### Rendering pipeline (policy → rulesets)
 
-`rulesets.yml` is a manifest mapping each ruleset JSON template in `rulesets/` to a target (`branch`/`tag`) and a `patch` of dotted policy paths to inject. `aviato/rulesets.py` deep-copies the JSON template and patches values from `policy.yml` (or a `--required-approvals` override) at render time. `apply_rulesets` then upserts each rendered payload to GitHub. To add a ruleset: add the JSON template, register it in `rulesets.yml`, and (if required) add it to `REQUIRED_FILES` in `validation.py`.
+`aviato/library/rulesets.yml` is a manifest mapping each ruleset JSON template in `aviato/library/rulesets/` to a target (`branch`/`tag`) and a `patch` of dotted policy paths to inject. `aviato/rulesets.py` deep-copies the JSON template and patches values from `policy.yml` (or a `--required-approvals` override) at render time. `apply_rulesets` then upserts each rendered payload to GitHub. To add a ruleset: add the JSON template under `aviato/library/rulesets/`, register it in `aviato/library/rulesets.yml`, and (if required) add it to `REQUIRED_FILES` in `validation.py`.
 
 ### GitHub access is via the `gh` CLI only
 
@@ -116,7 +121,7 @@ docstrings — keep them accurate when changing behavior.
 
 ### Validation is the gate
 
-`aviato/validation.py` (`validate()`) is what CI runs and what guards correctness. It checks required files exist, YAML/JSON parse, `policy.yml` examples actually match/reject the pattern, pattern drift across embedded copies, template `uses:` references point at workflows that exist, release workflows are tag-only (no `release/*`, no checkout by repository name, must reference `GITHUB_REF_TYPE`/`tag`), third-party actions/tools are digest-pinned (§11.3, `_check_action_pins`), and the `templates/profile-*.yml` examples match the rendered scaffold (`_check_template_scaffold_parity`). Adding a new required workflow/file or release workflow means updating `REQUIRED_FILES` / `RELEASE_WORKFLOWS`.
+`aviato/validation.py` (`validate()`) is what CI runs and what guards correctness. It checks required files exist, YAML/JSON parse, `policy.yml` examples actually match/reject the pattern, pattern drift across embedded copies, template `uses:` references point at workflows that exist, release workflows are tag-only (no `release/*`, no checkout by repository name, must reference `GITHUB_REF_TYPE`/`tag`), third-party actions/tools are digest-pinned (§11.3, `_check_action_pins`), the `templates/profile-*.yml` examples match the rendered scaffold (`_check_template_scaffold_parity`), and the inline `highest.py` heredocs embedded in the GHCR/Pages deploy workflows still agree with `core.versioning.is_highest` (§8.14/§13.2, `_check_monotonic_alias_parity` — runs the snippet against a battery of cases so a hand-copied comparator can't silently drift). Adding a new required workflow/file or release workflow means updating `REQUIRED_FILES` / `RELEASE_WORKFLOWS`.
 
 ### Reusable workflows share one command contract
 

@@ -1,8 +1,25 @@
 from __future__ import annotations
 
+import pytest
+
+from aviato.core.errors import CompositionError
 from aviato.core.file_drift_flow import run_file_drift
 
 from .fakeplatform import FakePlatform
+
+
+def test_proposable_status_without_expected_body_raises_cleanly() -> None:
+    # A proposable artifact (mergeable-drift/missing) absent from expected_bodies must
+    # raise a classified CompositionError, not an opaque KeyError that crashes a fleet
+    # scan / scheduled drift run mid-flight.
+    with pytest.raises(CompositionError):
+        run_file_drift(
+            FakePlatform(),
+            repo="o/r",
+            profile="p",
+            statuses={"missing.cfg": "missing"},
+            expected_bodies={},  # no body for the proposable artifact
+        )
 
 
 def test_mergeable_drift_opens_identity_keyed_proposal() -> None:
@@ -18,8 +35,15 @@ def test_mergeable_drift_opens_identity_keyed_proposal() -> None:
     assert "open_or_update_proposal" in platform.call_names()
     _, args = next(c for c in platform.calls if c[0] == "open_or_update_proposal")
     branch, files = args[1], args[3]
-    assert branch.startswith("aviato/sync/python-library-")
     assert "ruff.toml" in files
+    # §5.5/§8.11 convergence: the branch key is derived from the FULL expected output set
+    # (so scan --fix and the scheduled job converge), NOT just the proposed subset. Pin both
+    # so a regression keying on `proposed` only would be caught (it would still
+    # startswith("aviato/sync/python-library-") and slip past a weaker assertion).
+    from aviato.core.filedrift import proposal_identity
+
+    assert branch == proposal_identity("python-library", ["ruff.toml", ".editorconfig"])
+    assert branch != proposal_identity("python-library", ["ruff.toml"])
 
 
 def test_missing_file_is_proposed() -> None:

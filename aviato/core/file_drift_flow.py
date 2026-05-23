@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from .errors import CompositionError
 from .filedrift import proposal_identity
 from .ports import Platform
 
@@ -51,6 +52,12 @@ def run_file_drift(
     if not proposed:
         return outcome
 
+    missing_bodies = [output for output in proposed if output not in expected_bodies]
+    if missing_bodies:
+        raise CompositionError(
+            f"no expected body for proposable artifact(s) {sorted(missing_bodies)}; "
+            f"the caller must supply a body for every mergeable-drift/missing output (§5.5)"
+        )
     branch = proposal_identity(profile, list(statuses))
     files = {output: expected_bodies[output] for output in proposed}
     platform.open_or_update_proposal(repo, branch, "Aviato: managed file sync", files, _render_proposal_body(proposed))

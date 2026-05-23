@@ -20,7 +20,7 @@ def test_minimal_settings_block_destructive_but_no_pr_gate() -> None:
     # §2.11/§8.7: minimal protection must not require a PR (it would deadlock the first
     # direct push), but must still block force-push/deletion. Required reviews/status
     # checks and §17 security-prerequisite toggles are excluded (they arrive with full).
-    m = minimal_settings(DESIRED)
+    m = minimal_settings()
     assert m["requires_pull_request"] is False
     assert m["block_force_push"] is True
     assert m["block_deletion"] is True
@@ -57,3 +57,31 @@ def test_provision_reports_partial_state_when_full_protection_fails() -> None:
     assert outcome.full_applied is False
     assert outcome.created and outcome.minimal_applied and outcome.scaffolded
     assert "rejected" in outcome.reason
+
+
+def test_provision_reports_exposed_state_when_minimal_protection_fails() -> None:
+    # §8.7: if minimal protection fails AFTER the repo is created, the repo EXISTS and is
+    # unprotected. provision_repo must NOT crash — it returns created=True, minimal_applied=False
+    # so the caller can surface the exposed state + recovery, never leaving it silent.
+    platform = FakePlatform(fail_apply=True)  # the FIRST apply (minimal) raises
+    outcome = provision_repo(platform, repo="o/new", desired=DESIRED, private=True, scaffold_push=lambda: None)
+    assert outcome.created is True
+    assert outcome.minimal_applied is False
+    assert outcome.scaffolded is False
+    assert outcome.partial is True
+    assert not outcome.ok
+
+
+def test_provision_reports_partial_when_scaffold_push_fails() -> None:
+    # §8.7: a scaffold-push failure after minimal protection leaves the repo protected (minimal)
+    # but un-scaffolded — surfaced as partial, never crashing.
+    platform = FakePlatform()
+
+    def _boom() -> None:
+        raise RuntimeError("push rejected")
+
+    outcome = provision_repo(platform, repo="o/new", desired=DESIRED, private=True, scaffold_push=_boom)
+    assert outcome.created and outcome.minimal_applied
+    assert outcome.scaffolded is False
+    assert outcome.partial is True
+    assert "push rejected" in outcome.reason

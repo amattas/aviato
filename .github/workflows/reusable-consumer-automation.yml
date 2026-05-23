@@ -17,10 +17,33 @@ on:
         required: false
         type: string
         default: "3.12"
+    secrets:
+      settings-token:
+        description: >-
+          Optional admin-capable READ token (PAT / GitHub App) used ONLY to read branch
+          protection + rulesets for settings drift — the default GITHUB_TOKEN cannot (no
+          administration scope). It is read-only in use: the settings-drift step still writes
+          the tracking issue/comments under the ambient platform GITHUB_TOKEN, never this
+          token (§5.6/§11.2). Omit it and settings drift is skipped; file drift still runs.
+        required: false
 
 # File-drift proposals push an identity-keyed branch, which needs contents:write
 # (opening a PR with file changes cannot be done with read-only contents).
 # Settings drift remains report-only and never mutates protected settings.
+#
+# NOTE (§5.6/§11.3): the platform GITHUB_TOKEN has no `administration` scope — that
+# scope does not exist for workflow tokens — so it CANNOT read branch protection or
+# rulesets. Full settings-drift detection therefore requires an operator-supplied
+# admin-capable token (PAT / GitHub App) passed as the `settings-token` secret
+# below; without it, file drift still runs and settings reads degrade (skipped).
+# §5.5 (review #4): the scheduled drift/report run, plus any operator workflow_dispatch or
+# re-run, must SERIALIZE per repo — two concurrent runs would force-push the SAME deterministic
+# proposal branch and race (lost updates, non-deterministic PR contents). Queue, never cancel
+# (a cancelled mid-push run can leave a dangling ref).
+concurrency:
+  group: aviato-drift-${{ github.repository }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
@@ -31,7 +54,9 @@ jobs:
     name: Drift detection (propose/report only)
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ github.token }}
+      # Only the non-sensitive ref is job-wide. Tokens are scoped PER STEP below (§11.2):
+      # the admin settings-token must never be visible to the install step or the file-drift
+      # writes — only to the read-only settings-drift step.
       AVIATO_REF: ${{ inputs.aviato-ref }}
     steps:
       - name: Jitter
@@ -50,6 +75,28 @@ jobs:
         shell: bash
         run: python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
 
-      - name: Report drift
+      - name: File drift (platform token; contents/PR/issue writes only)
         shell: bash
-        run: aviato drift-report .
+        # Least-privilege (§11.2/§5.6): file-drift proposals need only the platform token's
+        # contents/PR/issue write scope. The admin settings-token is NEVER exposed here.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: aviato drift-report . --file-only
+
+      - name: Settings drift (platform token for issue writes; admin token READ-only for reads)
+        shell: bash
+        # Two tokens, distinct roles (§5.6/§11.2): GH_TOKEN is the ambient platform token, used
+        # for the tracking-issue WRITES (open/comment/revoke). AVIATO_SETTINGS_READ_TOKEN is the
+        # operator's admin READ token, scoped by aviato (settings_read_token_scope) to the
+        # branch-protection/ruleset READS alone — it mutates nothing, so the stored secret stays
+        # read-only in use. Both are scoped to THIS step; neither reaches the file-drift writes or
+        # the install step. No admin token ⇒ settings drift skips fail-closed (§5.6).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AVIATO_SETTINGS_READ_TOKEN: ${{ secrets.settings-token }}
+        run: |
+          if [ -z "${AVIATO_SETTINGS_READ_TOKEN}" ]; then
+            echo "settings drift: skipped — no admin settings-token secret supplied (§5.6)."
+            exit 0
+          fi
+          aviato drift-report . --settings-only

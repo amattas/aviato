@@ -50,7 +50,6 @@ class Registry:
                 workflows=doc["workflows"],
                 scaffold=doc["scaffold"],
                 settings=doc["settings"],
-                requires_macos=bool(doc.get("requires_macos", False)),
             )
         except KeyError as exc:
             raise CompositionError(f"profile {name!r} missing field: {exc}") from exc
@@ -105,7 +104,32 @@ class Registry:
             secrets=tuple(doc.get("secrets", ())),
             runner=doc.get("runner"),
             status_check=doc.get("status_check"),
+            always_on=bool(doc.get("always_on", False)),
         )
+
+    def always_on_pipelines(self) -> tuple[str, ...]:
+        """Pipelines the data flags ``always_on`` — they must survive every composition (§2.13)."""
+        path = self.root / "pipelines.yaml"
+        if not path.is_file():
+            return ()
+        with path.open("r", encoding="utf-8") as handle:
+            manifest = yaml.safe_load(handle) or {}
+        return tuple(name for name, doc in manifest.items() if isinstance(doc, dict) and doc.get("always_on"))
+
+    def declared_pipelines(self) -> set[str] | None:
+        """The set of pipeline names the manifest declares, or None when no manifest exists (§5.1).
+
+        Returns None — not an empty set — when ``pipelines.yaml`` is absent, so composition can
+        distinguish "this registry declares pipelines, validate refs against them" from a bare
+        test/empty registry that declares none (which stays lenient). The day-zero Library has a
+        complete manifest, so an unknown pipeline ref there is a typo and must hard-error (§5.1).
+        """
+        path = self.root / "pipelines.yaml"
+        if not path.is_file():
+            return None
+        with path.open("r", encoding="utf-8") as handle:
+            manifest = yaml.safe_load(handle) or {}
+        return {name for name, doc in manifest.items() if isinstance(doc, dict)}
 
     def template_module(self, name: str) -> TemplateModule:
         doc = _load_doc(self.root / "scaffold" / f"{name}.yaml")

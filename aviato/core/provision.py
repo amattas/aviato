@@ -7,8 +7,8 @@ from typing import Any
 from .ports import Platform
 
 
-def minimal_settings(desired: dict[str, Any]) -> dict[str, Any]:
-    """The §2.11 safe-to-persist minimal protection derived from the full desired set.
+def minimal_settings() -> dict[str, Any]:
+    """The §2.11 safe-to-persist minimal protection: a fixed, profile-independent set.
 
     Blocks the destructive operations (force-push, deletion) but DOES NOT require a
     pull request — a PR-required gate would deadlock the very first direct push of the
@@ -17,6 +17,9 @@ def minimal_settings(desired: dict[str, Any]) -> dict[str, Any]:
     §17 operator-prerequisite features that may be unavailable (e.g. secret scanning on
     a private repo without Advanced Security), so they belong to full protection, which
     enables them best-effort.
+
+    This minimal set is the same regardless of the desired full protection (it is a
+    safe floor, not a projection of ``desired``), so it takes no argument.
     """
     return {
         "requires_pull_request": False,
@@ -51,28 +54,31 @@ def provision_repo(
 
     create repo → apply MINIMAL protection (safe to persist; does not block the first
     commit) → run ``scaffold_push`` (the local scaffold + first commit + push) → apply
-    FULL protection. If full protection fails after the first commit, the repo is left
-    in the defined **partially-provisioned** state (minimal protection persists) and the
-    outcome reports ``partial`` so the operator runs the idempotent ``complete-protection``
-    recovery (§8.7) — full protection is never half-applied silently.
+    FULL protection. **Once the repo is created it EXISTS**, so every later stage is
+    wrapped: any failure returns an outcome describing how far provisioning got (and a
+    ``reason``), never crashing — so the caller can always surface the exposed/partial
+    state and the recovery (§8.7). A new resource is never left unprotected with no
+    recovery path, and full protection is never half-applied silently.
 
     ``scaffold_push`` performs the local git/scaffold side effects (kept out of core);
     platform calls go only through the :class:`Platform` port.
     """
     outcome = ProvisionOutcome()
+    # create_repo is intentionally OUTSIDE the try: if it fails, nothing was created and the
+    # caller's pre-create error path is correct. Everything after it operates on a repo that
+    # now exists, so it must fail soft (§8.7).
     platform.create_repo(repo, private=private)
     outcome.created = True
 
-    platform.apply_settings(repo, minimal_settings(desired))
-    outcome.minimal_applied = True
-
-    scaffold_push()
-    outcome.scaffolded = True
-
     try:
+        platform.apply_settings(repo, minimal_settings())
+        outcome.minimal_applied = True
+        scaffold_push()
+        outcome.scaffolded = True
         platform.apply_settings(repo, desired)
-    except Exception as exc:  # noqa: BLE001 - §8.7 boundary: a full-protection failure must
-        # surface the partially-provisioned state + recovery op, never crash or half-apply.
+    except Exception as exc:  # noqa: BLE001 - §8.7 boundary: a post-create failure must surface
+        # the exposed/partial state + recovery op, never crash or half-apply. The outcome flags
+        # record exactly how far provisioning got (minimal_applied / scaffolded).
         outcome.partial = True
         outcome.reason = str(exc)
         return outcome

@@ -16,14 +16,74 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from . import github
 from .command import CommandError
+from .core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from .core.ports import Issue
+from .core.settingsdrift import CONSENT_ID_HEX_LEN
 
 # A human grants consent by adding a label of this form to the tracking issue;
 # the diff identity it authorizes is encoded after the prefix (§6.4).
 CONSENT_LABEL_PREFIX = "aviato-consent:"
+
+# GitHub rejects label names longer than 50 characters. The consent-grant label is
+# CONSENT_LABEL_PREFIX + diff_identity(...), and a human must be able to create it for the
+# §5.7 reconcile gate to function — so the prefixed id MUST fit. Guard the invariant at import
+# time so a future change to either the prefix or the id length fails loud here rather than
+# silently making the gate unreachable (no test exercises the live label round-trip).
+GITHUB_LABEL_NAME_MAX = 50
+if len(CONSENT_LABEL_PREFIX) + CONSENT_ID_HEX_LEN > GITHUB_LABEL_NAME_MAX:
+    # An explicit raise (not assert) so the guard holds even under `python -O`.
+    raise RuntimeError(
+        f"consent label {CONSENT_LABEL_PREFIX!r}+{CONSENT_ID_HEX_LEN}-char id exceeds "
+        f"GitHub's {GITHUB_LABEL_NAME_MAX}-char label limit; the §5.7 reconcile gate "
+        "would be unreachable"
+    )
+
+
+def _select_issue(issues: Any, repo: str, key: str) -> dict[str, Any] | None:
+    """Pick the one tracking issue for ``key`` from a labels-filtered list, deterministically.
+
+    Exactly one issue should ever carry the consent/drift label. If more than one does
+    (a prior duplicate from a flaky run, or a human-opened lookalike), the three reads
+    (open-list / all-list) must agree on WHICH issue — otherwise consent could be read on one
+    and audited on another. Prefer an **open** issue (the actionable one), and among the chosen
+    state pick the oldest (lowest number); only fall back to a closed issue when none are open.
+    Preferring open keeps the all-state read (get_issue/comment_issue) agreeing with the
+    open-only read (open_or_update_issue) whenever an open issue exists, and stops a stale
+    *closed* duplicate from shadowing a live open issue (which would wrongly refuse reconcile).
+    Warn loudly on duplicates (§5.6). Returns the chosen issue dict, or ``None`` if the list is
+    empty/malformed.
+    """
+    if not isinstance(issues, list) or not issues:
+        return None
+    numbered = [i for i in issues if isinstance(i, dict) and isinstance(i.get("number"), int)]
+    if not numbered:
+        # No usable "number" — fall back to the first dict so callers can still create afresh.
+        return next((i for i in issues if isinstance(i, dict)), None)
+    # Prefer open issues; fall back to the full set only when none are open.
+    pool = [i for i in numbered if i.get("state") == "open"] or numbered
+    if len(pool) > 1:
+        print(
+            f"WARNING: {repo} has multiple issues labeled {key!r}; acting on the oldest "
+            f"(#{min(n['number'] for n in pool)}). Close the duplicates to restore a clean "
+            "consent/audit trail (§5.6).",
+            file=sys.stderr,
+        )
+    return min(pool, key=lambda i: i["number"])
+
+
+def _seg(value: str) -> str:
+    """Percent-encode a single-token value spliced into a ``gh api`` path/query.
+
+    Calls go through ``gh api`` argv (no shell), so this is not about shell injection
+    — it prevents a value containing ``/`` or ``?`` from altering the API path or
+    query. ``safe=""`` because these are single segments (a label name, a login),
+    never multi-segment paths like ``OWNER/REPO``.
+    """
+    return quote(str(value), safe="")
 
 
 class UnmodeledProtectionError(RuntimeError):
@@ -36,9 +96,17 @@ def _is_feature_unavailable(exc: CommandError) -> bool:
     These (secret scanning, push protection, Dependabot security updates) require the
     relevant features enabled at the org/repo level — an adoption prerequisite, not an
     apply failure.
+
+    Tightened to require an availability phrase **in a security-feature context** (or the
+    unambiguous "advanced security"), so an unrelated error that merely contains the words
+    "not enabled" is NOT misclassified as a benign adoption warning and is allowed to raise.
     """
     msg = exc.stderr.lower()
-    return "not available" in msg or "not enabled" in msg or "advanced security" in msg
+    if "advanced security" in msg:
+        return True
+    availability = "not available" in msg or "not enabled" in msg or "must be enabled" in msg
+    feature_context = "security" in msg or "scanning" in msg or "dependabot" in msg
+    return availability and feature_context
 
 
 @dataclass(frozen=True)
@@ -117,6 +185,52 @@ def current_consent(events: list[dict[str, Any]]) -> ConsentGrant | None:
     return ConsentGrant(diff_id=diff_id, actor_type=actor_type, actor_login=actor_login)
 
 
+# Branch-ruleset rule types the desired settings model represents (§5.6). A live
+# rule of any OTHER type is unmodeled protection the reconcile must not silently
+# shadow (see apply_settings fail-closed guard).
+_MODELED_RULE_TYPES = frozenset({"pull_request", "non_fast_forward", "deletion", "required_status_checks"})
+
+# Classic-protection toggles the wholesale branch-protection PUT (to_branch_protection_payload)
+# does NOT carry, so if any is ENABLED live it would be silently dropped (§2.4/§2.9). Each is a
+# ``{"enabled": bool}`` object on the protection GET; we fail closed when enabled rather than drop.
+_UNMODELED_CLASSIC_FLAGS = (
+    "required_linear_history",
+    "lock_branch",
+    "block_creations",
+    "allow_fork_syncing",
+    "required_signatures",
+)
+# Review sub-fields the PUT rebuilds without (it hardcodes require_code_owner_reviews=False and
+# omits the rest), so an enabled one live would be dropped — fail closed (§2.4/§2.9).
+_UNMODELED_REVIEW_FIELDS = (
+    "require_code_owner_reviews",
+    "require_last_push_approval",
+    "dismissal_restrictions",
+    "bypass_pull_request_allowances",
+)
+
+# The flat desired keys that describe branch protection (vs the repo security toggles,
+# which live on a different API surface). Used to decide whether a desired change lands
+# on the classic-protection surface or the ruleset surface.
+_BRANCH_PROTECTION_KEYS = (
+    "requires_pull_request",
+    "required_reviews",
+    "dismiss_stale_reviews",
+    "require_thread_resolution",
+    "enforce_admins",
+    "block_force_push",
+    "block_deletion",
+    "required_status_checks",
+)
+
+
+def _norm_setting(key: str, value: Any) -> Any:
+    """Normalize a flat setting value for comparison (status-check lists are order-insensitive)."""
+    if key == "required_status_checks" and isinstance(value, (list, tuple, set)):
+        return sorted({str(item) for item in value})
+    return value
+
+
 def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any]) -> dict[str, Any]:
     """Map live default-branch rules/protection into the flat comparable settings map (§5.6, §2.9).
 
@@ -160,6 +274,19 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
         rule_checks = rsc_rule.get("parameters", {}).get("required_status_checks", [])
         contexts += [c.get("context") for c in rule_checks if isinstance(c, dict) and c.get("context")]
 
+    # enforce_admins = "are admins subject to branch protection?". It's satisfied EITHER by the
+    # classic toggle ({"enabled": true}) OR by a branch RULESET owning protection — a ruleset
+    # enforces on everyone, including admins, absent a bypass actor (the Aviato baseline ruleset
+    # has none). Reading it both ways keeps it in the §5.7 diff (§2.9 — never silently forced)
+    # WITHOUT false-drifting/locking out the normal ruleset-protected repo, where classic
+    # protection is empty (its rules live on the ruleset). A classic-only repo reads the toggle.
+    # A protecting ruleset enforces on admins unless it grants a bypass actor — and an added
+    # bypass IS detected as ruleset content drift (rulesets.ruleset_content_drift, the §5.6 path),
+    # so treating a ruleset-owned branch as enforce_admins-satisfied here does not hide a bypass.
+    classic_enforce_admins = bool((protection.get("enforce_admins") or {}).get("enabled", False))
+    ruleset_owns_branch = any(rule.get("type") in _MODELED_RULE_TYPES for rule in rules)
+    enforce_admins = classic_enforce_admins or ruleset_owns_branch
+
     return {
         "requires_pull_request": requires_pr,
         "required_reviews": required_reviews,
@@ -167,6 +294,7 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
         "require_thread_resolution": require_threads,
         "block_force_push": block_force_push,
         "block_deletion": block_deletion,
+        "enforce_admins": enforce_admins,
         "required_status_checks": sorted(set(contexts)),
     }
 
@@ -194,6 +322,14 @@ def map_security_settings(security_and_analysis: dict[str, Any]) -> dict[str, An
     return out
 
 
+# The flat repo-security toggle keys this binding reconciles (the to_security_payload mapping
+# keys). Combined with _BRANCH_PROTECTION_KEYS below into RECONCILABLE_SETTING_KEYS — the full
+# set of desired keys the apply path actually writes. A desired key OUTSIDE this set would be
+# silently ignored by the writers (phantom drift that "applies" but never converges), so callers
+# filter to it and `aviato validate` asserts the baseline declares only recognized keys (§5.1).
+_SECURITY_SETTING_KEYS = ("secret_scanning", "secret_push_protection", "dependency_scanning")
+
+
 def to_security_payload(desired: dict[str, Any]) -> dict[str, Any]:
     """Build a ``security_and_analysis`` PATCH from the flat desired settings (§2.9)."""
     mapping = {
@@ -206,6 +342,12 @@ def to_security_payload(desired: dict[str, Any]) -> dict[str, Any]:
         if desired_key in desired:
             payload[api_key] = {"status": "enabled" if desired[desired_key] else "disabled"}
     return payload
+
+
+# Every flat desired key the apply path can actually write (branch protection + repo security).
+# A desired key outside this set is unreconcilable: filtered out before the diff so a typo can't
+# masquerade as never-converging "drift", and asserted against the baseline by `aviato validate`.
+RECONCILABLE_SETTING_KEYS = frozenset(_BRANCH_PROTECTION_KEYS) | frozenset(_SECURITY_SETTING_KEYS)
 
 
 def to_branch_protection_payload(desired: dict[str, Any]) -> dict[str, Any]:
@@ -228,7 +370,9 @@ def to_branch_protection_payload(desired: dict[str, Any]) -> dict[str, Any]:
     status_checks = {"strict": True, "contexts": contexts} if contexts else None
     return {
         "required_status_checks": status_checks,
-        "enforce_admins": True,
+        # Default True (admins subject to protection), but driven by the modeled desired value
+        # so the apply matches the §5.7-reviewed diff rather than blindly forcing it (§2.9).
+        "enforce_admins": bool(desired.get("enforce_admins", True)),
         "required_pull_request_reviews": reviews,
         "restrictions": None,
         "allow_force_pushes": not bool(desired.get("block_force_push", False)),
@@ -247,27 +391,72 @@ class GitHubPlatform:
         # Returns the flat default-branch settings map, matching the desired map
         # the CLI passes (resolved.settings["default_branch"]) so the diff compares
         # like-for-like (§5.6).
-        branch = github.default_branch(repo)
-        if not branch:
-            return {}
-        rules = github.active_branch_rules(repo, branch)
-        protection = github.classic_branch_protection(repo, branch)
-        security = map_security_settings(github.repo_security_settings(repo))
+        #
+        # A read failure here (e.g. the platform token lacks the admin scope branch
+        # protection/rulesets require) is raised as SettingsReadError so the caller can
+        # fail closed by SKIPPING settings drift (§5.6) — distinct from an issue-channel
+        # failure, which must fail loud. We never compute a diff from a falsely-
+        # "unprotected" read (§2.7): the gh_* readers already fail closed on ambiguity.
+        # All four reads run under the read-only admin token (§5.6/§11.2): the issue writes
+        # this automation also performs (open/comment/revoke) stay on the ambient platform
+        # token, so the stored admin secret is read-only IN USE and never mutates anything.
+        try:
+            with github.settings_read_token_scope():
+                branch = github.default_branch(repo)
+                if not branch:
+                    return {}
+                rules = github.active_branch_rules(repo, branch)
+                protection = github.classic_branch_protection(repo, branch)
+                security = map_security_settings(github.repo_security_settings(repo))
+        except github.GitHubAPIError as exc:
+            raise github.SettingsReadError(exc.endpoint, exc.returncode, exc.stderr) from exc
         # Flat merge: branch-protection fields + repo security toggles, matching the
         # flat desired map the CLI passes (so security drift is visible, §5.6/§2.13).
         return {**map_branch_settings(rules, protection), **security}
 
+    def read_rulesets(self, repo: str) -> list[dict[str, Any]]:
+        """Full live ruleset payloads (incl. rules), for §5.6 presence + CONTENT drift (read-only).
+
+        The list endpoint returns only summaries, so each ruleset is fetched by id for its rules/
+        enforcement. Reading rulesets needs the admin scope (like branch protection), so it runs
+        under the same read-only admin token (§11.2) and fails closed as a SettingsReadError — the
+        caller then SKIPS settings drift rather than treat a falsely-empty/partial read as "all
+        rulesets gone or clean".
+        """
+        try:
+            with github.settings_read_token_scope():
+                summaries = github.repository_rulesets(repo)
+                payloads: list[dict[str, Any]] = []
+                for summary in summaries:
+                    ruleset_id = summary.get("id") if isinstance(summary, dict) else None
+                    if ruleset_id is None:
+                        continue
+                    payloads.append(github.repository_ruleset(repo, ruleset_id))
+        except github.GitHubAPIError as exc:
+            raise github.SettingsReadError(exc.endpoint, exc.returncode, exc.stderr) from exc
+        return payloads
+
     def get_issue(self, repo: str, key: str) -> Issue | None:
-        issues = github.gh_json(f"repos/{repo}/issues?state=all&labels={key}", default=[], allow_error=True)
-        if not isinstance(issues, list) or not issues:
+        # Fail-closed read (§2.7): the issues-list endpoint returns ``200 []`` when no
+        # issue carries the label, so a 404 is the repo itself being absent — both mean
+        # "no tracking issue" (default []). An auth/5xx/rate-limit error must RAISE, not
+        # masquerade as "no issue": reading it as absent would let run_settings_drift open
+        # a duplicate tracking issue (and silently violates its "fails loud" contract).
+        issues = github.gh_json_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
+        head = _select_issue(issues, repo, key)
+        if head is None:
             return None
-        head = issues[0]
         number = head.get("number")
         is_open = head.get("state") == "open"
+        if number is None:
+            # A 200 with a malformed issue (no number) → can't read the consent timeline;
+            # report the issue with no consent so reconcile refuses (fail-safe), never crash.
+            return Issue(key=key, open=is_open)
 
-        # Read the FULL (paginated) label-event history so a later revoke cannot
-        # be missed (§2.8/§6.4), then reduce to the active consent grant.
-        timeline = github.gh_json_paginated(f"repos/{repo}/issues/{number}/timeline", default=[], allow_error=True)
+        # Read the FULL (paginated) label-event history so a later revoke cannot be missed
+        # (§2.8/§6.4). FAIL CLOSED on a transient error (no allow_error): silently reading
+        # the authoritative consent history as [] would drop a real grant/revoke.
+        timeline = github.gh_json_paginated(f"repos/{repo}/issues/{number}/timeline", default=[])
         events = _label_events(timeline if isinstance(timeline, list) else [])
         grant = current_consent(events)
         if grant is None:
@@ -275,12 +464,15 @@ class GitHubPlatform:
 
         role, role_ok = self._actor_role(repo, grant.actor_login)
         raw_timeline = timeline if isinstance(timeline, list) else []
+        # review #16: map GitHub's actor-type/permission vocabulary to core's NEUTRAL constants at
+        # the port boundary, so core/consent.py carries no platform-specific strings (§2.14). A
+        # non-"User" type / non-"admin" role maps to a sentinel the gate denies (fail-closed).
         return Issue(
             key=key,
             open=is_open,
             consent_diff_id=grant.diff_id,
-            consent_actor_type=grant.actor_type,
-            consent_role=role,
+            consent_actor_type=ACTOR_HUMAN if grant.actor_type == "User" else "nonhuman",
+            consent_role=ROLE_PRIVILEGED if role == "admin" else role,
             consent_role_lookup_ok=role_ok,
             edited_by_nonhuman_since_grant=nonhuman_edit_after_grant(raw_timeline, grant.diff_id),
         )
@@ -299,42 +491,92 @@ class GitHubPlatform:
             repo_data = github.gh_json_optional(f"repos/{repo}", default=None)
             if isinstance(repo_data, dict) and "has_issues" in repo_data:
                 issue_channel = bool(repo_data["has_issues"])
-            # Read the per-run heartbeat the security baseline EMITS (§5.14) — the
-            # presence of a recent `aviato-security-heartbeat` artifact — not a stale
-            # CodeQL analysis that could read "present" even if this run never ran.
-            artifacts = github.gh_json_optional(
-                f"repos/{repo}/actions/artifacts?name=aviato-security-heartbeat&per_page=1", default=None
-            )
-            if isinstance(artifacts, dict) and "artifacts" in artifacts:
-                items = artifacts["artifacts"]
-                heartbeat = bool(items) and not all(a.get("expired") for a in items)
+            # The heartbeat must be CURRENT, not merely present (§5.14/§8.16). The baseline only
+            # uploads it on a CLEAN run (gate-before-upload), but the artifact lingers up to its
+            # retention window — so a "clean yesterday, broke today" repo would read clean for days
+            # if we checked mere presence. Tie freshness to the current default-branch HEAD: the
+            # baseline ran clean on the deployed code iff a non-expired heartbeat exists whose run's
+            # head_sha == HEAD. Absence (HEAD's run broke / never ran) reads as broken, not clean.
+            branch = repo_data.get("default_branch") if isinstance(repo_data, dict) else None
+            head = github.gh_json_optional(f"repos/{repo}/commits/{branch}", default=None) if branch else None
+            head_sha = head.get("sha") if isinstance(head, dict) else None
+            if head_sha:
+                artifacts = github.gh_json_optional(
+                    f"repos/{repo}/actions/artifacts?name=aviato-security-heartbeat&per_page=30", default=None
+                )
+                items = artifacts.get("artifacts", []) if isinstance(artifacts, dict) else []
+                heartbeat = any(
+                    not item.get("expired") and (item.get("workflow_run") or {}).get("head_sha") == head_sha
+                    for item in items
+                    if isinstance(item, dict)
+                )
         except github.GitHubAPIError:
             pass  # ambiguous read → leave unknown (None)
         return issue_channel, heartbeat
 
     def _actor_role(self, repo: str, login: str | None) -> tuple[str | None, bool]:
+        # §2.7/§6.4 — DELIBERATE: the granter's role is read at apply/get_issue time, not
+        # snapshotted at grant time. This is consistent with §2.8 apply-time recompute and fails
+        # CLOSED on the dangerous direction (a granter demoted since their grant is now denied).
+        # The opposite (a non-admin who grants, then is promoted before reconcile) would be
+        # allowed — a bounded TOCTOU widening accepted under the single-operator day-zero scope
+        # (§3.4): the same human both grants and applies, so a self-promotion-then-apply is not a
+        # privilege-escalation across actors. Revisit if multi-operator consent is added.
         if not login:
             return None, False
-        response = github.gh_json(f"repos/{repo}/collaborators/{login}/permission", default=None, allow_error=True)
+        response = github.gh_json(
+            f"repos/{repo}/collaborators/{_seg(login)}/permission", default=None, allow_error=True
+        )
         if not isinstance(response, dict):
             return None, False  # lookup failed → not authorized (§2.7)
         permission = response.get("permission")
         return (permission, True) if isinstance(permission, str) else (None, False)
 
     def open_or_update_issue(self, repo: str, key: str, title: str, body: str) -> str:
-        existing = github.gh_json(f"repos/{repo}/issues?state=open&labels={key}", default=[], allow_error=True)
-        if isinstance(existing, list) and existing:
-            number = existing[0]["number"]
+        # Fail-closed read (§2.7): a transient auth/5xx must RAISE rather than read as "no
+        # existing issue", which would POST a DUPLICATE tracking issue every flaky run and
+        # fragment the consent/audit trail. A genuine ``200 []`` (no match) still creates one.
+        existing = github.gh_json_optional(f"repos/{repo}/issues?state=open&labels={_seg(key)}", default=[])
+        # A malformed 200 (issue object without "number") must not crash the scheduled
+        # drift-report; fall through to creating a fresh issue rather than KeyError. When
+        # several issues share the label, act on ONE deterministically (oldest), with a warn.
+        chosen = _select_issue(existing, repo, key)
+        number = chosen.get("number") if chosen else None
+        if number is not None:
             self._gh_input(["--method", "PATCH", f"repos/{repo}/issues/{number}"], {"body": body})
             return str(number)
         self._gh_input(["--method", "POST", f"repos/{repo}/issues"], {"title": title, "body": body, "labels": [key]})
         return key
 
     def comment_issue(self, repo: str, key: str, body: str) -> None:
-        existing = github.gh_json(f"repos/{repo}/issues?state=all&labels={key}", default=[], allow_error=True)
-        if isinstance(existing, list) and existing:
-            number = existing[0]["number"]
+        # Fail-closed read (§2.7): a transient auth/5xx must RAISE rather than silently drop
+        # the audit comment (the §5.7 record of a privileged change). A genuine ``200 []``
+        # (no issue to comment on) stays a no-op.
+        existing = github.gh_json_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
+        chosen = _select_issue(existing, repo, key)
+        number = chosen.get("number") if chosen else None
+        if number is not None:
             self._gh_input(["--method", "POST", f"repos/{repo}/issues/{number}/comments"], {"body": body})
+
+    def revoke_consent(self, repo: str, key: str, diff_id: str) -> None:
+        """Remove the consent-grant label bound to ``diff_id`` from the tracking issue (§5.6/§6.4).
+
+        Called when reported settings drift changes: the prior consent must be VOIDED, not
+        merely commented, so a later return to the old diff id cannot re-authorize on a
+        stale label (§8.3). Fail-closed: an auth/5xx on the issue read or the label DELETE
+        raises (the scheduled run then fails loud, §5.6), while a genuine 404 — the label is
+        already absent — is the desired end state and tolerated.
+        """
+        existing = github.gh_json_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
+        chosen = _select_issue(existing, repo, key)
+        number = chosen.get("number") if chosen else None
+        if number is None:
+            return
+        label = f"{CONSENT_LABEL_PREFIX}{diff_id}"
+        endpoint = f"repos/{repo}/issues/{number}/labels/{_seg(label)}"
+        result = github.run(["gh", "api", "--method", "DELETE", endpoint], check=False)
+        if result.returncode != 0 and "http 404" not in result.stderr.lower():
+            raise github.GitHubAPIError(endpoint, result.returncode, result.stderr)
 
     def open_or_update_proposal(self, repo: str, branch: str, title: str, files: dict[str, str], body: str) -> str:
         """Write the regenerated files onto an identity-keyed branch and open/update a PR (§5.5).
@@ -368,7 +610,45 @@ class GitHubPlatform:
         )
         self._git("push", "--force", "origin", branch)
 
-        existing = github.gh_json(f"repos/{repo}/pulls?head={owner}:{branch}&state=open", default=[], allow_error=True)
+        # Fail-closed read: a 404 cannot occur here (the list is empty when no PR
+        # matches), so an auth/5xx error must raise rather than be read as "no existing
+        # PR" — which would push a duplicate `pr create`. Consistent with the other reads.
+        existing = github.gh_json_optional(f"repos/{repo}/pulls?head={owner}:{branch}&state=open", default=[])
+        if not (isinstance(existing, list) and existing):
+            self._gh("pr", "create", "--repo", repo, "--head", branch, "--base", base, "--title", title, "--body", body)
+        return branch
+
+    def open_worktree_proposal(self, repo: str, branch: str, title: str, body: str) -> str:
+        """Commit ALL working-tree changes (incl. deletions) onto an identity-keyed
+        branch and open/update a PR (§5.13 offboarding).
+
+        Unlike :meth:`open_or_update_proposal` (which stages a known file set), the caller
+        has already mutated the checked-out tree — stripped markers, removed files, deleted
+        the declaration — so this stages everything with ``git add -A`` to capture deletions
+        too. Runs in ``workdir``; requires ``contents: write`` + ``pull-requests: write``.
+        """
+        base = github.default_branch(repo) or "main"
+        owner = repo.split("/", 1)[0]
+
+        self._git("switch", "-C", branch)
+        self._git("add", "-A")
+        self._git(
+            "-c",
+            "user.name=aviato-bot",
+            "-c",
+            "user.email=aviato-bot@users.noreply.github.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            title,
+        )
+        self._git("push", "--force", "origin", branch)
+
+        # Fail-closed read: a 404 cannot occur here (the list is empty when no PR
+        # matches), so an auth/5xx error must raise rather than be read as "no existing
+        # PR" — which would push a duplicate `pr create`. Consistent with the other reads.
+        existing = github.gh_json_optional(f"repos/{repo}/pulls?head={owner}:{branch}&state=open", default=[])
         if not (isinstance(existing, list) and existing):
             self._gh("pr", "create", "--repo", repo, "--head", branch, "--base", base, "--title", title, "--body", body)
         return branch
@@ -379,26 +659,100 @@ class GitHubPlatform:
     def _gh(self, *args: str) -> None:
         github.run(["gh", *args], cwd=self.workdir)
 
-    def apply_settings(self, repo: str, payload: dict[str, Any]) -> None:
+    def apply_settings(
+        self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
+    ) -> None:
         # ``payload`` is the flat desired default-branch state; translate it to the
         # branch-protection API shape before the PUT (§2.9). The PUT replaces
         # protection wholesale, so FAIL CLOSED if the live branch carries protections
         # the desired model does not cover (required status checks / push
         # restrictions): silently dropping them would mutate state the operator never
         # saw or consented to (§2.4/§5.7).
+        #
+        # ``expected_live`` (review #14): the flat live snapshot the consented diff was computed
+        # against (§2.8). The fail-closed guards below necessarily re-read live state fresh, which
+        # is a SEPARATE snapshot from the one the operator reviewed/consented to. If a MODELED
+        # branch-protection field changed between the decision and now, applying the (possibly
+        # stale-consented) desired state would write something the operator didn't review against
+        # current reality — so re-assert the modeled state is unchanged and abort if it drifted,
+        # tying "what is applied" to "what was consented". (Unmodeled protections newly added in
+        # the gap are caught by the guards below regardless.)
         branch = github.default_branch(repo)
+        if not branch:
+            # Empty branch ⇒ ambiguous/transient read. Proceeding would build a
+            # `branches//protection` URL that 404s to empty data, silently bypassing the
+            # fail-closed unmodeled-protection guards below before the wholesale PUT. Fail
+            # closed, mirroring read_settings (§2.7/§2.4).
+            raise github.GitHubAPIError(
+                f"repos/{repo}", 0, "could not resolve default branch; refusing to apply settings"
+            )
         live = github.classic_branch_protection(repo, branch)
-        # required_status_checks is now modeled (§10); only push restrictions remain
-        # unmodeled — fail closed rather than silently drop them.
+        # The wholesale PUT carries only the modeled fields (PR reviews, status checks, force/
+        # delete, conversation resolution). Any OTHER classic protection enabled live — push
+        # restrictions, linear history, branch lock, code-owner/last-push-approval review gates,
+        # etc. — would be silently dropped by the replacement PUT, so fail closed and make the
+        # operator reconcile it manually rather than clobber it (§2.4/§2.9).
         unmodeled = [k for k in ("restrictions",) if live.get(k)]
+        unmodeled += [k for k in _UNMODELED_CLASSIC_FLAGS if isinstance(live.get(k), dict) and live[k].get("enabled")]
+        live_reviews = live.get("required_pull_request_reviews") or {}
+        unmodeled += [k for k in _UNMODELED_REVIEW_FIELDS if live_reviews.get(k)]
+        # Also inspect branch RULESETS: a rule type the desired model doesn't represent
+        # (e.g. commit_message_pattern, required_signatures, required_deployments) would
+        # leave a dual-control state the operator never reviewed when the classic PUT
+        # lands — fail closed there too (§2.4/§5.7), matching what read_settings reads.
+        rules = github.active_branch_rules(repo, branch)
+        unmodeled += sorted({str(rule.get("type")) for rule in rules if rule.get("type") not in _MODELED_RULE_TYPES})
         if unmodeled:
             raise UnmodeledProtectionError(
                 f"refusing to PUT branch protection on {repo}@{branch}: it carries unmodeled "
-                f"protection(s) {unmodeled} that this reconcile does not manage and would drop. "
-                f"Reconcile those manually, then re-run."
+                f"protection(s) {unmodeled} that this reconcile does not manage and would drop "
+                f"or shadow. Reconcile those manually, then re-run."
             )
-        api_payload = to_branch_protection_payload(payload)
-        self._gh_input(["--method", "PUT", f"repos/{repo}/branches/{branch}/protection"], api_payload)
+
+        # review #14: re-assert the modeled branch state hasn't drifted since the consented diff
+        # was computed (§2.8/§5.7). The decision snapshot (expected_live) and these guard reads are
+        # otherwise independent; a modeled-field change in between means the operator consented
+        # against stale reality — fail closed and make them re-run, rather than apply a diff that
+        # no longer reflects the live state.
+        if expected_live is not None:
+            fresh_branch = map_branch_settings(rules, live)
+            drifted_since = sorted(
+                key
+                for key in _BRANCH_PROTECTION_KEYS
+                if _norm_setting(key, expected_live.get(key)) != _norm_setting(key, fresh_branch.get(key))
+            )
+            if drifted_since:
+                raise UnmodeledProtectionError(
+                    f"refusing to apply settings on {repo}@{branch}: its branch protection changed "
+                    f"since the reviewed diff was computed ({drifted_since}); re-run reconcile so the "
+                    f"applied change reflects current state and your consent (§2.8/§5.7)."
+                )
+
+        # Branch protection may be authored on the RULESET surface (the bundled
+        # "protect default branch" ruleset) rather than classic protection. This
+        # settings reconcile can only write CLASSIC protection, so a classic PUT when a
+        # ruleset owns the branch-protection rules would create an unreviewed
+        # dual-control divergence — and could silently FAIL to apply a relaxation while
+        # reporting success. If the ruleset already enforces the desired branch state
+        # there is nothing to write on that surface; otherwise fail closed and direct
+        # the operator to the ruleset surface (§2.4/§2.9/§5.7).
+        if any(rule.get("type") in _MODELED_RULE_TYPES for rule in rules):
+            live_branch = map_branch_settings(rules, live)
+            drifted = sorted(
+                key
+                for key in _BRANCH_PROTECTION_KEYS
+                if key in payload and _norm_setting(key, payload[key]) != _norm_setting(key, live_branch.get(key))
+            )
+            if drifted:
+                raise UnmodeledProtectionError(
+                    f"refusing to PUT classic branch protection on {repo}@{branch}: its branch "
+                    f"protection is enforced by a ruleset, which this settings reconcile cannot "
+                    f"write. Reconcile the ruleset with `aviato apply-rulesets {repo}` for {drifted}, "
+                    f"then re-run."
+                )
+        else:
+            api_payload = to_branch_protection_payload(payload)
+            self._gh_input(["--method", "PUT", f"repos/{repo}/branches/{branch}/protection"], api_payload)
 
         # Apply the repo-level security toggles (§2.13) when present in the desired set.
         # These are §17 operator-prerequisite features that can be UNAVAILABLE (e.g.

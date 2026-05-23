@@ -62,9 +62,16 @@ def audit_repo(repo: Path, *, root: Path, policy: dict) -> AuditRow:
     if not default:
         return AuditRow(rel, slug, "", local_branch, workflows, "API_ERROR", "API_ERROR", "API_ERROR", invalid_tags)
 
-    rules = github.active_branch_rules(slug, default)
-    protection = github.classic_branch_protection(slug, default)
-    tag_rulesets = github.tag_ruleset_names(slug)
+    # These reads fail closed (§2.7): an ambiguous (auth/5xx/rate-limit) read raises
+    # rather than reporting a false "no protection". Degrade the whole row to
+    # API_ERROR rather than crash the audit, so one flaky repo doesn't sink the run.
+    try:
+        rules = github.active_branch_rules(slug, default)
+        protection = github.classic_branch_protection(slug, default)
+        tag_rulesets = github.tag_ruleset_names(slug)
+    except GitHubAPIError:
+        err = "API_ERROR"
+        return AuditRow(rel, slug, default, local_branch, workflows, err, err, err, invalid_tags)
 
     return AuditRow(
         path=rel,

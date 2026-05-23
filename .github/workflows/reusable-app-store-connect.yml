@@ -101,6 +101,13 @@ on:
       APPLE_PROVISIONING_PROFILE_BASE64:
         required: true
 
+# review #26: serialize App Store uploads per repo for parity with the other deploys — a re-run
+# should queue, not race a parallel upload. Bounded anyway by App Store Connect rejecting a
+# duplicate build number.
+concurrency:
+  group: aviato-app-store-${{ github.repository }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -144,8 +151,8 @@ jobs:
         id: release
         shell: bash
         env:
-          TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
-          TAG_FORMAT_DESCRIPTION: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
+          TAG_PATTERN: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+          TAG_FORMAT_DESCRIPTION: 'N.N.N, N.N.N-alphaN, or N.N.N-betaN'
           RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
         run: |
           set -euo pipefail
@@ -218,7 +225,10 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           MARKETING_VERSION: ${{ steps.release.outputs.tag }}
           BUILD_NUMBER: ${{ github.run_number }}
-        run: ${{ inputs.version-command }}
+          VERSION_COMMAND: ${{ inputs.version-command }}
+        run: |
+          set -euo pipefail
+          eval "$VERSION_COMMAND"
 
       - name: Archive app
         shell: bash
@@ -303,7 +313,10 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           BUILD_NUMBER: ${{ github.run_number }}
-        run: ${{ inputs.submit-for-review-command }}
+          SUBMIT_FOR_REVIEW_COMMAND: ${{ inputs.submit-for-review-command }}
+        run: |
+          set -euo pipefail
+          eval "$SUBMIT_FOR_REVIEW_COMMAND"
 
       - name: Upload App Store Connect receipt
         if: ${{ always() }}

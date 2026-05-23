@@ -46,10 +46,6 @@ def test_profile_is_frozen() -> None:
         p.name = "y"  # type: ignore[misc]
 
 
-def test_profile_requires_macos_default_false() -> None:
-    assert Profile(name="x", workflows="w", scaffold="s", settings="g").requires_macos is False
-
-
 def test_bundle_fields_present() -> None:
     wb = WorkflowsBundle(name="w", extends="base", add=("verify",), remove=())
     sb = ScaffoldBundle(name="s", templates=("a", "b"))

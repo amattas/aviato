@@ -27,3 +27,13 @@ shellcheck
 dependabot
 testflight
 xcode
+javascript
+typescript
+package.json
+pyproject
+pbxproj
+plist
+npm
+pip
+docker
+container

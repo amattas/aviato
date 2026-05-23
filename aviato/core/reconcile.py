@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .consent import authorize
-from .settingsdrift import classify_settings
+from .errors import CompatibilityError
+from .settingsdrift import classify_settings, diff_identity
 from .version import is_compatible
 
 Action = Literal["apply", "noop", "abort", "refuse"]
@@ -16,13 +17,17 @@ class ReconcileState:
 
     A thin platform adapter (around ``gh``) populates this from the live issue,
     its consent record, and live settings; the decision logic below is pure so
-    it can be exhaustively tested. ``current_diff_id`` and ``*_settings`` are the
-    apply-time **recomputed** values, never an earlier snapshot (§2.8).
+    it can be exhaustively tested. ``*_settings`` are the apply-time recomputed
+    values, never an earlier snapshot (§2.8).
     """
 
     issue_open: bool
     consent_present: bool
     consent_diff_id: str | None
+    # A caller-supplied diff id. The decision DELIBERATELY IGNORES this and recomputes
+    # the identity from live settings at apply time (§2.8) — a stale/forged value here
+    # must never influence the gate. Retained (not removed) precisely so a test can pass a
+    # wrong value and prove it has no effect (test_reconcile: STALE-WRONG-VALUE). Not dead.
     current_diff_id: str
     actor_type: str | None
     role: str | None
@@ -55,7 +60,7 @@ class ReconcileOutcome:
     values: dict[str, dict[str, Any]] | None = None
 
 
-def _purpose_built_payload(desired: dict[str, Any], live: dict[str, Any], diff_keys) -> dict[str, Any]:
+def _purpose_built_payload(desired: dict[str, Any], diff_keys) -> dict[str, Any]:
     """Construct a write payload of only the changed fields (§2.9): no read-shaped replay."""
     return {key: desired[key] for key in diff_keys if key in desired}
 
@@ -79,13 +84,18 @@ def reconcile_decision(state: ReconcileState) -> ReconcileOutcome:
     if not diff.changes:
         return ReconcileOutcome("noop", "recomputed diff is empty; already converged")
 
-    if not state.consent_present or state.consent_diff_id != state.current_diff_id:
+    # Bind the gate to the identity of the diff RECOMPUTED here, not the caller-supplied
+    # state.current_diff_id — so consent/confirmation and the applied payload all derive
+    # from one apply-time source and a stale/divergent state field can't slip through (§2.8/§6.4).
+    current_diff_id = diff_identity(diff)
+
+    if not state.consent_present or state.consent_diff_id != current_diff_id:
         return ReconcileOutcome("refuse", "consent absent or not bound to the current diff; needs (re-)consent")
 
     decision = authorize(
         actor_type=state.actor_type,
         consent_diff_id=state.consent_diff_id,
-        current_diff_id=state.current_diff_id,
+        current_diff_id=current_diff_id,
         role_lookup_ok=state.role_lookup_ok,
         role=state.role,
     )
@@ -97,24 +107,31 @@ def reconcile_decision(state: ReconcileState) -> ReconcileOutcome:
 
     if state.confirmed_diff_id is None:
         return ReconcileOutcome(
-            "abort", f"operator did not confirm the apply-time diff; re-run with --confirm {state.current_diff_id}"
+            "abort", f"operator did not confirm the apply-time diff; re-run with --confirm {current_diff_id}"
         )
-    if state.confirmed_diff_id != state.current_diff_id:
+    if state.confirmed_diff_id != current_diff_id:
         return ReconcileOutcome(
             "abort",
             f"confirmed diff {state.confirmed_diff_id} no longer matches the apply-time diff "
-            f"{state.current_diff_id} (live state changed since review); re-review and re-confirm",
+            f"{current_diff_id} (live state changed since review); re-review and re-confirm",
         )
 
     pin_overridden = False
-    if not is_compatible(tool=state.tool_version, pinned=state.pin, recorded=state.recorded_version):
+    # An unparseable pin/recorded version (e.g. a corrupted or empty marker) must fail
+    # CLOSED to the same operator-gated "refuse" path, not crash out of the pure decision
+    # with a CompatibilityError that bypasses the §5.7 issue-audit comment (§2.6/§2.7).
+    try:
+        compatible = is_compatible(tool=state.tool_version, pinned=state.pin, recorded=state.recorded_version)
+    except CompatibilityError:
+        compatible = False
+    if not compatible:
         if not state.override_version_pin:
             return ReconcileOutcome(
                 "refuse", "version-pin mismatch (§2.6); re-run with --override-version-pin to proceed"
             )
         pin_overridden = True
 
-    payload = _purpose_built_payload(state.desired_settings, state.live_settings, diff.changes)
+    payload = _purpose_built_payload(state.desired_settings, diff.changes)
     reason = "human consent, admin role, confirmed recomputed diff"
     if pin_overridden:
         reason += " (version-pin mismatch overridden by operator, §2.6)"

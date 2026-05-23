@@ -9,10 +9,12 @@
     "lint": "eslint .",
     "format:check": "prettier --check .",
     "test": "vitest run --coverage",
-    "build": "echo 'Configure a JavaScript bundle for your service (e.g. esbuild).'"
+    "build": "echo 'No build configured. Add a bundler (e.g. esbuild) and set run-build for the CI gate.' && exit 1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
     "eslint": "^9.0.0",
+    "eslint-plugin-security": "^3.0.0",
     "prettier": "^3.0.0",
     "vitest": "^2.0.0"
   }

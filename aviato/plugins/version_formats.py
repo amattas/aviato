@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+from aviato.core.errors import AviatoError
+from aviato.core.scaffold import atomic_write
+
+# Per-format version-source rewriters (§3.3). Each rewriter names a concrete
+# manifest/project-file format (pyproject.toml, package.json, .pbxproj, .plist),
+# so this knowledge lives in the plug-in tree, not the agnostic core. The set of
+# *locations* a profile bumps is plug-in DATA (``version_source.locations``); this
+# module is the matching plug-in LOGIC that knows how to rewrite each format.
+# Match either quote style (TOML/PEP 621 permits single OR double quotes); the closing
+# quote is a backreference so the original style is preserved on rewrite.
+_PYPROJECT_VERSION = re.compile(r'(?m)^(?P<prefix>version\s*=\s*)(?P<q>["\'])[^"\']*(?P=q)')
+# The package version lives only in [project] (PEP 621) or [tool.poetry]; a stray
+# version = "..." in another table (e.g. a bumpver/tool config) must not be touched.
+_PYPROJECT_VERSION_TABLES = ("project", "tool.poetry")
+# Tolerate any spacing around '=' (a hand-edited pbxproj need not use Xcode's canonical
+# single spaces); the captured prefix preserves the file's original spacing on rewrite.
+_PBXPROJ_MARKETING = re.compile(r"(MARKETING_VERSION\s*=\s*)[^;]+;")
+_PBXPROJ_BUILD = re.compile(r"(CURRENT_PROJECT_VERSION\s*=\s*)[^;]+;")
+_PLIST_SHORT = re.compile(r"(<key>CFBundleShortVersionString</key>\s*<string>)[^<]*(</string>)")
+_PLIST_BUILD = re.compile(r"(<key>CFBundleVersion</key>\s*<string>)[^<]*(</string>)")
+
+
+def _bare(version: str) -> str:
+    """Manifest version strings are bare SemVer (a legacy leading ``v`` is stripped)."""
+    return version[1:] if version.startswith("v") else version
+
+
+def _rewrite_toml_table_version(text: str, tables: tuple[str, ...], bare: str) -> tuple[str, int]:
+    """Rewrite the first ``version = "..."`` inside one of ``tables`` (e.g. ``project``).
+
+    Scoped to a single table's span so a ``version`` key in an unrelated table is
+    never rewritten. Preserves all surrounding formatting (no reserialization).
+    """
+    for table in tables:
+        header = re.search(r"(?m)^\[" + re.escape(table) + r"\]\s*$", text)
+        if header is None:
+            continue
+        start = header.end()
+        following = re.search(r"(?m)^\[", text[start:])
+        end = start + following.start() if following else len(text)
+        # Function replacement (not a template string) so a version containing a regex
+        # backreference sequence (e.g. ``\g<...>``/``\1``) is spliced literally, never
+        # re-interpreted by ``re.sub``.
+        segment, count = _PYPROJECT_VERSION.subn(
+            lambda m: f"{m.group('prefix')}{m.group('q')}{bare}{m.group('q')}", text[start:end], count=1
+        )
+        if count:
+            return text[:start] + segment + text[end:], count
+    return text, 0
+
+
+def _top_level_json_string_span(text: str, key: str) -> tuple[int, int] | None:
+    """Return the (start, end) span of the value string literal for a depth-1 object
+    ``key``, scanning JSON structurally so a nested key of the same name is skipped.
+
+    Returned span includes both surrounding quotes; ``None`` if no depth-1 string
+    value for ``key`` is found.
+    """
+    depth = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            token = text[i + 1 : j]
+            after = j + 1
+            while after < n and text[after] in " \t\r\n":
+                after += 1
+            if depth == 1 and token == key and after < n and text[after] == ":":
+                value = after + 1
+                while value < n and text[value] in " \t\r\n":
+                    value += 1
+                if value < n and text[value] == '"':
+                    w = value + 1
+                    while w < n and text[w] != '"':
+                        w += 2 if text[w] == "\\" else 1
+                    return (value, w + 1)
+                return None
+            i = j + 1
+            continue
+        if ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+        i += 1
+    return None
+
+
+def bump_text(filename: str, text: str, new_version: str, build_number: str | None = None) -> str:
+    """Rewrite the version string(s) in a version-source file's text (§3.3).
+
+    Manifests record bare SemVer (any leading ``v`` is stripped). App-bundle project
+    files (``.pbxproj``/``.plist``) get the marketing version plus a strictly-increasing
+    build number (§12.3/§13.4). An unsupported filename is returned unchanged.
+    """
+    name = Path(filename).name
+    bare = _bare(new_version)
+
+    if name == "pyproject.toml":
+        new, count = _rewrite_toml_table_version(text, _PYPROJECT_VERSION_TABLES, bare)
+        if count == 0:
+            raise AviatoError(f"no [project]/[tool.poetry] version field found in {filename}")
+        return new
+
+    if name == "package.json":
+        # Validate it is JSON and read the current top-level version, then rewrite ONLY
+        # that string in place — never reserialize the whole file (that would churn the
+        # operator-owned, seed-once manifest's formatting/key order, §3.3/§6.3). The span
+        # is found structurally so a nested object's version key is never rewritten.
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            # review #23: surface a malformed manifest as an AviatoError (the caller-consistent
+            # contract every other version-source path uses), never a raw JSONDecodeError.
+            raise AviatoError(f"{filename} is not valid JSON: {exc}") from exc
+        if not isinstance(data.get("version"), str):
+            raise AviatoError(f"no top-level version string found in {filename}")
+        span = _top_level_json_string_span(text, "version")
+        if span is None:
+            raise AviatoError(f"could not locate the top-level version field to rewrite in {filename}")
+        return text[: span[0]] + f'"{bare}"' + text[span[1] :]
+
+    if name.endswith(".pbxproj"):
+        # Match COUNT (not text-equality) decides "found": an idempotent re-bump to the
+        # value the file already holds is a successful no-op, not a "field missing" error.
+        # Function replacements splice the version/build literally (no backreference re-parse).
+        new, count = _PBXPROJ_MARKETING.subn(lambda m: f"{m.group(1)}{bare};", text)
+        if count == 0:
+            raise AviatoError(f"no MARKETING_VERSION found in {filename}")
+        if build_number is not None:
+            # A supplied build number MUST land somewhere — silently dropping it ships an
+            # unchanged CFBundleVersion that App Store Connect rejects (§13.4). Fail loud.
+            new, build_count = _PBXPROJ_BUILD.subn(lambda m: f"{m.group(1)}{build_number};", new)
+            if build_count == 0:
+                raise AviatoError(f"no CURRENT_PROJECT_VERSION found in {filename} to write build number")
+        return new
+
+    if name.endswith(".plist"):
+        new, count = _PLIST_SHORT.subn(lambda m: f"{m.group(1)}{bare}{m.group(2)}", text)
+        if count == 0:
+            raise AviatoError(f"no CFBundleShortVersionString found in {filename}")
+        if build_number is not None:
+            new, build_count = _PLIST_BUILD.subn(lambda m: f"{m.group(1)}{build_number}{m.group(2)}", new)
+            if build_count == 0:
+                raise AviatoError(f"no CFBundleVersion found in {filename} to write build number")
+        return new
+
+    return text
+
+
+def bump_files(root: Path, locations: list[str], new_version: str, build_number: str | None = None) -> list[str]:
+    """Bump the version in each existing version-source location under ``root``.
+
+    Returns the list of files actually rewritten.
+    """
+    changed: list[str] = []
+    for location in locations:
+        path = Path(root) / location
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        bumped = bump_text(location, text, new_version, build_number)
+        if bumped != text:
+            # Atomic write (temp + swap): a crash mid-bump must never leave a half-written
+            # version manifest (§2.5/§5.3), consistent with the scaffolder.
+            atomic_write(path, bumped)
+            changed.append(location)
+    return changed

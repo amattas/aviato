@@ -32,3 +32,19 @@ def test_pipeline_privileges_match_workflow_permissions(pipeline: str, workflow:
     assert set(module.privileges) == workflow_privs, (
         f"{pipeline} module privileges {set(module.privileges)} != {workflow} permissions {workflow_privs}"
     )
+
+
+@pytest.mark.parametrize("pipeline,workflow", PIPELINE_WORKFLOWS.items())
+def test_pipeline_secrets_match_workflow_call_secrets(pipeline: str, workflow: str) -> None:
+    # review #25: §14 secret matrix — a pipeline module's declared `secrets` must equal the reusable
+    # workflow's `workflow_call.secrets` keys. Previously only privileges were guarded, so the
+    # secret list could drift from the workflow undetected (they currently match).
+    module = Registry(MODULE_SOURCE_ROOT).pipeline_module(pipeline)
+    assert module is not None
+
+    wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / workflow).read_text())
+    on_block = wf.get("on") or wf.get(True)  # YAML 1.1 parses the `on:` key as boolean True
+    call_secrets = (on_block.get("workflow_call") or {}).get("secrets") or {}
+    assert set(module.secrets) == set(call_secrets), (
+        f"{pipeline} module secrets {set(module.secrets)} != {workflow} workflow_call.secrets {set(call_secrets)}"
+    )

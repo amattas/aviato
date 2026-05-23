@@ -21,8 +21,8 @@ on:
       release-tag:
         description: >-
           The release tag to gate when invoked IN-RUN (branch context) by the release
-          job, e.g. v1.2.3. When empty the gate runs in the classic tag-ref context
-          and validates GITHUB_REF_NAME.
+          job, e.g. 1.2.3 (bare SemVer; the policy rejects a v-prefix). When empty the
+          gate runs in the classic tag-ref context and validates GITHUB_REF_NAME.
         required: false
         type: string
         default: ""
@@ -51,8 +51,8 @@ jobs:
       - name: Validate release tag
         shell: bash
         env:
-          TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
-          TAG_FORMAT_DESCRIPTION: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
+          TAG_PATTERN: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+          TAG_FORMAT_DESCRIPTION: 'N.N.N, N.N.N-alphaN, or N.N.N-betaN'
           RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
         run: |
           set -euo pipefail

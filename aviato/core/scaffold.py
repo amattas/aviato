@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .marker import content_hash, parse_marker_from_text, render_marker, strip_marker_from_text
+from .version import is_known_version_pin
 
 SIDECAR_PATH = ".github/aviato.seed.json"
 
@@ -27,14 +28,20 @@ class ScaffoldResult:
     unchanged: list[str] = field(default_factory=list)
     skipped_unmanaged: list[str] = field(default_factory=list)
     skipped_modified: list[str] = field(default_factory=list)
+    # Marker present and well-formed, but not a trustworthy managed artifact under THIS
+    # declaration: stamped for a different profile, or recording an unknown version. Mirrors
+    # diagnosis dirty-drift — never silently regenerated (§5.3/§5.4 one posture).
+    skipped_foreign: list[str] = field(default_factory=list)
     seeded: list[str] = field(default_factory=list)
 
 
-def _atomic_write(path: Path, text: str) -> None:
+def atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".aviato-", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        # newline="" disables platform newline translation so the bytes on disk are exactly
+        # the rendered string — byte-identical output across platforms (§5.3 determinism).
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
         os.replace(tmp_name, path)
     except BaseException:
@@ -46,15 +53,28 @@ def read_sidecar(root: Path) -> dict[str, str]:
     path = Path(root) / SIDECAR_PATH
     if not path.is_file():
         return {}
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
+    # The sidecar is a report-only advisory record (§6.3); a corrupt/truncated/non-UTF-8 one
+    # (manual edit, half-written, merge-conflict markers) must degrade to "no recorded hashes",
+    # never crash diagnosis/scaffold — and thus never abort a whole fleet scan (the per-repo
+    # guard in scan_fleet catches only AviatoError, so a raw JSONDecodeError would escape).
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return {}
     return data if isinstance(data, dict) else {}
 
 
 def _write_sidecar(root: Path, data: dict[str, str]) -> None:
+    # review #31: each sidecar write is atomic (temp + os.replace via atomic_write), but the
+    # read-modify-write within scaffold() is not guarded against a SECOND concurrent scaffold of
+    # the SAME local tree (last-writer-wins on the merged dict). The CLI runs one command per
+    # process against an operator's local checkout, so concurrent scaffolds of one tree are not an
+    # expected workflow; the sidecar is report-only, so the worst case is a stale/incomplete record
+    # (no file is ever half-written), recovered on the next single-writer sync.
     path = Path(root) / SIDECAR_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+    atomic_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def render_managed(item: ScaffoldItem, *, profile: str, version: str) -> str:
@@ -99,8 +119,22 @@ def scaffold(
 
         if item.seed_once:
             if target.exists():
+                # §6.3 seed-once: never overwrite an existing operator-owned file. But if the
+                # sidecar has NO recorded hash for it (the report-only integrity record was
+                # deleted/lost, or the file pre-existed adoption), re-establish the baseline from
+                # the file's CURRENT content so a deleted sidecar self-heals on the next sync and
+                # FUTURE tamper is again visible (§5.14 "absence reads as broken, never clean").
+                # This cannot retroactively detect tampering that happened before the heal — the
+                # sidecar is an advisory record, not a security boundary; once deleted, prior
+                # content is unknowable.
+                if output not in sidecar:
+                    try:
+                        sidecar[output] = content_hash(target.read_text(encoding="utf-8"))
+                        sidecar_changed = True
+                    except UnicodeDecodeError:
+                        pass  # binary seed-once file (§6.3) — no text hash to record
                 continue
-            _atomic_write(target, item.body)
+            atomic_write(target, item.body)
             sidecar[output] = content_hash(item.body)
             sidecar_changed = True
             result.seeded.append(output)
@@ -109,7 +143,16 @@ def scaffold(
         rendered = render_managed(item, profile=profile, version=version)
         expected_hash = content_hash(item.body)
         if target.exists():
-            existing = target.read_text(encoding="utf-8")
+            try:
+                existing = target.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                # A non-UTF-8 file cannot carry a valid Aviato marker, so it is operator-owned:
+                # never silently regenerate over it (mirrors diagnosis dirty-drift), and never
+                # crash a fleet sync. Treated exactly like a no-marker unmanaged file.
+                if not force:
+                    result.skipped_unmanaged.append(output)
+                    continue
+                existing = ""
             marker = parse_marker_from_text(existing)
             if marker is None:
                 if not force:
@@ -117,10 +160,29 @@ def scaffold(
                     result.skipped_unmanaged.append(output)
                     continue
             else:
+                if not force and marker.profile != profile:
+                    # Marker stamped for a DIFFERENT profile (one profile per repo, §3): not a
+                    # trustworthy managed artifact under this declaration. Mirror diagnosis
+                    # dirty-drift — never silently regenerate; require human review or --force
+                    # (§5.3/§5.4 one posture). Checked before the body compare so a foreign-profile
+                    # marker is never reported "unchanged" either.
+                    result.skipped_foreign.append(output)
+                    continue
+                if not force and not is_known_version_pin(marker.version):
+                    # Recorded version unknown/unparseable → version compatibility cannot be
+                    # established, so the file is never silently regenerated over (mirrors
+                    # diagnosis dirty-drift, §5.4). Defense in depth behind the CLI §2.6 gate.
+                    result.skipped_foreign.append(output)
+                    continue
                 body_hash = content_hash(strip_marker_from_text(existing))
-                # Body correct and marker hash current → no-op (marker version excluded,
-                # so a version-only move is not churn; matches diagnosis "clean", §5.5).
-                if body_hash == expected_hash and marker.hash == expected_hash:
+                # Body correct, marker hash current, AND marker version current → no-op. The drift
+                # hash excludes the version (§5.5), so a scheduled drift run never churns on a
+                # version move — but a §5.12 re-pin DELIBERATELY moves the pin, so when only the
+                # version differs this is False and we fall through to RESTAMP the marker (the
+                # rendered content carries the new version), so `repin` never leaves a stale
+                # `version=` on non-pin-bearing files. Not skipped_modified: the body matches
+                # expected, so the `body_hash != expected_hash` guard below is False.
+                if body_hash == expected_hash and marker.hash == expected_hash and marker.version == version:
                     result.unchanged.append(output)
                     continue
                 # Body matches neither expected nor what Aviato last wrote → the operator
@@ -130,7 +192,7 @@ def scaffold(
                     result.skipped_modified.append(output)
                     continue
                 # else: template moved or marker stale → regenerate (diagnosis "mergeable").
-        _atomic_write(target, rendered)
+        atomic_write(target, rendered)
         result.written.append(output)
 
     if sidecar_changed:

@@ -96,7 +96,8 @@ logic.
 
 ### Rulesets
 
-Ruleset payloads live in `rulesets/`.
+Ruleset payloads live in `aviato/library/rulesets/` (inside the package, so they
+ship in the wheel for installed rendering).
 
 - `protect-default-branch.json` protects the repository default branch.
 - `release-tag-format.json` protects release tags and enforces the release tag
@@ -108,9 +109,9 @@ unattended automation.
 
 The near-term shape is:
 
-- `policy.yml` owns policy constants such as the release tag pattern.
-- `rulesets.yml` declares which ruleset templates exist and how policy values
-  are injected into them.
+- `aviato/library/policy.yml` owns policy constants such as the release tag pattern.
+- `aviato/library/rulesets.yml` declares which ruleset templates exist and how policy
+  values are injected into them.
 - ruleset JSON files remain readable templates.
 
 ### Core Engine
@@ -161,22 +162,22 @@ Policy constants should have one canonical source.
 The release tag format is:
 
 ```text
-^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$
+^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$
 ```
 
 Accepted examples:
 
-- `v1.2.3`
-- `v1.2.3-alpha1`
-- `v1.2.3-beta2`
+- `1.2.3`
+- `1.2.3-alpha1`
+- `1.2.3-beta2`
 
 Rejected examples:
 
-- `1.2.3` (no `v`)
-- `v1.2.3-beta.1`
+- `v1.2.3` (no `v` prefix allowed)
+- `1.2.3-beta.1`
 - `build-20260519.0215`
 
-The canonical file is `policy.yml`. Ruleset rendering derives from it, and
+The canonical file is `aviato/library/policy.yml`. Ruleset rendering derives from it, and
 validation checks any embedded copies needed by GitHub Actions defaults.
 Documentation may describe policy, but documentation must not become the source
 of truth.
@@ -192,13 +193,9 @@ should not be supported by release publishing workflows.
 If branch or pull request Docker builds are needed, they should be implemented
 as a separate non-release workflow instead of weakening the release workflow.
 
-Release workflows embed release reference validation so the validation behavior
-is pinned to the same ref as the reusable workflow. A standalone composite
-validator also exists for direct callers that want it:
-
-```text
-.github/actions/validate-release-ref/action.yml
-```
+Release workflows embed release reference validation inline (a `TAG_PATTERN` env
+fed to the ref check) so the validation behavior is pinned to the same ref as the
+reusable workflow.
 
 Repository validation checks those embedded patterns against `policy.yml`.
 
@@ -247,9 +244,11 @@ Validation should cover:
 
 - shell syntax and linting while shell scripts remain;
 - GitHub Actions workflow linting;
-- YAML syntax for `policy.yml` and `rulesets.yml`;
-- JSON syntax for `rulesets/*.json`;
-- drift checks that compare embedded release tag patterns against `policy.yml`;
+- YAML syntax for `aviato/library/policy.yml` and `aviato/library/rulesets.yml`;
+- JSON syntax for `aviato/library/rulesets/*.json`;
+- drift checks that compare embedded release tag patterns against `policy.yml`,
+  and that the inline `highest.py` monotonic-alias guards embedded in the deploy
+  workflows still agree with the core `is_highest` comparator (§8.14/§13.2);
 - Python tests once the CLI exists.
 
 CI should install required validation tools and run the validation script on

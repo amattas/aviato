@@ -14,6 +14,52 @@ from .model import (
     WorkflowsBundle,
 )
 from .registry import Registry
+from .settingsdrift import weakens
+
+_VARIABLE_TYPES = {"string", "boolean", "enum"}
+
+
+def _variable_spec(item: dict[str, Any]) -> VariableSpec:
+    """Build a typed VariableSpec, validating the §6.6 schema at composition time.
+
+    The variable ``type`` must be one of string/boolean/enum (a typo like ``bool``
+    must fail loud here, never silently render uncoerced), and an ``enum`` must
+    declare a non-empty ``domain`` (otherwise no value — including its own default —
+    could ever resolve, §6.6).
+    """
+    name = item.get("name")
+    var_type = item.get("type")
+    if var_type not in _VARIABLE_TYPES:
+        raise CompositionError(
+            f"variable {name!r} has unknown type {var_type!r}; must be one of {sorted(_VARIABLE_TYPES)} (§6.6)"
+        )
+    domain = tuple(item["domain"]) if item.get("domain") is not None else None
+    if var_type == "enum" and not domain:
+        raise CompositionError(f"enum variable {name!r} must declare a non-empty domain (§6.6)")
+    return VariableSpec(
+        name=item["name"],
+        type=var_type,
+        secret=bool(item.get("secret", False)),
+        required=bool(item.get("required", True)),
+        domain=domain,
+        default=item.get("default"),
+    )
+
+
+def _settings_override_lists(override: dict[str, Any], _prefix: str = "") -> list[str]:
+    """Dotted paths of any list-valued key in a settings override (§4.2 bare-list guard).
+
+    Recurses nested maps; a list value at any depth is a bare-list restatement the settings
+    deep-merge would silently replace, which §4.2 forbids (lists need explicit add/remove).
+    """
+    found: list[str] = []
+    for key, value in override.items():
+        path = f"{_prefix}{key}"
+        if isinstance(value, list):
+            found.append(path)
+        elif isinstance(value, dict):
+            found.extend(_settings_override_lists(value, f"{path}."))
+    return found
 
 
 def _chain(load, name: str) -> list:
@@ -40,6 +86,12 @@ def _resolve_list(layers: list, base_attr: str) -> tuple[str, ...]:
     root = layers[0]
     if root.extends is not None:  # defensive; root by construction has no extends
         raise CompositionError(f"resolution root {root.name!r} unexpectedly extends another")
+    if root.add or root.remove:
+        # add/remove are relative to a base layer; the root IS the base, so they have no
+        # meaning here. Silently ignoring them would let a misplaced override no-op (§4.2).
+        raise CompositionError(
+            f"resolution root {root.name!r} declares add/remove, which only apply under extends (§4.2)"
+        )
     resolved = list(getattr(root, base_attr))
     for layer in layers[1:]:
         if getattr(layer, base_attr):
@@ -76,6 +128,12 @@ def resolve_profile(
     ``extends``/override, or an add/remove edge violation.
     """
     overrides = overrides or {}
+    unknown = set(overrides) - {"pipelines", "settings"}
+    if unknown:
+        raise CompositionError(
+            f"unknown override key(s) {sorted(unknown)}; only 'pipelines' and 'settings' "
+            f"are supported (§4.2 — overrides are explicit, never silently dropped)"
+        )
     profile = registry.profile(name)
 
     wf_layers: list[WorkflowsBundle] = _chain(registry.workflows_bundle, profile.workflows)
@@ -86,6 +144,11 @@ def resolve_profile(
 
     set_layers: list[SettingsBundle] = _chain(registry.settings_bundle, profile.settings)
     settings = _resolve_settings(set_layers)
+    # Capture the always-on security baseline BEFORE consumer overrides apply (§2.13).
+    # Which toggles are baseline is DATA (the settings bundle's ``security`` block), so
+    # the core names no specific scanner; it only enforces that the composed baseline
+    # cannot be silently omitted or weakened by an override below.
+    baseline_security = dict(settings.get("security", {}))
 
     pipeline_override = overrides.get("pipelines")
     if pipeline_override is not None:
@@ -103,7 +166,43 @@ def resolve_profile(
     if settings_override is not None:
         if not isinstance(settings_override, dict):
             raise CompositionError("settings override must be a mapping (§4.2)")
+        # §4.2/§5.1: a list-valued property is modified by EXPLICIT add/remove only — a child must
+        # never restate a bare list (which would silently replace, e.g. emptying `rulesets` or
+        # `required_status_checks`). Settings overrides are map deep-merges with no add/remove
+        # semantics, so a bare list in the override is rejected rather than silently accepted-and-
+        # ignored (the actual ruleset apply/drift derive from the manifest + composed checks, so a
+        # replaced list would have no effect — a silent no-op the spec forbids).
+        bare_lists = _settings_override_lists(settings_override)
+        if bare_lists:
+            raise CompositionError(
+                f"settings override restates list-valued key(s) {sorted(bare_lists)} as a bare list "
+                "(§4.2); list-valued settings are not consumer-overridable via a bare list — they "
+                "are derived from the composed pipelines (status checks) and the ruleset manifest"
+            )
         settings = deep_merge(settings, settings_override)
+        # §2.13: the security baseline is always-on — "there is no composition that
+        # silently omits it." An override may strengthen a toggle but may never remove
+        # or weaken one (true→false, etc.); doing so is a hard composition error, the
+        # settings analogue of the always_on_pipelines guard below.
+        resolved_security = settings.get("security", {})
+        if not isinstance(resolved_security, dict):
+            # A non-dict override (e.g. ``security: false``) replaces the whole baseline block
+            # wholesale — the maximal weakening. Treat it as a clean refusal, not a TypeError.
+            raise CompositionError(
+                "consumer override replaces the always-on security baseline with a non-mapping "
+                f"({resolved_security!r}); the security baseline cannot be disabled (§2.13)"
+            )
+        weakened = [
+            key
+            for key, base_value in baseline_security.items()
+            if key not in resolved_security or weakens(base_value, resolved_security[key])
+        ]
+        if weakened:
+            raise CompositionError(
+                f"consumer override weakens or removes always-on security baseline "
+                f"setting(s) {sorted(weakened)} (§2.13); the security baseline cannot be "
+                "disabled or weakened via a profile or consumer override"
+            )
 
     templates = tuple(registry.template_module(ref) for ref in template_refs)
 
@@ -113,17 +212,30 @@ def resolve_profile(
         docs_pipeline = doc.get("docs_pipeline")
         if docs_pipeline and docs_pipeline not in pipelines:
             pipelines = (*pipelines, docs_pipeline)
-    variables = tuple(
-        VariableSpec(
-            name=item["name"],
-            type=item["type"],
-            secret=bool(item.get("secret", False)),
-            required=bool(item.get("required", True)),
-            domain=tuple(item["domain"]) if item.get("domain") is not None else None,
-            default=item.get("default"),
+
+    # §5.1: a referenced pipeline that the manifest does not declare is a hard error — a typo
+    # must fail loud, never silently resolve to a module-less pipeline (no privileges/checks).
+    # Gated on a manifest existing: a bare test/empty registry (declared_pipelines() is None)
+    # declares no pipelines and stays lenient, exactly as before.
+    declared = registry.declared_pipelines()
+    if declared is not None:
+        unknown = sorted(ref for ref in pipelines if ref not in declared)
+        if unknown:
+            raise CompositionError(
+                f"profile {name!r} references undeclared pipeline(s) {unknown}; every pipeline must be "
+                f"declared in the pipelines manifest (§5.1) — check for a typo or a missing declaration"
+            )
+
+    # §2.13: no composition (profile or consumer override) may drop an always-on
+    # pipeline (e.g. the security baseline). Which pipelines are mandatory is plug-in
+    # DATA (``always_on`` in pipelines.yaml), so the core names no specific capability.
+    dropped = [name for name in registry.always_on_pipelines() if name not in pipelines]
+    if dropped:
+        raise CompositionError(
+            f"composition drops always-on pipeline(s) {sorted(dropped)} that must be present in "
+            f"every Aviato-managed repository (§2.13); they cannot be removed via profile or override"
         )
-        for item in doc.get("variables", [])
-    )
+    variables = tuple(_variable_spec(item) for item in doc.get("variables", []))
     vs_doc = doc.get("version_source")
     version_source = VersionSourceModule(locations=tuple(vs_doc.get("locations", ()))) if vs_doc is not None else None
     toolchain = dict(doc.get("toolchain", {}))

@@ -62,8 +62,13 @@ def writeback_variables(specs: Sequence[VariableSpec], resolved: Mapping[str, An
     A ``secret``-typed variable must never be written into the declaration; its
     presence in the resolved set is a hard error (§8.15).
     """
+    # §8.15: refuse to persist a secret that actually carries a VALUE. resolve_variables
+    # emits a key for every spec (an unset optional resolves to None), so keying on mere
+    # presence would hard-error onboarding for any profile that merely DECLARES a secret
+    # variable, even when no secret value exists. A None-valued secret is never written
+    # (filtered below) and is not an offence.
     secret_names = {spec.name for spec in specs if spec.secret}
-    offending = secret_names & set(resolved)
+    offending = {name for name in secret_names if resolved.get(name) is not None}
     if offending:
         raise DeclarationError(
             f"refusing to persist secret-typed variable(s) into the declaration: {sorted(offending)} (§8.15)"

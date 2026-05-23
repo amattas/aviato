@@ -73,3 +73,13 @@ def test_persisting_secret_typed_variable_is_hard_error() -> None:
     specs = (VariableSpec("token", "string", secret=True),)
     with pytest.raises(DeclarationError):
         writeback_variables(specs, {"token": "abc"})
+
+
+def test_writeback_allows_unset_optional_secret() -> None:
+    # §8.15: a secret must never be PERSISTED — but an optional secret that was not
+    # provided resolves to None and would never be written. resolve_variables emits a
+    # key for every spec (including unset optionals), so the guard must key on a
+    # non-None value, not mere presence; otherwise onboarding any profile that declares
+    # a secret variable hard-errors even when no secret value exists.
+    specs = (VariableSpec("token", "string", secret=True, required=False),)
+    assert writeback_variables(specs, {"token": None, "dist": "x"}) == {"dist": "x"}

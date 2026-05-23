@@ -6,7 +6,7 @@ on:
   push:
     branches: [main]
     tags:
-      - "v*.*.*"
+      - "*.*.*"
   schedule:
     - cron: "23 5 * * 1"
 
@@ -37,6 +37,7 @@ jobs:
       test-command: "npm test"
       build-command: "npm run build"
       run-typecheck: {{ run-typecheck }}
+      run-build: {{ run-build }}
 
   security:
     # Runs on PRs AND on the release tag, so source scans gate the verify pipeline
@@ -69,7 +70,7 @@ jobs:
 
   docker:
     needs: [release, release-gate, security]
-    if: ${{ always() && needs.release-gate.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
+    if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@{{ aviato-ref }}
     with:
       context: "."

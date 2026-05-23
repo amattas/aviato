@@ -36,12 +36,63 @@ def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureF
 
     decl = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
     assert decl["profile"] == "python-library"
-    assert decl["version"] == "v0"
+    # --pin v0 (legacy form) is canonicalized to bare on write; a leading v is never emitted (§6.1).
+    assert decl["version"] == "0"
     assert decl["variables"]["distribution-name"] == "acme"
 
-    # managed file scaffolded with marker; seed-once LICENSE written without marker
-    assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library version=v0")
+    # managed file scaffolded with marker (bare pin); seed-once LICENSE written without marker
+    assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library version=0")
     assert "wrote .github/aviato.yaml" in out
+
+
+def test_reonboard_preserves_docs_opt_in(tmp_path: Path) -> None:
+    # §5.2/§6.1 (M-D): re-onboarding an adopted docs:true repo WITHOUT --docs must NOT silently
+    # flip docs back to false. --docs only enables; a re-run preserves the existing choice.
+    base = [
+        "onboard",
+        str(tmp_path),
+        "--profile",
+        "python-library",
+        "--write",
+        "--allow-dirty",
+        "--var",
+        "distribution-name=acme",
+        "--var",
+        "import-name=acme",
+    ]
+    assert main(base + ["--docs"]) == 0
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["docs"] is True
+    # Re-onboard WITHOUT --docs → docs must stay true (preserved like overrides).
+    assert main(base) == 0
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["docs"] is True
+
+
+def test_reonboard_docs_true_also_scaffolds_docs_workflow(tmp_path: Path) -> None:
+    # §5.2/§6.1/§13.3 (FIX-1): a docs:true declaration re-onboarded WITHOUT --docs must keep
+    # docs:true AND scaffold the docs workflow — the artifacts must match the declaration, not
+    # silently omit docs (the partial-fix bug where scaffold used args.docs).
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "aviato.yaml").write_text(
+        "profile: python-library\nversion: '0'\ndocs: true\nvariables:\n  distribution-name: a\n  import-name: a\n",
+        encoding="utf-8",
+    )
+    rc = main(
+        [
+            "onboard",
+            str(tmp_path),
+            "--profile",
+            "python-library",
+            "--write",
+            "--allow-dirty",
+            "--var",
+            "distribution-name=a",
+            "--var",
+            "import-name=a",
+        ]  # NO --docs
+    )
+    assert rc == 0
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["docs"] is True
+    assert list((tmp_path / ".github" / "workflows").glob("*docs*")), "docs:true must scaffold the docs workflow"
 
 
 def test_onboard_write_fails_on_missing_required_var(tmp_path: Path) -> None:

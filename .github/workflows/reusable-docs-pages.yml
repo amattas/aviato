@@ -99,8 +99,8 @@ jobs:
         id: release
         shell: bash
         env:
-          TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
-          TAG_FORMAT_DESCRIPTION: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
+          TAG_PATTERN: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+          TAG_FORMAT_DESCRIPTION: 'N.N.N, N.N.N-alphaN, or N.N.N-betaN'
           RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
         run: |
           set -euo pipefail
@@ -131,7 +131,9 @@ jobs:
 
       - name: Install
         shell: bash
-        run: ${{ inputs.install-command }}
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        run: eval "$INSTALL_COMMAND"
 
       # §12: emit language API/narrative docs into the docs source tree BEFORE the
       # version cut, so the generated reference is captured in the versioned snapshot
@@ -140,7 +142,9 @@ jobs:
         if: ${{ inputs.docs-emit-command != '' }}
         shell: bash
         working-directory: ${{ inputs.docs-source-directory }}
-        run: ${{ inputs.docs-emit-command }}
+        env:
+          DOCS_EMIT_COMMAND: ${{ inputs.docs-emit-command }}
+        run: eval "$DOCS_EMIT_COMMAND"
 
       # §13.3 multi-version: restore the accumulated Docusaurus version SOURCES from the
       # prior run's `aviato-docs-versions` artifact (read-only; no source-branch push).
@@ -163,7 +167,9 @@ jobs:
       # §8.14 monotonic guard (fail-closed): determine whether this release is the
       # highest. When it is NOT (or the tag listing fails), the version cut, build,
       # AND deploy are ALL skipped — so an older release cannot regress the published
-      # site / `latest` alias. Mirrors aviato.core.versioning.is_highest.
+      # site / `latest` alias. Mirrors aviato.core.versioning.is_highest, and
+      # `aviato validate` (_check_monotonic_alias_parity) fails if this inline copy
+      # drifts from it.
       - name: Monotonic guard
         id: guard
         shell: bash
@@ -202,9 +208,10 @@ jobs:
           RETENTION: ${{ inputs.docs-retention }}
         run: |
           set -euo pipefail
-          if ! npx --no-install docusaurus docs:version "${RELEASE_TAG}"; then
-            npx docusaurus docs:version "${RELEASE_TAG}"
-          fi
+          # §11.3: run ONLY the lockfile-installed docusaurus (from npm ci). A floating
+          # `npx docusaurus` fallback would fetch an unpinned latest from the registry, so
+          # if docusaurus is not in the lockfile we fail loud rather than fetch it.
+          npx --no-install docusaurus docs:version "${RELEASE_TAG}"
           python3 - "${RETENTION}" <<'PY'
           import json, sys, pathlib, shutil
           cap = int(sys.argv[1])
@@ -223,7 +230,9 @@ jobs:
       - name: Build docs
         if: ${{ steps.guard.outputs.highest == 'true' }}
         shell: bash
-        run: ${{ inputs.build-command }}
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: eval "$BUILD_COMMAND"
 
       # Persist the updated version SOURCES as an artifact for the next release
       # (read back above) — keeps the source branch untouched and contents read-only.
@@ -240,7 +249,7 @@ jobs:
 
       - name: Upload Pages artifact
         if: ${{ steps.guard.outputs.highest == 'true' }}
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
 

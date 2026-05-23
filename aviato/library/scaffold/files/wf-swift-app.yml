@@ -6,7 +6,7 @@ on:
   push:
     branches: [main]
     tags:
-      - "v*.*.*"
+      - "*.*.*"
   schedule:
     - cron: "23 5 * * 1"
 
@@ -27,7 +27,10 @@ jobs:
       scheme: "{{ product-scheme }}"
       workspace: "{{ product-scheme }}.xcworkspace"
       destination: "platform=iOS Simulator,name=iPhone 16"
-      install-command: "brew install swiftformat swiftlint"
+      # §11.3 day-zero exception: swift-format/swiftlint install via Homebrew UNPINNED — neither
+      # ships a versioned formula and `brew install` fetches latest (not the runner snapshot).
+      # Checksum-pinned release binaries are a documented post-day-zero hardening (REQUIREMENTS §11.3).
+      install-command: "brew install swift-format swiftlint"
       run-install: true
 
   security:
@@ -62,7 +65,7 @@ jobs:
 
   app-store-connect:
     needs: [release, release-gate, security]
-    if: ${{ always() && needs.release-gate.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
+    if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-app-store-connect.yml@{{ aviato-ref }}
     with:
       release-tag: ${{ needs.release.outputs.tag }}

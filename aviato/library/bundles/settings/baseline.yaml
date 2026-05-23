@@ -10,6 +10,10 @@ settings:
     require_thread_resolution: true
     block_force_push: true
     block_deletion: true
+    # Administrators are subject to branch protection (no admin bypass). Modeled as desired
+    # state so it is part of the §5.7 reviewed/consented diff — never silently forced by the
+    # apply outside the diff the operator confirmed (§2.9).
+    enforce_admins: true
     # Verify/security checks required to merge (§10) are NOT hardcoded here: they are
     # derived at composition time from the status_check each composed pipeline
     # declares (common-lint, security-baseline heartbeat, and the per-language verify

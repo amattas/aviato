@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+import sys
 from typing import Any
 
 from .ports import Platform
@@ -65,11 +67,42 @@ def run_reconcile(
     )
 
     if outcome.action == "apply":
-        # Apply the FULL desired state (the branch-protection PUT replaces wholesale);
-        # the diff (outcome.payload) is what the operator confirmed and is recorded.
-        platform.apply_settings(repo, desired_settings)
-        platform.comment_issue(repo, issue_key, f"Applied diff {current_diff_id} (changes: {outcome.payload})")
+        # Apply the full DESIRED state, not the diff. The platform binding constructs
+        # the purpose-built write payload(s) from this (§2.9): branch protection is a
+        # wholesale PUT whose accepted payload is the complete protection object, so a
+        # diff-only payload would DROP the unchanged protections. ``outcome.payload``
+        # (the changed keys) is recorded in the comment so the operator sees exactly
+        # what changed; unchanged desired fields equal live, so applying the full
+        # desired state is equivalent to applying just the diff.
+        try:
+            # Pass the decision-time live snapshot so the binding can fail closed if the modeled
+            # branch state drifted since the diff/consent were computed (§2.8/§5.7, review #14).
+            platform.apply_settings(repo, desired_settings, expected_live=live)
+        except Exception as exc:
+            # §5.7 audit: an apply that throws mid-flight may have PARTIALLY landed, so it
+            # must leave a record on the issue, then propagate (fail-closed) — never vanish
+            # with no breadcrumb. A best-effort comment must not mask the original error.
+            with contextlib.suppress(Exception):
+                platform.comment_issue(repo, issue_key, f"Apply FAILED for diff {current_diff_id}: {exc}")
+            raise
+        # Audit comment reports the COMPLETE recomputed change set (additive + destructive
+        # removals), not the additive-only write subset (outcome.payload) — a removed key is
+        # the most sensitive change and must appear in the audit trail (§5.7).
+        audit = f"Applied diff {current_diff_id} (changes: {outcome.changes})"
     else:
-        platform.comment_issue(repo, issue_key, f"{outcome.action}: {outcome.reason}")
+        audit = f"{outcome.action}: {outcome.reason}"
+
+    # The audit comment is a best-effort breadcrumb (§5.7), never the operation itself. On the
+    # apply path the privileged change has ALREADY landed, so a transient failure POSTING the
+    # comment must not raise out and make the operator think the apply failed (and re-run it);
+    # on a non-apply path nothing mutated. Either way, warn loudly but still return the outcome.
+    try:
+        platform.comment_issue(repo, issue_key, audit)
+    except Exception as exc:  # noqa: BLE001 - audit comment is best-effort, never the operation
+        print(
+            f"WARNING: {repo} reconcile outcome '{outcome.action}' (diff {current_diff_id}) could "
+            f"not be recorded on the issue: {exc}. The decision still stands (apply, if any, landed).",
+            file=sys.stderr,
+        )
 
     return outcome

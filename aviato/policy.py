@@ -5,7 +5,7 @@ from typing import Any
 
 import yaml
 
-from .paths import REPO_ROOT
+from .paths import POLICY_DATA_ROOT
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -16,11 +16,17 @@ def load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-def load_policy(root: Path = REPO_ROOT) -> dict[str, Any]:
+def load_policy(root: Path = POLICY_DATA_ROOT) -> dict[str, Any]:
+    """Load ``policy.yml`` from the packaged data root (ships in the wheel; §5.6/§11.3).
+
+    ``root`` is the directory CONTAINING the data files. The runtime default is the installed
+    package's own ``aviato/library``; validation passes the in-repo ``<repo>/aviato/library``
+    for the copy it is checking.
+    """
     return load_yaml(root / "policy.yml")
 
 
-def load_ruleset_manifest(root: Path = REPO_ROOT) -> dict[str, Any]:
+def load_ruleset_manifest(root: Path = POLICY_DATA_ROOT) -> dict[str, Any]:
     return load_yaml(root / "rulesets.yml")
 
 

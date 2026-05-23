@@ -65,6 +65,51 @@ def test_refuses_to_overwrite_hand_edited_managed_file_unless_forced(tmp_path: P
     assert "X = 2" in (tmp_path / "cfg.py").read_text()
 
 
+def test_refuses_to_overwrite_marker_from_different_profile_unless_forced(tmp_path: Path) -> None:
+    # §5.3/§5.4 one posture: a valid marker stamped for a DIFFERENT profile is dirty-drift in
+    # diagnosis, so scaffold must NOT silently regenerate it either (one profile per repo, §3).
+    scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="other-profile", version="v1")
+    before = (tmp_path / "cfg.py").read_text()
+
+    # Sync under profile "p" with a CHANGED body — without the guard this would overwrite.
+    result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 2\n", "#", False)], profile="p", version="v1")
+    assert result.skipped_foreign == ["cfg.py"]
+    assert result.written == []
+    assert (tmp_path / "cfg.py").read_text() == before  # foreign-profile file untouched
+
+    forced = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 2\n", "#", False)], profile="p", version="v1", force=True)
+    assert forced.written == ["cfg.py"]
+    assert "profile=p " in (tmp_path / "cfg.py").read_text()
+
+
+def test_refuses_to_overwrite_marker_with_unknown_version_unless_forced(tmp_path: Path) -> None:
+    # §5.4: a marker recording an unknown/unparseable version cannot be reasoned about for
+    # compatibility, so scaffold mirrors diagnosis dirty-drift and never silently regenerates it.
+    (tmp_path / "cfg.py").write_text("# aviato:managed profile=p version=garbage hash=DEADBEEF\nX = 1\n")
+    result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 2\n", "#", False)], profile="p", version="v1")
+    assert result.skipped_foreign == ["cfg.py"]
+    assert "X = 1" in (tmp_path / "cfg.py").read_text()  # not clobbered
+
+    forced = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 2\n", "#", False)], profile="p", version="v1", force=True)
+    assert "cfg.py" in forced.written
+
+
+def test_version_only_change_restamps_marker_not_left_stale(tmp_path: Path) -> None:
+    # §5.12: a re-pin moves the version; even when the body is unchanged the marker MUST be
+    # restamped to the new pin (the drift hash excludes the version, so without this the marker
+    # would silently keep the OLD version, breaking the §2.6 gate after a downgrade).
+    scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="1")
+    assert "version=1 " in (tmp_path / "cfg.py").read_text()
+
+    result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="2")
+    assert result.written == ["cfg.py"]  # restamped, not left "unchanged"
+    assert "version=2 " in (tmp_path / "cfg.py").read_text()
+
+    # Idempotent: re-running at the SAME version is a no-op (no churn).
+    again = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="2")
+    assert again.written == [] and again.unchanged == ["cfg.py"]
+
+
 def test_stale_marker_correct_body_is_regenerated_not_skipped(tmp_path: Path) -> None:
     # body already matches desired but marker hash is stale: scaffold must regenerate
     # (refresh the marker), agreeing with diagnosis "mergeable" rather than skipping
@@ -95,3 +140,37 @@ def test_seed_once_writes_when_absent_records_sidecar_and_never_overwrites(tmp_p
     result2 = scaffold(tmp_path, plan, profile="p", version="v1")
     assert (tmp_path / "Dockerfile").read_text() == "FROM y\n"  # never overwritten
     assert result2.seeded == []
+
+
+def test_seed_once_heals_lost_sidecar_entry_so_future_tamper_is_visible(tmp_path: Path) -> None:
+    # §6.3/§5.14 (review #1): the sidecar is the SOLE seed-once integrity record. If it is
+    # deleted/lost, a re-scaffold must re-establish the baseline from the current file so a
+    # deleted sidecar SELF-HEALS and future tamper is again detectable — never silently leave the
+    # file unprotected forever. (Cannot retroactively detect tamper before the heal — advisory.)
+    plan = [ScaffoldItem("Dockerfile", "FROM x\n", "#", seed_once=True)]
+    scaffold(tmp_path, plan, profile="p", version="v1")
+    (tmp_path / ".github" / "aviato.seed.json").unlink()  # operator/attacker deletes the record
+    assert read_sidecar(tmp_path) == {}
+
+    result = scaffold(tmp_path, plan, profile="p", version="v1")
+    assert result.seeded == []  # existing file is NEVER overwritten
+    assert read_sidecar(tmp_path)["Dockerfile"] == content_hash("FROM x\n")  # baseline recovered
+
+
+def test_corrupt_sidecar_does_not_crash_scaffold_or_read(tmp_path: Path) -> None:
+    # review #7: a truncated/corrupt report-only sidecar must degrade to "no recorded hashes",
+    # never raise (a raw JSONDecodeError would escape scan_fleet's AviatoError-only guard).
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "aviato.seed.json").write_text("{ this is not json", encoding="utf-8")
+    assert read_sidecar(tmp_path) == {}
+    result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="v1")
+    assert result.written == ["cfg.py"]
+
+
+def test_non_utf8_managed_file_is_skipped_not_crashed(tmp_path: Path) -> None:
+    # review #6: a non-UTF-8 file at a managed path can't carry a marker → operator-owned; scaffold
+    # must skip it (never regenerate, never crash a fleet sync with a raw UnicodeDecodeError).
+    (tmp_path / "cfg.py").write_bytes(b"\xff\xfe\x00 binary")
+    result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="v1")
+    assert result.skipped_unmanaged == ["cfg.py"]
+    assert (tmp_path / "cfg.py").read_bytes() == b"\xff\xfe\x00 binary"  # untouched

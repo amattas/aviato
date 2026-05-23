@@ -42,8 +42,15 @@ on:
         description: Set to true when this run cut a release (tagged + published).
         value: ${{ jobs.release.outputs.released }}
       tag:
-        description: The released tag (vX.Y.Z), set only when released is true.
+        description: The released tag (X.Y.Z), set only when released is true.
         value: ${{ jobs.release.outputs.tag }}
+
+# §5.9 (review #4): serialize release runs per repo. Two near-simultaneous default-branch runs
+# (a release-bump merge + a follow-on push, or a re-run) could both reach the TAG phase and race
+# the floating-major `git push -f`, briefly regressing the major pointer. Queue, never cancel.
+concurrency:
+  group: aviato-release-${{ github.repository }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -80,9 +87,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Latest EXACT version tag only (vX.Y.Z) — never the floating major (vX),
-          # which would crash next-version and is not a release point.
-          last="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || echo v0.0.0)"
+          # Latest EXACT final version tag only (X.Y.Z) — never the floating major (N)
+          # and never a pre-release (X.Y.Z-alphaN/-betaN), which are not release points.
+          # (next-version tolerates a pre-release base, but the bump baseline is the
+          # last FINAL release.)
+          last="$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' 2>/dev/null || echo 0.0.0)"
           range="${last}..HEAD"
           if ! git rev-parse "${last}" >/dev/null 2>&1; then range="HEAD"; fi
           # Commit messages are piped (never interpolated into a command) to aviato.
@@ -156,17 +165,46 @@ jobs:
           set -euo pipefail
           git config user.name aviato-bot
           git config user.email aviato-bot@users.noreply.github.com
-          git tag "${NEXT}"
-          # §5.9: advance the floating major (e.g. v1) to this release — a mutable
-          # published pointer consumers pin with @vN (§6.1/§11.3).
-          major="$(printf '%s' "${NEXT}" | sed -E 's/^(v[0-9]+).*/\1/')"
-          git tag -f "${major}"
-          git push origin "${NEXT}"
-          git push -f origin "${major}"
+          # §5.9/§719: PROVE the merged commit actually wrote the version-source bump for
+          # NEXT before tagging. A commit whose subject claims `chore(release): NEXT` but
+          # never bumped the manifest must not be tagged/deployed. Re-running the bump is
+          # idempotent (§2.5): a no-op leaves the tree clean; any change means the manifest
+          # was NOT at NEXT, so fail closed. (Build number is per-run and omitted from the
+          # semantic-version proof.)
+          aviato bump-version "${NEXT}" . >/dev/null
+          if ! git diff --quiet; then
+            git checkout -- . 2>/dev/null || true
+            echo "::error::Release commit subject claims ${NEXT} but the version-source was not bumped to ${NEXT}; refusing to tag." >&2
+            exit 1
+          fi
+          # Idempotent re-run (§5.9): a transient failure AFTER the tag/release was created must be
+          # retriable, so create the immutable version tag + release only if absent (never -f the
+          # release tag — it's an immutable published ref). The floating major IS force-moved (it's
+          # the mutable pointer). `gh release create` likewise skipped if the release already exists.
+          if ! git rev-parse -q --verify "refs/tags/${NEXT}" >/dev/null; then
+            git tag "${NEXT}"
+            git push origin "${NEXT}"
+          fi
+          # §5.9: advance the floating major (e.g. 1) to this release — a mutable
+          # published pointer consumers pin with @N (§6.1/§11.3).
+          major="$(printf '%s' "${NEXT}" | sed -E 's/^([0-9]+).*/\1/')"
+          # review (floating-major monotonicity): only advance @N if NEXT is the HIGHEST release
+          # in that major line — an out-of-order or re-run release of an OLDER patch must never
+          # regress the mutable pointer (mirrors the GHCR/Pages `is_highest` latest-alias guard).
+          # NEXT was just tagged above, so it is included in the candidate set.
+          mapfile -t major_tags < <(git tag --list "${major}.*.*")
+          if aviato is-highest "${NEXT}" "${major_tags[@]}"; then
+            git tag -f "${major}"
+            git push -f origin "${major}"
+          else
+            echo "Not advancing floating major ${major}: ${NEXT} is not the highest ${major}.x.y release."
+          fi
           range="${LAST}..HEAD"
           if ! git rev-parse "${LAST}" >/dev/null 2>&1; then range="HEAD"; fi
           git log "${range}" --pretty=format:'- %s' > /tmp/changelog.md || true
-          gh release create "${NEXT}" --title "${NEXT}" --notes-file /tmp/changelog.md
+          if ! gh release view "${NEXT}" >/dev/null 2>&1; then
+            gh release create "${NEXT}" --title "${NEXT}" --notes-file /tmp/changelog.md
+          fi
           # Signal the caller to run deploy as in-run downstream jobs for this tag.
           echo "released=true" >> "${GITHUB_OUTPUT}"
           echo "Tagged and published ${NEXT}; deploy runs in-run from caller."

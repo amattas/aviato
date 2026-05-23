@@ -83,30 +83,42 @@ jobs:
       - name: Install
         if: ${{ inputs.run-install && inputs.install-command != '' }}
         shell: bash
-        run: ${{ inputs.install-command }}
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        run: eval "$INSTALL_COMMAND"
 
       - name: Lint
         if: ${{ inputs.run-lint && inputs.lint-command != '' }}
         shell: bash
-        run: ${{ inputs.lint-command }}
+        env:
+          LINT_COMMAND: ${{ inputs.lint-command }}
+        run: eval "$LINT_COMMAND"
 
       - name: Format check
         if: ${{ inputs.run-format && inputs.format-command != '' }}
         shell: bash
-        run: ${{ inputs.format-command }}
+        env:
+          FORMAT_COMMAND: ${{ inputs.format-command }}
+        run: eval "$FORMAT_COMMAND"
 
       - name: Type check
         if: ${{ inputs.run-typecheck && inputs.typecheck-command != '' }}
         shell: bash
-        run: ${{ inputs.typecheck-command }}
+        env:
+          TYPECHECK_COMMAND: ${{ inputs.typecheck-command }}
+        run: eval "$TYPECHECK_COMMAND"
 
       - name: Test
         if: ${{ inputs.run-tests && inputs.test-command != '' }}
         shell: bash
-        run: ${{ inputs.test-command }}
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: eval "$TEST_COMMAND"
 
       - name: Build
         if: ${{ inputs.run-build && inputs.build-command != '' }}
         shell: bash
-        run: ${{ inputs.build-command }}
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: eval "$BUILD_COMMAND"
 

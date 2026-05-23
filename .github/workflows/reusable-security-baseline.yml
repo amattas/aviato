@@ -47,6 +47,16 @@ jobs:
     name: Probe findings-upload privilege
     runs-on: ubuntu-latest
     steps:
+      # §5.14/§5.5: scheduled scans are jittered so a fleet of consumers on the same weekly
+      # cron does not stampede the platform. Gated to schedule only — PR and release-ref runs
+      # must stay immediate (no added latency on the deploy gate or PR feedback). This is the
+      # single chokepoint: every scan job `needs: privilege-probe`, so delaying it here defers
+      # the whole baseline by one random window.
+      - name: Jitter (scheduled runs only)
+        if: ${{ github.event_name == 'schedule' }}
+        shell: bash
+        run: sleep $((RANDOM % 120))
+
       - name: Verify security-events scope
         shell: bash
         env:
@@ -76,15 +86,22 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ inputs.codeql-languages }}
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@v4
 
+      # §2.13 SAST gate (note): `analyze` uploads SARIF and SUCCEEDS even with high/critical
+      # alerts — CodeQL has no in-workflow fail-on-severity input. The high/critical SAST gate
+      # is therefore realized by the platform's **code-scanning check** (configured to fail PR
+      # checks at the high/critical threshold), a §17 operator prerequisite ("enable code
+      # scanning", probeable by §5.4). The heartbeat gate below only proves CodeQL RAN (not that
+      # it found nothing); severity gating for SAST is the platform check, unlike the dependency/
+      # secret scans which gate in-workflow via Trivy exit-code.
       - name: Analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
 
   # PR-only diff-based review (richer signal on pull requests).
   dependency-review:
@@ -115,13 +132,17 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      - name: Scan dependencies
+      # §2.13 report/gate split: REPORT all severities to the Security surface (no gate), then
+      # GATE separately on high/critical. A single `severity: HIGH,CRITICAL` step would filter
+      # the SARIF too, so medium/low would be neither blocked NOR reported — the §2.13 policy
+      # requires medium/low to be reported (without blocking).
+      - name: Report dependency findings (all severities, no gate)
         uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           scan-type: fs
           scan-ref: "."
-          severity: HIGH,CRITICAL
-          exit-code: "1"
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          exit-code: "0"
           ignore-unfixed: true
           scanners: vuln
           format: sarif
@@ -129,10 +150,21 @@ jobs:
 
       - name: Upload dependency findings
         if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-deps.sarif
           category: aviato-dependency-scan
+
+      - name: Gate on high/critical dependencies (§2.13)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          scan-type: fs
+          scan-ref: "."
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+          ignore-unfixed: true
+          scanners: vuln
+          format: table
 
   # Secret scan (defense-in-depth alongside platform secret scanning + push
   # protection, §2.13): any detected secret fails the pipeline; findings upload as SARIF.
@@ -158,7 +190,7 @@ jobs:
 
       - name: Upload secret findings
         if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-secrets.sarif
           category: aviato-secret-scan
@@ -177,6 +209,8 @@ jobs:
       DEPSCAN_RESULT: ${{ needs.dependency-scan.result }}
       SECRET_RESULT: ${{ needs.secret-scan.result }}
       DEPREVIEW_RESULT: ${{ needs.dependency-review.result }}
+      RUN_CODEQL: ${{ inputs.run-codeql }}
+      CODEQL_LANGUAGES: ${{ inputs.codeql-languages }}
     steps:
       - name: Emit heartbeat
         shell: bash
@@ -187,13 +221,11 @@ jobs:
             > heartbeat/aviato-security-heartbeat.json
           cat heartbeat/aviato-security-heartbeat.json
 
-      - name: Upload heartbeat
-        uses: actions/upload-artifact@v4
-        with:
-          name: aviato-security-heartbeat
-          path: heartbeat/aviato-security-heartbeat.json
-          retention-days: 30
-
+      # GATE BEFORE UPLOAD (§5.14/§8.16): the heartbeat artifact must mean "the baseline RAN
+      # CLEAN", so it is uploaded ONLY when the gate passes. A broken/skipped scan fails the gate
+      # here, the upload step (default `if: success()`) is skipped, and §5.4 then correctly reads
+      # the ABSENT heartbeat as "broken" — not "clean". Were upload to run unconditionally, a red
+      # run would still leave a present heartbeat and read clean (the §8.16 fail-open).
       - name: Gate on required scans
         shell: bash
         run: |
@@ -205,7 +237,31 @@ jobs:
               exit 1
             fi
           done
-          if [ "${CODEQL_RESULT}" = "failure" ]; then
-            echo "::error::CodeQL SAST reported failures."
+          # SAST must not silently no-op: if CodeQL is enabled (run-codeql=true) it MUST
+          # have succeeded. A skipped CodeQL (e.g. run-codeql=true but codeql-languages
+          # left empty) is broken, not clean — absence reads as broken (§5.14/§8.16).
+          if [ "${RUN_CODEQL}" = "true" ]; then
+            if [ -z "${CODEQL_LANGUAGES}" ]; then
+              echo "::error::run-codeql is true but codeql-languages is empty; SAST cannot run. Set codeql-languages (§5.14/§8.16)."
+              exit 1
+            fi
+            if [ "${CODEQL_RESULT}" != "success" ]; then
+              echo "::error::CodeQL SAST was enabled but did not succeed (result=${CODEQL_RESULT}); broken (§5.14/§8.16)."
+              exit 1
+            fi
+          else
+            # §2.13/§5.14: SAST is an ALWAYS-ON baseline — no profile may turn it off. A caller
+            # passing run-codeql=false would skip SAST and (previously) pass the gate silently.
+            # That is the §8.16 fail-open the baseline forbids: reject it.
+            echo "::error::SAST is disabled (run-codeql=${RUN_CODEQL}); the §2.13 security baseline is always-on and cannot be turned off (§5.14/§8.16)."
             exit 1
           fi
+
+      # Only reached when the gate above passed (default step success-gating) → the heartbeat
+      # signals a CLEAN run. A broken run skips this, leaving no fresh artifact (absent = broken).
+      - name: Upload heartbeat
+        uses: actions/upload-artifact@v4
+        with:
+          name: aviato-security-heartbeat
+          path: heartbeat/aviato-security-heartbeat.json
+          retention-days: 30

@@ -13,10 +13,40 @@ def _scaffold_one(root: Path, output: str, body: str) -> None:
     scaffold(root, [ScaffoldItem(output, body, "#", False)], profile="p", version="v1")
 
 
+def test_diagnose_tolerates_non_utf8_workflow_file(tmp_path: Path) -> None:
+    # A corrupted/non-UTF-8 workflow file in .github/workflows must not crash diagnosis
+    # (and thus a whole fleet scan) with a UnicodeDecodeError when probing for the
+    # scheduled drift-automation caller (§5.4 robustness). Place a VALID drift caller
+    # ALONGSIDE the bad file and assert it is still found — proving the bad file was
+    # tolerated and the scan continued, not that detection was silently disabled (which
+    # a bare `present is False` could not distinguish from "no caller present").
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "bad.yml").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+    (workflows / "aviato-drift.yml").write_text(
+        "jobs:\n  drift:\n    uses: owner/aviato/.github/workflows/reusable-consumer-automation.yml@main\n",
+        encoding="utf-8",
+    )
+    report = diagnose(tmp_path, [], drift_automation_markers=("reusable-consumer-automation",))
+    assert report.drift_automation_present is True  # bad file tolerated; valid caller still detected
+
+
 def test_clean_when_body_matches(tmp_path: Path) -> None:
     _scaffold_one(tmp_path, "cfg.py", "X = 1\n")
     report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])
     assert report.statuses["cfg.py"] == "clean"
+
+
+def test_marker_for_different_profile_is_dirty_drift(tmp_path: Path) -> None:
+    # §6.2: the marker's profile field is ENFORCED, not just recorded. A file stamped
+    # for profile "p" must not read clean under a declaration for profile "other" —
+    # even when the body matches — it needs human review (dirty-drift, §5.4).
+    _scaffold_one(tmp_path, "cfg.py", "X = 1\n")  # stamped profile="p"
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")], profile="other")
+    assert report.statuses["cfg.py"] == "dirty-drift"
+    # ...and matches clean when the profile agrees.
+    report_ok = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")], profile="p")
+    assert report_ok.statuses["cfg.py"] == "clean"
 
 
 def test_mergeable_drift_when_body_diverges_with_valid_marker(tmp_path: Path) -> None:
@@ -50,6 +80,18 @@ def test_stale_marker_but_correct_body_is_mergeable_not_clean(tmp_path: Path) ->
     (tmp_path / "cfg.py").write_text("# aviato:managed profile=p version=v1 hash=DEADBEEF\nX = 1\n")
     report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])
     assert report.statuses["cfg.py"] == "mergeable-drift"
+
+
+def test_unknown_recorded_version_is_dirty_drift(tmp_path: Path) -> None:
+    # §5.4: a managed file whose marker records an UNKNOWN/unparseable version is
+    # dirty-drift even if the body matches expected — Aviato never silently regenerates
+    # over a marker it cannot reason about (it can't establish version compatibility).
+    body = "X = 1\n"
+    from aviato.core.marker import content_hash
+
+    (tmp_path / "cfg.py").write_text(f"# aviato:managed profile=p version=garbage hash={content_hash(body)}\n{body}")
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", body)])
+    assert report.statuses["cfg.py"] == "dirty-drift"
 
 
 def test_template_moved_but_file_untouched_is_mergeable(tmp_path: Path) -> None:
@@ -99,10 +141,32 @@ def test_seed_once_integrity_divergence_is_reported_not_overwritten(tmp_path: Pa
     assert (tmp_path / "Dockerfile").read_text() == "FROM tampered\n"  # never overwritten
 
 
+def test_seed_once_deletion_is_reported_as_divergence(tmp_path: Path) -> None:
+    # §6.3 (L-B): a recorded seed-once file that is later DELETED (e.g. a removed Dockerfile) is a
+    # divergence too — tamper visibility, not just a hash change. Reported, never re-created.
+    scaffold(tmp_path, [ScaffoldItem("Dockerfile", "FROM x\n", "#", True)], profile="p", version="v1")
+    (tmp_path / "Dockerfile").unlink()
+    report = diagnose(tmp_path, [ExpectedArtifact("Dockerfile", "", seed_once=True)])
+    assert "Dockerfile" in report.seed_divergence
+    assert not (tmp_path / "Dockerfile").exists()  # not re-created (seed-once is write-when-absent)
+
+
+def test_seed_once_binary_file_does_not_crash_diagnosis(tmp_path: Path) -> None:
+    # §6.3 lists binaries among seed-once files. A seed-once file whose live bytes are
+    # not valid UTF-8 must not crash the integrity probe (which would crash a fleet scan);
+    # it is read leniently and simply reported as divergence (report-only).
+    scaffold(tmp_path, [ScaffoldItem("asset.bin", "placeholder\n", "#", True)], profile="p", version="v1")
+    (tmp_path / "asset.bin").write_bytes(b"\xff\xfe\x00\x80 binary \x81")
+    report = diagnose(tmp_path, [ExpectedArtifact("asset.bin", "", seed_once=True)])  # must not raise
+    assert "asset.bin" in report.seed_divergence
+    assert (tmp_path / "asset.bin").read_bytes() == b"\xff\xfe\x00\x80 binary \x81"  # never overwritten
+
+
 def test_probes_drift_automation_and_prerequisites(tmp_path: Path) -> None:
     prereqs = {"container_build_definition": ["Dockerfile"]}
+    markers = ("reusable-consumer-automation",)  # review #18: marker is caller-supplied data
     # no drift workflow, no Dockerfile → probes false
-    report = diagnose(tmp_path, [], prerequisite_paths=prereqs)
+    report = diagnose(tmp_path, [], prerequisite_paths=prereqs, drift_automation_markers=markers)
     assert report.drift_automation_present is False
     assert report.prerequisites["container_build_definition"] is False
 
@@ -111,8 +175,12 @@ def test_probes_drift_automation_and_prerequisites(tmp_path: Path) -> None:
     wf.mkdir(parents=True)
     (wf / "drift.yml").write_text("uses: amattas/aviato/.github/workflows/reusable-consumer-automation.yml@main\n")
     (tmp_path / "Dockerfile").write_text("FROM scratch\n")
-    report2 = diagnose(tmp_path, [], prerequisite_paths=prereqs)
+    report2 = diagnose(tmp_path, [], prerequisite_paths=prereqs, drift_automation_markers=markers)
     assert report2.drift_automation_present is True
+
+    # review #18: with NO markers supplied the probe is not meaningful → reports absent (the literal
+    # is no longer hardcoded in core, so an empty marker set cannot detect anything).
+    assert diagnose(tmp_path, [], prerequisite_paths=prereqs).drift_automation_present is False
     assert report2.prerequisites["container_build_definition"] is True
 
 
@@ -121,6 +189,15 @@ def test_platform_probes_default_unknown(tmp_path: Path) -> None:
     report = diagnose(tmp_path, [])
     assert report.issue_channel_available is None
     assert report.scan_heartbeat_present is None
+
+
+def test_non_utf8_managed_file_classifies_dirty_drift_without_crashing(tmp_path: Path) -> None:
+    # review #6: a non-UTF-8 file at a managed path must classify dirty-drift (operator-owned,
+    # never silently regenerated), NOT raise a UnicodeDecodeError that escapes scan_fleet's
+    # AviatoError-only guard and aborts the whole fleet scan.
+    (tmp_path / "cfg.py").write_bytes(b"\xff\xfe\x00 binary")
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])
+    assert report.statuses["cfg.py"] == "dirty-drift"
 
 
 def test_bootstrap_declaration_rejected_outside_library(tmp_path: Path) -> None:

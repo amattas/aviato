@@ -46,6 +46,10 @@ class PipelineModule:
     # the merge gate requires exactly the jobs the profile actually runs. None = the
     # pipeline gates nothing (release/publish run after merge).
     status_check: str | None = None
+    # §2.13: a pipeline the data declares always-on (e.g. the security baseline) must
+    # survive every composition — resolution refuses to remove it. Data-driven so the
+    # agnostic core never names which capability is mandatory.
+    always_on: bool = False
 
 
 @dataclass(frozen=True)
@@ -94,7 +98,9 @@ class Profile:
     workflows: str
     scaffold: str
     settings: str
-    requires_macos: bool = False
+    # review #17: a profile carries NO runner-OS flag. "Does this need a macOS runner?" is derived
+    # from the resolved pipelines' data-driven PipelineModule.runner (§11.5), not a target-OS
+    # boolean baked into the agnostic core model (adding e.g. a Windows target must never edit core).
 
 
 @dataclass(frozen=True)

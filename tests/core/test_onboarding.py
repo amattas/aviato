@@ -5,10 +5,32 @@ from pathlib import Path
 import pytest
 
 from aviato.core.declaration import Declaration
-from aviato.core.errors import DeclarationError
-from aviato.core.onboarding import materialize_items, plan_onboarding
+from aviato.core.errors import CompositionError, DeclarationError
+from aviato.core.model import TemplateModule
+from aviato.core.onboarding import (
+    check_output_collisions,
+    materialize_items,
+    plan_onboarding,
+)
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT
+
+
+def test_output_collision_among_applicable_templates_is_error() -> None:
+    # §4.2: two applicable templates writing the same path is a tie, not a silent pick.
+    colliding = [
+        TemplateModule(output_path="config.toml", source="a"),
+        TemplateModule(output_path="config.toml", source="b"),
+    ]
+    with pytest.raises(CompositionError):
+        check_output_collisions(colliding)
+
+
+def test_variant_exclusive_templates_sharing_a_path_are_allowed() -> None:
+    # package.json.ts / package.json.js render to the same path but are mutually
+    # exclusive via `when`; only one is ever applicable, so this is NOT a collision.
+    ts = TemplateModule(output_path="package.json", source="ts", when=(("language-variant", "typescript"),))
+    check_output_collisions([ts])  # the applicable set for one variant — no raise
 
 
 def test_docs_true_scaffolds_gated_docs_workflow() -> None:
@@ -46,8 +68,11 @@ def test_javascript_variant_omits_tsconfig_and_disables_typecheck() -> None:
     js_items = {i.output for i in materialize_items(reg, "node-service", {"language-variant": "javascript"})}
     assert "tsconfig.json" in ts_items
     assert "tsconfig.json" not in js_items  # §12.2: JS omits TypeScript config
-    assert render_variables({"language-variant": "javascript"})["run-typecheck"] == "false"
-    assert render_variables({"language-variant": "typescript"})["run-typecheck"] == "true"
+    # run-typecheck is derived from the profile's data-driven derived_variables rule
+    # (no language literal in core); apply it the same way resolved_artifacts does.
+    rules = reg.profile_doc("node-service")["derived_variables"]
+    assert render_variables({"language-variant": "javascript"}, derived_rules=rules)["run-typecheck"] == "false"
+    assert render_variables({"language-variant": "typescript"}, derived_rules=rules)["run-typecheck"] == "true"
 
 
 def test_materialize_builds_scaffold_items_from_resolved_set() -> None:

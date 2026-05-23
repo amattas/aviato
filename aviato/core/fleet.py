@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .bootstrap import is_library
 from .composition import resolve_profile
 from .declaration import Declaration, load_declaration
 from .diagnosis import ExpectedArtifact, diagnose
@@ -20,12 +21,15 @@ class RepoScan:
     seed_divergence: list[str] = field(default_factory=list)
     secret_in_declaration: bool = False
     error: str | None = None
+    # True when the repo was skipped because it is archived and --include-archived was not
+    # passed (§5.11). Distinct from ``error`` (it is a deliberate skip, not a failure).
+    skipped_archived: bool = False
 
 
 def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[ExpectedArtifact]:
-    # Same resolution/rendering/conditional-filtering (pin, docs, type-check) as
-    # onboarding/doctor — so the fleet scan doesn't report false drift for JS
-    # consumers or miss docs-enabled artifacts (§5.11 parity).
+    # Same resolution/rendering/conditional-filtering (pin, docs, variant) as
+    # onboarding/doctor — so the fleet scan doesn't report false drift for
+    # variant-excluded consumers or miss docs-enabled artifacts (§5.11 parity).
     return [
         ExpectedArtifact(a.output, a.body if not a.seed_once else "", a.seed_once)
         for a in resolved_artifacts(
@@ -39,7 +43,13 @@ def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[Ex
     ]
 
 
-def scan_fleet(paths: Sequence[Path], registry: Registry) -> list[RepoScan]:
+def scan_fleet(
+    paths: Sequence[Path],
+    registry: Registry,
+    *,
+    include_archived: bool = False,
+    archived_probe: Callable[[Path], bool | None] | None = None,
+) -> list[RepoScan]:
     """Run §5.4 diagnosis across many local repositories, read-only (§5.11).
 
     The repository list is resolved by the operator (here, explicit paths) — never
@@ -47,10 +57,19 @@ def scan_fleet(paths: Sequence[Path], registry: Registry) -> list[RepoScan]:
     without a declaration is reported as an error rather than crashing the scan.
     Nothing is mutated and no proposal is opened (that is ``scan --fix``, layered
     on :func:`aviato.core.file_drift_flow.run_file_drift`).
+
+    **Archived repos are skipped unless ``include_archived``** (§5.11). Whether a repo
+    is archived is a platform attribute, so the check is supplied by an injected
+    ``archived_probe`` (the binding lives outside core, §2.14); the probe returning
+    ``None`` (unknown — e.g. no remote / offline) is treated as *not* archived, so a
+    repo is never silently dropped from the operator's read-only scan on an ambiguous read.
     """
     scans: list[RepoScan] = []
     for path in paths:
         root = Path(path)
+        if not include_archived and archived_probe is not None and archived_probe(root) is True:
+            scans.append(RepoScan(path=str(root), skipped_archived=True))
+            continue
         declaration_path = root / ".github" / "aviato.yaml"
         if not declaration_path.is_file():
             scans.append(RepoScan(path=str(root), error="no declaration"))
@@ -65,6 +84,9 @@ def scan_fleet(paths: Sequence[Path], registry: Registry) -> list[RepoScan]:
                 expected,
                 declaration_variables=declaration.variables,
                 secret_var_names=secret_names,
+                profile=declaration.profile,
+                is_library=is_library(root),
+                bootstrap_declared=declaration.bootstrap,
             )
         except AviatoError as exc:
             scans.append(RepoScan(path=str(root), error=str(exc)))

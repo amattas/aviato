@@ -3,7 +3,8 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "{{ import-name }}"
+# The PyPI/wheel DISTRIBUTION name (§12.1) — distinct from the import package name below.
+name = "{{ distribution-name }}"
 version = "0.1.0"
 description = "TODO: describe this project."
 requires-python = ">=3.11"

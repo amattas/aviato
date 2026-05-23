@@ -8,8 +8,25 @@ from dataclasses import dataclass
 # plug-in data (see aviato.plugins.comment_syntax), keeping this module agnostic.
 
 _TOKEN = "aviato:managed"
+# The marker line must be led by the file's comment syntax (§6.2): a run of comment
+# punctuation (e.g. ``#``, ``//``, ``/*``, ``<!--``) — never letters/digits, and never
+# CONTROL bytes (review #19: ``[^\sA-Za-z0-9]`` alone matched NUL/control prefixes, letting a
+# binary blob spoof the comment lead). The ``\x00-\x1f\x7f`` exclusion keeps every real comment
+# punctuation char while rejecting control bytes, so a binary file is never read as marked. The
+# hash is the hex content digest; an optional trailing run of comment punctuation tolerates
+# block-comment closers (e.g. ``*/``, ``-->``) without swallowing them into the hash.
+# The ``version`` group stays ``\S+`` on purpose: the marker is parsed STRUCTURALLY here, then
+# the recorded version is validated SEMANTICALLY by the caller (is_known_version_pin / §2.6
+# is_compatible, both fail-closed). That distinction lets diagnosis tell "a valid aviato marker
+# recording an unknown version" (dirty-drift / skipped_foreign — migration or tamper) apart from
+# "no marker at all" (skipped_unmanaged — operator's own file); tightening it here would conflate
+# the two. The version is never executed — only compared and stamped — so an exotic token is inert.
+_PUNCT = r"[^\sA-Za-z0-9\x00-\x1f\x7f]+"
+_LEAD = _PUNCT
+_CLOSE = rf"(?:\s+{_PUNCT})?"
 _MARKER_RE = re.compile(
-    r"aviato:managed\s+profile=(?P<profile>\S+)\s+version=(?P<version>\S+)\s+hash=(?P<hash>\S+)\s*$"
+    rf"^\s*{_LEAD}\s+aviato:managed\s+profile=(?P<profile>\S+)\s+version=(?P<version>\S+)"
+    rf"\s+hash=(?P<hash>[0-9a-fA-F]+){_CLOSE}\s*$"
 )
 
 

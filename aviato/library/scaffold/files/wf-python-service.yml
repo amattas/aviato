@@ -6,7 +6,7 @@ on:
   push:
     branches: [main]
     tags:
-      - "v*.*.*"
+      - "*.*.*"
   schedule:
     - cron: "23 5 * * 1"
 
@@ -63,9 +63,10 @@ jobs:
 
   docker:
     needs: [release, release-gate, security]
-    if: ${{ always() && needs.release-gate.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
+    if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@{{ aviato-ref }}
     with:
+      image-name: "{{ image-name }}"
       context: "."
       dockerfile: "Dockerfile"
       platforms: "linux/amd64"

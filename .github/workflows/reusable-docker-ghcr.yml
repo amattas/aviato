@@ -36,11 +36,8 @@ on:
         required: false
         type: boolean
         default: true
-      scan-image:
-        description: Scan the published image for high/critical vulnerabilities.
-        required: false
-        type: boolean
-        default: true
+      # §11.7: the published-artifact vulnerability scan is MANDATORY and always gates
+      # the publish — there is intentionally no opt-out input to disable it.
 
 permissions:
   contents: read
@@ -73,8 +70,8 @@ jobs:
         id: release
         shell: bash
         env:
-          TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
-          TAG_FORMAT_DESCRIPTION: 'vN.N.N, vN.N.N-alphaN, or vN.N.N-betaN'
+          TAG_PATTERN: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+          TAG_FORMAT_DESCRIPTION: 'N.N.N, N.N.N-alphaN, or N.N.N-betaN'
           RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
         run: |
           set -euo pipefail
@@ -108,14 +105,14 @@ jobs:
 
       - name: Set up QEMU
         if: ${{ contains(inputs.platforms, 'arm') }}
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GitHub Container Registry
         if: ${{ inputs.push }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -123,7 +120,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
           images: ${{ steps.vars.outputs.image }}
 
@@ -131,13 +128,11 @@ jobs:
       # target platform locally first (no push) and scan it — so a high/critical
       # vulnerability on ANY published architecture blocks the push, not just amd64.
       - name: Install Trivy
-        if: ${{ inputs.scan-image }}
         uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
         with:
           version: v0.55.0
 
       - name: Build and scan each target platform (gate before publish)
-        if: ${{ inputs.scan-image }}
         shell: bash
         env:
           IMAGE: ${{ steps.vars.outputs.image }}
@@ -146,26 +141,53 @@ jobs:
           CONTEXT: ${{ inputs.context }}
           DOCKERFILE: ${{ inputs.dockerfile }}
         run: |
-          set -euo pipefail
+          # NOTE: deliberately NOT `set -e` — the high/critical GATE failure is ACCUMULATED so
+          # every platform is still report-scanned (its SARIF written) before we fail. A build or
+          # report-scan ERROR still hard-fails via explicit `|| exit 1`.
+          set -uo pipefail
           mkdir -p trivy-sarif
+          gate_failed=0
           IFS=',' read -ra plats <<< "${PLATFORMS}"
           for raw in "${plats[@]}"; do
             plat="$(echo "${raw}" | xargs)"
             [ -z "${plat}" ] && continue
             echo "::group::Build + scan ${plat}"
             docker buildx build --platform "${plat}" --load \
-              -t "${IMAGE}:scan-tmp" -f "${DOCKERFILE}" "${CONTEXT}"
-            trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
-              --format sarif --output "trivy-sarif/${plat//\//-}.sarif" "${IMAGE}:scan-tmp"
+              -t "${IMAGE}:scan-tmp" -f "${DOCKERFILE}" "${CONTEXT}" || exit 1
+            # §2.13 report/gate split: REPORT all severities to the Security surface (SARIF, no
+            # severity filter so medium/low are reported too), then GATE the publish on
+            # high/critical. A single --severity HIGH,CRITICAL run would drop medium/low from
+            # the SARIF entirely — §2.13 requires medium/low reported (without blocking).
+            trivy image --ignore-unfixed \
+              --format sarif --output "trivy-sarif/${plat//\//-}.sarif" "${IMAGE}:scan-tmp" || exit 1
+            # Accumulate the gate (don't abort), so a high/critical on an early platform doesn't
+            # skip scanning/reporting later platforms (§2.13 medium/low reporting completeness).
+            if ! trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
+              --format table "${IMAGE}:scan-tmp"; then
+              gate_failed=1
+            fi
             echo "::endgroup::"
           done
+          # All platforms scanned + their SARIFs written (the upload step runs next, always()).
+          if [ "${gate_failed}" -ne 0 ]; then
+            echo "::error::HIGH/CRITICAL image vulnerabilities found; blocking publish (§2.13/§11.7)."
+            exit 1
+          fi
 
       - name: Upload image scan results
-        if: ${{ always() && inputs.scan-image }}
-        uses: github/codeql-action/upload-sarif@v3
+        if: ${{ always() }}
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-sarif
 
+      # NOTE (scan-vs-push image identity, §11.7): the scan above builds each platform
+      # with `--load` and the push below rebuilds via build-push-action. Both share the
+      # same Dockerfile, context, and `type=gha` build cache, so the pushed layers are the
+      # cached scanned layers — functionally equivalent, but NOT a proven byte-identical
+      # digest match. A stronger guarantee (build once to a local OCI store, scan, then push
+      # that exact artifact by digest) is a deferred hardening; it interacts with multi-arch
+      # `--load` limitations and cannot be exercised without a live registry (operator-verified
+      # DoD, §9.9). The gate still blocks publish on a HIGH/CRITICAL finding in those layers.
       - name: Build and push image
         id: build
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
@@ -193,7 +215,9 @@ jobs:
       # §8.14/§13.2: move the mutable `latest` tag only if this release is the
       # highest released version. The comparison mirrors aviato.core.versioning
       # .is_highest (which is unit-tested); kept inline to avoid a self-reference
-      # install in the deploy job.
+      # install in the deploy job. `aviato validate` (_check_monotonic_alias_parity)
+      # runs this snippet against a battery of cases and fails if it drifts from
+      # is_highest, so the inline copy cannot diverge silently.
       - name: Determine highest released version
         id: monotonic
         if: ${{ inputs.push }}
@@ -234,4 +258,9 @@ jobs:
         env:
           IMAGE: ${{ steps.vars.outputs.image }}
           TAG: ${{ steps.vars.outputs.tag }}
+        # `latest` is a mutable ALIAS: imagetools copies the manifest so it points at the
+        # exact same digest as the versioned tag (which carries the provenance + SBOM
+        # attestations from the build step). No fresh attestation is emitted for the
+        # `latest` name itself — verifiers should attest against the immutable digest
+        # (or the versioned tag), not the floating `latest` (§11.7).
         run: docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}:${TAG}"

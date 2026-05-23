@@ -218,7 +218,15 @@ always blocks**, regardless of severity. The gate is applied where each scan is
 authoritative: **source scans (SAST, dependency) gate the verify pipeline on PRs
 and are re-run on the release ref before any deploy** (so the deploy gate is
 evaluated against the deployed code, not a stale PR head); **published-artifact
-scans gate the publish itself** (§11.7). **Enforcement is fail-closed:** a scan
+scans gate the publish itself** (§11.7). **Where each gate lives (GitHub binding):**
+the **dependency** and **secret** scans gate **in-workflow** (the scanner's
+exit-code fails the job on high/critical / any secret), and report **all severities**
+as SARIF (medium/low surfaced, not blocked); the **SAST (CodeQL)** high/critical gate
+is realized by the platform's **code-scanning check** evaluated against the uploaded
+SARIF (CodeQL has no in-workflow fail-on-severity input), which the operator enables
+at the high/critical threshold as a §17 prerequisite (probeable, §5.4) — the workflow
+proves CodeQL **ran**, the platform check enforces the **severity gate**.
+**Enforcement is fail-closed:** a scan
 whose required upload privilege is absent at runtime, or that cannot run, **fails
 the pipeline** — it never passes silently (§5.14, §5.4, §8.16). **No external
 service, no stored secret:** scans run on the platform token plus the
@@ -376,6 +384,16 @@ should have kept.
   - **Same-output-path collisions** in the scaffold set are resolved by overlay
     order (§5.3): the later/overriding source wins; ties at the same level are an
     error, not a silent pick.
+    **Day-zero behavior (conservative):** the implementation treats **every**
+    same-output-path collision in the applicable set as a **hard error**
+    (`onboarding.check_output_collisions`), not just same-level ties. Cross-level
+    overlay *resolution* (a descendant template deliberately overriding an ancestor's
+    output) is **deferred**: silently letting a later source win is exactly the §8.1
+    "child silently loses an inherited entry" failure mode, so day-zero fails loud
+    rather than resolve. Day-zero profiles compose **no** two applicable templates at
+    one path (variant-exclusive templates are filtered by `when` before this check),
+    so the resolution branch is never legitimately exercised; implementing an explicit,
+    reviewable cross-level override is a post-day-zero refinement.
 
 ```mermaid
 flowchart TD
@@ -449,7 +467,17 @@ secret-typed variable into the persisted set is a **hard error** (§8.15), so th
 declaration carries no secrets (§6.6/§11.4). "Auto-detection"
 derives from a **defined, enumerated** set of host sources (e.g. repository
 name, the platform's repository metadata, the operator's configured identity);
-nothing outside that enumerated set is auto-detected.
+nothing outside that enumerated set is auto-detected. **Day-zero scope:** the
+resolution honors the auto-detection tier (it is the lowest-precedence source in
+`resolve_variables`), but **day-zero profiles deliberately auto-map no
+identity-bearing variable** (distribution / import / image / project / bundle
+names). Because a resolved variable is **persisted into the declaration** (above),
+auto-detecting one would silently write a *guess* — and these identifiers need
+language-specific normalization (a directory name is not a PyPI distribution name),
+so a wrong guess is worse than failing closed. Day-zero therefore resolves these
+from flag / declaration / environment and **fails closed** (lists the missing
+variable) when unset; populating the auto-detection tier with safe, normalized
+sources is a post-day-zero refinement.
 **Preconditions:** every *required* variable resolves; for adopt, the working
 tree is clean unless overridden.
 **Two paths, one shape:**
@@ -625,7 +653,23 @@ changed, any prior consent record on the issue is voided with a comment** (the
 authoritative gate is still §5.7's apply-time recompute, but this surfaces
 staleness at report time). **If the issue channel is unavailable** (issues
 disabled), the automation **fails loud** in its log and §5.4 flags it — it never
-silently drops the report. The automation performs **no** settings mutation.
+silently drops the report. **If live settings cannot be read** (the platform token
+lacks the admin/read scope branch-protection and rulesets require), the automation
+**skips settings drift fail-closed** — it never computes a diff from a falsely
+"unprotected" read — and reports the skip; by default this is not a hard failure (so
+a scheduled run is not failed by a missing admin token), but an operator gating CI on
+settings drift can opt to treat the skip as a failure (`drift-report --require-settings`).
+The automation performs **no** settings mutation.
+**Rulesets (presence + content):** the desired **named rulesets** (§3.2 settings bundle)
+are also protected settings, so drift detection covers them: a desired ruleset that is
+**missing**, **disabled** (enforcement no longer `active`), or **content-weakened** (e.g. a
+permissive `tag_name_pattern`, a lowered required-approval count, a dropped required check, a
+removed rule) is reported on the same tracking issue. The live ruleset is compared to the
+**rendered desired payload** (the GitHub-specific comparison lives in the binding, not the
+agnostic flow); GitHub-added metadata and benign live additions are ignored (no false drift),
+the ref-name scope is conservatively not compared (the platform may normalize `~DEFAULT_BRANCH`).
+**Ruleset remediation is the operator-direct `apply-rulesets` path, NOT the §5.7 consent gate**
+(see §5.7) — so the report directs the operator to `apply-rulesets … --apply --profile <p>`.
 **additive vs destructive (normative):** a change is **destructive** if it
 removes, weakens, or replaces an existing protection or any operator-relied-upon
 value (e.g. lowering a required-review count, removing a required check,
@@ -656,6 +700,17 @@ sequenceDiagram
 
 **Trigger:** operator runs the reconcile command against a tracking issue.
 **Actor:** operator, own elevated credentials.
+**Scope (branch protection + repo security toggles):** this consent-gated path reconciles the
+**flat default-branch protection and repo security toggles** only. **Named rulesets are
+reconciled by the distinct operator-direct `apply-rulesets` command** — itself operator-gated
+(§2.3: the operator runs it with their own credentials, with a dry-run preview before `--apply`),
+and **idempotent** (it re-asserts the rendered desired payload, so it fixes both missing and
+content-drifted rulesets). Rulesets are deliberately **not** folded into this consent-issue flow:
+the two use different platform write surfaces (a wholesale branch-protection `PUT` vs a ruleset
+upsert), and the dry-run-reviewed `apply-rulesets` is the sanctioned operator gate for them
+(the same way provisioning/`complete-protection` apply protection operator-direct, outside the
+consent-issue mechanism). §5.6 detects ruleset drift (presence + content) and directs the operator
+to `apply-rulesets … --apply --profile <p>`.
 **Steps:** fetch the issue; refuse if closed → confirm the consent record is
 present and **bound to the current diff** (§6.4) → identify the human who granted
 consent via the issue's authoritative event history (most recent grant not later
@@ -752,9 +807,19 @@ flowchart TD
 **Trigger:** the Library applies its own conventions and runs its own
 pipelines before it has a release.
 **Structural predicate (normative):** a repository is *the Library* iff it
-contains all of: the core engine's source package, the `profiles/` and
-`bundles/` definition trees, and the Library's project manifest. Detection is by
-this structure, never by repository name (so forks/renames are unaffected).
+contains all of: the core engine's source package (`aviato/core/`), the
+module-source tree under `aviato/library/` (its `bundles/` and `scaffold/`
+definition trees), and the packaged `policy.yml` (`aviato/library/policy.yml`) —
+which serves as the manifest anchor *agnostically* (a language-specific build
+manifest cannot be named in the agnostic core, §9b; `policy.yml` is the
+distinctive Library artifact). `policy.yml` and the ruleset manifest/templates
+live **inside** `aviato/library/` (not the repo root) so they ship in the wheel
+for installed ruleset rendering (§5.6/§11.3). Detection is by this structure,
+never by repository name (so forks/renames are unaffected): a **Consumer**
+repository never vendors the `aviato/` package tree, so the predicate is false
+for it. (The predicate is only ever evaluated against the operated-on repository
+root — never the installed package in site-packages — so the fact that a
+site-packages copy also contains `aviato/library/policy.yml` is immaterial.)
 **Rule:** in bootstrap state, **all** self-applied automation — scaffolding,
 verify, **and the release pipeline** — resolves its module/action references to
 self-contained local paths. The first release the pipeline produces is what makes
@@ -817,6 +882,13 @@ or behavior may be reduced" warning**.
 been repurposed to a different composition** (identity change), refuse and report.
 The upgrade/downgrade path is the **only** sanctioned way a pin moves; drift
 (§5.5) never advances it.
+**Day-zero limitation:** the repurpose (identity-change) refusal requires resolving
+the profile **at the target version**, which needs that version's definitions
+present. The operator's installed CLI carries **one** Library version, so the
+shipped re-pin confirms the profile still **resolves** but cannot compare its
+identity *across* versions; cross-version repurpose detection (fetching the target
+version's registry) is a post-day-zero refinement. The decision logic is implemented
+and tested against a second registry; it is dormant in the single-installed-CLI flow.
 
 ```mermaid
 flowchart TD
@@ -840,11 +912,17 @@ flowchart TD
 **Steps:** strip managed markers from managed files (converting them to plain
 operator-owned files) **or** remove them per operator choice → remove the
 Consumer automation (the scheduled drift/report workflows) → delete the
-declaration file → open a reviewable proposal capturing the removal. **The proposal
-must carry an explicit warning that offboarding removes the always-on §2.13
-security baseline and all Aviato protection** — mirroring the §5.12
-backward-movement warning, since offboarding is the *maximal* protection reduction.
-After offboarding, no Aviato automation runs and no markers remain to drift-check.
+declaration file. The change may be applied to a local checkout (`--write`) or
+surfaced as a reviewable removal proposal (`--open-pr`), mirroring onboarding.
+**The result must carry an explicit warning that offboarding removes the
+always-on §2.13 security-baseline automation and stops Aviato managing this
+repository's protection** — mirroring the §5.12 backward-movement warning, since
+offboarding is the *maximal* protection reduction. Note the scope precisely: any
+GitHub branch protection and rulesets Aviato applied **remain in place but become
+unmanaged**; offboarding does **not** tear them down (an unattended privileged
+teardown is out of scope, §2.x) — the operator removes them manually if full
+protection removal is desired. After offboarding, no Aviato automation runs and
+no markers remain to drift-check.
 
 ```mermaid
 flowchart TD
@@ -854,7 +932,7 @@ flowchart TD
     C --> E["Remove consumer drift/report automation"]
     D --> E
     E --> F["Delete declaration file"]
-    F --> G["Open reviewable proposal — WARN: removes §2.13 baseline + all protection"]
+    F --> G["Apply locally or open proposal — WARN: removes §2.13 baseline automation; GitHub protection remains but UNMANAGED"]
 ```
 
 ### 5.14 Security scanning (baseline)
@@ -908,8 +986,9 @@ surface, specified normatively below.
 - **Format:** YAML.
 - **Versioned schema** with these fields:
   - `profile` (string) — the profile name (a stable public identity, §6.5).
-  - `version` (string) — the Library version pin: an exact version (`vX.Y.Z`) or
-    a floating major reference (`vX`).
+  - `version` (string) — the Library version pin: an exact version (`X.Y.Z`) or
+    a floating major reference (`X`). Bare SemVer is canonical (matching `policy.yml`
+    and the CLI); a legacy leading `v` is tolerated on read but never emitted.
   - `docs` (boolean, optional, default `false`) — opt-in to building and
     publishing the multi-version documentation site (§13.3). When `true`, the
     language plug-in's docs step emits API/reference material as md/mdx (§12) and
@@ -927,7 +1006,7 @@ surface, specified normatively below.
 - A managed file's **first non-blank line** is a marker using the file's native
   comment syntax, of the canonical form:
   `aviato:managed profile=<name> version=<pin> hash=<content-hash>`
-  (e.g. `# aviato:managed profile=python-library version=v1 hash=…` for
+  (e.g. `# aviato:managed profile=python-library version=1 hash=…` for
   hash-comment files; the equivalent block/line comment for other syntaxes).
 - The marker records **profile**, **version**, and a **content-hash** of the
   rendered body (excluding the marker line) for drift comparison (§5.5).
@@ -968,6 +1047,12 @@ operator edits that make these files operator-owned. (This replaces the earlier
   diff identity not later revoked.
 - A consent record whose bound diff identity does not match the current diff is
   **stale** → DENY (§5.8).
+- Because the record is carried as a hosting-platform label a **human must be able
+  to create**, the diff identity is constrained to fit the platform's label-name
+  limit (GitHub: 50 chars, including the binding's `aviato-consent:` prefix). The
+  identity is a truncated content hash (`settingsdrift.CONSENT_ID_HEX_LEN` hex
+  chars) — short enough to label, long enough to keep the content binding
+  collision-resistant. The binding guards this invariant at import.
 
 ### 6.5 Profile name stability
 
@@ -1051,7 +1136,10 @@ Each maps to a principle and must be designed out, not patched later.
   published alias (e.g. a `latest` image tag or docs alias) **backward** →
   prevented by a **per-alias deploy concurrency group** plus a **monotonic-version
   guard** that moves the alias only if the deploying tag is the highest released
-  version (§13.2, §13.3); the §2.12 recompute exemption does not cover this.
+  version (§13.2, §13.3); the §2.12 recompute exemption does not cover this. The
+  guard is inlined into the deploy workflows (to avoid a self-reference install) but
+  is **validation-checked against the core `is_highest` comparator** so the hand-copied
+  copy cannot silently drift from the tested implementation.
 - **§8.15** A `secret`-typed variable is persisted into the declaration → prevented
   by onboarding excluding secret-typed variables from the write-back as a hard
   error, and diagnosis flagging any present (§5.2, §5.4, §6.6).
@@ -1237,12 +1325,24 @@ on arbitrary push, pull_request, or fork events.
 - Prefer keyless/OIDC or the platform token for every target that supports it.
   PyPI uses OIDC Trusted Publishing; GHCR and Pages use the platform token. None
   store a long-lived secret.
-- Stored secrets are permitted **only** where the platform offers no OIDC path.
-  Day zero, that is **Apple App Store Connect alone**.
+- Stored secrets for **deployment** are permitted **only** where the platform offers
+  no OIDC path. Day zero, that is **Apple App Store Connect alone**.
 - The zero-stored-secret posture of all read/propose/report automation (§6.6) is
-  never weakened. Note: the platform-issued workflow token is **not** a stored
-  secret — it is ephemeral — so read automation that needs an elevated *read*
-  scope still carries no stored secret.
+  never weakened **on the write side**: no read/propose/report automation carries a
+  stored secret that can *mutate* anything. The platform-issued workflow token is
+  **not** a stored secret — it is ephemeral — so read automation that needs an
+  elevated *read* scope it can obtain from the workflow token carries no stored secret.
+- **One narrow read-side exception (settings-drift, §5.6/§11.3).** Reading branch
+  protection and rulesets requires the `administration` scope, which the platform's
+  ephemeral workflow token **does not and cannot** carry — so settings-drift detection
+  is the single place an operator may supply a stored **admin-scoped READ token**. This
+  exception is tightly bounded and does **not** weaken the posture above: the token is
+  **optional** (settings-drift skips fail-closed without it, §5.6), **read-only** (it
+  performs no mutation — apply is the separate operator-gated §5.7 path under the
+  operator's own credentials, never this automation), **scoped to its own step alone**
+  (§11.3 — never visible to the file-drift writes, the install step, or any deploy/PR/
+  fork-triggered workflow), and supplied by the operator, not embedded by the Library.
+  It is a read credential of last resort, not a deploy secret.
 
 ### 11.3 Privileges are declared and granted (read and deploy alike)
 
@@ -1253,9 +1353,19 @@ it **grants** exactly those (§8.9).
 
 | Automation | Required job privileges | Stored secrets |
 |---|---|---|
-| File-drift detection (§5.5) | `contents: read`, `pull-requests: write` | none (platform token) |
+| File-drift detection (§5.5) | `contents: write`, `pull-requests: write` | none (platform token) |
 | Settings-drift detection (§5.6) | settings **read** scope, `issues: write` | none (platform token) |
 | Security scanning (§5.14) | `contents: read`, `security-events: write`, `actions: read` | none (platform token) |
+
+File-drift proposes via a pull request, which requires **pushing an identity-keyed
+proposal branch** — hence `contents: write`, not `contents: read` (it never mutates
+the default branch directly; the PR remains the human gate). The two automations run
+as **separate steps under separate tokens** (§11.2): file-drift uses the platform
+token; settings-drift uses **two** tokens in distinct roles — the ambient platform token
+for its tracking-issue **writes** (open/comment/revoke), and an operator-supplied admin
+**read** token, scoped to the branch-protection/ruleset **reads** alone, for the reads the
+platform token cannot perform. The admin token mutates nothing (read-only *in use*),
+preserving the §11.2/§14 "no write-capable stored secret" posture; both are confined to that step.
 
 **Deployment:**
 
@@ -1266,14 +1376,47 @@ it **grants** exactly those (§8.9).
 | Pages docs | `pages: write`, `id-token: write`, `contents: read` | none (platform token) |
 | App Store Connect | `contents: read` | **yes** — §13.4 |
 
-Third-party actions/tools invoked by any pipeline are **pinned by commit digest**.
+Third-party actions/tools invoked by any pipeline are **pinned to an immutable
+reference**, by the strongest pin the delivery channel supports: GitHub Actions and
+container images are **commit-digest / image-digest** pinned; a binary fetched over
+the network is **checksum-verified** before execution; and a tool installed from a
+package index that exposes no digest (e.g. a `pip`/`npm` package) is pinned to an
+**exact version**, never a floating latest. (Distro packages installed via the
+runner's system package manager inherit the pinned runner-image snapshot.) The
+agnostic checker (`aviato.plugins.actionpins`) and the in-CI gate enforce the
+digest-pinned classes (actions, images, curl-fetched binaries); exact-version tool
+pins are carried as workflow inputs (e.g. `actionlint-version`, `yamllint-version`).
+**Day-zero exception (macOS Homebrew tools, deferred):** the Swift verify install
+(`brew install swift-format swiftlint`, §12.3) is **not** version/checksum-pinned —
+neither tool ships a versioned Homebrew formula, and unlike a Linux distro package a
+`brew install` fetches the latest formula rather than the runner-image snapshot, so it
+does not cleanly fit either pinning class above. This is a **known day-zero gap**:
+the Swift toolchain path is operator-verified only (§13.4.7), and pinning these to
+checksum-verified release binaries is a post-day-zero hardening. It is called out so
+the gap is an explicit, traceable boundary, not a silent omission.
+**Scope boundary (seeded consumer manifests vs. Aviato's pipeline tooling):** this exact/digest
+pinning rule governs **Aviato's own pipeline supply chain** — the actions, container images,
+fetched binaries, and pip/npm tools the reusable workflows invoke (all pinned). It does **not**
+dictate the version ranges in a **seeded consumer project manifest** (`pyproject.toml`'s
+`[project.optional-dependencies]`, `package.json` deps): those are **seed-once, operator-owned**
+(§6.3) — the consumer's own project dependencies, conventionally expressed as ranges and kept
+current by Dependabot, which the operator owns and tunes after seeding. Aviato pins the *tools it
+runs*, not the *consumer's project deps*.
+**First-party GitHub-owned actions** (the `actions/*` and `github/*` namespaces —
+e.g. `actions/checkout`, `actions/attest-build-provenance`, `github/codeql-action`)
+are exempt from the digest requirement and pinned at **major-tag** granularity: they
+share the same trust root as the runner image itself (GitHub maintains both), so a
+digest pin buys no additional supply-chain isolation while costing constant churn.
+**Third-party actions carry no such exemption** and are commit-digest pinned. The
+checker encodes this carve-out (`actionpins._FIRST_PARTY_OWNERS`); changing it is a
+deliberate policy decision, not a bug.
 For the Library reference a Consumer pulls, **digest-level verifiability holds only
-for exact-version pins** (`vX.Y.Z`, resolved to a recorded digest / signed tag) —
-those **close the supply-chain delivery path**. A **floating major pin** (`vX`,
+for exact-version pins** (`X.Y.Z`, resolved to a recorded digest / signed tag) —
+those **close the supply-chain delivery path**. A **floating major pin** (`X`,
 §6.1) is deliberately **mutable**: it is advanced on every release (§5.9) and may
-be hand-de-advanced on rollback (§13.5), so a `vX` consumer gets **tag-trust, not
+be hand-de-advanced on rollback (§13.5), so an `X` consumer gets **tag-trust, not
 content-digest immutability**. Operators who require a closed delivery path pin an
-**exact version**; `vX` is convenience with an explicit mutable-reference
+**exact version**; `X` is convenience with an explicit mutable-reference
 trade-off. (The apply path is closed regardless; this is about the delivery path.)
 
 ### 11.4 Stored-secret confinement (App Store Connect)
@@ -1435,7 +1578,13 @@ exists for Swift API reference but produces an *archive*, not md/mdx — see Doc
 
 **Version-source module:** the marketing version **and** a monotonic build number
 (see deploy, §13.4) — the release process derives marketing version from SemVer
-and ensures the build number is strictly increasing.
+and ensures the build number is strictly increasing. The day-zero `swift-app`
+version-source `locations` are a **placeholder** (`project.pbxproj`/`Info.plist` at
+the root); a real Xcode project keeps these in `<Scheme>.xcodeproj/project.pbxproj`,
+whose path varies, so the operator **overrides `version_source.locations`** in the
+declaration to point at their actual file(s). `bump-version` names the expected
+locations and exits non-zero if none exist (it never silently no-ops), so a wrong
+default fails loud — consistent with the §13.4.7 operator-verified Swift DoD.
 
 **Workflows bundle (pipelines):**
 - **Verify** (**macOS**): swift-format `--lint` + SwiftLint `--strict` + build +
@@ -1473,6 +1622,12 @@ only where unavoidable — secrets), triggered on a release tag (§11.1).
 provenance/attestation, scan dependencies (gate on high/critical, §11.7)** →
 publish via **OIDC Trusted Publishing** with SBOM/provenance attached → confirm
 the version is resolvable.
+**Resolvability confirmation is best-effort, not a gate (deliberate):** the publish itself is
+the authoritative success; the post-publish "version resolvable on the index" check retries and
+then **warns rather than fails**, because PyPI index propagation has a real, unbounded delay and
+failing the run on propagation latency would falsely mark a *successful* publish as failed (and a
+re-run cannot re-upload an immutable version, §11.6). The DoD (§11.6) is operator-verified, which
+is where resolvability is actually confirmed; the in-run check is an advisory signal.
 **Auth:** OIDC; `id-token: write` + `contents: read`; **no stored secret**.
 **Prerequisite (out-of-band):** register the repo + workflow as a trusted
 publisher on PyPI (and TestPyPI for verification).
@@ -1554,6 +1709,21 @@ site (versioning + local search index) → publish to Pages via the platform tok
 **move the `latest` alias only if this release is the highest released version**
 (monotonic guard), under a **per-alias deploy concurrency group** so a slower
 older-release deploy cannot regress `latest`/docs (§8.14).
+**Day-zero limitation (conservative monotonic gate):** the implementation gates the
+**entire** docs job — version-cut, build, and publish — on the monotonic
+"highest-released-version" guard, not just the `latest`-alias move. Consequence: a
+release that is **not** the highest (e.g. a backport patch to an older line published
+after a newer major already shipped) does **not** retroactively add its own docs
+version. This is deliberately conservative: publishing an older release's site without
+correctly merging it into the newer published version set risks regressing live docs,
+which has no apply-time recompute (§2.12) and is operator-verified only (§9.9). Adding
+a non-highest version *without* moving `latest` (a true §13.3 "every release adds a
+version") requires merging into the existing `gh-pages` version set and is a
+post-day-zero refinement. Likewise the version sources read forward between releases
+are persisted as a **time-bounded build artifact** rather than durably from the
+published `gh-pages` artifact; a release gap exceeding that window would lose prior
+snapshots — also a post-day-zero hardening. Day-zero releases are monotonic, so
+neither edge is exercised by the normal release cadence.
 **Auth:** platform token, `pages: write` + `id-token: write` + `contents: read`;
 **no stored secret**.
 **Why a deployment plug-in:** publishing to Pages is a privileged outward publish;
@@ -1612,6 +1782,17 @@ not blocked; a protected deployment environment with required reviewers.
 bundle identifier, app/scheme identifiers, export method, team/app identifiers,
 and the **monotonic build number** (distinct from the marketing version, §12.3) —
 App Store Connect rejects duplicate/non-increasing build numbers.
+**Where the build number is set and enforced.** The build number is written into the
+version-source (`CURRENT_PROJECT_VERSION`/`CFBundleVersion`) at the **release-proposal**
+step (§5.9): the bump **fails loud** if a build number is supplied but the version-source
+exposes no field to receive it (so a Swift release can never tag with an un-bumped build
+number). The agnostic release process derives the marketing version from SemVer and
+re-proves *that* at the tag step; the build number's value is supplied per-run (the run
+number, strictly increasing) and its **strict-increase invariant is enforced
+authoritatively by App Store Connect at upload** (it rejects duplicate/non-increasing
+build numbers). The agnostic tag step deliberately does **not** re-prove monotonicity
+(it would require language-specific knowledge of the build-number location and the prior
+value — neither belongs in the agnostic core, §9b); Apple is the authoritative gate.
 
 #### 13.4.7 Definition of done (operator-verified exception, §9.9)
 The system author cannot verify this. It is "done" only when the **operator**
@@ -1654,12 +1835,17 @@ Aviato-driven, operator-gated rollback flow is a candidate for a later version.
 | GHCR | platform token | **No** | `packages: write`, `contents: read` | Linux | Yes (test image) |
 | Docusaurus docs (Pages) | platform token | **No** | `pages: write`, `id-token: write`, `contents: read` | Linux | Yes |
 | App Store Connect | App Store Connect API key + signing assets | **Yes** | `contents: read` | macOS | **No — operator-verified** |
-| Read/report automation | platform token (ephemeral) | **No** | read scope + `issues`/`pull-requests: write` | Linux | Yes |
+| File-drift / report automation | platform token (ephemeral) | **No** | read scope + `issues`/`pull-requests: write` | Linux | Yes |
+| Settings-drift detection (§5.6) | operator-supplied admin **read** token | **Optional, read-only** | `administration: read` (read branch protection/rulesets) | Linux | Yes |
 | Security scanning (baseline, §2.13) | platform token + OIDC | **No** | `security-events: write`, `contents: read` | Linux/macOS | Yes |
 
-Read/propose/report automation carries **no stored secret** for any target.
-Stored secrets exist only in the App Store Connect deploy job, behind a protected
-environment.
+Read/propose/report automation carries **no write-capable stored secret** for any
+target. The single read-side exception is the **optional, read-only** settings-drift
+admin token (§11.2/§11.3): the platform's ephemeral workflow token cannot carry the
+`administration` scope branch-protection reads require, so an operator may supply an
+admin **read** token scoped to that step alone; it can mutate nothing (apply is the
+separate §5.7 operator-gated path). Write/deploy stored secrets exist **only** in the
+App Store Connect deploy job, behind a protected environment.
 
 ---
 

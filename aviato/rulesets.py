@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from . import github
-from .paths import REPO_ROOT
+from .paths import POLICY_DATA_ROOT
 from .policy import default_required_approvals, get_path, load_policy, load_ruleset_manifest
 
 
@@ -25,7 +25,7 @@ def _patch_tag_ruleset(payload: dict[str, Any], tag_pattern: str) -> None:
 
 
 def _patch_status_checks(payload: dict[str, Any], extra_contexts: list[str]) -> None:
-    """Union additional required status-check contexts into the branch ruleset (§10).
+    """Union additional required status-check contexts into the branch ruleset (§10.3/§5.6).
 
     The static ruleset carries only the common (language-agnostic) checks; a resolved
     profile adds its language verify job (e.g. ``ci / Python CI``) so the ruleset cannot
@@ -47,7 +47,7 @@ def _patch_status_checks(payload: dict[str, Any], extra_contexts: list[str]) -> 
 def render_ruleset(
     item: dict[str, Any],
     *,
-    root: Path = REPO_ROOT,
+    root: Path = POLICY_DATA_ROOT,
     policy: dict[str, Any] | None = None,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,
@@ -76,9 +76,72 @@ def render_ruleset(
     return rendered
 
 
+def _subset_match(desired: Any, live: Any) -> bool:
+    """True if everything ``desired`` specifies is present-and-equal in ``live`` (recursively).
+
+    Compares ONLY what Aviato renders, so GitHub-added fields/defaults in ``live`` are ignored
+    (no false drift from platform metadata). For lists, every desired element must subset-match
+    SOME live element (order-insensitive) — so a removed/weakened required item (a dropped status
+    check, a changed tag pattern, a lowered approval count) is drift, while a benign live ADDITION
+    is not. Same additive-vs-destructive posture as settings drift (§5.6).
+    """
+    if isinstance(desired, dict):
+        return isinstance(live, dict) and all(k in live and _subset_match(v, live[k]) for k, v in desired.items())
+    if isinstance(desired, list):
+        return isinstance(live, list) and all(any(_subset_match(d, item) for item in live) for d in desired)
+    return desired == live
+
+
+def ruleset_content_drift(desired: dict[str, Any], live: dict[str, Any]) -> bool:
+    """True if a live ruleset has drifted from the rendered desired payload (§5.6).
+
+    Catches the security-relevant divergences: a DISABLED/evaluate ruleset (``enforcement`` no
+    longer ``active``), an added ``bypass_actors`` entry (an actor that can skip ALL rules — incl.
+    admin enforcement, so this also backs the §2.13 enforce_admins posture), a MISSING required
+    rule type, and a WEAKENED rule parameter (e.g. a permissive ``tag_name_pattern`` or a lowered
+    ``required_approving_review_count``). Conditions (the ref-name scope) are deliberately NOT
+    compared: GitHub may normalize the ``~DEFAULT_BRANCH`` token, which would risk false drift;
+    scope changes are a documented day-zero detection gap. Robust against GitHub metadata via
+    :func:`_subset_match`.
+    """
+    if desired.get("enforcement") != live.get("enforcement"):
+        return True
+    # bypass_actors: any actor that can skip the rules. Aviato's rulesets grant NONE, so any live
+    # bypass not explicitly desired weakens the ruleset (§5.6). Subset-match keeps it robust to
+    # GitHub-added actor fields when a future desired ruleset DOES grant a bypass.
+    desired_bypass = desired.get("bypass_actors") or []
+    if any(not any(_subset_match(d, actor) for d in desired_bypass) for actor in (live.get("bypass_actors") or [])):
+        return True
+    live_rule_by_type: dict[Any, dict[str, Any]] = {}
+    for rule in live.get("rules", []):
+        if isinstance(rule, dict):
+            live_rule_by_type.setdefault(rule.get("type"), rule)
+    for desired_rule in desired.get("rules", []):
+        live_rule = live_rule_by_type.get(desired_rule.get("type"))
+        if live_rule is None:
+            return True  # a desired rule type is absent on the live ruleset
+        if not _subset_match(desired_rule.get("parameters", {}), live_rule.get("parameters", {})):
+            return True  # a desired rule parameter was weakened/removed
+    return False
+
+
+def drifted_ruleset_names(desired_payloads: list[dict[str, Any]], live_payloads: list[dict[str, Any]]) -> list[str]:
+    """Names of desired rulesets MISSING from, or content-DRIFTED on, the live platform (§5.6)."""
+    live_by_name = {p["name"]: p for p in live_payloads if isinstance(p, dict) and isinstance(p.get("name"), str)}
+    drifted: list[str] = []
+    for desired in desired_payloads:
+        name = desired.get("name")
+        if not isinstance(name, str):
+            continue
+        live = live_by_name.get(name)
+        if live is None or ruleset_content_drift(desired, live):
+            drifted.append(name)
+    return drifted
+
+
 def render_all_rulesets(
     *,
-    root: Path = REPO_ROOT,
+    root: Path = POLICY_DATA_ROOT,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,
 ) -> list[dict[str, Any]]:
