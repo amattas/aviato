@@ -3,20 +3,24 @@ workflows: python-service-wf
 scaffold: python-service-sc
 settings: baseline
 variables:
-  # §12.1 Python plug-in vars: the wheel/distribution name (the pyproject [project] name) and
-  # the import package name. image-name (§13.2) is the GHCR target. All are non-secret.
-  - {name: distribution-name, type: string}
+  # A Python container SERVICE: the build artifact is its Dockerfile image (§13.2), NOT a wheel,
+  # so it declares NO distribution/import name (unlike the python-library packaging model, §12.1).
+  # The only required var is the GHCR image target. Mirrors node-service, whose production
+  # artifact is likewise the image.
   - {name: image-name, type: string}
-  - {name: import-name, type: string}
 version_source:
-  locations: [pyproject.toml]
+  # Packaging-free version-source: a plain VERSION file holding the bare SemVer (§13.2). The
+  # release flow bumps it; the Dockerfile owns the build. (A library uses pyproject.toml instead.)
+  locations: [VERSION]
 toolchain:
   linter: ruff
   formatter: ruff
   type_checker: mypy
   test_runner: pytest
 notes:
-  - "Requires a seed-once container build definition before GHCR publishing (§13.2)."
+  - "A container service: builds via its Dockerfile, ships a GHCR image — no wheel/library publish."
+  - "Requires a seed-once container build definition (Dockerfile) before GHCR publishing (§13.2)."
+  - "CI installs from requirements.txt (+ the seeded requirements-dev.txt); it does NOT `pip install -e .`."
 docs_pipeline: docs-pages
 prerequisites:
   container_build_definition: [Dockerfile]

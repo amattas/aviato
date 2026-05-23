@@ -20,6 +20,13 @@ def test_manifests_get_bare_semver_not_v_prefixed() -> None:
     assert json.loads(bump_text("package.json", '{"version": "0.1.0"}', "v0.2.0"))["version"] == "0.2.0"
 
 
+def test_bump_plain_version_file() -> None:
+    # Container-service version-source (§13.2): a plain VERSION file holds only the bare SemVer.
+    assert bump_text("VERSION", "0.1.0\n", "v2.3.4") == "2.3.4\n"  # leading v stripped
+    # Idempotent: re-bump to the same value yields identical text (bump_files writes only on change).
+    assert bump_text("VERSION", "2.3.4\n", "2.3.4") == "2.3.4\n"
+
+
 def test_malformed_package_json_raises_aviato_error_not_raw_jsondecode() -> None:
     # review #23: an invalid package.json must surface as AviatoError (the caller-consistent
     # contract), never a raw json.JSONDecodeError that bypasses the error handling.

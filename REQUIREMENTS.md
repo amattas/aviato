@@ -1523,8 +1523,24 @@ without the core knowing the location.
   + push protection (platform-native); SARIF to the Security tab; high/critical
   gates verify.
 
-**Required variables:** distribution name, import/package name, shared metadata
-variables (typed, non-secret).
+**Required variables:** for the **library** model (`python-library`/`python-component`),
+the distribution name and import/package name (typed, non-secret). For the **container
+service** model (`python-service`, below), only the GHCR image name.
+
+**Container-service model (`python-service`).** A Python *service* whose build artifact
+is its **Dockerfile image** (§13.2), not a wheel — so it follows the same packaging-free
+shape as `node-service`, **not** the library model above:
+- declares **no** distribution/import name (only the GHCR `image-name`);
+- versions via a plain **`VERSION`** file (the release flow bumps the bare SemVer), not a
+  `pyproject.toml` — there is no wheel/package metadata;
+- CI installs from **`requirements.txt`** (the same file the Dockerfile uses) plus a seeded
+  **`requirements-dev.txt`** for tools — it never installs the project as an editable package
+  and **builds no wheel** (`run-build: false`); type-checking is **non-strict** `mypy` (lower
+  adoption friction than the library default's `mypy --strict`);
+- docs (when `docs: true`) are **narrative-only** (no docstring API reference — a service has
+  no importable library API), mirroring `swift-app`.
+The Dockerfile remains a §17 seed-once prerequisite the developer owns; the GHCR deploy
+(§13.2) builds it. This keeps "service = container" symmetric across Python and Node.
 
 **Runner:** Linux. **Definition of done:** verify + release green in real CI (plus
 the docs build when `docs: true`); the attached deploy plug-in meets its DoD.

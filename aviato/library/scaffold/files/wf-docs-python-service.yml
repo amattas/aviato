@@ -81,10 +81,6 @@ jobs:
     with:
       working-directory: website
       release-tag: ${{ needs.resolve.outputs.tag }}
-      docs-source-directory: "."
-      docs-emit-command: |
-        # §12.1 Python API reference (docstrings -> markdown) into the docs source tree.
-        # §11.3: pin the pip-installed doc tool to an exact version (no floating latest).
-        python3 -m pip install --quiet -e . "pydoc-markdown==4.8.2"
-        mkdir -p website/docs/api
-        pydoc-markdown -I . -p {{ import-name }} > website/docs/api/reference.md
+      # Narrative-only docs (mirrors swift-app): a container service has no installable Python
+      # library API to auto-generate a reference from, so there is no pydoc-markdown emit step
+      # (and hence no import-name dependency — §13.2). Authors write the docs under website/.
