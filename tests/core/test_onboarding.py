@@ -36,8 +36,8 @@ def test_variant_exclusive_templates_sharing_a_path_are_allowed() -> None:
 def test_docs_true_scaffolds_gated_docs_workflow() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {"distribution-name": "acme", "import-name": "acme"}
-    without = {i.output for i in materialize_items(reg, "python-library", variables)}
-    withdocs = {i.output: i for i in materialize_items(reg, "python-library", variables, docs=True)}
+    without = {i.output for i in materialize_items(reg, "python-library", variables, pin="0")}
+    withdocs = {i.output: i for i in materialize_items(reg, "python-library", variables, pin="0", docs=True)}
     assert ".github/workflows/aviato-docs.yml" not in without
     docs = withdocs[".github/workflows/aviato-docs.yml"]
     # §4/§5.14: docs deploy is gated by the release gate AND the release-ref security baseline.
@@ -64,20 +64,37 @@ def test_javascript_variant_omits_tsconfig_and_disables_typecheck() -> None:
     from aviato.core.onboarding import render_variables
 
     reg = Registry(MODULE_SOURCE_ROOT)
-    ts_items = {i.output for i in materialize_items(reg, "node-service", {"language-variant": "typescript"})}
-    js_items = {i.output for i in materialize_items(reg, "node-service", {"language-variant": "javascript"})}
+    ts_items = {i.output for i in materialize_items(reg, "node-service", {"language-variant": "typescript"}, pin="0")}
+    js_items = {i.output for i in materialize_items(reg, "node-service", {"language-variant": "javascript"}, pin="0")}
     assert "tsconfig.json" in ts_items
     assert "tsconfig.json" not in js_items  # §12.2: JS omits TypeScript config
     # run-typecheck is derived from the profile's data-driven derived_variables rule
     # (no language literal in core); apply it the same way resolved_artifacts does.
     rules = reg.profile_doc("node-service")["derived_variables"]
-    assert render_variables({"language-variant": "javascript"}, derived_rules=rules)["run-typecheck"] == "false"
-    assert render_variables({"language-variant": "typescript"}, derived_rules=rules)["run-typecheck"] == "true"
+    assert (
+        render_variables({"language-variant": "javascript"}, pin="0", derived_rules=rules)["run-typecheck"] == "false"
+    )
+    assert render_variables({"language-variant": "typescript"}, pin="0", derived_rules=rules)["run-typecheck"] == "true"
+
+
+def test_template_applies_canonicalizes_booleans() -> None:
+    # R1-2/§12.2: a `when` value must match the resolved variable regardless of bool shape — an
+    # unquoted YAML bool `True` (stored "True") must still match the derived "true", not silently
+    # exclude the template.
+    from aviato.core.onboarding import template_applies
+
+    t = TemplateModule(output_path="x", source="x", when=(("docs", "true"),))
+    assert template_applies(t, {"docs": "true"}) is True
+    assert template_applies(t, {"docs": True}) is True  # Python bool canonicalized
+    assert template_applies(t, {"docs": "false"}) is False
+    assert template_applies(t, {"docs": False}) is False
+    t2 = TemplateModule(output_path="x", source="x", when=(("docs", "True"),))
+    assert template_applies(t2, {"docs": True}) is True
 
 
 def test_materialize_builds_scaffold_items_from_resolved_set() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "python-library", variables={})
+    items = materialize_items(reg, "python-library", variables={}, pin="0")
     by_output = {item.output: item for item in items}
     assert ".editorconfig" in by_output
     assert by_output[".editorconfig"].seed_once is False
@@ -88,7 +105,7 @@ def test_materialize_renders_into_scaffold_then_writes(tmp_path: Path) -> None:
     from aviato.core.scaffold import scaffold
 
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "python-library", variables={})
+    items = materialize_items(reg, "python-library", variables={}, pin="0")
     result = scaffold(tmp_path, items, profile="python-library", version="v1")
     assert ".editorconfig" in result.written
     assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library")

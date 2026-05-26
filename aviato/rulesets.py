@@ -9,19 +9,33 @@ from . import github
 from .paths import POLICY_DATA_ROOT
 from .policy import default_required_approvals, get_path, load_policy, load_ruleset_manifest
 
+# R3-9: the patch keys a manifest entry may declare. An unknown key (typo) would be silently
+# ignored and render a weakened payload, so render_ruleset rejects anything outside this set.
+_KNOWN_PATCH_KEYS = frozenset({"required_approving_review_count", "tag_name_pattern"})
+
 
 def _patch_branch_ruleset(payload: dict[str, Any], approvals: int) -> None:
+    injected = False
     for rule in payload.get("rules", []):
         if rule.get("type") == "pull_request":
             parameters = rule.setdefault("parameters", {})
             parameters["required_approving_review_count"] = approvals
+            injected = True
+    # R3-9: a branch ruleset template missing its pull_request rule would render with NO approval
+    # requirement — a silently weakened payload. Fail loud instead (§5.6/§8.10).
+    if not injected:
+        raise ValueError("branch ruleset has no pull_request rule to inject required_approving_review_count into")
 
 
 def _patch_tag_ruleset(payload: dict[str, Any], tag_pattern: str) -> None:
+    injected = False
     for rule in payload.get("rules", []):
         if rule.get("type") == "tag_name_pattern":
             parameters = rule.setdefault("parameters", {})
             parameters["pattern"] = tag_pattern
+            injected = True
+    if not injected:
+        raise ValueError("tag ruleset has no tag_name_pattern rule to inject the release pattern into")
 
 
 def _patch_status_checks(payload: dict[str, Any], extra_contexts: list[str]) -> None:
@@ -60,6 +74,11 @@ def render_ruleset(
     rendered = deepcopy(payload)
     target = item.get("target", rendered.get("target"))
     patch = item.get("patch", {})
+    # R3-9: an unknown patch key (a typo in rulesets.yml) would be silently ignored, leaving the
+    # intended value un-injected. Reject it so a manifest mistake fails loud, not silently weakens.
+    unknown_patch = set(patch) - _KNOWN_PATCH_KEYS
+    if unknown_patch:
+        raise ValueError(f"ruleset {item.get('file')!r} has unknown patch key(s) {sorted(unknown_patch)}")
 
     if target == "branch":
         approvals = required_approvals
@@ -126,14 +145,20 @@ def ruleset_content_drift(desired: dict[str, Any], live: dict[str, Any]) -> bool
 
 
 def drifted_ruleset_names(desired_payloads: list[dict[str, Any]], live_payloads: list[dict[str, Any]]) -> list[str]:
-    """Names of desired rulesets MISSING from, or content-DRIFTED on, the live platform (§5.6)."""
-    live_by_name = {p["name"]: p for p in live_payloads if isinstance(p, dict) and isinstance(p.get("name"), str)}
+    """Names of desired rulesets MISSING from, or content-DRIFTED on, the live platform (§5.6).
+
+    R3-10: matched by ``(name, target)`` — a live ruleset that shares a name but targets a different
+    ref kind (e.g. a tag ruleset named like the branch one) is NOT the desired branch ruleset, so it
+    must not satisfy presence/content while real branch protection is absent."""
+    live_by_key = {
+        (p["name"], p.get("target")): p for p in live_payloads if isinstance(p, dict) and isinstance(p.get("name"), str)
+    }
     drifted: list[str] = []
     for desired in desired_payloads:
         name = desired.get("name")
         if not isinstance(name, str):
             continue
-        live = live_by_name.get(name)
+        live = live_by_key.get((name, desired.get("target")))
         if live is None or ruleset_content_drift(desired, live):
             drifted.append(name)
     return drifted

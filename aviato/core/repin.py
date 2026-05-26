@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .composition import resolve_profile
+from .composition import _unknown_settings_override_paths, resolve_profile
 from .declaration import Declaration
 from .errors import CompositionError
 from .registry import Registry
@@ -24,7 +24,11 @@ class RepinPlan:
 
     @property
     def ok(self) -> bool:
-        return not self.newly_required and not self.conflicting_overrides
+        # R1-8: orphaned overrides are BLOCKING. Composition now hard-rejects unknown settings keys
+        # and remove-of-absent pipelines, so a plan that reports orphaned overrides but writes the
+        # pin anyway would then fail at the next `aviato sync` (which resolves WITH overrides) — a
+        # half-applied move. Refuse until the operator removes the orphaned overrides.
+        return not self.newly_required and not self.conflicting_overrides and not self.orphaned_overrides
 
 
 def _is_downgrade(current: str, target: str) -> bool:
@@ -37,13 +41,22 @@ def _is_downgrade(current: str, target: str) -> bool:
         return False
 
 
-def _profile_identity(registry: Registry, profile: str) -> tuple[str, ...]:
-    """A profile's stable identity for re-pin (§6.5): the version-source artifact kind
-    it manages. A profile name is a public identity; if the same name maps to a
-    different artifact kind at another version it has been repurposed, not evolved."""
+def _profile_identity(registry: Registry, profile: str) -> tuple:
+    """A profile's stable identity for re-pin (§6.5, R1-7): a digest of its FULL resolved
+    composition, not just the version-source locations. A profile name is a public identity;
+    if the same name resolves to a different shape at another version (different pipelines,
+    template outputs, version-source, or deploy targets) it has been repurposed, not evolved.
+    Comparing the whole composition (not only version-source) catches a repurpose that keeps the
+    same version file but changes everything else."""
     resolved = resolve_profile(registry, profile)
     vs = resolved.version_source
-    return tuple(sorted(vs.locations)) if vs is not None else ()
+    return (
+        tuple(sorted(resolved.pipelines)),
+        tuple(sorted(t.output_path for t in resolved.templates)),
+        tuple(sorted(vs.locations)) if vs is not None else (),
+        tuple(sorted(spec.name for spec in resolved.variables)),
+        tuple(sorted(resolved.settings.keys())),
+    )
 
 
 def plan_repin(
@@ -104,9 +117,12 @@ def plan_repin(
         if spec.required and spec.default is None and spec.name not in declaration.variables:
             plan.newly_required.append(spec.name)
 
-    for key in declaration.overrides.get("settings", {}):
-        if key not in resolved.settings:
-            plan.orphaned_overrides.append(key)
+    # R1-3: recurse nested settings-override leaves (not just top-level keys), mirroring the
+    # composition unknown-key guard — a nested override like `default_branch.removed_key` that no
+    # longer exists at the target is orphaned too (and would now be hard-rejected on re-sync).
+    plan.orphaned_overrides.extend(
+        _unknown_settings_override_paths(declaration.overrides.get("settings", {}), resolved.settings)
+    )
 
     # A pipeline override that removes a pipeline no longer present at the target is
     # orphaned — report it (don't let merge_list raise remove-of-absent, §5.12/§4.2).

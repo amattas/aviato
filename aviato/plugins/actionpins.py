@@ -115,6 +115,24 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
     return flagged
 
 
+def unpinned_requirements_lines(text: str) -> list[str]:
+    """Requirement lines in a SEEDED requirements file that are not pinned to an exact version.
+
+    R4-4/R4-5: a requirements file the consumer CI installs with ``pip install -r`` is itself a
+    supply-chain surface, but the ``-r <file>`` reference is (correctly) skipped by the package
+    scanner — the path is not a package — so a floor pin (``pytest>=8.0``) inside it was invisible
+    to the gate and let CI silently pull an untested newer tool (§11.3). Each non-comment line is a
+    single requirement; reuse the same exact-pin rule as ``pip install`` tokens (a bare name or any
+    non-``==`` specifier is flagged). Inline ``# …`` comments and blank lines are ignored.
+    """
+    flagged: list[str] = []
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            flagged.extend(_unpinned_pip_packages(line))
+    return flagged
+
+
 def unpinned_tool_invocations(text: str) -> list[str]:
     """Return shell-invoked tools/images not pinned by digest/checksum/version (§11.3)."""
     violations: list[str] = []
@@ -216,6 +234,13 @@ def action_pin_violations(root: Path) -> list[str]:
             continue
         for tool in unpinned_tool_invocations(text):
             violations.append(f"{path.name}: {tool}")
+    # R4-4/R4-5: the seeded dev-requirements file is installed by the container-service CI
+    # (`pip install -r requirements-dev.txt`); its tool pins must be exact, but a floor inside it
+    # is invisible to the `pip install` token scan above (the `-r <path>` is skipped). Scan the
+    # seed body directly. Materialized seed bodies carry a `.txt.txt` suffix in the scaffold dir.
+    for req in sorted(scaffold_dir.glob("requirements-dev.txt.txt")):
+        for pkg in unpinned_requirements_lines(req.read_text(encoding="utf-8")):
+            violations.append(f"{req.name}: requirement not pinned to an exact version: {pkg}")
     return violations
 
 

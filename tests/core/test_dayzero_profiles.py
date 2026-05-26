@@ -87,17 +87,21 @@ def test_services_deploy_ghcr(registry: Registry) -> None:
 
 def test_python_service_is_a_container_service_not_a_library(registry: Registry) -> None:
     # The Python container-service model: the build artifact is the Docker image, so the profile
-    # declares ONLY the GHCR image target — no wheel/import packaging vars (§13.2) — and versions
-    # via a packaging-free VERSION file (not pyproject.toml). Mirrors node-service.
+    # declares no wheel/import packaging vars (§13.2) and versions via a packaging-free VERSION file
+    # (not pyproject.toml). Mirrors node-service — including NO image-name var (R4-2): the GHCR image
+    # defaults to the repo slug.
     rs = resolve_profile(registry, "python-service")
     var_names = {v.name for v in rs.variables}
-    assert var_names == {"image-name"}, var_names
+    # `default-branch` (R4-3) is the only var — an optional, every-profile branch override templated
+    # into caller triggers; there is no required container-service-specific variable.
+    assert var_names == {"default-branch"}, var_names
     assert "distribution-name" not in var_names and "import-name" not in var_names
+    assert "image-name" not in var_names
     assert rs.version_source.locations == ("VERSION",)
     # The scaffold seeds VERSION + requirements-dev.txt and does NOT seed a pyproject.toml.
     from aviato.core.onboarding import resolved_artifacts
 
-    arts = resolved_artifacts(registry, "python-service", {"image-name": "o/img"}, pin="1", docs=False)
+    arts = resolved_artifacts(registry, "python-service", {}, pin="1", docs=False)
     outputs = {a.output for a in arts}
     seed_once = {a.output for a in arts if a.seed_once}
     assert "VERSION" in seed_once and "requirements-dev.txt" in seed_once
@@ -132,12 +136,12 @@ def test_node_ci_workflow_renders_typecheck_from_variant() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     js = next(
         i
-        for i in materialize_items(reg, "node-service", {"language-variant": "javascript"})
+        for i in materialize_items(reg, "node-service", {"language-variant": "javascript"}, pin="0")
         if i.output == ".github/workflows/aviato-ci.yml"
     )
     ts = next(
         i
-        for i in materialize_items(reg, "node-service", {"language-variant": "typescript"})
+        for i in materialize_items(reg, "node-service", {"language-variant": "typescript"}, pin="0")
         if i.output == ".github/workflows/aviato-ci.yml"
     )
     assert "run-typecheck: false" in js.body
@@ -168,8 +172,8 @@ def test_docs_opt_in_scaffolds_runnable_docusaurus_site() -> None:
 
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {"distribution-name": "acme", "import-name": "acme"}
-    outputs_off = {i.output for i in materialize_items(reg, "python-library", variables, docs=False)}
-    items_on = materialize_items(reg, "python-library", variables, docs=True)
+    outputs_off = {i.output for i in materialize_items(reg, "python-library", variables, docs=False, pin="0")}
+    items_on = materialize_items(reg, "python-library", variables, docs=True, pin="0")
     outputs_on = {i.output for i in items_on}
 
     expected = {
@@ -195,7 +199,7 @@ def test_python_profile_scaffolds_pyproject_manifest() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     item = next(
         i
-        for i in materialize_items(reg, "python-library", {"distribution-name": "acme", "import-name": "acme"})
+        for i in materialize_items(reg, "python-library", {"distribution-name": "acme", "import-name": "acme"}, pin="0")
         if i.output == "pyproject.toml"
     )
     assert item.seed_once is True
@@ -211,7 +215,9 @@ def test_node_typescript_manifest_has_tsc_and_engines() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     items = [
         i
-        for i in materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": "typescript"})
+        for i in materialize_items(
+            reg, "node-service", {"project-name": "acme", "language-variant": "typescript"}, pin="0"
+        )
         if i.output == "package.json"
     ]
     assert len(items) == 1  # only the TS-gated manifest applies
@@ -232,7 +238,9 @@ def test_node_javascript_manifest_omits_typescript() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     items = [
         i
-        for i in materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": "javascript"})
+        for i in materialize_items(
+            reg, "node-service", {"project-name": "acme", "language-variant": "javascript"}, pin="0"
+        )
         if i.output == "package.json"
     ]
     assert len(items) == 1  # only the JS-gated manifest applies
@@ -256,7 +264,9 @@ def test_swift_caller_consumes_declared_variables() -> None:
         "export-method": "app-store",
     }
     ci = next(
-        i for i in materialize_items(reg, "swift-app", variables) if i.output == ".github/workflows/aviato-ci.yml"
+        i
+        for i in materialize_items(reg, "swift-app", variables, pin="0")
+        if i.output == ".github/workflows/aviato-ci.yml"
     )
     assert 'scheme: "Acme"' in ci.body
     assert 'bundle-identifier: "com.acme.app"' in ci.body
@@ -288,7 +298,7 @@ def test_node_eslint_config_is_runnable(variant: str) -> None:
     from aviato.core.onboarding import materialize_items
 
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": variant})
+    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": variant}, pin="0")
     eslint = next(i for i in items if i.output == "eslint.config.mjs")
     assert 'import security from "eslint-plugin-security"' in eslint.body
     assert 'import js from "@eslint/js"' in eslint.body
@@ -304,7 +314,7 @@ def test_node_javascript_has_no_fake_build_gate() -> None:
     from aviato.core.onboarding import materialize_items
 
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": "javascript"})
+    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": "javascript"}, pin="0")
     ci = next(i for i in items if i.output == ".github/workflows/aviato-ci.yml")
     assert "run-build: false" in ci.body
     pkg = next(i for i in items if i.output == "package.json")
@@ -315,7 +325,7 @@ def test_node_typescript_runs_real_build_gate() -> None:
     from aviato.core.onboarding import materialize_items
 
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": "typescript"})
+    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": "typescript"}, pin="0")
     ci = next(i for i in items if i.output == ".github/workflows/aviato-ci.yml")
     assert "run-build: true" in ci.body
     pkg = next(i for i in items if i.output == "package.json")
@@ -336,8 +346,52 @@ def test_swift_caller_installs_apple_swift_format() -> None:
         "export-method": "app-store",
     }
     ci = next(
-        i for i in materialize_items(reg, "swift-app", variables) if i.output == ".github/workflows/aviato-ci.yml"
+        i
+        for i in materialize_items(reg, "swift-app", variables, pin="0")
+        if i.output == ".github/workflows/aviato-ci.yml"
     )
     assert "swift-format" in ci.body
     # No bare `swiftformat` (the wrong tool): removing the correct token leaves none behind.
     assert "swiftformat" not in ci.body.replace("swift-format", "")
+
+
+def test_default_branch_templates_into_caller_triggers(registry: Registry) -> None:
+    # R4-3: GitHub Actions trigger `branches:` can't use `${{ }}`, so the default branch is a
+    # render-time literal. Default is `main`; a consumer on another default branch overrides the
+    # `default-branch` variable and the generated CI caller's push/PR triggers + release-gate input
+    # follow — otherwise CI/release gating would silently never fire on their branch.
+    from aviato.core.onboarding import resolved_artifacts
+
+    def ci_body(variables: dict[str, str]) -> str:
+        arts = resolved_artifacts(registry, "python-library", variables, pin="1", docs=False)
+        return next(a.body for a in arts if a.output == ".github/workflows/aviato-ci.yml")
+
+    base = {"distribution-name": "d", "import-name": "pkg"}
+    default = ci_body(base)
+    assert 'branches: ["main"]' in default
+    overridden = ci_body({**base, "default-branch": "trunk"})
+    assert 'branches: ["trunk"]' in overridden
+    assert 'branches: ["main"]' not in overridden
+    assert "default-branch: trunk" in overridden
+
+
+def test_python_service_omits_image_name_input_like_node_service(registry: Registry) -> None:
+    # R4-2: python-service declares no image-name var and its GHCR caller passes no image-name input
+    # — the image defaults to the repo slug in reusable-docker-ghcr.yml, exactly like node-service.
+    # Resolving with empty variables must succeed (no unset-placeholder strict-render failure) and
+    # the rendered docker job must carry no image-name line.
+    from aviato.core.onboarding import resolved_artifacts
+
+    py = resolved_artifacts(registry, "python-service", {}, pin="1", docs=False)
+    node = resolved_artifacts(
+        registry, "node-service", {"project-name": "a", "language-variant": "typescript"}, pin="1", docs=False
+    )
+    py_ci = next(a.body for a in py if a.output == ".github/workflows/aviato-ci.yml")
+    node_ci = next(a.body for a in node if a.output == ".github/workflows/aviato-ci.yml")
+
+    def sets_image_name(body: str) -> bool:
+        # An actual workflow INPUT line (ignore an explanatory `# … image-name: …` comment).
+        return any(line.strip().startswith("image-name:") for line in body.splitlines())
+
+    assert not sets_image_name(py_ci)
+    assert not sets_image_name(node_ci)

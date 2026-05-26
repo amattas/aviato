@@ -181,3 +181,50 @@ def test_lint_definition_file_exempt_from_tool_invocation_scan(tmp_path) -> None
     violations = action_pin_violations(tmp_path)
     assert not any("reusable-common-lint.yml" in v and "docker image" in v for v in violations)
     assert any("other.yml" in v and "docker image" in v for v in violations)
+
+
+def test_action_pin_scan_flags_unpinned_docker_pull_end_to_end(tmp_path) -> None:
+    # R5-12: CX#7 has unit coverage of the `docker pull` matcher, but no end-to-end fixture proved
+    # the repo-level scan (what `aviato validate` runs) actually surfaces it. A workflow that pulls
+    # a mutable tag must fail the scan; the digest-pinned form must not.
+    from aviato.plugins.actionpins import action_pin_violations
+
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "bad.yml").write_text(
+        "jobs:\n  x:\n    steps:\n      - run: |\n          docker pull alpine:3.19\n", encoding="utf-8"
+    )
+    (wf / "good.yml").write_text(
+        "jobs:\n  y:\n    steps:\n      - run: |\n          docker pull alpine@sha256:" + "a" * 64 + "\n",
+        encoding="utf-8",
+    )
+    violations = action_pin_violations(tmp_path)
+    assert any("bad.yml" in v and "docker image not digest-pinned" in v for v in violations)
+    assert not any("good.yml" in v for v in violations)
+
+
+def test_unpinned_requirements_lines_flags_floors_not_exact() -> None:
+    # R4-4/R4-5: a CI-installed requirements file must pin tools exactly; a `>=` floor lets a run
+    # pull an untested newer tool (§11.3). The line scanner flags floors/bare names, accepts `==`,
+    # and ignores comments/blank lines.
+    from aviato.plugins.actionpins import unpinned_requirements_lines
+
+    body = "# header comment\npytest>=8.0\nmypy==1.13.0\n\nruff  # inline note\n"
+    flagged = unpinned_requirements_lines(body)
+    assert any("pytest>=8.0" in f for f in flagged)
+    assert any(f == "ruff" for f in flagged)
+    assert not any("mypy" in f for f in flagged)
+
+
+def test_action_pin_scan_flags_floor_pinned_seeded_dev_requirements(tmp_path) -> None:
+    # R4-5: the `pip install -r requirements-dev.txt` reference is (correctly) skipped by the
+    # package-token scan — the path isn't a package — so a floor INSIDE the seeded file was
+    # invisible. The repo-level scan now reads the seed body directly and flags it.
+    from aviato.plugins.actionpins import action_pin_violations
+
+    seeds = tmp_path / "aviato" / "library" / "scaffold" / "files"
+    seeds.mkdir(parents=True)
+    (seeds / "requirements-dev.txt.txt").write_text("pytest>=8.0\nruff==0.8.0\n", encoding="utf-8")
+    violations = action_pin_violations(tmp_path)
+    assert any("requirements-dev.txt.txt" in v and "pytest>=8.0" in v for v in violations)
+    assert not any("ruff" in v for v in violations)

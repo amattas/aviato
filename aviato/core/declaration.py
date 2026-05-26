@@ -39,11 +39,30 @@ def _as_bool(value: object, field_name: str, path: Path) -> bool:
     raise DeclarationError(f"declaration field {field_name!r} must be a boolean (true/false), got {value!r}: {path}")
 
 
+_KNOWN_DECLARATION_KEYS = frozenset({"profile", "version", "docs", "bootstrap", "variables", "overrides"})
+
+
 def load_declaration(path: Path) -> Declaration:
-    with Path(path).open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
+    # R1-1: a corrupt/truncated/merge-conflicted declaration must surface as a DeclarationError
+    # (an AviatoError) — NOT a raw yaml.YAMLError/OSError that escapes the per-repo guard in
+    # scan_fleet (which catches only AviatoError) and aborts an operator's whole fleet scan (§5.11).
+    try:
+        with Path(path).open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except yaml.YAMLError as exc:
+        raise DeclarationError(f"declaration is not valid YAML: {path}: {exc}") from exc
+    except OSError as exc:
+        raise DeclarationError(f"could not read declaration: {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise DeclarationError(f"declaration is not a mapping: {path}")
+    # R1-9/§6.1: the declaration schema is explicit — an unknown top-level key is almost always a
+    # typo (e.g. `doc:` for `docs:`) that would silently disable a feature. Reject it, never ignore.
+    unknown = set(data) - _KNOWN_DECLARATION_KEYS
+    if unknown:
+        raise DeclarationError(
+            f"declaration has unknown field(s) {sorted(unknown)} in {path}; allowed: "
+            f"{sorted(_KNOWN_DECLARATION_KEYS)} (check for a typo)"
+        )
     for required in ("profile", "version"):
         if required not in data:
             raise DeclarationError(f"declaration missing required field {required!r}: {path}")

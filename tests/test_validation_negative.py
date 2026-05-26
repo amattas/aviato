@@ -132,6 +132,19 @@ def test_static_ruleset_pattern_drift_is_detected(repo_copy: Path) -> None:
     assert any("tag_name_pattern" in e and "policy.yml" in e for e in errors)
 
 
+def test_baseline_required_reviews_deletion_is_detected(repo_copy: Path) -> None:
+    # R3-11: removing the baseline approval setting entirely must FAIL validation (it previously
+    # returned clean when the key was absent).
+    import yaml as _yaml
+
+    f = repo_copy / "aviato" / "library" / "bundles" / "settings" / "baseline.yaml"
+    doc = _yaml.safe_load(f.read_text())
+    doc["settings"]["default_branch"].pop("required_reviews", None)
+    f.write_text(_yaml.safe_dump(doc), encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("required_reviews" in e and "missing" in e for e in errors)
+
+
 def test_branch_ruleset_approval_literal_drift_is_detected(repo_copy: Path) -> None:
     # review #24: the branch ruleset's required_approving_review_count is render-injected from
     # policy, but the static literal must ALSO be drift-checked (the tag-pattern check was, the

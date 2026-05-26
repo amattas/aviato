@@ -64,6 +64,19 @@ def test_scan_reports_repo_without_declaration(tmp_path: Path) -> None:
     assert scans[0].statuses == {}
 
 
+def test_scan_reports_malformed_declaration_as_error_not_crash(tmp_path: Path) -> None:
+    # R1-1/§5.11: a repo with corrupt YAML must be reported as that repo's error, never crash the
+    # whole fleet scan. The good repo alongside it must still be scanned.
+    bad = tmp_path / "bad"
+    (bad / ".github").mkdir(parents=True)
+    (bad / ".github" / "aviato.yaml").write_text("profile: p\nversion: '1'\nvariables: {a: [x\n", encoding="utf-8")
+    good = tmp_path / "good"
+    good.mkdir()  # no declaration → its own benign error row
+    scans = scan_fleet([bad, good], Registry(MODULE_SOURCE_ROOT))
+    assert len(scans) == 2
+    assert scans[0].error is not None  # malformed YAML reported, not raised
+
+
 def test_scan_is_read_only(tmp_path: Path) -> None:
     consumer = tmp_path / "c"
     _make_consumer(consumer, scaffold_all=False)

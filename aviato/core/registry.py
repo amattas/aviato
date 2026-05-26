@@ -19,8 +19,15 @@ from .model import (
 def _load_doc(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise CompositionError(f"missing module definition: {path}")
-    with path.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
+    # R1-1: a malformed/unreadable module definition must raise CompositionError (an AviatoError),
+    # not a raw yaml.YAMLError/OSError that escapes callers guarding only AviatoError.
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except yaml.YAMLError as exc:
+        raise CompositionError(f"module definition is not valid YAML: {path}: {exc}") from exc
+    except OSError as exc:
+        raise CompositionError(f"could not read module definition: {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise CompositionError(f"module definition is not a mapping: {path}")
     return data
@@ -81,6 +88,17 @@ class Registry:
             extends=doc.get("extends"),
             settings=dict(doc.get("settings", {})),
         )
+
+    def security_floor(self) -> dict[str, Any]:
+        """The canonical always-on security baseline (§2.13, R1-4): the ``baseline`` settings
+        bundle's ``security`` block. Composition enforces that NO profile/bundle/override composes
+        a repo without it. Returns ``{}`` when there is no ``baseline`` bundle (a bare test
+        registry), so the floor is enforced only where the Library actually declares one. The
+        canonical floor lives in DATA (baseline.yaml), so core names no specific scanner (§9b)."""
+        path = self.root / "bundles" / "settings" / "baseline.yaml"
+        if not path.is_file():
+            return {}
+        return dict(self.settings_bundle("baseline").settings.get("security", {}))
 
     def pipeline_module(self, name: str) -> PipelineModule | None:
         """Load a typed pipeline module (§3.2/§11.3) from ``pipelines.yaml``.

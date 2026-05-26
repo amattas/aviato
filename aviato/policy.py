@@ -48,6 +48,8 @@ def release_tag_pattern(policy: dict[str, Any]) -> str:
 
 def default_required_approvals(policy: dict[str, Any]) -> int:
     value = get_path(policy, "branch.required_approvals_default")
-    if not isinstance(value, int) or value < 0:
-        raise ValueError("branch.required_approvals_default must be a non-negative integer")
+    # R3-17: `bool` is an `int` subclass, so `required_approvals_default: true` would pass an
+    # `isinstance(int)` check and render as 1. Require a real int, rejecting bool.
+    if type(value) is not int or value < 0:
+        raise ValueError("branch.required_approvals_default must be a non-negative integer (not a boolean)")
     return value

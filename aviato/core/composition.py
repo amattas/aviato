@@ -39,11 +39,25 @@ def _variable_spec(item: dict[str, Any]) -> VariableSpec:
     return VariableSpec(
         name=item["name"],
         type=var_type,
-        secret=bool(item.get("secret", False)),
-        required=bool(item.get("required", True)),
+        secret=_spec_bool(item.get("secret", False), "secret", name),
+        required=_spec_bool(item.get("required", True), "required", name),
         domain=domain,
         default=item.get("default"),
     )
+
+
+def _spec_bool(value: object, field: str, varname: object) -> bool:
+    """Strictly coerce a variable-spec boolean field (§6.6, R5-3).
+
+    `bool("false")` is truthy, so a quoted `secret: "false"` in module data would flip a
+    non-secret optional variable into a REQUIRED SECRET. Accept only a real bool or the
+    case-insensitive strings ``true``/``false``; anything else fails loud at composition time.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise CompositionError(f"variable {varname!r} field {field!r} must be a boolean, got {value!r} (§6.6)")
 
 
 def _settings_override_lists(override: dict[str, Any], _prefix: str = "") -> list[str]:
@@ -126,7 +140,19 @@ def _resolve_list(layers: list, base_attr: str) -> tuple[str, ...]:
 
 def _resolve_settings(layers: list[SettingsBundle]) -> dict[str, Any]:
     resolved: dict[str, Any] = {}
-    for layer in layers:
+    for index, layer in enumerate(layers):
+        # R1-5/§4.2: settings are deep-merged maps with no add/remove semantics, so a list value at
+        # any depth in a NON-root (extending) bundle layer would silently REPLACE the inherited list
+        # (e.g. emptying `rulesets`/`required_status_checks`) — the same bare-list hazard the consumer
+        # override path already rejects. Only the root layer (the base) may declare list values.
+        if index > 0:
+            bare = _settings_override_lists(layer.settings)
+            if bare:
+                raise CompositionError(
+                    f"settings bundle {layer.name!r} restates list-valued key(s) {sorted(bare)} "
+                    f"under extends; settings lists are base-only and cannot be replaced by a child "
+                    f"bundle (§4.2)"
+                )
         resolved = deep_merge(resolved, layer.settings)
     return resolved
 
@@ -237,6 +263,32 @@ def resolve_profile(
                 "disabled or weakened via a profile or consumer override"
             )
 
+    # R1-4/§2.13: the prior guard only stops a CONSUMER OVERRIDE from weakening the profile's own
+    # security block — it can't catch a PROFILE/BUNDLE that omits or weakens security in the first
+    # place (`baseline_security` is captured from the profile's own resolved settings). Enforce the
+    # canonical always-on security floor (DATA: the `baseline` bundle's security) against the FINAL
+    # resolved settings, so "no composition silently omits security" holds for profile data too, not
+    # just overrides. Skipped when the registry declares no floor (a bare test registry).
+    floor = registry.security_floor()
+    if floor:
+        resolved_security = settings.get("security", {})
+        if not isinstance(resolved_security, dict):
+            raise CompositionError(
+                f"profile {name!r} composes a non-mapping security block ({resolved_security!r}); "
+                "the always-on security baseline cannot be disabled (§2.13)"
+            )
+        below_floor = [
+            key
+            for key, floor_value in floor.items()
+            if key not in resolved_security or weakens(floor_value, resolved_security[key])
+        ]
+        if below_floor:
+            raise CompositionError(
+                f"profile {name!r} omits or weakens always-on security baseline setting(s) "
+                f"{sorted(below_floor)} relative to the canonical floor (§2.13); every profile must "
+                "compose at least the baseline security toggles"
+            )
+
     templates = tuple(registry.template_module(ref) for ref in template_refs)
 
     doc = registry.profile_doc(name)
@@ -286,7 +338,17 @@ def resolve_profile(
             )
         if version_source is None:
             raise CompositionError(f"profile {name!r} declares no version_source, so it cannot be overridden (§12.3)")
-        version_source = VersionSourceModule(locations=tuple(vs_override["locations"]))
+        # R5-10: a `locations` list that is empty, or carries a non-string / blank entry, parses but
+        # silently disables the version-source (or feeds a bogus path) downstream in version tooling
+        # (§12.1). Reject it here, fail-closed, so the operator fixes the override rather than getting
+        # a no-op bump. (`bool` is an int subclass but not a str, so it is correctly rejected.)
+        locations = vs_override["locations"]
+        if not locations or any(not isinstance(loc, str) or not loc.strip() for loc in locations):
+            raise CompositionError(
+                "version_source override 'locations' must be a non-empty list of non-blank path "
+                "strings (§12.3) — e.g. version_source: {locations: ['path/to/your/version-file']}"
+            )
+        version_source = VersionSourceModule(locations=tuple(locations))
     toolchain = dict(doc.get("toolchain", {}))
 
     # Resolve each pipeline reference to its typed module (privileges/inputs/

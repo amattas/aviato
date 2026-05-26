@@ -12,15 +12,15 @@ on:
   workflow_run:
     workflows: ["Aviato Python Component"]
     types: [completed]
-    branches: [main]
+    branches: ["{{ default-branch }}"]
 
+# R4-7: least privilege. The top-level token is the FLOOR for jobs that don't set
+# their own; only the privileged `resolve` checkout runs under it, so it grants just
+# read. Each reusable-workflow call below sets job-level permissions matching exactly
+# what that workflow needs (a caller cannot elevate a called workflow's token, so the
+# grant must be >= its needs and no more).
 permissions:
   contents: read
-  pull-requests: read
-  security-events: write
-  actions: read
-  pages: write
-  id-token: write
 
 jobs:
   # Resolve the release tag at the completed run's head commit; skip if none.
@@ -32,6 +32,8 @@ jobs:
       ${{ github.event.workflow_run.conclusion == 'success'
       && github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       release: ${{ steps.tag.outputs.release }}
@@ -60,15 +62,24 @@ jobs:
   release-gate:
     needs: [resolve]
     if: ${{ needs.resolve.outputs.release == 'true' }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
     uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@{{ aviato-ref }}
     with:
-      default-branch: main
+      default-branch: {{ default-branch }}
       require-merged-pr: true
       release-tag: ${{ needs.resolve.outputs.tag }}
 
   security:
     needs: [resolve]
     if: ${{ needs.resolve.outputs.release == 'true' }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      security-events: write
     uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@{{ aviato-ref }}
     with:
       ref: ${{ needs.resolve.outputs.tag }}
@@ -77,6 +88,11 @@ jobs:
   docs:
     needs: [resolve, release-gate, security]
     if: ${{ needs.resolve.outputs.release == 'true' }}
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      pages: write
     uses: amattas/aviato/.github/workflows/reusable-docs-pages.yml@{{ aviato-ref }}
     with:
       working-directory: website
@@ -87,4 +103,4 @@ jobs:
         # §11.3: pin the pip-installed doc tool to an exact version (no floating latest).
         python3 -m pip install --quiet -e . "pydoc-markdown==4.8.2"
         mkdir -p website/docs/api
-        pydoc-markdown -I . -p {{ import-name }} > website/docs/api/reference.md
+        pydoc-markdown -I . -p "{{ import-name }}" > website/docs/api/reference.md

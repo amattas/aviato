@@ -57,9 +57,16 @@ def run_reconcile(
         pin=pin,
         recorded_version=recorded_version,
         override_version_pin=override_version_pin,
+        issue_ambiguous=issue.ambiguous,
     )
 
     outcome = reconcile_decision(state)
+    # R2-6/§5.7: a non-human edit since the grant VOIDS consent — actually revoke the grant label
+    # (not just comment), so a subsequent run doesn't re-evaluate a stale grant. The decision
+    # reports this as an abort with "consent voided"; effect it here on the platform.
+    if state.issue_edited_by_nonhuman_since_grant and issue.consent_diff_id is not None:
+        with contextlib.suppress(Exception):
+            platform.revoke_consent(repo, issue_key, issue.consent_diff_id)
     # Surface the apply-time recomputed diff on every outcome (§2.8): the caller renders
     # it so the operator confirms/sees the SAME read that was applied, not the preview.
     outcome = dataclasses.replace(
@@ -77,7 +84,7 @@ def run_reconcile(
         try:
             # Pass the decision-time live snapshot so the binding can fail closed if the modeled
             # branch state drifted since the diff/consent were computed (§2.8/§5.7, review #14).
-            platform.apply_settings(repo, desired_settings, expected_live=live)
+            skipped = platform.apply_settings(repo, desired_settings, expected_live=live)
         except Exception as exc:
             # §5.7 audit: an apply that throws mid-flight may have PARTIALLY landed, so it
             # must leave a record on the issue, then propagate (fail-closed) — never vanish
@@ -89,6 +96,11 @@ def run_reconcile(
         # removals), not the additive-only write subset (outcome.payload) — a removed key is
         # the most sensitive change and must appear in the audit trail (§5.7).
         audit = f"Applied diff {current_diff_id} (changes: {outcome.changes})"
+        # R5-4: if the binding surfaced-and-skipped a §17 toggle (feature unavailable), the audit
+        # must say so rather than overstate a clean apply — the operator needs to know a requested
+        # security setting did NOT land (enable it per §17, then re-reconcile).
+        if skipped:
+            audit += f"; SKIPPED unavailable: {sorted(skipped)}"
     else:
         audit = f"{outcome.action}: {outcome.reason}"
 

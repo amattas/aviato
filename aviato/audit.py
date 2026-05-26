@@ -11,6 +11,10 @@ from .github import GitHubAPIError
 from .policy import release_tag_pattern
 from .repos import current_branch, discover_repos, normalize_slug, remote_url, tags, workflow_files
 
+# R3-14/§5.9/§6.1: a bare floating-major tag (`1`, `2`) is a SANCTIONED release alias (the tag
+# ruleset explicitly excludes it from the exact-SemVer pattern), so it is not an "invalid" tag.
+_FLOATING_MAJOR_RE = re.compile(r"[0-9]+")
+
 
 @dataclass
 class AuditRow:
@@ -47,7 +51,9 @@ def audit_repo(repo: Path, *, root: Path, policy: dict) -> AuditRow:
     rel = "." if repo_path == root_path else str(repo_path).removeprefix(str(root_path) + "/")
     remote = remote_url(repo)
     slug = normalize_slug(remote)
-    invalid_tags = ",".join(tag for tag in tags(repo) if not pattern.fullmatch(tag))[:500]
+    invalid_tags = ",".join(
+        tag for tag in tags(repo) if not pattern.fullmatch(tag) and not _FLOATING_MAJOR_RE.fullmatch(tag)
+    )[:500]
     local_branch = current_branch(repo)
     workflows = workflow_files(repo)
 

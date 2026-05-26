@@ -2,9 +2,9 @@ name: Aviato Python Service
 
 on:
   pull_request:
-    branches: [main]
+    branches: ["{{ default-branch }}"]
   push:
-    branches: [main]
+    branches: ["{{ default-branch }}"]
     tags:
       - "*.*.*"
   schedule:
@@ -72,7 +72,7 @@ jobs:
     if: ${{ always() && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@{{ aviato-ref }}
     with:
-      default-branch: main
+      default-branch: {{ default-branch }}
       require-merged-pr: true
       release-tag: ${{ needs.release.outputs.tag }}
 
@@ -81,7 +81,7 @@ jobs:
     if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@{{ aviato-ref }}
     with:
-      image-name: "{{ image-name }}"
+      # No image-name: defaults to the repo slug in reusable-docker-ghcr.yml (R4-2, mirrors node-service).
       context: "."
       dockerfile: "Dockerfile"
       platforms: "linux/amd64"

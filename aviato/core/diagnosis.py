@@ -63,7 +63,7 @@ def _probe_prerequisites(root: Path, prerequisite_paths: Mapping[str, Sequence[s
     """Probe the §17 prerequisites determinable from the local tree.
 
     The names and candidate paths are plug-in **data** (e.g. a service profile
-    declares its image build definition path), never hardcoded here — so the core
+    declares its build-definition path), never hardcoded here — so the core
     stays free of deployment-specific identifiers (§9b). A prerequisite is
     satisfied if any of its candidate paths exists.
     """
@@ -162,7 +162,7 @@ def diagnose(
         target = root / artifact.output_path
         if artifact.seed_once:
             # A recorded seed-once file diverges if it is now MISSING (deleted — §6.3 tamper
-            # visibility, e.g. a removed Dockerfile) OR its content changed. The `and`/`or`
+            # visibility, e.g. a removed operator-owned seed file) OR its content changed. The `and`/`or`
             # short-circuit so a missing file is never read. errors="replace": a seed-once file
             # may be binary (§6.3); read leniently so the probe never crashes a fleet scan — a
             # binary just won't match its text hash. Reported, never overwritten.

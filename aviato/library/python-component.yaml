@@ -4,6 +4,9 @@ workflows: python-component-wf
 scaffold: python-component-sc
 settings: baseline
 variables:
+  # R4-3: optional; the consumer's default branch (default `main`), templated into the
+  # generated callers' trigger filters and release-gate input for non-`main` repos.
+  - {name: default-branch, type: string, required: false, default: main}
   # §12.1 Python plug-in vars: the wheel/distribution name (the pyproject [project] name) and
   # the import package name. (A component publishes no index artifact, but it still builds a
   # wheel whose [project] name is the distribution name.)

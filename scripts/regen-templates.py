@@ -19,7 +19,7 @@ from aviato.validation import _PROFILE_TEMPLATE_FILES, _TEMPLATE_EXAMPLE_VARS
 
 
 def _body(registry: Registry, profile: str, output: str) -> str:
-    artifacts = resolved_artifacts(registry, profile, _TEMPLATE_EXAMPLE_VARS[profile], pin="main", docs=False)
+    artifacts = resolved_artifacts(registry, profile, _TEMPLATE_EXAMPLE_VARS[profile], pin="0.1.0", docs=False)
     return next(a.body for a in artifacts if a.output == output)
 
 

@@ -65,6 +65,9 @@ def test_repin_reports_orphaned_override(module_root: Path) -> None:
     decl = _decl(overrides={"settings": {"nonexistent_key": 1}})
     plan = plan_repin(Registry(module_root), decl, "v1.0.0")
     assert "nonexistent_key" in plan.orphaned_overrides
+    # R1-8: orphaned overrides are BLOCKING — composition now hard-rejects them on re-sync, so a
+    # write-then-sync would half-apply. The plan must NOT be ok.
+    assert plan.ok is False
 
 
 def test_repin_reports_orphaned_pipeline_override(module_root: Path) -> None:

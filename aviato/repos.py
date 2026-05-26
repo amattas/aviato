@@ -3,15 +3,42 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .command import run
 
-GITHUB_REMOTE_RE = re.compile(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$")
+# R2-8: a slug is exactly `owner/repo` with safe chars — anything else (a `?`-bearing segment, a
+# sub-path) is rejected so it can't later alter an API endpoint it's interpolated into.
+_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+# SCP-style / SSH remotes: `git@github.com:owner/repo(.git)`, `ssh://git@github.com/owner/repo`.
+# Anchored at the start with the host as a literal so `notgithub.com/...` cannot match (the old
+# unanchored `github.com` search did).
+_SSH_REMOTE_RE = re.compile(r"^(?:ssh://)?(?:[^@/]+@)?github\.com[:/](?P<path>.+?)(?:\.git)?/?$")
 
 
 def normalize_slug(remote_url: str) -> str:
-    match = GITHUB_REMOTE_RE.search(remote_url.strip())
-    return match.group(1) if match else ""
+    """Extract the ``owner/repo`` slug from a GitHub remote, or ``""`` (R2-8/§2.14).
+
+    Requires the host to be EXACTLY ``github.com`` (so ``notgithub.com/o/r`` is rejected) and the
+    result to be a clean two-segment ``owner/repo`` (so a query-/path-shaped value can't slip
+    through and corrupt a later API path)."""
+    url = remote_url.strip()
+    path: str | None = None
+    parsed = urlparse(url)
+    if parsed.scheme in ("http", "https"):
+        # urlparse.hostname is lowercased and strips any creds/port — exact match only.
+        if parsed.hostname == "github.com":
+            path = parsed.path.lstrip("/")
+            if path.endswith(".git"):
+                path = path[: -len(".git")]
+    else:
+        ssh = _SSH_REMOTE_RE.match(url)
+        if ssh:
+            path = ssh.group("path")
+    if path is None:
+        return ""
+    path = path.strip("/")
+    return path if _OWNER_REPO_RE.match(path) else ""
 
 
 def git_root(path: Path) -> Path | None:

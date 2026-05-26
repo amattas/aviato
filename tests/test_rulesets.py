@@ -228,3 +228,26 @@ def test_policy_ruleset_data_ships_in_the_package() -> None:
     assert list((POLICY_DATA_ROOT / "rulesets").glob("*.json"))
     # And rendering resolves entirely from the packaged location (no repo-root dependency).
     assert len(render_all_rulesets()) == 2
+
+
+def test_drift_distinguishes_target() -> None:
+    # R3-10: a live ruleset sharing a name but a different target must NOT satisfy the desired one.
+    from aviato.rulesets import drifted_ruleset_names
+
+    desired = [{"name": "X", "target": "branch", "enforcement": "active", "rules": []}]
+    live_wrong_target = [{"name": "X", "target": "tag", "enforcement": "active", "rules": []}]
+    assert drifted_ruleset_names(desired, live_wrong_target) == ["X"]  # missing the branch one
+    live_right = [{"name": "X", "target": "branch", "enforcement": "active", "rules": []}]
+    assert drifted_ruleset_names(desired, live_right) == []
+
+
+def test_render_rejects_unknown_patch_key() -> None:
+    # R3-9: an unknown patch key (typo) must fail loud, not silently leave a value un-injected.
+    import pytest as _pytest
+
+    from aviato.rulesets import render_ruleset
+
+    with _pytest.raises(ValueError, match="unknown patch key"):
+        render_ruleset(
+            {"file": "rulesets/release-tag-format.json", "target": "tag", "patch": {"tag_naem_pattern": "x"}}
+        )

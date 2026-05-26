@@ -116,8 +116,24 @@ class ConsentGrant:
     actor_login: str | None
 
 
+def _chronological(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stable-sort timeline entries by ``created_at`` (R2-1/§2.8/§6.4).
+
+    The issue-timeline API + ``--slurp`` page concatenation do NOT guarantee the array is in
+    strict chronological order, so a revoke returned BEFORE its stale grant (or a post-grant
+    non-human edit returned before the grant) would be mis-reduced and a revoked consent could
+    re-authorize an apply. Sorting by the event timestamp makes the grant/revoke reduction reflect
+    true history, not array position. ISO-8601 timestamps sort lexically; the original index is the
+    tiebreak (stable). Entries lacking ``created_at`` (e.g. synthetic test events) keep their
+    relative order via the index tiebreak.
+    """
+    return [e for _, e in sorted(enumerate(timeline), key=lambda pair: (str(pair[1].get("created_at") or ""), pair[0]))]
+
+
 def _label_events(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Normalize GitHub timeline entries into label-event dicts for :func:`current_consent`."""
+    """Normalize GitHub timeline entries into label-event dicts for :func:`current_consent`.
+
+    Carries ``created_at`` so :func:`current_consent` can reduce by true chronology (R2-1)."""
     events: list[dict[str, Any]] = []
     for entry in timeline:
         action = entry.get("event")
@@ -131,6 +147,7 @@ def _label_events(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "label": label.get("name", ""),
                 "actor_type": actor.get("type"),
                 "actor_login": actor.get("login"),
+                "created_at": entry.get("created_at"),
             }
         )
     return events
@@ -142,7 +159,9 @@ def nonhuman_edit_after_grant(timeline: list[dict[str, Any]], diff_id: str) -> b
     Finds the latest grant of ``aviato-consent:<diff_id>`` and reports whether any
     later timeline entry was performed by an actor whose type is not ``User`` (a
     Bot/App/unknown actor). Entries with no actor are system events and ignored.
+    "Later" is by ``created_at`` chronology, not array position (R2-1).
     """
+    timeline = _chronological(timeline)
     grant_label = f"{CONSENT_LABEL_PREFIX}{diff_id}"
     grant_index = -1
     for i, entry in enumerate(timeline):
@@ -161,16 +180,16 @@ def nonhuman_edit_after_grant(timeline: list[dict[str, Any]], diff_id: str) -> b
 
 
 def current_consent(events: list[dict[str, Any]]) -> ConsentGrant | None:
-    """Reduce a chronological list of label events to the active consent grant (§6.4).
+    """Reduce label events to the active consent grant (§6.4), in TRUE chronological order.
 
-    Each event is ``{"action": "labeled"|"unlabeled", "label": str,
-    "actor_type": str|None, "actor_login": str|None}``. A ``labeled`` event with
-    the consent prefix is a grant; a matching ``unlabeled`` is a revoke. The
-    current consent is the most recent grant not later revoked. Reading the full
-    (paginated) history is what prevents a later revoke from being missed.
+    Each event is ``{"action": "labeled"|"unlabeled", "label": str, "actor_type": str|None,
+    "actor_login": str|None, "created_at": str|None}``. A ``labeled`` event with the consent
+    prefix is a grant; a matching ``unlabeled`` is a revoke. The current consent is the most
+    recent (by ``created_at``, R2-1) grant not later revoked. Reading the full (paginated) history
+    is what prevents a later revoke from being missed; sorting prevents array-order mis-reduction.
     """
     active: dict[str, tuple[int, str | None, str | None]] = {}
-    for seq, event in enumerate(events):
+    for seq, event in enumerate(_chronological(events)):
         label = event.get("label", "")
         if not isinstance(label, str) or not label.startswith(CONSENT_LABEL_PREFIX):
             continue
@@ -404,7 +423,10 @@ class GitHubPlatform:
             with github.settings_read_token_scope():
                 branch = github.default_branch(repo)
                 if not branch:
-                    return {}
+                    # R2-3: an unresolvable default branch is ambiguous, not "unprotected" — raise
+                    # (fail-closed SKIP) instead of returning {} (which would diff every desired key
+                    # as additive drift, over-reporting). Mirrors apply_settings' refusal (§2.7).
+                    raise github.SettingsReadError(f"repos/{repo}", 0, "could not resolve default branch")
                 rules = github.active_branch_rules(repo, branch)
                 protection = github.classic_branch_protection(repo, branch)
                 security = map_security_settings(github.repo_security_settings(repo))
@@ -442,16 +464,23 @@ class GitHubPlatform:
         # "no tracking issue" (default []). An auth/5xx/rate-limit error must RAISE, not
         # masquerade as "no issue": reading it as absent would let run_settings_drift open
         # a duplicate tracking issue (and silently violates its "fails loud" contract).
-        issues = github.gh_json_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
+        # R2-7: paginate the issue list — a label shared by many issues could otherwise hide the
+        # active/consent-bearing one on a later page.
+        issues = github.gh_json_paginated(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
         head = _select_issue(issues, repo, key)
         if head is None:
             return None
+        # R2-5: more than one OPEN tracking issue for this key is an authorization-ambiguity — consent
+        # could be granted on one duplicate while a revoke lives on another. Flag it so reconcile
+        # refuses (fail-closed) until the duplicates are closed (§5.7/§5.8).
+        open_count = sum(1 for i in issues if isinstance(i, dict) and i.get("state") == "open")
+        ambiguous = open_count > 1
         number = head.get("number")
         is_open = head.get("state") == "open"
         if number is None:
             # A 200 with a malformed issue (no number) → can't read the consent timeline;
             # report the issue with no consent so reconcile refuses (fail-safe), never crash.
-            return Issue(key=key, open=is_open)
+            return Issue(key=key, open=is_open, ambiguous=ambiguous)
 
         # Read the FULL (paginated) label-event history so a later revoke cannot be missed
         # (§2.8/§6.4). FAIL CLOSED on a transient error (no allow_error): silently reading
@@ -475,6 +504,7 @@ class GitHubPlatform:
             consent_role=ROLE_PRIVILEGED if role == "admin" else role,
             consent_role_lookup_ok=role_ok,
             edited_by_nonhuman_since_grant=nonhuman_edit_after_grant(raw_timeline, grant.diff_id),
+            ambiguous=ambiguous,
         )
 
     def probe_health(self, repo: str) -> tuple[bool | None, bool | None]:
@@ -661,7 +691,7 @@ class GitHubPlatform:
 
     def apply_settings(
         self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
-    ) -> None:
+    ) -> list[str]:
         # ``payload`` is the flat desired default-branch state; translate it to the
         # branch-protection API shape before the PUT (§2.9). The PUT replaces
         # protection wholesale, so FAIL CLOSED if the live branch carries protections
@@ -702,6 +732,26 @@ class GitHubPlatform:
         # lands — fail closed there too (§2.4/§5.7), matching what read_settings reads.
         rules = github.active_branch_rules(repo, branch)
         unmodeled += sorted({str(rule.get("type")) for rule in rules if rule.get("type") not in _MODELED_RULE_TYPES})
+        # R2-4: the flat model collapses live required-status-checks to bare context NAMES and the
+        # PUT hardcodes strict=true with no app binding. So a live `strict_required_status_checks_
+        # policy: false` (which the PUT would flip to true) or an app-BOUND check (carrying an
+        # `app_id`, which the PUT would drop the binding of) is unmodeled state the wholesale PUT
+        # would silently alter — fail closed rather than clobber (§2.4/§2.9).
+        classic_rsc = live.get("required_status_checks") or {}
+        if classic_rsc.get("strict") is False:
+            unmodeled.append("required_status_checks.strict=false")
+        if any(isinstance(c, dict) and c.get("app_id") is not None for c in classic_rsc.get("checks", [])):
+            unmodeled.append("required_status_checks.app_bound_checks")
+        for rule in rules:
+            if rule.get("type") == "required_status_checks":
+                params = rule.get("parameters", {})
+                if params.get("strict_required_status_checks_policy") is False:
+                    unmodeled.append("ruleset.required_status_checks.strict=false")
+                if any(
+                    isinstance(c, dict) and c.get("integration_id") is not None
+                    for c in params.get("required_status_checks", [])
+                ):
+                    unmodeled.append("ruleset.required_status_checks.app_bound_checks")
         if unmodeled:
             raise UnmodeledProtectionError(
                 f"refusing to PUT branch protection on {repo}@{branch}: it carries unmodeled "
@@ -771,8 +821,12 @@ class GitHubPlatform:
                         f"(enable per §17, e.g. Advanced Security): {exc.stderr.strip()}",
                         file=sys.stderr,
                     )
-                else:
-                    raise
+                    # R5-4: the whole security PATCH is skipped (one request for all toggles), so the
+                    # desired security keys were NOT applied. Return them so the §5.7 audit reports a
+                    # PARTIAL apply rather than overstating a clean one — branch protection still landed.
+                    return sorted(security_payload)
+                raise
+        return []
 
     def create_repo(self, repo: str, *, private: bool) -> None:
         # §5.2 provision-new: create the repository initialized with a README so the

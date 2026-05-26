@@ -79,3 +79,15 @@ def test_floating_major_pin_matches_on_major() -> None:
 
 def test_tool_equal_to_recorded_is_compatible() -> None:
     assert is_compatible(tool="1.2.0", pinned="v1", recorded="1.2.0") is True
+
+
+def test_is_compatible_lower_bound_is_recorded_marker_not_pinned_exact() -> None:
+    # R5-8: §2.6 floors compatibility at the version recorded in the consumer's markers, NOT at the
+    # pinned-exact. A tool OLDER than the pin but >= what last wrote the files is still compatible.
+    # tool 1.1.0, pin 1.2.0, recorded 1.0.0 → compatible (major matches, 1.1.0 >= 1.0.0). A bug that
+    # used `tool >= pinned` would reject this (1.1.0 < 1.2.0), so the assertion pins the semantics.
+    assert is_compatible(tool="1.1.0", pinned="1.2.0", recorded="1.0.0") is True
+    # Below the recorded marker is incompatible (the floor is real).
+    assert is_compatible(tool="1.0.0", pinned="1.2.0", recorded="1.1.0") is False
+    # A different major is incompatible regardless of the recorded floor.
+    assert is_compatible(tool="2.0.0", pinned="1.2.0", recorded="1.0.0") is False

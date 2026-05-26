@@ -9,10 +9,11 @@ on:
   workflow_call:
     inputs:
       aviato-ref:
-        description: The Aviato version pin to install and resolve against.
-        required: false
+        description: The Aviato version pin to install and resolve against (X.Y.Z, X.Y.Z-alphaN/-betaN, or floating major N).
+        # R4-6: required, no `main` default. Drift automation must install a PINNED Aviato, never a
+        # moving branch (§11.3); a caller omitting it fails closed at config time.
+        required: true
         type: string
-        default: main
       python-version:
         required: false
         type: string
@@ -70,6 +71,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python-version }}
+
+      - name: Verify Aviato ref is pinned (§11.3 fail-closed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # R4-6: drift automation must install a PINNED Aviato, never a moving branch. Accept an
+          # exact version (X.Y.Z[-alphaN|-betaN]) or a floating-major alias (N); reject empty or any
+          # branch-like ref (e.g. main) so a mis-wired caller cannot run off unpinned Library code
+          # (§11.3). AVIATO_REF is the job-wide env var.
+          if [[ ! "${AVIATO_REF}" =~ ^[0-9]+(\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?)?$ ]]; then
+            echo "::error::aviato-ref '${AVIATO_REF}' is not a pinned version (expected X.Y.Z, X.Y.Z-alphaN/-betaN, or a floating major N)."
+            exit 1
+          fi
 
       - name: Install Aviato (pinned)
         shell: bash

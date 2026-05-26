@@ -103,6 +103,71 @@ def test_version_source_locations_are_overridable() -> None:
         resolve_profile(registry, "swift-app", overrides={"version_source": {"locations": "nope"}})
 
 
+def test_variable_spec_secret_required_are_strict_booleans() -> None:
+    # R5-3/§6.6: bool("false") is truthy — a quoted `secret: "false"` must NOT flip a non-secret
+    # optional variable into a required secret. Strict-bool: real bool or "true"/"false" only.
+    from aviato.core.composition import _variable_spec
+
+    assert _variable_spec({"name": "v", "type": "string", "secret": "false"}).secret is False
+    assert _variable_spec({"name": "v", "type": "string", "required": "false"}).required is False
+    with pytest.raises(CompositionError):
+        _variable_spec({"name": "v", "type": "string", "secret": "maybe"})
+
+
+def test_security_floor_enforced_against_profile_data_not_just_overrides(module_root: Path, tmp_path: Path) -> None:
+    # R1-4/§2.13: a profile whose settings bundle omits/weakens the canonical security floor must be
+    # rejected, not only a consumer override. Build a registry with a baseline floor + a profile
+    # whose settings bundle drops it.
+    import shutil
+
+    import yaml as _yaml
+
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    root = tmp_path / "lib"
+    shutil.copytree(MODULE_SOURCE_ROOT, root)
+    # A settings bundle with NO security block, and a profile using it.
+    (root / "bundles" / "settings" / "nosec.yaml").write_text(
+        _yaml.safe_dump({"name": "nosec", "settings": {"default_branch": {"requires_pull_request": True}}}),
+        encoding="utf-8",
+    )
+    (root / "nosec-prof.yaml").write_text(
+        _yaml.safe_dump(
+            {
+                "name": "nosec-prof",
+                "workflows": "python-library-wf",
+                "scaffold": "python-library-sc",
+                "settings": "nosec",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(CompositionError) as exc:
+        resolve_profile(Registry(root), "nosec-prof")
+    assert "security" in str(exc.value).lower()
+
+
+def test_settings_bundle_child_bare_list_is_rejected(module_root: Path) -> None:
+    # R1-5/§4.2: a child settings bundle restating a list (e.g. emptying rulesets) silently replaces
+    # the inherited list — settings have no add/remove, so reject it like a bare consumer override.
+    bundles = module_root / "bundles" / "settings"
+    (bundles / "base-set2.yaml").write_text(
+        yaml.safe_dump({"name": "base-set2", "settings": {"rulesets": ["a", "b"]}}), encoding="utf-8"
+    )
+    (bundles / "child-set2.yaml").write_text(
+        yaml.safe_dump({"name": "child-set2", "extends": "base-set2", "settings": {"rulesets": []}}), encoding="utf-8"
+    )
+    (module_root / "barelist-prof.yaml").write_text(
+        yaml.safe_dump(
+            {"name": "barelist-prof", "workflows": "child-wf", "scaffold": "child-sc", "settings": "child-set2"}
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(CompositionError) as exc:
+        resolve_profile(Registry(module_root), "barelist-prof")
+    assert "rulesets" in str(exc.value)
+
+
 def test_non_dict_security_override_is_clean_composition_error() -> None:
     # §2.13: replacing the security baseline with a non-mapping (e.g. `security: false`) is the
     # maximal weakening — it must fail with a clean CompositionError, never a TypeError crash.
@@ -243,3 +308,19 @@ def test_bare_list_under_extends_is_rejected(module_root: Path) -> None:
     )
     with pytest.raises(CompositionError):
         resolve_profile(Registry(module_root), "bareprof")
+
+
+def test_version_source_override_rejects_empty_or_nonstring_locations() -> None:
+    # R5-10: an override whose `locations` is empty, or carries a non-string / blank entry, parses
+    # but silently disables (or corrupts) the version-source downstream in version tooling (§12.3).
+    # Composition must fail closed on each shape so the operator fixes it rather than getting a
+    # no-op version bump.
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    for bad in ([], [123], ["VERSION", 1], ["  "], [""]):
+        with pytest.raises(CompositionError):
+            resolve_profile(registry, "swift-app", overrides={"version_source": {"locations": bad}})
+    # A boolean is an int subclass but not a str → still rejected (not silently coerced).
+    with pytest.raises(CompositionError):
+        resolve_profile(registry, "swift-app", overrides={"version_source": {"locations": [True]}})

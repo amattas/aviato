@@ -17,9 +17,9 @@ permissions:
 
 jobs:
   drift:
-    uses: amattas/aviato/.github/workflows/reusable-consumer-automation.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-consumer-automation.yml@0.1.0
     with:
-      aviato-ref: main
+      aviato-ref: 0.1.0
     secrets:
       # Optional: define AVIATO_SETTINGS_TOKEN (admin-capable) to enable settings-drift
       # detection; without it only file drift runs (the platform token cannot read

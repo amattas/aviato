@@ -7,8 +7,19 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from .command import run
+
+
+def _branch_seg(branch: str) -> str:
+    """Percent-encode a branch name for an API path (R2-2/§2.7).
+
+    GitHub's branch endpoints accept ``/`` in a branch name (e.g. ``release/main``) as part of the
+    route, so ``/`` is left safe; every OTHER special char (``?``, ``#``, space, …) is encoded so a
+    branch name cannot alter the endpoint path it's interpolated into."""
+    return quote(branch, safe="/")
+
 
 # The settings-drift automation (§5.6) supplies an operator's admin-scoped READ token here
 # so branch-protection/ruleset reads — which the platform's ephemeral workflow token cannot
@@ -154,12 +165,12 @@ def repo_security_settings(slug: str) -> dict[str, Any]:
 
 def active_branch_rules(slug: str, branch: str) -> list[dict[str, Any]]:
     # Fail closed on an ambiguous read (§2.7): only a genuine 404 is empty.
-    response = gh_json_optional(f"repos/{slug}/rules/branches/{branch}", default=[])
+    response = gh_json_optional(f"repos/{slug}/rules/branches/{_branch_seg(branch)}", default=[])
     return response if isinstance(response, list) else []
 
 
 def classic_branch_protection(slug: str, branch: str) -> dict[str, Any]:
-    response = gh_json_optional(f"repos/{slug}/branches/{branch}/protection", default={})
+    response = gh_json_optional(f"repos/{slug}/branches/{_branch_seg(branch)}/protection", default={})
     return response if isinstance(response, dict) else {}
 
 

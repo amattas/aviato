@@ -14,15 +14,28 @@ from .render import render
 from .scaffold import ScaffoldItem
 
 
+def _canon(value: Any) -> str:
+    """Canonical string for a ``when`` comparison (R1-2/§12.2).
+
+    Booleans canonicalize to ``"true"``/``"false"`` regardless of source shape, so an UNQUOTED
+    `when: {docs: true}` (YAML bool `True` → `"True"`) still matches the derived `"true"` instead of
+    silently excluding the template. Non-booleans compare by their plain string form.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value)
+    return text.lower() if text.lower() in ("true", "false") else text
+
+
 def template_applies(template: TemplateModule, variables: Mapping[str, Any]) -> bool:
     """True if a conditional template's ``when`` matches the resolved variables (§12.2)."""
-    return all(str(variables.get(key)) == value for key, value in template.when)
+    return all(_canon(variables.get(key)) == _canon(value) for key, value in template.when)
 
 
 def render_variables(
     variables: Mapping[str, Any],
     *,
-    pin: str = "main",
+    pin: str,
     docs: bool = False,
     derived_rules: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
@@ -41,6 +54,12 @@ def render_variables(
     derived["aviato-ref"] = pin
     derived["docs"] = "true" if docs else "false"
     derived.setdefault("year", str(date.today().year))
+    # R4-3: the default branch is templated into the generated callers' trigger filters and
+    # release-gate input (GitHub Actions trigger `branches:` cannot use `${{ }}` expressions, so
+    # it must be a render-time literal). A consumer whose default branch isn't `main` overrides it
+    # via the `default-branch` profile variable; absent that (and for the direct-render paths used
+    # by diagnosis/parity that don't go through variable resolution) it defaults to `main`.
+    derived.setdefault("default-branch", "main")
     for rule in derived_rules:
         source_value = variables.get(rule["from"])
         if source_value is not None:
@@ -84,7 +103,7 @@ def resolved_artifacts(
     profile: str,
     variables: Mapping[str, Any],
     *,
-    pin: str = "main",
+    pin: str,
     docs: bool = False,
     overrides: Mapping[str, Any] | None = None,
 ) -> list[ResolvedArtifact]:
@@ -115,7 +134,7 @@ def materialize_items(
     profile: str,
     variables: Mapping[str, Any],
     *,
-    pin: str = "main",
+    pin: str,
     docs: bool = False,
     overrides: Mapping[str, Any] | None = None,
 ) -> list[ScaffoldItem]:
@@ -161,7 +180,10 @@ def plan_onboarding(
             )
         migrating_from = existing_declaration.profile
 
-    items = materialize_items(registry, profile, variables)
+    # R1-10: pass an explicit placeholder pin — the plan only consumes output PATHS (not the
+    # rendered `@ref` content), so the pin value is immaterial here, but we pass it explicitly
+    # rather than rely on a silent default that could stamp an unpinned `@main` ref elsewhere.
+    items = materialize_items(registry, profile, variables, pin="0")
     plan = OnboardingPlan(profile=profile, migrating_from=migrating_from)
     for item in items:
         if item.seed_once:

@@ -21,6 +21,11 @@ from .policy import (
 REQUIRED_FILES = [
     "aviato/library/policy.yml",
     "aviato/library/rulesets.yml",
+    # R3-8: load-bearing data files. Without pipelines.yaml, composition silently goes lenient
+    # (drops typed privileges/status-checks, disables the undeclared-pipeline check) and without
+    # denylist.txt the §9b agnosticism scan can't run — yet validate() reported no missing file.
+    "aviato/library/pipelines.yaml",
+    "aviato/plugins/denylist.txt",
     ".github/dependabot.yml",
     ".github/workflows/ci.yml",
     ".github/workflows/reusable-python-ci.yml",
@@ -97,7 +102,13 @@ def _check_release_pattern_drift(root: Path, data_root: Path, policy: dict, erro
         "required_approving_review_count": ("pull_request", "required_approving_review_count"),
     }
     for item in load_ruleset_manifest(data_root).get("rulesets", []):
-        raw = json.loads((data_root / item["file"]).read_text(encoding="utf-8"))
+        # R3-12: a malformed/unreadable ruleset JSON is reported by the dedicated JSON-parse check;
+        # don't re-raise here (which would abort validate() with a traceback). Skip + record.
+        try:
+            raw = json.loads((data_root / item["file"]).read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            errors.append(f"{item['file']} could not be parsed for pattern-drift check: {exc}")
+            continue
         for patch_key, policy_path in item.get("patch", {}).items():
             mapping = _PATCH_RULE_PARAM.get(patch_key)
             if mapping is None or not policy_path:
@@ -184,9 +195,15 @@ def _check_baseline_settings_drift(root: Path, policy: dict, errors: list[str]) 
         return
     baseline = load_yaml(baseline_path)
     default_branch = baseline.get("settings", {}).get("default_branch", {})
-    if "required_reviews" not in default_branch:
-        return
     expected = default_required_approvals(policy)
+    if "required_reviews" not in default_branch:
+        # R3-11: previously this returned clean when the key was ABSENT, so the Library could
+        # delete the baseline approval requirement undetected. The key must EXIST and equal policy.
+        errors.append(
+            "settings baseline is missing required_reviews; it must exist and equal policy.yml's "
+            f"required approvals ({expected})"
+        )
+        return
     if default_branch.get("required_reviews") != expected:
         errors.append(
             f"settings baseline required_reviews ({default_branch.get('required_reviews')}) differs from "
@@ -241,8 +258,9 @@ def _check_action_pins(root: Path, errors: list[str]) -> None:
 # regenerate (scripts/regen-templates.py).
 _TEMPLATE_EXAMPLE_VARS: dict[str, dict[str, str]] = {
     "python-library": {"distribution-name": "your-distribution", "import-name": "your_package"},
-    # A container service declares only the GHCR image target — no wheel/import name (§13.2).
-    "python-service": {"image-name": "your-image"},
+    # A container service declares no packaging/image vars — the GHCR image defaults to the repo
+    # slug (R4-2, mirrors node-service) and it ships no wheel/import name (§13.2).
+    "python-service": {},
     "python-component": {"distribution-name": "your-distribution", "import-name": "your_package"},
     "node-service": {"project-name": "your-app", "language-variant": "typescript"},
     "swift-app": {
@@ -266,7 +284,7 @@ def _rendered_caller(root: Path, profile: str, output: str) -> str | None:
     from .core.registry import Registry
 
     registry = Registry(root / "aviato" / "library")
-    artifacts = resolved_artifacts(registry, profile, _TEMPLATE_EXAMPLE_VARS[profile], pin="main", docs=False)
+    artifacts = resolved_artifacts(registry, profile, _TEMPLATE_EXAMPLE_VARS[profile], pin="0.1.0", docs=False)
     return next((a.body for a in artifacts if a.output == output), None)
 
 
@@ -292,7 +310,7 @@ def _check_scaffold_workflow_yaml(root: Path, errors: list[str]) -> None:
     for profile, example_vars in _TEMPLATE_EXAMPLE_VARS.items():
         for docs in (False, True):
             try:
-                artifacts = resolved_artifacts(registry, profile, example_vars, pin="main", docs=docs)
+                artifacts = resolved_artifacts(registry, profile, example_vars, pin="0.1.0", docs=docs)
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"scaffold render failed for {profile!r} (docs={docs}): {exc}")
                 continue
@@ -376,21 +394,30 @@ _MONOTONIC_CASES = [
 
 
 def _extract_py_heredoc(run_text: str) -> str | None:
-    """Return the body of a ``<<'PY' ... PY`` heredoc in a parsed step ``run`` block, or None.
+    """Return the body of the monotonic-GUARD ``<<'PY' ... PY`` heredoc in a step ``run``, or None.
 
-    The YAML loader already dedents the block to its base indent, so the captured lines are
-    valid Python (relative indentation preserved).
+    R5-11: select the heredoc that IS the guard (its body prints ``true``/``false`` — the is_highest
+    comparator's output), not merely the FIRST ``<<'PY'`` in the run. Otherwise an unrelated earlier
+    heredoc would make the parity check compare the wrong snippet and miss a drifted/removed guard.
+    The YAML loader already dedents the block, so captured lines are valid Python.
     """
     lines = run_text.splitlines()
-    for i, line in enumerate(lines):
-        if "<<'PY'" in line:
+    heredocs: list[str] = []
+    i = 0
+    while i < len(lines):
+        if "<<'PY'" in lines[i]:
             body: list[str] = []
-            for sub in lines[i + 1 :]:
-                if sub.strip() == "PY":
-                    return "\n".join(body)
-                body.append(sub)
-            return None
-    return None
+            i += 1
+            while i < len(lines) and lines[i].strip() != "PY":
+                body.append(lines[i])
+                i += 1
+            heredocs.append("\n".join(body))
+        i += 1
+    # Prefer the guard (prints true/false); fall back to the sole heredoc if only one is present.
+    guard = [h for h in heredocs if "true" in h and "false" in h]
+    if guard:
+        return guard[0]
+    return heredocs[0] if len(heredocs) == 1 else None
 
 
 def _check_monotonic_alias_parity(root: Path, errors: list[str]) -> None:

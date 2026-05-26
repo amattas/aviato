@@ -6,9 +6,9 @@ name: Aviato Python Component
 
 on:
   pull_request:
-    branches: [main]
+    branches: ["{{ default-branch }}"]
   push:
-    branches: [main]
+    branches: ["{{ default-branch }}"]
     tags:
       - "*.*.*"
   schedule:
@@ -58,6 +58,6 @@ jobs:
     if: ${{ always() && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@{{ aviato-ref }}
     with:
-      default-branch: main
+      default-branch: {{ default-branch }}
       require-merged-pr: true
       release-tag: ${{ needs.release.outputs.tag }}

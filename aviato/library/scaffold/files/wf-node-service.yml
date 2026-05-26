@@ -2,9 +2,9 @@ name: Aviato Node Service
 
 on:
   pull_request:
-    branches: [main]
+    branches: ["{{ default-branch }}"]
   push:
-    branches: [main]
+    branches: ["{{ default-branch }}"]
     tags:
       - "*.*.*"
   schedule:
@@ -33,7 +33,7 @@ jobs:
       # verify pipeline (§12.2). Format-check (Prettier) and TS type-check (tsc,
       # auto-skipped when there is no tsconfig.json, i.e. language-variant=javascript)
       # use the reusable workflow defaults.
-      lint-command: "npx eslint ."
+      lint-command: "npx --no-install eslint ."
       test-command: "npm test"
       build-command: "npm run build"
       run-typecheck: {{ run-typecheck }}
@@ -64,7 +64,7 @@ jobs:
     if: ${{ always() && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@{{ aviato-ref }}
     with:
-      default-branch: main
+      default-branch: {{ default-branch }}
       require-merged-pr: true
       release-tag: ${{ needs.release.outputs.tag }}
 

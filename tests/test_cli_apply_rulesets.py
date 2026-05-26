@@ -91,3 +91,30 @@ def test_negative_required_approvals_is_rejected_at_parse_time(
         assert exc.value.code == 2
     # 0 (the documented solo-repo override) is still accepted by the type.
     assert cli._non_negative_int("0") == 0
+
+
+def test_apply_rulesets_rejects_malformed_slug(capsys: pytest.CaptureFixture[str]) -> None:
+    # R3-5: a non-OWNER/REPO slug must fail loud locally (exit 2), not as an API 404.
+    assert cli.main(["apply-rulesets", "justaword", "--apply"]) == 2
+    assert "OWNER/REPO" in capsys.readouterr().err
+
+
+def test_apply_rulesets_missing_repos_file_is_clean_error(tmp_path, capsys: pytest.CaptureFixture[str]) -> None:
+    # R3-13: a missing --repos-file is a clean operator error (exit 2 via main()), not a traceback.
+    rc = cli.main(["apply-rulesets", "--repos-file", str(tmp_path / "nope.txt"), "--apply"])
+    assert rc == 2
+    assert "repos-file" in capsys.readouterr().err
+
+
+def test_parse_var_flags_rejects_empty_key_and_duplicates() -> None:
+    # R3-6: empty key and duplicate key are input footguns → fail loud, not silent.
+    import pytest as _pytest
+
+    from aviato.cli import _parse_var_flags
+    from aviato.core.errors import AviatoError
+
+    assert _parse_var_flags(["k=v"]) == {"k": "v"}
+    with _pytest.raises(AviatoError):
+        _parse_var_flags(["=v"])
+    with _pytest.raises(AviatoError):
+        _parse_var_flags(["k=1", "k=2"])

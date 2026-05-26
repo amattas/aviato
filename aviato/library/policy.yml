@@ -13,8 +13,7 @@ release:
 
 branch:
   required_approvals_default: 1
-
-rulesets:
-  protect_default_branch_name: 'Common: protect default branch'
-  release_tag_format_name: 'Common: release tag format'
+# R4-10: the ruleset `name` literals live in the ruleset JSON templates (their single source of
+# truth); the previously-duplicated `rulesets.*_name` policy keys were never read by the renderer
+# or settings, so they were a drift hazard and have been removed.
 

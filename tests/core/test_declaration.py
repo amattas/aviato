@@ -77,6 +77,25 @@ def test_unquoted_float_version_is_rejected_not_silently_corrupted(tmp_path: Pat
         assert load_declaration(path).profile == "p"
 
 
+def test_malformed_yaml_raises_declaration_error_not_raw_yamlerror(tmp_path: Path) -> None:
+    # R1-1: a corrupt declaration must raise DeclarationError (an AviatoError) so scan_fleet's
+    # per-repo guard catches it, never a raw yaml.YAMLError that aborts the whole fleet scan (§5.11).
+    path = tmp_path / "aviato.yaml"
+    path.write_text("profile: p\nversion: '1'\nvariables: {a: [unclosed\n", encoding="utf-8")
+    with pytest.raises(DeclarationError):
+        load_declaration(path)
+
+
+def test_unknown_top_level_key_is_rejected(tmp_path: Path) -> None:
+    # R1-9/§6.1: a typo'd top-level key (e.g. `doc:` for `docs:`) must fail loud, not be silently
+    # ignored (which would silently disable the intended feature).
+    path = tmp_path / "aviato.yaml"
+    path.write_text("profile: p\nversion: '1'\ndoc: true\n", encoding="utf-8")
+    with pytest.raises(DeclarationError) as exc:
+        load_declaration(path)
+    assert "unknown field" in str(exc.value) and "doc" in str(exc.value)
+
+
 def test_boolean_fields_are_parsed_by_value_not_truthiness(tmp_path: Path) -> None:
     # CX#3: a QUOTED `docs: "false"` / `bootstrap: "false"` must load as False (bool("false") is
     # truthy — the bug), and a non-boolean must fail loud per §6.1's typed contract.
