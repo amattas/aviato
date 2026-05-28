@@ -206,7 +206,7 @@ jobs:
       # §13.2/§11.7: keyless OIDC build provenance attestation for the pushed image.
       - name: Attest image provenance
         if: ${{ inputs.push }}
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ steps.vars.outputs.image }}
           subject-digest: ${{ steps.build.outputs.digest }}

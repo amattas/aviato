@@ -164,7 +164,7 @@ jobs:
       # §11.7: build provenance AND the SBOM are attested to the published artifacts
       # (keyless OIDC), not just generated as loose files.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: "${{ inputs.working-directory }}/${{ inputs.packages-dir }}/*"
 
