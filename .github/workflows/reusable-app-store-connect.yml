@@ -320,7 +320,7 @@ jobs:
 
       - name: Upload App Store Connect receipt
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: app-store-connect-upload
           path: ${{ inputs.working-directory }}/build/app-store-upload.log

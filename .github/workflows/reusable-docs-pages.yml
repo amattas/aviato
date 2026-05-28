@@ -238,7 +238,7 @@ jobs:
       # (read back above) — keeps the source branch untouched and contents read-only.
       - name: Persist doc versions
         if: ${{ steps.guard.outputs.highest == 'true' && hashFiles(format('{0}/versions.json', inputs.working-directory)) != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aviato-docs-versions
           path: |
