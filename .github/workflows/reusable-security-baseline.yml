@@ -260,7 +260,7 @@ jobs:
       # Only reached when the gate above passed (default step success-gating) → the heartbeat
       # signals a CLEAN run. A broken run skips this, leaving no fresh artifact (absent = broken).
       - name: Upload heartbeat
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aviato-security-heartbeat
           path: heartbeat/aviato-security-heartbeat.json
