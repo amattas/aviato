@@ -132,12 +132,14 @@ jobs:
       EXPORT_PATH: ${{ inputs.export-path }}
       EXPORT_OPTIONS_PLIST: ${{ inputs.export-options-plist }}
       EXPORT_METHOD: ${{ inputs.export-method }}
-      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-      APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
-      APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+      # R7-4-APPSTORE-OIDC: the 6 Apple/App-Store-Connect secrets used to live HERE (job-level env),
+      # which exposed them to EVERY step in the job — including the operator-controlled
+      # `eval "$VERSION_COMMAND"` (the version-source bump). A compromised version command (or a
+      # build-time dependency it pulled) could have exfiltrated the signing key material via the
+      # in-scope env vars. Scoping each secret to ONLY the step(s) that legitimately consume it
+      # closes that leak. (Mirrors the PyPI build/publish job split — same isolation principle,
+      # applied per-step here because Apple's archive+upload flow doesn't split cleanly into two
+      # jobs without an .ipa artifact handoff.)
     steps:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
@@ -179,6 +181,14 @@ jobs:
 
       - name: Install signing assets
         shell: bash
+        env:
+          # R7-4-APPSTORE-OIDC: signing-assets-install is the ONE step that consumes the certificate
+          # and provisioning material; expose the secrets here, not job-wide.
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
         run: |
           set -euo pipefail
 
@@ -291,6 +301,12 @@ jobs:
 
       - name: Upload to App Store Connect
         shell: bash
+        env:
+          # R7-4-APPSTORE-OIDC: only altool needs the App Store Connect API key/issuer; expose them
+          # here rather than job-wide so the earlier operator `eval "$VERSION_COMMAND"` step ran
+          # without these in scope.
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
           set -euo pipefail
           ipa_path="$(find "${EXPORT_PATH}" -maxdepth 1 -name '*.ipa' -print | head -n1)"
@@ -314,6 +330,12 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           BUILD_NUMBER: ${{ github.run_number }}
           SUBMIT_FOR_REVIEW_COMMAND: ${{ inputs.submit-for-review-command }}
+          # R7-4-APPSTORE-OIDC: the submit command DOES legitimately call App Store Connect
+          # (that's its purpose), so it gets the API credentials per-step — but NOT the certificate /
+          # provisioning material (which it has no business with).
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           eval "$SUBMIT_FOR_REVIEW_COMMAND"
@@ -329,6 +351,9 @@ jobs:
       - name: Cleanup signing assets
         if: ${{ always() }}
         shell: bash
+        env:
+          # R7-4-APPSTORE-OIDC: cleanup only needs the key id to construct the .p8 filename it deletes.
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
         run: |
           set -euo pipefail
           if [ -n "${KEYCHAIN_PATH:-}" ]; then

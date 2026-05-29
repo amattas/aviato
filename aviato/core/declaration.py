@@ -51,6 +51,12 @@ def load_declaration(path: Path) -> Declaration:
             data = yaml.safe_load(handle)
     except yaml.YAMLError as exc:
         raise DeclarationError(f"declaration is not valid YAML: {path}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        # R5-4-DECL: PyYAML reading a text-mode handle propagates UnicodeDecodeError (a ValueError,
+        # NOT an OSError or YAMLError) raw on a non-UTF-8 file. Without this it escapes scan_fleet's
+        # `except AviatoError` guard and aborts the operator's WHOLE fleet scan (§5.11) — and leaks a
+        # raw traceback in every single-repo command. Map it to a clean DeclarationError like the rest.
+        raise DeclarationError(f"declaration is not valid UTF-8: {path}: {exc}") from exc
     except OSError as exc:
         raise DeclarationError(f"could not read declaration: {path}: {exc}") from exc
     if not isinstance(data, dict):

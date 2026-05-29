@@ -33,6 +33,12 @@ class DiagnosisReport:
     prerequisites: dict[str, bool] = field(default_factory=dict)
     issue_channel_available: bool | None = None
     scan_heartbeat_present: bool | None = None
+    # R6-2-§17-PROBE: REMOTE-probeable §17 prerequisites filled by the platform binding (the names
+    # and what they mean are plug-in DATA — core is agnostic to which checks the binding emits,
+    # §9b). Distinct from the LOCAL `prerequisites` map (file-path probes). None per key means
+    # "unable to determine"; the doctor report surfaces both so the operator can act (§5.4 —
+    # absence reads as broken, never clean).
+    prerequisites_remote: dict[str, bool | None] = field(default_factory=dict)
 
 
 def _has_drift_automation(root: Path, markers: Sequence[str]) -> bool:
@@ -88,12 +94,13 @@ def _classify_managed(target: Path, expected_body: str, *, profile: str | None =
         return "missing"
     try:
         text = target.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        # A non-UTF-8 file at a managed path cannot carry a valid marker → operator-owned,
-        # dirty-drift (never silently regenerated). Must not crash diagnosis — a raw
-        # UnicodeDecodeError (a ValueError, not AviatoError) would escape scan_fleet's
-        # per-repo guard and abort the whole fleet scan. Mirrors the errors="replace"/
-        # except-UnicodeDecodeError handling used elsewhere for the same condition.
+    except (UnicodeDecodeError, OSError):
+        # A non-UTF-8 file — OR a DIRECTORY / otherwise-unreadable path (R5-3-DIAG-OS:
+        # IsADirectoryError and friends are OSError, NOT UnicodeDecodeError) — at a managed
+        # output path cannot carry a valid marker → operator-owned, dirty-drift (never silently
+        # regenerated). Must not crash diagnosis: a raw OSError/UnicodeDecodeError (neither an
+        # AviatoError) would escape scan_fleet's per-repo guard and abort the WHOLE fleet scan
+        # (§5.11), and leak a raw traceback in doctor/drift-report (§2.4).
         return "dirty-drift"
     marker = parse_marker_from_text(text)
     if marker is None:
@@ -167,11 +174,17 @@ def diagnose(
             # may be binary (§6.3); read leniently so the probe never crashes a fleet scan — a
             # binary just won't match its text hash. Reported, never overwritten.
             recorded = sidecar.get(artifact.output_path)
-            diverged = recorded is not None and (
-                not target.exists() or content_hash(target.read_text(encoding="utf-8", errors="replace")) != recorded
-            )
-            if diverged:
-                report.seed_divergence.append(artifact.output_path)
+            if recorded is not None:
+                try:
+                    live_hash = content_hash(target.read_text(encoding="utf-8", errors="replace"))
+                except OSError:
+                    # R5-3-DIAG-OS: the seed-once target is a DIRECTORY or otherwise unreadable
+                    # (IsADirectoryError &c. are OSError, which errors="replace" does NOT handle).
+                    # Treat it as diverged (§5.14 "absence/unreadable reads as broken"), never crash
+                    # the fleet scan with a raw OSError.
+                    live_hash = None
+                if not target.exists() or live_hash != recorded:
+                    report.seed_divergence.append(artifact.output_path)
             continue
         report.statuses[artifact.output_path] = _classify_managed(target, artifact.body, profile=profile)
 

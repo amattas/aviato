@@ -324,3 +324,34 @@ def test_version_source_override_rejects_empty_or_nonstring_locations() -> None:
     # A boolean is an int subclass but not a str → still rejected (not silently coerced).
     with pytest.raises(CompositionError):
         resolve_profile(registry, "swift-app", overrides={"version_source": {"locations": [True]}})
+
+
+def test_scalar_default_branch_override_raises_composition_error() -> None:
+    # R2-3-1: a scalar (non-mapping) default_branch settings override must fail as a CompositionError,
+    # not a raw ValueError from dict(<scalar>) that escapes the fleet-scan AviatoError guard.
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    with pytest.raises(CompositionError):
+        resolve_profile(registry, "python-library", overrides={"settings": {"default_branch": "develop"}})
+
+
+def test_profile_declared_version_source_locations_validated_like_override() -> None:
+    # R2-1-VS: the profile-declared version_source uses the SAME validation as a consumer override
+    # (parity) — empty/blank/non-string/non-mapping all rejected, so a profile can't silently no-op
+    # the version bump. Exercise the shared helper directly (a full minimal registry just to reach
+    # it is needless scaffolding).
+    from aviato.core.composition import _validated_locations
+
+    assert _validated_locations({"locations": ["VERSION"]}, context="x") == ("VERSION",)
+    for bad in (
+        {},
+        {"locations": []},
+        {"locations": [123]},
+        {"locations": ["  "]},
+        {"locations": [True]},
+        "scalar",
+        None,
+    ):
+        with pytest.raises(CompositionError):
+            _validated_locations(bad, context="x")

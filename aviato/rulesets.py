@@ -1,10 +1,23 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+# R7-4-RULESET-DRIFT (documented asymmetry): `_subset_match` falls through to strict scalar
+# equality (e.g. `required_approving_review_count`), so a manually-tightened LIVE value (5 against
+# desired 2) reports as drift, and a subsequent `apply-rulesets --apply` would LOOSEN it back to
+# the desired value. This is INTENTIONALLY narrower than settings-drift's additive/destructive
+# classifier (which treats `live > desired` as additive). The reason: apply-rulesets is an
+# operator-DIRECT provisioning command (warns explicitly on invocation, see cli.py — "not the
+# §5.7 drift/consent flow"). The operator is asserting "the manifest is the desired state, period",
+# so a stricter-live mismatch is a real divergence the operator should review (then either bump
+# the manifest or accept the loosening). Loosening is not silent — the message in `messages`
+# describes the upsert. If you want the settings-drift semantics here, route the scalar compare
+# through `settingsdrift._classify_value_change` (deliberately NOT done because the manifest is the
+# single source of truth in the operator-direct path).
 from . import github
 from .paths import POLICY_DATA_ROOT
 from .policy import default_required_approvals, get_path, load_policy, load_ruleset_manifest
@@ -190,10 +203,23 @@ def apply_rulesets(
     apply: bool,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,
-) -> list[str]:
+) -> Iterator[str]:
+    """Yield a confirmation per upserted ruleset (R2-4-6).
+
+    Returns a GENERATOR that yields each upsert's message as it succeeds, so the caller prints it
+    BEFORE a later-repo/later-ruleset failure aborts — otherwise a multi-repo apply that fails on
+    repo N would surface only the error, with no record that repos 1..N-1 were already mutated.
+
+    R3-1-GENLAZY: ``render_all_rulesets`` is run EAGERLY here (at call time), not deferred to first
+    advance — so a malformed-library-data ``ValueError`` surfaces when ``apply_rulesets`` is called,
+    matching the old eager-list semantics, regardless of whether/how the caller consumes the
+    generator. Only the per-upsert platform writes are streamed lazily.
+    """
     payloads = render_all_rulesets(required_approvals=required_approvals, extra_status_checks=extra_status_checks)
-    messages: list[str] = []
-    for slug in slugs:
-        for payload in payloads:
-            messages.append(github.upsert_ruleset(slug, payload, apply=apply))
-    return messages
+
+    def _stream() -> Iterator[str]:
+        for slug in slugs:
+            for payload in payloads:
+                yield github.upsert_ruleset(slug, payload, apply=apply)
+
+    return _stream()

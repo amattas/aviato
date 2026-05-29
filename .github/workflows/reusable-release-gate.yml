@@ -80,16 +80,18 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin "${DEFAULT_BRANCH}" --tags
-          # In both contexts GITHUB_SHA is the commit being gated: the tag commit (tag
-          # ref) or the merge commit we are deploying (in-run). It must be the default
-          # branch tip and (in-run) the resolved tag must point at it.
+          # In both contexts GITHUB_SHA is the commit being gated: the tag commit (tag ref) or the
+          # merge commit we are deploying (in-run). It must be REACHABLE FROM the default branch.
+          # R6-4-DOCSGATE: the previous strict equality (gated_sha == branch_tip) caused docs deploy
+          # (which runs on workflow_run minutes after the main CI) to fail valid releases whenever
+          # ANY unrelated push landed on the default branch in that window. The §5.9 invariant is
+          # "the gated commit IS on the default branch's history" — is-ancestor is the correct check
+          # (handles tip-equality AND the post-CI-push case). Reject only when off the branch.
           gated_sha="$(git rev-parse "${GITHUB_SHA}")"
           branch_sha="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
 
-          if [ "${gated_sha}" != "${branch_sha}" ]; then
-            echo "::error::${RESOLVED_TAG} must point at origin/${DEFAULT_BRANCH}."
-            echo "gated=${gated_sha}"
-            echo "branch=${branch_sha}"
+          if ! git merge-base --is-ancestor "${gated_sha}" "${branch_sha}"; then
+            echo "::error::${RESOLVED_TAG} (${gated_sha}) is not reachable from origin/${DEFAULT_BRANCH} (${branch_sha})."
             exit 1
           fi
           if git rev-parse -q --verify "refs/tags/${RESOLVED_TAG}" >/dev/null; then

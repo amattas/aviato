@@ -121,9 +121,9 @@ scaffold, diagnose, and reconcile — with **no** language- or
 deployment-specific logic. Its falsifiable agnosticism (§9b) is enforced by
 `aviato/core/selfcheck.py` (no import edge into `aviato/plugins/`, no denylisted
 identifier from `aviato/plugins/denylist.txt`) and checked as part of
-`aviato validate`. Day-zero plug-in specifics live as **data** in `profiles/`,
-`bundles/`, and `templates/scaffold/` (the §5.10 module-source tree), loaded by
-`aviato/core/registry.py`. See `CLAUDE.md` for the module map.
+`aviato validate`. Day-zero plug-in specifics live as **data** under `aviato/library/`
+(the §5.10 module-source tree: `aviato/library/<profile>.yaml`, `aviato/library/bundles/`,
+`aviato/library/scaffold/`), loaded by `aviato/core/registry.py`. See `CLAUDE.md` for the module map.
 
 ### Scripts
 
@@ -187,8 +187,11 @@ of truth.
 Release publishing is tag-driven only.
 
 Release workflows must run from tags that match the canonical release format.
-Legacy `release/*` branches and `release/latest` are migration artifacts and
-should not be supported by release publishing workflows.
+Branch-based release *publishing* (legacy `release/*` / `release/latest` publish
+branches) is a migration artifact and is rejected by validation. This is distinct
+from the release-PR *source* branch (`reusable-release.yml` opens its proposal on a
+short-lived `release/<version>` branch and tags from the default branch) — that is
+not branch-based publishing and is allowed.
 
 If branch or pull request Docker builds are needed, they should be implemented
 as a separate non-release workflow instead of weakening the release workflow.

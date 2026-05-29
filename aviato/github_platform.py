@@ -258,7 +258,11 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     write. Returns the same flat shape the resolved ``default_branch`` map carries.
     """
     pr_rule = next((r for r in rules if r.get("type") == "pull_request"), None)
-    pr_params = pr_rule.get("parameters", {}) if pr_rule else {}
+    # R2-4-2: `… or {}`/`… or []` (not the `.get(k, default)` form) because GitHub serializes a
+    # PRESENT-but-null `parameters`/`checks`/`required_status_checks` — the default only applies when
+    # the key is ABSENT, so a present null would otherwise raise TypeError/AttributeError on a valid
+    # payload and crash this read (which is contracted to fail CLOSED, not crash — §2.7).
+    pr_params = (pr_rule.get("parameters") or {}) if pr_rule else {}
     classic_reviews = protection.get("required_pull_request_reviews") or {}
     requires_pr = pr_rule is not None or protection.get("required_pull_request_reviews") is not None
 
@@ -287,10 +291,10 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     # set and shows false drift / a duplicate classic-protection write (§5.6).
     rsc = protection.get("required_status_checks") or {}
     contexts = list(rsc.get("contexts") or [])
-    contexts += [c.get("context") for c in rsc.get("checks", []) if isinstance(c, dict) and c.get("context")]
+    contexts += [c.get("context") for c in (rsc.get("checks") or []) if isinstance(c, dict) and c.get("context")]
     rsc_rule = next((r for r in rules if r.get("type") == "required_status_checks"), None)
     if rsc_rule is not None:
-        rule_checks = rsc_rule.get("parameters", {}).get("required_status_checks", [])
+        rule_checks = (rsc_rule.get("parameters") or {}).get("required_status_checks") or []
         contexts += [c.get("context") for c in rule_checks if isinstance(c, dict) and c.get("context")]
 
     # enforce_admins = "are admins subject to branch protection?". It's satisfied EITHER by the
@@ -507,16 +511,24 @@ class GitHubPlatform:
             ambiguous=ambiguous,
         )
 
-    def probe_health(self, repo: str) -> tuple[bool | None, bool | None]:
-        """Probe issue-channel availability and scan-heartbeat presence (§5.4/§5.14).
+    def probe_health(
+        self, repo: str, *, environments: tuple[str, ...] = (), probe_pages: bool = False
+    ) -> tuple[bool | None, bool | None, dict[str, bool | None]]:
+        """Probe issue-channel availability, scan-heartbeat presence, and §17 remote prereqs.
 
-        Returns ``(issue_channel_available, scan_heartbeat_present)``. A value is
-        None when it cannot be determined (e.g. the API call failed) — and a None
-        heartbeat reads as broken, never clean (§5.14). Best-effort: a failed probe
-        does not raise (doctor is a read-only health report).
+        Returns ``(issue_channel_available, scan_heartbeat_present, prerequisites_remote)``. A
+        value is None when it cannot be determined (e.g. the API call failed) — and a None
+        heartbeat reads as broken, never clean (§5.14). R6-2-§17-PROBE: the third element is the
+        live state of §17's remote-probeable items — the ``security_and_analysis`` toggles (secret
+        scanning, push protection, Dependabot, code scanning), the Pages source, and (R7-3-
+        APPSTORE-ENV) the existence + required-reviewer count of each `environments` entry the
+        caller supplies. The list of environment names comes from plug-in DATA (the resolved
+        profile's pipelines, see `PipelineModule.environment`), so the binding stays agnostic to
+        which capability requires which env. Best-effort: a failed probe does not raise.
         """
         issue_channel: bool | None = None
         heartbeat: bool | None = None
+        remote: dict[str, bool | None] = {}
         try:
             repo_data = github.gh_json_optional(f"repos/{repo}", default=None)
             if isinstance(repo_data, dict) and "has_issues" in repo_data:
@@ -534,7 +546,7 @@ class GitHubPlatform:
                 artifacts = github.gh_json_optional(
                     f"repos/{repo}/actions/artifacts?name=aviato-security-heartbeat&per_page=30", default=None
                 )
-                items = artifacts.get("artifacts", []) if isinstance(artifacts, dict) else []
+                items = (artifacts.get("artifacts") or []) if isinstance(artifacts, dict) else []
                 heartbeat = any(
                     not item.get("expired") and (item.get("workflow_run") or {}).get("head_sha") == head_sha
                     for item in items
@@ -542,7 +554,35 @@ class GitHubPlatform:
                 )
         except github.GitHubAPIError:
             pass  # ambiguous read → leave unknown (None)
-        return issue_channel, heartbeat
+        # R6-2-§17-PROBE: read the §17 remote-probeable items separately so a failure on one
+        # (e.g. Pages not configured) does not zero out the security toggle reads.
+        try:
+            sa = github.repo_security_settings(repo)
+            for key in ("secret_scanning", "secret_scanning_push_protection", "dependabot_security_updates"):
+                value = sa.get(key) if isinstance(sa, dict) else None
+                # The GitHub schema exposes each as `{"status": "enabled"|"disabled"}`.
+                remote[key] = value.get("status") == "enabled" if isinstance(value, dict) else None
+        except github.GitHubAPIError:
+            for key in ("secret_scanning", "secret_scanning_push_protection", "dependabot_security_updates"):
+                remote.setdefault(key, None)
+        # R7-3-DOCTOR-NOISE: probe Pages only when the caller indicates a docs-bearing profile —
+        # otherwise the doctor surfaces a noisy "pages_source_actions: unknown / no" for repos that
+        # have no docs at all. The caller (cmd_doctor) sets `probe_pages` from `declaration.docs`.
+        if probe_pages:
+            try:
+                remote["pages_source_actions"] = github.pages_source_is_actions(repo)
+            except github.GitHubAPIError:
+                remote["pages_source_actions"] = None
+        # R7-3-APPSTORE-ENV: each environment name is plug-in DATA from the resolved profile (the
+        # binding doesn't know WHICH capability needs it); probe each and surface under a `env:<name>`
+        # key in `prerequisites_remote`.
+        for env_name in environments:
+            key = f"env:{env_name}"
+            try:
+                remote[key] = github.protected_environment_has_reviewers(repo, env_name)
+            except github.GitHubAPIError:
+                remote[key] = None
+        return issue_channel, heartbeat, remote
 
     def _actor_role(self, repo: str, login: str | None) -> tuple[str | None, bool]:
         # §2.7/§6.4 — DELIBERATE: the granter's role is read at apply/get_issue time, not
@@ -740,16 +780,18 @@ class GitHubPlatform:
         classic_rsc = live.get("required_status_checks") or {}
         if classic_rsc.get("strict") is False:
             unmodeled.append("required_status_checks.strict=false")
-        if any(isinstance(c, dict) and c.get("app_id") is not None for c in classic_rsc.get("checks", [])):
+        # R2-4-2: `… or []`/`… or {}` — a present-but-null `checks`/`parameters`/`required_status_checks`
+        # would otherwise crash these fail-closed guard reads with TypeError BEFORE the wholesale PUT.
+        if any(isinstance(c, dict) and c.get("app_id") is not None for c in (classic_rsc.get("checks") or [])):
             unmodeled.append("required_status_checks.app_bound_checks")
         for rule in rules:
             if rule.get("type") == "required_status_checks":
-                params = rule.get("parameters", {})
+                params = rule.get("parameters") or {}
                 if params.get("strict_required_status_checks_policy") is False:
                     unmodeled.append("ruleset.required_status_checks.strict=false")
                 if any(
                     isinstance(c, dict) and c.get("integration_id") is not None
-                    for c in params.get("required_status_checks", [])
+                    for c in (params.get("required_status_checks") or [])
                 ):
                     unmodeled.append("ruleset.required_status_checks.app_bound_checks")
         if unmodeled:

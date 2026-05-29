@@ -193,3 +193,198 @@ def test_security_baseline_retains_fail_closed_structure() -> None:
 
     gate_steps = [step.get("name", "") for step in jobs["heartbeat"].get("steps", []) if isinstance(step, dict)]
     assert any("Gate" in name for name in gate_steps), "missing 'Gate on required scans' step"
+
+
+def test_aviato_ref_pin_guard_present_and_regex_correct() -> None:
+    # R2-5-F2 / R4-6: a fail-closed supply-chain control — the release/automation workflows must
+    # refuse to install the Library off an unpinned/branch ref. Assert (a) the guard step exists in
+    # both workflows BEFORE the `pip install …@${AVIATO_REF}` step, and (b) extract the embedded ERE
+    # and exercise it over a battery, so a refactor dropping the guard or loosening the regex (e.g.
+    # accidentally accepting `@main`) goes red. (Mirrors the monotonic-alias parity approach.)
+    import re
+
+    guard_re = re.compile(r"AVIATO_REF.*?=~\s+(\S+)\s+\]\]")
+    for name in ("reusable-release.yml", "reusable-consumer-automation.yml"):
+        body = (WORKFLOWS / name).read_text()
+        m = guard_re.search(body)
+        assert m, f"{name} missing the AVIATO_REF pin guard"
+        # The guard must run BEFORE the pinned install.
+        assert body.index("AVIATO_REF") < body.index(
+            'pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"'
+        )
+        pattern = re.compile(m.group(1))
+        for good in ("1.2.3", "1.2.3-alpha1", "1.2.3-beta2", "7", "1.10.0"):
+            assert pattern.fullmatch(good), f"{name}: should accept {good}"
+        for bad in ("", "main", "v1.2.3", "release/x", "1.2", "1.2.3-rc1", "1.2.3-beta.1"):
+            assert not pattern.fullmatch(bad), f"{name}: should reject {bad!r}"
+
+
+def test_ghcr_image_name_is_lowercased() -> None:
+    # R3-2-GHCRCASE/R3-5-E: GHCR/OCI repo paths must be lowercase; github.repository preserves case,
+    # so the "Determine image name" step must lowercase before building the ghcr.io/<image> ref.
+    body = (WORKFLOWS / "reusable-docker-ghcr.yml").read_text()
+    assert "tr '[:upper:]' '[:lower:]'" in body or "${image,,}" in body, "GHCR image name not lowercased"
+
+
+def test_pypi_publish_isolates_build_from_oidc_token() -> None:
+    # R3-2-PYPIJOB: the operator build/install commands (eval) must run in an UNPRIVILEGED job; only a
+    # separate publish job (which runs no eval) may hold id-token/attestations. This keeps a
+    # compromised build dependency away from the OIDC token (trusted-publishing isolation).
+    # R4-5-B: compute EFFECTIVE permissions — a job inherits the TOP-LEVEL block when it omits its
+    # own, so checking only the job-level key would pass even if the build job dropped its downgrade
+    # and inherited the token. The eval-bearing job must EXPLICITLY exclude the publish token.
+    import json as _json
+
+    wf = _load("reusable-pypi-publish.yml")
+    top_perms = wf.get("permissions", {}) or {}
+    jobs = wf["jobs"]
+
+    def holds_token(perms: dict) -> bool:
+        return perms.get("id-token") == "write" or perms.get("attestations") == "write"
+
+    for job_name, job in jobs.items():
+        job_perms = job.get("permissions")
+        # Effective perms: a job WITHOUT its own `permissions:` inherits the top-level block.
+        effective = job_perms if job_perms is not None else top_perms
+        runs_eval = "eval " in _json.dumps(job.get("steps", []))
+        assert not (holds_token(effective) and runs_eval), (
+            f"job {job_name!r} runs build code with effective access to the OIDC/attestation token"
+        )
+
+    # The build (eval) job must declare its OWN permissions that exclude the token (not merely rely
+    # on the absence of a job-level key, which would inherit the top-level token).
+    build_perms = jobs["build"].get("permissions")
+    assert build_perms is not None and not holds_token(build_perms), (
+        "build job must explicitly downgrade permissions to exclude id-token/attestations"
+    )
+    # The privileged publish job must depend on build (artifacts cross the boundary) and run NO eval.
+    assert jobs["publish"].get("needs") == "build" or "build" in (jobs["publish"].get("needs") or [])
+    assert "eval " not in _json.dumps(jobs["publish"].get("steps", [])), "publish job must run no build code"
+
+
+def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
+    # R4-5-D: the build job uploads the dist+sbom and the publish job downloads them; the paths must
+    # reconstruct symmetrically so the attest subject-path / pypi packages-dir (which read
+    # `<working-directory>/<packages-dir>`) resolve to the actual files. upload-artifact roots the
+    # artifact at the least-common-ancestor of its `path:` entries; downloading to `path: <wd>`
+    # re-roots there. The round-trip is exact IFF every uploaded path is under `<wd>` and download
+    # extracts to exactly `<wd>` (a wrong download path would yield `<wd>/<wd>/...` or a missing dir).
+    wf = _load("reusable-pypi-publish.yml")
+    steps = {"build": wf["jobs"]["build"]["steps"], "publish": wf["jobs"]["publish"]["steps"]}
+
+    def _step(job: str, action_substr: str) -> dict:
+        return next(s for s in steps[job] if action_substr in (s.get("uses") or ""))
+
+    up = _step("build", "upload-artifact")["with"]
+    down = _step("publish", "download-artifact")["with"]
+    wd = "${{ inputs.working-directory }}"
+
+    assert up["name"] == down["name"], "upload/download artifact names must match"
+    # Every uploaded path is under <wd> (so the least-common-ancestor is <wd>).
+    upload_paths = [p for p in str(up["path"]).splitlines() if p.strip()]
+    assert upload_paths, "upload step lists no paths"
+    for p in upload_paths:
+        assert p.strip().startswith(f"{wd}/"), f"upload path not under working-directory: {p!r}"
+    # Download must extract to exactly <wd> so the tree reconstructs at <wd>/<packages-dir>/... .
+    assert down["path"] == wd, f"download path {down['path']!r} must be exactly {wd!r}"
+
+
+def test_release_phase_detector_accepts_squash_merge_subject() -> None:
+    # R6-4-SQUASH: GitHub's DEFAULT squash-merge title format appends ' (#N)' (the PR number) to
+    # the PR title, so the merged subject is `chore(release): NEXT (#42)`. The phase-detector regex
+    # MUST accept that form — a bare end-anchor would miss it and the workflow would silently fall
+    # through to the propose phase, refusing to tag any release on a repo using the default merge
+    # mode. Extract the regex literal and exercise both subject formats.
+    import re
+
+    # R7-4-SQUASH-TAUT: exercise the regex actually present in the workflow, not a hand-written
+    # copy. Extract the literal from `grep -Eq "<regex>"`, substitute the bash ${NEXT} interpolation
+    # with a concrete version, and translate the bash end-anchor `\$` into a Python `$`. A future
+    # workflow regex regression must make this test fail.
+    body = (WORKFLOWS / "reusable-release.yml").read_text()
+    match = re.search(r'grep -Eq "(\^chore[^"]+)"', body)
+    assert match, "is_release_commit grep -Eq regex not found in reusable-release.yml"
+    workflow_regex = match.group(1).replace("${NEXT}", re.escape("1.2.3")).replace(r"\$", "$")
+    pattern = re.compile(workflow_regex)
+    for accepted in ("chore(release): 1.2.3", "chore(release): 1.2.3 (#42)", "chore(release): 1.2.3 (#1234)"):
+        assert pattern.match(accepted), f"phase detector must accept: {accepted!r}"
+    for rejected in ("chore(release): 1.2.4 (#42)", "chore: 1.2.3", "chore(release): 1.2.3-extra"):
+        assert not pattern.match(rejected), f"phase detector must NOT accept: {rejected!r}"
+
+
+def test_app_store_secrets_not_exposed_to_operator_eval_steps() -> None:
+    # R7-4-APPSTORE-OIDC: the 6 Apple/App-Store-Connect secrets must NOT live at JOB level (where
+    # every step inherits them, including the operator-controlled `eval "$VERSION_COMMAND"` and
+    # `eval "$SUBMIT_FOR_REVIEW_COMMAND"`). Each secret is scoped per-step to ONLY the step that
+    # legitimately consumes it. The version-command step (which has no business with signing keys)
+    # must NOT receive any of them; the submit-for-review-command step (which calls App Store
+    # Connect) gets the API credentials only, NOT the certificate material.
+    import json as _json
+
+    wf = _load("reusable-app-store-connect.yml")
+    job = wf["jobs"]["deploy"] if "deploy" in wf["jobs"] else next(iter(wf["jobs"].values()))
+    secret_keys = {
+        "APP_STORE_CONNECT_ISSUER_ID",
+        "APP_STORE_CONNECT_KEY_ID",
+        "APP_STORE_CONNECT_API_PRIVATE_KEY",
+        "APPLE_CERTIFICATE_P12_BASE64",
+        "APPLE_CERTIFICATE_PASSWORD",
+        "APPLE_PROVISIONING_PROFILE_BASE64",
+    }
+    # Job-level env must NOT carry any Apple/ASC secret.
+    job_env = job.get("env") or {}
+    leaked = secret_keys & set(job_env)
+    assert not leaked, f"job-level env still carries secrets that every step inherits: {sorted(leaked)}"
+
+    # The operator `eval` steps must NOT have any of these secrets in their per-step env.
+    eval_steps = [s for s in job["steps"] if "eval " in _json.dumps(s.get("run", ""))]
+    assert eval_steps, "no operator eval steps found (workflow shape changed unexpectedly)"
+    for step in eval_steps:
+        step_env = step.get("env") or {}
+        # The submit-for-review step is allowed the API creds (it calls App Store Connect by design);
+        # NO eval step is allowed the certificate/provisioning material.
+        cert_keys = {"APPLE_CERTIFICATE_P12_BASE64", "APPLE_CERTIFICATE_PASSWORD", "APPLE_PROVISIONING_PROFILE_BASE64"}
+        cert_leak = cert_keys & set(step_env)
+        assert not cert_leak, f"eval step {step.get('name')!r} sees certificate material: {sorted(cert_leak)}"
+        if "VERSION_COMMAND" in _json.dumps(step.get("env") or {}):
+            # The version-command step has no legitimate need for ANY of the secrets.
+            version_leak = secret_keys & set(step_env)
+            assert not version_leak, f"version-command step sees secrets: {sorted(version_leak)}"
+
+
+def test_cilint_interps_mirror_actionpins() -> None:
+    """R8-9-PARITY-TEST: the in-CI shell `interps='…'` alternation in reusable-common-lint.yml
+    must mirror `aviato/plugins/actionpins.py:_INTERPRETERS` so the two enforcement layers
+    (shell grep + Python detector) cover the same interpreter set. Without this test the in-CI
+    grep would silently rot as `_INTERPRETERS` grows (R8-10-INTERP-INCOMPLETE was exactly this
+    drift mode: `_INTERPRETERS` grew while the grep didn't).
+    """
+    import re as _re
+
+    from aviato.plugins.actionpins import _INTERPRETERS
+
+    workflow = (WORKFLOWS / "reusable-common-lint.yml").read_text(encoding="utf-8")
+    match = _re.search(r"interps='([^']+)'", workflow)
+    assert match, "reusable-common-lint.yml no longer declares `interps='…'` — update this test"
+    grep_tokens = set(match.group(1).split("|"))
+    # `python[0-9.]*` represents the Python family that the Python detector matches via
+    # `_PYTHON_INTERP_RE` (not a literal in `_INTERPRETERS`); drop it from grep-side comparison.
+    grep_tokens.discard("python[0-9.]*")
+
+    # The Python detector also catches multi-token / syntax-form interpreters the shell grep
+    # CANNOT represent (`.`, `source`, `eval` — these match either as builtins after a pipe or
+    # via the proc-sub/cmd-sub pre-scan). Carve them out so the parity assertion only compares
+    # what BOTH layers can plausibly scan for.
+    python_only_extras: set[str] = {".", "source", "eval"}
+    python_set = _INTERPRETERS - python_only_extras
+
+    missing_in_grep = python_set - grep_tokens
+    extra_in_grep = grep_tokens - python_set
+    assert not missing_in_grep, (
+        f"in-CI grep `interps=` is missing interpreters the Python detector catches: "
+        f"{sorted(missing_in_grep)} — add them to reusable-common-lint.yml's `interps='…'`"
+    )
+    assert not extra_in_grep, (
+        f"in-CI grep `interps=` has interpreters the Python detector does not: "
+        f"{sorted(extra_in_grep)} — add to _INTERPRETERS or remove from the grep"
+    )

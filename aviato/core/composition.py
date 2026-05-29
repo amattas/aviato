@@ -60,6 +60,29 @@ def _spec_bool(value: object, field: str, varname: object) -> bool:
     raise CompositionError(f"variable {varname!r} field {field!r} must be a boolean, got {value!r} (§6.6)")
 
 
+def _validated_locations(vs: object, *, context: str) -> tuple[str, ...]:
+    """Validate a ``version_source`` mapping's ``locations`` (§12.3, R5-10/R2-1-VS).
+
+    Accept only a mapping carrying a non-empty list of non-blank path strings — the same rule for
+    a profile-declared value and a consumer override, so neither can silently disable the
+    version-source (empty list / `{}`) or feed a bogus path (non-string/blank entry) into version
+    tooling. (`bool` is an int subclass but not a str, so it is correctly rejected.)
+    """
+    if not isinstance(vs, dict):
+        raise CompositionError(f"{context} must be a mapping with a 'locations' list (§12.3)")
+    locations = vs.get("locations")
+    if (
+        not isinstance(locations, list)
+        or not locations
+        or any(not isinstance(p, str) or not p.strip() for p in locations)
+    ):
+        raise CompositionError(
+            f"{context} 'locations' must be a non-empty list of non-blank path strings (§12.3) — "
+            f"e.g. version_source: {{locations: ['path/to/your/version-file']}}"
+        )
+    return tuple(locations)
+
+
 def _settings_override_lists(override: dict[str, Any], _prefix: str = "") -> list[str]:
     """Dotted paths of any list-valued key in a settings override (§4.2 bare-list guard).
 
@@ -321,8 +344,17 @@ def resolve_profile(
             f"every Aviato-managed repository (§2.13); they cannot be removed via profile or override"
         )
     variables = tuple(_variable_spec(item) for item in doc.get("variables", []))
+    # R5-10/R2-1-VS: `locations` (empty, or with a non-string/blank entry) parses but silently
+    # disables the version-source (or feeds a bogus path) downstream in version tooling (§12.1).
+    # Validate the SAME way for the profile-declared value AND the consumer override — fail closed
+    # so the operator fixes it rather than getting a no-op bump. (`bool` is an int subclass but not
+    # a str, so it is correctly rejected.)
     vs_doc = doc.get("version_source")
-    version_source = VersionSourceModule(locations=tuple(vs_doc.get("locations", ()))) if vs_doc is not None else None
+    version_source = (
+        VersionSourceModule(locations=_validated_locations(vs_doc, context=f"profile {name!r} version_source"))
+        if vs_doc is not None
+        else None
+    )
     # CX#2/§12.3: a consumer may OVERRIDE version_source.locations in its declaration — the
     # documented path when a profile's day-zero placeholder locations do not match the project's
     # actual layout. `locations` is config data (WHERE the version is written), not a composed
@@ -331,24 +363,11 @@ def resolve_profile(
     # language/target identifier appears here — the example path is generic — to keep core agnostic.)
     vs_override = overrides.get("version_source")
     if vs_override is not None:
-        if not isinstance(vs_override, dict) or not isinstance(vs_override.get("locations"), list):
-            raise CompositionError(
-                "version_source override must be a mapping with a 'locations' list (§12.3) — "
-                "e.g. version_source: {locations: ['path/to/your/version-file']}"
-            )
         if version_source is None:
             raise CompositionError(f"profile {name!r} declares no version_source, so it cannot be overridden (§12.3)")
-        # R5-10: a `locations` list that is empty, or carries a non-string / blank entry, parses but
-        # silently disables the version-source (or feeds a bogus path) downstream in version tooling
-        # (§12.1). Reject it here, fail-closed, so the operator fixes the override rather than getting
-        # a no-op bump. (`bool` is an int subclass but not a str, so it is correctly rejected.)
-        locations = vs_override["locations"]
-        if not locations or any(not isinstance(loc, str) or not loc.strip() for loc in locations):
-            raise CompositionError(
-                "version_source override 'locations' must be a non-empty list of non-blank path "
-                "strings (§12.3) — e.g. version_source: {locations: ['path/to/your/version-file']}"
-            )
-        version_source = VersionSourceModule(locations=tuple(locations))
+        version_source = VersionSourceModule(
+            locations=_validated_locations(vs_override, context="version_source override")
+        )
     toolchain = dict(doc.get("toolchain", {}))
 
     # Resolve each pipeline reference to its typed module (privileges/inputs/
@@ -362,7 +381,17 @@ def resolve_profile(
     # truth, so a profile cannot require a check it never runs (or omit one it does).
     status_checks = sorted({m.status_check for m in pipeline_modules if m.status_check})
     if status_checks:
-        branch = dict(settings.get("default_branch", {}))
+        # R2-3-1: a settings override may have replaced `default_branch` with a SCALAR (e.g.
+        # {settings: {default_branch: "develop"}}) — it passes the bare-list/unknown-key/floor guards
+        # but `dict(<scalar>)` would raise a raw ValueError here that escapes the fleet-scan guard.
+        # Fail loud with a CompositionError instead (mirrors the other non-dict guards).
+        default_branch_settings = settings.get("default_branch", {})
+        if not isinstance(default_branch_settings, dict):
+            raise CompositionError(
+                f"profile {name!r}: settings 'default_branch' must be a mapping, got "
+                f"{type(default_branch_settings).__name__} (§4.2/§5.1) — a scalar override is invalid"
+            )
+        branch = dict(default_branch_settings)
         existing = list(branch.get("required_status_checks", ()))
         branch["required_status_checks"] = sorted(set(existing) | set(status_checks))
         settings = {**settings, "default_branch": branch}

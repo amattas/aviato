@@ -38,6 +38,9 @@ aviato repin /path/to/consumer X.Y.Z [--write]  # move the Library version pin (
 aviato offboard /path/to/consumer [--write --delete-files | --open-pr]  # remove from Aviato mgmt; --open-pr opens a reviewable removal proposal (§5.13)
 aviato next-version --current 1.2.3 --commit "feat: x"  # SemVer from Conventional Commits (§5.9)
 aviato bump-version 1.3.0 /path/to/consumer  # write version into version-source locations (§3.3)
+aviato provision OWNER/REPO --profile python-library [--var k=v --public]  # create + stage-protect + scaffold a NEW repo (§5.2/§2.11)
+aviato is-highest 1.2.3 1.0.0 1.2.3          # exit 0 iff arg1 is the highest release among the rest (§8.14 alias gate)
+aviato lint-actions [PATH]                    # report unpinned third-party actions / shell-fetched tools (§11.3)
 aviato validate                              # validate policy infra + agnosticism + digest pins + template parity + inline monotonic-alias parity
 ```
 
@@ -60,10 +63,11 @@ those scaffold bodies (run `python3 scripts/regen-templates.py` after editing a 
 `REQUIREMENTS.md` mandates a composition of plug-in modules around an **agnostic
 core** (§2.1). The core lives in `aviato/core/` and must contain **no** language-
 or deployment-specific logic. Day-zero specifics (Python/Node/Swift, PyPI/GHCR/
-Pages/Apple) live as **data** in `profiles/`, `bundles/{workflows,scaffold,settings}/`,
-and `templates/scaffold/` — the §5.10 module-source tree — loaded by
-`aviato/core/registry.py` and resolved by `aviato/core/composition.py` into a
-`ResolvedSet`.
+Pages/Apple) live as **data** under `aviato/library/` — the §5.10 module-source tree:
+per-profile manifests at `aviato/library/<profile>.yaml`, `aviato/library/bundles/{workflows,scaffold,settings}/`,
+and the scaffold template bodies at `aviato/library/scaffold/` — loaded by
+`aviato/core/registry.py` (via `paths.MODULE_SOURCE_ROOT`) and resolved by
+`aviato/core/composition.py` into a `ResolvedSet`.
 
 **The agnosticism is falsifiable and enforced (§9b).** `aviato/core/selfcheck.py`
 fails if any `aviato/core/*.py` (a) imports `aviato.plugins`, or (b) contains a
@@ -130,6 +134,6 @@ All language CI workflows (`reusable-python-ci`, `reusable-node-ci`, `reusable-s
 ## Conventions
 
 - **Terminology:** use "default branch", not "main" (main is only an example). Rulesets target `~DEFAULT_BRANCH`; report fields use names like `default_branch_requires_pr`.
-- **Release publishing is tag-only.** Legacy `release/*` / `release/latest` branches are migration artifacts and are rejected by validation — do not add branch-based release support.
+- **Release publishing is tag-only.** Branch-based release *publishing* (legacy `release/*` / `release/latest` publish branches) is a migration artifact, rejected by validation — do not add branch-based release support. (Distinct from `reusable-release.yml`'s short-lived `release/<version>` PR *source* branch, which is not publishing and is fine.)
 - Ruleset JSON files stay readable templates; policy values are injected, not hardcoded.
 - `catalog.md` and `repos-*.txt` are operator working artifacts, not committed library state.

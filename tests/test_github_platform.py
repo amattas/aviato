@@ -474,6 +474,39 @@ def test_map_branch_settings_unions_classic_and_ruleset_checks() -> None:
     assert mapped["required_status_checks"] == ["ci / Python CI", "common-lint / Common lint"]
 
 
+def test_map_branch_settings_tolerates_present_but_null_payload() -> None:
+    # R2-4-1/R2-5-F3: GitHub serializes a PRESENT-but-null `checks`/`parameters`/
+    # `required_status_checks`. The read is contracted to fail CLOSED, never crash — a `.get(k, [])`
+    # default only applies when ABSENT, so a present null must be normalized, not iterated as None.
+    protection = {
+        "required_status_checks": {"contexts": None, "checks": None},
+        "required_pull_request_reviews": None,
+        "allow_force_pushes": None,
+        "allow_deletions": None,
+    }
+    rules = [
+        {"type": "pull_request", "parameters": None},
+        {"type": "required_status_checks", "parameters": {"required_status_checks": None}},
+    ]
+    mapped = map_branch_settings(rules, protection)  # must not raise
+    assert mapped["required_status_checks"] == []
+
+
+def test_apply_settings_tolerates_present_but_null_status_check_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-4-2: the apply fail-closed guards read live `checks` (present-but-null); that must not crash
+    # them with TypeError before the PUT. No modeled ruleset rule here, so the classic-PUT path runs.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(
+        github,
+        "classic_branch_protection",
+        lambda repo, branch: {"required_status_checks": {"strict": True, "checks": None}},
+    )
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(github, "run", lambda cmd, **__: subprocess.CompletedProcess(cmd, 0, "", ""))
+    # Must not raise on the null payload; returns the (empty) skipped-toggle list.
+    assert GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True}) == []
+
+
 def test_to_branch_protection_payload_sets_required_checks() -> None:
     payload = to_branch_protection_payload({"required_status_checks": ["security / Security baseline heartbeat"]})
     assert payload["required_status_checks"]["contexts"] == ["security / Security baseline heartbeat"]
@@ -626,7 +659,7 @@ def test_probe_health_heartbeat_true_only_for_current_head(monkeypatch: pytest.M
             has_issues=True, head_sha="abc", artifacts=[{"expired": False, "workflow_run": {"head_sha": "abc"}}]
         ),
     )
-    issue_channel, heartbeat = GitHubPlatform().probe_health("o/r")
+    issue_channel, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
     assert issue_channel is True
     assert heartbeat is True
 
@@ -641,13 +674,13 @@ def test_probe_health_heartbeat_false_when_stale_for_old_head(monkeypatch: pytes
             has_issues=True, head_sha="newsha", artifacts=[{"expired": False, "workflow_run": {"head_sha": "oldsha"}}]
         ),
     )
-    _, heartbeat = GitHubPlatform().probe_health("o/r")
+    _, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
     assert heartbeat is False
 
 
 def test_probe_health_heartbeat_false_when_no_artifact_or_expired(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "gh_json_optional", _probe_optional(has_issues=False, head_sha="abc", artifacts=[]))
-    issue_channel, heartbeat = GitHubPlatform().probe_health("o/r")
+    issue_channel, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
     assert issue_channel is False
     assert heartbeat is False
     monkeypatch.setattr(
@@ -657,7 +690,7 @@ def test_probe_health_heartbeat_false_when_no_artifact_or_expired(monkeypatch: p
             has_issues=True, head_sha="abc", artifacts=[{"expired": True, "workflow_run": {"head_sha": "abc"}}]
         ),
     )
-    _, heartbeat = GitHubPlatform().probe_health("o/r")
+    _, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
     assert heartbeat is False  # expired heartbeat for HEAD → broken
 
 

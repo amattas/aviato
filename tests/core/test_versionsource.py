@@ -163,3 +163,59 @@ def test_bump_files_rewrites_existing_locations(tmp_path: Path) -> None:
     changed = bump_files(tmp_path, ["pyproject.toml", "missing.toml"], "1.1.0")
     assert changed == ["pyproject.toml"]
     assert 'version = "1.1.0"' in (tmp_path / "pyproject.toml").read_text()
+
+
+def test_bump_files_non_utf8_fails_closed(tmp_path: Path) -> None:
+    # R4-2-BUMP/R4-5-C: a non-UTF-8 version-source file must FAIL CLOSED with a clean AviatoError —
+    # not a raw UnicodeDecodeError traceback, and not a silent skip that lets the caller report a
+    # false "nothing to bump" success when the version was never written.
+    (tmp_path / "pyproject.toml").write_bytes(b"\xff\xfe[project]\x00 version")
+    with pytest.raises(AviatoError, match="not valid UTF-8"):
+        bump_files(tmp_path, ["pyproject.toml"], "2.0.0", None)
+
+
+def test_bump_files_dedupes_duplicate_locations(tmp_path: Path) -> None:
+    # R6-3-DUP: a profile that lists the same location twice must not double-write or double-report.
+    (tmp_path / "VERSION").write_text("1.2.3")
+    changed = bump_files(tmp_path, ["VERSION", "VERSION"], "2.0.0", None)
+    assert changed == ["VERSION"]  # deduped: not ["VERSION","VERSION"]
+    assert (tmp_path / "VERSION").read_text().strip() == "2.0.0"
+
+
+def test_bump_text_pbxproj_idempotent_when_build_number_is_none() -> None:
+    # R6-4-SWIFTBUILD: the release TAG-phase re-runs `aviato bump-version NEXT .` WITHOUT
+    # --build-number to PROVE the manifest is at NEXT. Idempotency requires that calling bump_text
+    # with build_number=None on an already-bumped .pbxproj does NOT rewrite the existing build
+    # number (preserving the propose-time value). Pins the otherwise-undocumented short-circuit
+    # that the workflow's `git diff --quiet` assertion relies on.
+    pbx = "MARKETING_VERSION = 1.0.0;\nCURRENT_PROJECT_VERSION = 42;\n"
+    bumped_with = bump_text("App.xcodeproj/project.pbxproj", pbx, "1.0.0", "42")
+    bumped_none = bump_text("App.xcodeproj/project.pbxproj", pbx, "1.0.0", None)
+    # Both must equal the input (already at MARKETING 1.0.0 / build 42); the None call must not
+    # blank or rewrite the existing CURRENT_PROJECT_VERSION.
+    assert bumped_with == pbx
+    assert bumped_none == pbx
+    assert "CURRENT_PROJECT_VERSION = 42;" in bumped_none
+
+
+def test_bump_text_silently_ignores_build_number_on_non_app_formats() -> None:
+    # R7-4-BUILDNUM-TEST/§13.4.6: for non-app version-source formats (pyproject.toml, package.json,
+    # plain VERSION, anything unsupported), a supplied build_number is best-effort — silently
+    # ignored. The agnostic release workflow passes --build-number uniformly without knowing the
+    # version-source format, so the no-op is intentional. A future fail-loud regression on these
+    # formats would silently break the release flow; lock the contract.
+    import json as _json
+
+    for name, before in (
+        ("pyproject.toml", '[project]\nname = "x"\nversion = "1.2.3"\n'),
+        ("package.json", '{"name":"x","version":"0.1.0"}\n'),
+        ("VERSION", "0.1.0\n"),
+        ("build.gradle", "version 1.0\n"),  # unsupported format → returns text unchanged
+    ):
+        with_buildnum = bump_text(name, before, "2.0.0", build_number="42")
+        without = bump_text(name, before, "2.0.0", build_number=None)
+        assert with_buildnum == without, f"{name}: build_number must be silently ignored"
+    # And the package.json sanity check (the format does bump the version, just ignores build_number).
+    assert (
+        _json.loads(bump_text("package.json", '{"version":"0.1.0"}', "0.2.0", build_number="42"))["version"] == "0.2.0"
+    )

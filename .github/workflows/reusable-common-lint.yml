@@ -149,10 +149,19 @@ jobs:
           done < <(grep -rhE '\bdocker[[:space:]]+(run|pull)\b' .github/workflows || true)
           # A network download piped straight into a shell/extractor has no checksum gate. The
           # `[^|;]*` (no semicolon) keeps the fetch and the pipe in ONE command, so an unrelated
-          # later `; … | bash` on the same line is not a false positive.
-          if grep -rqE '\b(curl|wget)\b[^|;]*\|[^|]*\b(sh|bash|tar)\b' .github/workflows; then
+          # later `; … | bash` on the same line is not a false positive. R7-4-CILINT-DRIFT /
+          # R8-9-PARITY-TEST: the interpreter alternation MIRRORS the Python detector's
+          # aviato/plugins/actionpins.py:_INTERPRETERS so the two enforcement layers (this in-CI
+          # shell gate + `aviato validate`'s Python detector) agree on coverage —
+          # tests/test_workflow_guards.py::test_cilint_interps_mirror_actionpins parses this
+          # exact `interps=` line and asserts parity with `_INTERPRETERS` to prevent drift.
+          # The grep can't represent multi-token forms (`. /dev/stdin`, `> (bash)`,
+          # `$(echo bash)`, line-continuation folds, builtins like `source`/`.`/`eval`); those
+          # are covered by the Python detector layer only.
+          interps='sh|bash|dash|zsh|ksh|fish|csh|tcsh|mksh|tar|python[0-9.]*|node|nodejs|ruby|perl|pwsh|php|lua|tclsh|julia|r|rscript|osascript|awk|gawk|mawk|sed|m4|groovy|swift|jjs'
+          if grep -rqE "\b(curl|wget)\b[^|;]*\|[^|]*\b(${interps})\b" .github/workflows; then
             echo "::error::Fetch-and-execute without a checksum (§11.3): download to a file, verify with sha256sum -c, then run."
-            grep -rnE '\b(curl|wget)\b[^|;]*\|[^|]*\b(sh|bash|tar)\b' .github/workflows
+            grep -rnE "\b(curl|wget)\b[^|;]*\|[^|]*\b(${interps})\b" .github/workflows
             violations=$((violations + 1))
           fi
           if [ "${violations}" -gt 0 ]; then

@@ -50,6 +50,11 @@ class PipelineModule:
     # survive every composition — resolution refuses to remove it. Data-driven so the
     # agnostic core never names which capability is mandatory.
     always_on: bool = False
+    # §17 (R7-3-APPSTORE-ENV): the GitHub-Environments name this pipeline requires (e.g. the
+    # protected `app-store-connect` env). DATA, not core knowledge: the binding probes the
+    # environment's existence + required-reviewers settings; the agnostic core just relays
+    # the per-pipeline string (None = no environment prerequisite for this pipeline).
+    environment: str | None = None
 
 
 @dataclass(frozen=True)

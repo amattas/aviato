@@ -61,9 +61,19 @@ def render_variables(
     # by diagnosis/parity that don't go through variable resolution) it defaults to `main`.
     derived.setdefault("default-branch", "main")
     for rule in derived_rules:
+        # R2-3-3: a malformed rule missing `from`/`name` must fail loud as a CompositionError, not a
+        # raw KeyError that escapes the fleet-scan guard (R1-1). `derived_variables` is Library data.
+        if not isinstance(rule, Mapping) or "from" not in rule or "name" not in rule:
+            raise CompositionError(f"derived_variables rule must declare 'from' and 'name': {rule!r} (§9b)")
         source_value = variables.get(rule["from"])
         if source_value is not None:
-            derived[rule["name"]] = rule.get("cases", {}).get(source_value, rule.get("default"))
+            mapped = rule.get("cases", {}).get(source_value, rule.get("default"))
+            # R2-3-3: only set the derived var when it resolves to a real value. A rule whose source
+            # value isn't in `cases` and declares NO `default` resolves to None; setting it would bake
+            # the literal string "None" into the workflow (a DEFINED key, so strict render's undefined
+            # guard wouldn't fire). Leaving it unset instead surfaces a clear "undefined variable" error.
+            if mapped is not None:
+                derived[rule["name"]] = mapped
     return derived
 
 

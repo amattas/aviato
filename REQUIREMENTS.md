@@ -1177,6 +1177,11 @@ A capability is "done" only when **all** hold:
    **operator-performed** real run on the operator's own account (§13.4.7) — this
    substitutes for criteria 2–3 for that capability only.
 
+### 9b. Core-level Definition of Done (falsifiable agnosticism)
+
+<a id="9b"></a>
+_(Referenced throughout as "§9b" — the core-level, falsifiable agnosticism DoD.)_
+
 **Core-level Definition of Done (falsifiable agnosticism):** beyond per-capability
 DoD, the **core itself** is done only when: (a) the core loads and all core tests
 pass with **zero plug-ins present**; (b) a static check confirms the core has **no
@@ -1460,6 +1465,17 @@ published-artifact security set (§2.13): a **container image vulnerability scan
 (fails the deploy); the SBOM and provenance are attached to the published
 artifact. Runs on the platform token / OIDC — no stored secret. (App Store
 Connect, §13.4, is exempt from image scan; its signing is platform-side.)
+
+**Severity-filtered vs strict gates (scanner capability note).** The "high/critical
+blocks, medium/low reports" policy assumes the scanner exposes per-vuln severity
+inline. The GHCR pipeline uses Trivy, which supports `--severity HIGH,CRITICAL`,
+so it filters as specified. The PyPI pipeline uses `pip-audit` against the OSV/PyPA
+service, which does NOT emit severity in its `--format json` output (each vuln carries
+only `id`/`fix_versions`/`aliases`/`description`). For the PyPI gate the pessimistic
+fail-closed posture is therefore `pip-audit --strict` — any reported finding blocks
+the publish (medium/low are still reported in the run log, just not separately gated).
+A future severity-aware PyPI gate would require switching scanners (osv-scanner) or
+doing a separate OSV/NVD lookup per vuln id.
 
 ---
 
@@ -1800,9 +1816,14 @@ and the **monotonic build number** (distinct from the marketing version, §12.3)
 App Store Connect rejects duplicate/non-increasing build numbers.
 **Where the build number is set and enforced.** The build number is written into the
 version-source (`CURRENT_PROJECT_VERSION`/`CFBundleVersion`) at the **release-proposal**
-step (§5.9): the bump **fails loud** if a build number is supplied but the version-source
-exposes no field to receive it (so a Swift release can never tag with an un-bumped build
-number). The agnostic release process derives the marketing version from SemVer and
+step (§5.9). For a build-number-bearing version-source format (Swift `.pbxproj`/`.plist`),
+the bump **fails loud** if a build number is supplied but no concrete field is found (so a
+Swift release can never tag with an un-bumped build number). For non-app version-source
+formats that have no build-number field by construction (`pyproject.toml`, `package.json`,
+plain `VERSION`), the supplied build number is best-effort: it is **silently ignored** —
+the agnostic release workflow passes `--build-number` uniformly without knowing which
+version-source the profile uses, so the no-op is intentional and not an error.
+The agnostic release process derives the marketing version from SemVer and
 re-proves *that* at the tag step; the build number's value is supplied per-run (the run
 number, strictly increasing) and its **strict-increase invariant is enforced
 authoritatively by App Store Connect at upload** (it rejects duplicate/non-increasing

@@ -158,6 +158,12 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
         # map both to the documented exit 1 instead of letting CommandError fall to main()'s exit 2.
         print(f"GitHub API error: {exc}", file=sys.stderr)
         return 1
+    except ValueError as exc:
+        # R2-4-5: a malformed ruleset manifest/template (missing rule, unknown patch key, empty name)
+        # raises ValueError from render — a library-data error `aviato validate` is meant to catch.
+        # Surface it cleanly here rather than leaking a raw traceback past main() (§2.4).
+        print(f"ruleset render error (run `aviato validate`): {exc}", file=sys.stderr)
+        return 1
 
 
 def cmd_render_rulesets(args: argparse.Namespace) -> int:
@@ -168,7 +174,12 @@ def cmd_render_rulesets(args: argparse.Namespace) -> int:
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    payloads = render_all_rulesets(required_approvals=args.required_approvals, extra_status_checks=extra_checks)
+    try:
+        payloads = render_all_rulesets(required_approvals=args.required_approvals, extra_status_checks=extra_checks)
+    except ValueError as exc:
+        # R2-4-5: malformed ruleset library data → clean error, never a raw traceback (§2.4).
+        print(f"ruleset render error (run `aviato validate`): {exc}", file=sys.stderr)
+        return 1
     print(json.dumps(payloads, indent=2))
     return 0
 
@@ -207,7 +218,15 @@ def _recorded_versions(root: Path, expected: list[ExpectedArtifact]) -> list[str
             continue
         path = root / artifact.output_path
         if path.is_file():
-            info = parse_marker_from_text(path.read_text(encoding="utf-8"))
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                # R3-4-1: a non-UTF-8 file at a managed output path carries no valid marker → no
+                # version constraint. Skip it (matches diagnosis/scaffold, which treat it as
+                # dirty-drift) rather than leak a raw UnicodeDecodeError (a ValueError, outside
+                # main()'s except net) that would abort a sync/drift/fleet-scan with a traceback.
+                continue
+            info = parse_marker_from_text(text)
             if info is not None:
                 versions.append(info.version)
     return versions
@@ -659,7 +678,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     # per-run scan heartbeat. Best-effort — populated only if a repo slug resolves.
     slug = normalize_slug(remote_url(root))
     if slug and not args.no_remote_probe:
-        report.issue_channel_available, report.scan_heartbeat_present = GitHubPlatform().probe_health(slug)
+        # R7-3-APPSTORE-ENV: derive the list of environments to probe from the resolved profile's
+        # pipelines (plug-in DATA, §9b — the binding/core stay agnostic to which capability requires
+        # which env name). Today only app-store-connect declares one; future deploy pipelines that
+        # require a protected environment can add the field without code changes here.
+        environments = tuple(sorted({p.environment for p in resolved.pipeline_modules if p.environment}))
+        (
+            report.issue_channel_available,
+            report.scan_heartbeat_present,
+            report.prerequisites_remote,
+        ) = GitHubPlatform().probe_health(slug, environments=environments, probe_pages=declaration.docs)
 
     print(f"doctor: {declaration.profile} @ {declaration.version} ({root})")
     for output_path, status in sorted(report.statuses.items()):
@@ -676,6 +704,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print(f"- {name}: {'ok' if ok else 'missing'}")
     print(f"issue channel available: {_tri(report.issue_channel_available)}")
     print(f"scan heartbeat present: {_tri(report.scan_heartbeat_present)} (absence reads as broken, §5.14)")
+    if report.prerequisites_remote:
+        # R6-2-§17-PROBE: §17 items the binding probed remotely (security toggles + Pages source).
+        # Absence/unknown reads as broken (§5.14) — operator should enable per §17, then re-run.
+        print("remote prerequisites (§17):")
+        for name, value in sorted(report.prerequisites_remote.items()):
+            print(f"- {name}: {_tri(value)}")
     return 0
 
 
@@ -913,8 +947,9 @@ def cmd_repin(args: argparse.Namespace) -> int:
         variables=declaration.variables,
         overrides=declaration.overrides,
     )
-    dump_declaration(updated, declaration_path)
-    print(f"wrote pin {plan.target_version} to {declaration_path.relative_to(root)}")
+    # R3-4-3: render the new-pin artifacts BEFORE persisting the pin, so a render-time failure aborts
+    # the re-pin without leaving the declaration moved to the new pin but the managed files still at
+    # the old one (a non-transactional state that a re-run would report as `X -> X` and re-fail).
     items = materialize_items(
         registry,
         updated.profile,
@@ -923,6 +958,8 @@ def cmd_repin(args: argparse.Namespace) -> int:
         docs=updated.docs,
         overrides=updated.overrides,
     )
+    dump_declaration(updated, declaration_path)
+    print(f"wrote pin {plan.target_version} to {declaration_path.relative_to(root)}")
     result = scaffold(root, items, profile=updated.profile, version=updated.version)
     for output in result.written:
         print(f"rewrote {output}")
@@ -1091,7 +1128,7 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
 
     desired = _desired_settings(resolved)
     try:
-        GitHubPlatform().apply_settings(slug, desired)
+        skipped = GitHubPlatform().apply_settings(slug, desired)
     except UnmodeledProtectionError as exc:
         # The live protection surface carries something this reconcile cannot safely write
         # (unmodeled classic protection, or ruleset-owned branch protection). Fail closed with
@@ -1102,6 +1139,14 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
         print(f"error applying protection: {exc}", file=sys.stderr)
         return 1
     print(f"applied full protection to {slug} (idempotent, §5.2 complete-protection).")
+    if skipped:
+        # R2-4-3: a requested §17 toggle was surfaced-and-skipped (feature unavailable). Branch
+        # protection landed; do not let the success line imply the security toggle did too.
+        print(
+            f"NOTE: security toggle(s) SKIPPED (unavailable on the repo — enable per §17, then "
+            f"re-run): {sorted(skipped)}",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -1217,6 +1262,14 @@ def cmd_provision(args: argparse.Namespace) -> int:
         )
         return 1
     print(f"applied full protection to {slug}. Provisioned (§5.2).")
+    if outcome.skipped_security:
+        # R2-1-PROV: a requested §17 toggle was surfaced-and-skipped (feature unavailable). Full
+        # branch protection landed, but do not let the success line imply the security toggle did.
+        print(
+            f"NOTE: security toggle(s) SKIPPED (unavailable on the repo — enable per §17, then "
+            f"`aviato complete-protection <local-clone-of-{slug}>`): {sorted(outcome.skipped_security)}",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -1450,7 +1503,13 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
         print("profile declares no version-source locations", file=sys.stderr)
         return 2
     present = [loc for loc in locations if (root / loc).is_file()]
-    changed = bump_files(root, locations, args.version, args.build_number)
+    try:
+        changed = bump_files(root, locations, args.version, args.build_number)
+    except AviatoError as exc:
+        # R4-2-BUMP: a non-UTF-8 version-source fails closed (clean error + exit 1), never a
+        # misleading "nothing to bump" success nor a raw traceback.
+        print(str(exc), file=sys.stderr)
+        return 1
     for location in changed:
         print(f"bumped {location} -> {args.version}")
     if not present:

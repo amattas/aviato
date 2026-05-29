@@ -163,6 +163,53 @@ def repo_security_settings(slug: str) -> dict[str, Any]:
     return sa if isinstance(sa, dict) else {}
 
 
+def protected_environment_has_reviewers(slug: str, environment: str) -> bool | None:
+    """True iff a GitHub Environment exists for ``slug`` with at least one required reviewer (§17).
+
+    R7-3-APPSTORE-ENV: §17 mandates the App Store deploy (and any similarly-privileged release) run
+    in a PROTECTED environment with a required reviewer. Returns None on an ambiguous read (404,
+    non-dict, missing fields) so the doctor surfaces "unknown" rather than mis-reporting (§5.14).
+    A clean determinate True/False is only emitted when the API returns a parseable environment with
+    a countable reviewers list.
+    """
+    env = gh_json_optional(f"repos/{slug}/environments/{environment}", default=None)
+    if not isinstance(env, dict):
+        return None  # 404 (ambiguous: env absent vs no-perms) or non-dict — unknown per §5.14
+    rules = env.get("protection_rules")
+    if not isinstance(rules, list):
+        return None  # schema drift — unknown, not a determinate "no reviewers"
+    for rule in rules:
+        if not isinstance(rule, dict) or rule.get("type") != "required_reviewers":
+            continue
+        reviewers = rule.get("reviewers")
+        if isinstance(reviewers, list) and len(reviewers) > 0:
+            return True
+    return False  # environment exists + parseable rules but no required-reviewer rule (real "no")
+
+
+def pages_source_is_actions(slug: str) -> bool | None:
+    """True iff the repo has Pages enabled with the GitHub Actions source (§13.3).
+
+    R6-2-§17-PROBE: §17 lists this as remote-probeable. Returns None on an ambiguous read so
+    `doctor` can surface "unable to determine" rather than mis-report "absent" (§5.14).
+
+    R7-3-PAGES-§5.14: a 404 from ``repos/{slug}/pages`` is NOT a determinate "Pages off" — the
+    GitHub API conflates "Pages not configured" with "token lacks Pages-read permission" and "repo
+    not visible to the token", so the only honest mapping is "unknown" (None). Returning False
+    would violate §5.14's "absence/unreadable reads as broken, not clean" — a private repo whose
+    operator forgot to grant Pages-read would read clean-disabled despite actually being enabled.
+    R7-3-PAGES-SCHEMA: same posture for a present dict that lacks the ``build_type`` field (schema
+    drift / older API version) — unknown, not no.
+    """
+    pages = gh_json_optional(f"repos/{slug}/pages", default=None)
+    if not isinstance(pages, dict):
+        return None  # 404 (ambiguous: off vs no-perms vs invisible) or non-dict response
+    build_type = pages.get("build_type")
+    if build_type is None:
+        return None  # field absent — unknown, never a determinate "no"
+    return build_type == "workflow"
+
+
 def active_branch_rules(slug: str, branch: str) -> list[dict[str, Any]]:
     # Fail closed on an ambiguous read (§2.7): only a genuine 404 is empty.
     response = gh_json_optional(f"repos/{slug}/rules/branches/{_branch_seg(branch)}", default=[])

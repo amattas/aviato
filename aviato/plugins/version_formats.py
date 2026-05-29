@@ -169,16 +169,34 @@ def bump_files(root: Path, locations: list[str], new_version: str, build_number:
 
     Returns the list of files actually rewritten.
     """
-    changed: list[str] = []
+    # R5-2-PARTIAL: TWO passes. First read + render EVERY present location (raising on any
+    # non-UTF-8/unparseable manifest BEFORE touching disk); only then write the changed ones. A
+    # single pass that read-and-wrote each location in turn could leave an EARLIER file already
+    # rewritten when a LATER location raised — a partial bump (§2.5 "never half-apply"). The
+    # per-file write is still atomic (temp + swap), so the only remaining non-atomicity is a crash
+    # BETWEEN two writes, which the idempotent re-run resolves.
+    # R6-3-DUP: dedupe locations (preserving first occurrence) so a profile that lists the same
+    # version-source path twice doesn't double-write or double-report it in `changed`.
+    seen: set[str] = set()
+    locations = [loc for loc in locations if not (loc in seen or seen.add(loc))]
+    pending: list[tuple[Path, str, str]] = []
     for location in locations:
         path = Path(root) / location
         if not path.is_file():
             continue
-        text = path.read_text(encoding="utf-8")
-        bumped = bump_text(location, text, new_version, build_number)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            # R3-4-2/R4-2-BUMP: a non-UTF-8 version-source is not a rewritable text manifest. FAIL
+            # CLOSED with a clean AviatoError (caught by the CLI) — never a raw UnicodeDecodeError
+            # traceback, and never a silent skip that lets the caller report a false "nothing to
+            # bump" success when the version was in fact never written (§3.3/§5.9).
+            raise AviatoError(f"version-source file is not valid UTF-8, cannot bump: {location}") from exc
+        bumped = bump_text(location, text, new_version, build_number)  # may raise AviatoError (bad manifest)
         if bumped != text:
-            # Atomic write (temp + swap): a crash mid-bump must never leave a half-written
-            # version manifest (§2.5/§5.3), consistent with the scaffolder.
-            atomic_write(path, bumped)
-            changed.append(location)
+            pending.append((path, bumped, location))
+    changed: list[str] = []
+    for path, bumped, location in pending:
+        atomic_write(path, bumped)
+        changed.append(location)
     return changed

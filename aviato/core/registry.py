@@ -33,6 +33,28 @@ def _load_doc(path: Path) -> dict[str, Any]:
     return data
 
 
+def _load_optional_manifest(path: Path) -> dict[str, Any]:
+    """Read a manifest that may legitimately be absent, guarded like :func:`_load_doc` (R2-3-2).
+
+    Absent → ``{}``. A malformed/unreadable manifest raises ``CompositionError`` (an AviatoError),
+    never a raw ``yaml.YAMLError``/``OSError`` that would escape callers (e.g. ``scan_fleet``) which
+    guard only AviatoError — the documented R1-1 invariant, previously not applied to the pipeline
+    manifest loaders.
+    """
+    if not path.is_file():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+    except yaml.YAMLError as exc:
+        raise CompositionError(f"manifest is not valid YAML: {path}: {exc}") from exc
+    except OSError as exc:
+        raise CompositionError(f"could not read manifest: {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise CompositionError(f"manifest is not a mapping: {path}")
+    return data
+
+
 class Registry:
     """Loads profile/bundle/template module definitions from a source root.
 
@@ -107,11 +129,7 @@ class Registry:
         declared — composition tolerates this so test/empty registries still work;
         day-zero pipelines are all declared.
         """
-        path = self.root / "pipelines.yaml"
-        if not path.is_file():
-            return None
-        with path.open("r", encoding="utf-8") as handle:
-            manifest = yaml.safe_load(handle) or {}
+        manifest = _load_optional_manifest(self.root / "pipelines.yaml")
         doc = manifest.get(name)
         if not isinstance(doc, dict):
             return None
@@ -123,15 +141,12 @@ class Registry:
             runner=doc.get("runner"),
             status_check=doc.get("status_check"),
             always_on=bool(doc.get("always_on", False)),
+            environment=doc.get("environment"),
         )
 
     def always_on_pipelines(self) -> tuple[str, ...]:
         """Pipelines the data flags ``always_on`` — they must survive every composition (§2.13)."""
-        path = self.root / "pipelines.yaml"
-        if not path.is_file():
-            return ()
-        with path.open("r", encoding="utf-8") as handle:
-            manifest = yaml.safe_load(handle) or {}
+        manifest = _load_optional_manifest(self.root / "pipelines.yaml")
         return tuple(name for name, doc in manifest.items() if isinstance(doc, dict) and doc.get("always_on"))
 
     def declared_pipelines(self) -> set[str] | None:
@@ -144,10 +159,8 @@ class Registry:
         """
         path = self.root / "pipelines.yaml"
         if not path.is_file():
-            return None
-        with path.open("r", encoding="utf-8") as handle:
-            manifest = yaml.safe_load(handle) or {}
-        return {name for name, doc in manifest.items() if isinstance(doc, dict)}
+            return None  # absent → None (distinct from an empty manifest); see docstring
+        return {name for name, doc in _load_optional_manifest(path).items() if isinstance(doc, dict)}
 
     def template_module(self, name: str) -> TemplateModule:
         doc = _load_doc(self.root / "scaffold" / f"{name}.yaml")

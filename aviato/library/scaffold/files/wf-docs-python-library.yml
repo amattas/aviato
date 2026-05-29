@@ -49,7 +49,11 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          tag="$(git tag --points-at "${HEAD_SHA}" --list '[0-9]*.[0-9]*.[0-9]*' | head -n1)"
+          # R7-4-DOCSTAGFILTER: the `--list '[0-9]*.[0-9]*.[0-9]*'` is a shell GLOB, broader than the
+          # policy tag pattern (`1foo.2bar.3baz` matches). Post-filter with grep -E so docs deploy
+          # only triggers on a real policy-conformant release tag.
+          tag="$(git tag --points-at "${HEAD_SHA}" --list '[0-9]*.[0-9]*.[0-9]*' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$' | head -n1)"
           if [ -n "${tag}" ]; then
             echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
             echo "release=true" >> "${GITHUB_OUTPUT}"

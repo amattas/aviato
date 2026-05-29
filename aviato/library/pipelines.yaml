@@ -44,6 +44,10 @@ docs-pages:
   runner: linux
 app-store-connect:
   privileges: ["contents: read"]
+  # R7-3-APPSTORE-ENV: §17 declares the deploy MUST run in a protected GitHub Environment with at
+  # least one required reviewer. The environment name is plug-in DATA (not core knowledge); doctor
+  # reads it from the resolved pipeline modules to probe existence + reviewer count.
+  environment: app-store-connect
   secrets:
     - APP_STORE_CONNECT_ISSUER_ID
     - APP_STORE_CONNECT_KEY_ID

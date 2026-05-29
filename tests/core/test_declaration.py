@@ -153,3 +153,17 @@ def test_legacy_v_prefix_is_tolerated_on_read_but_never_emitted(tmp_path: Path) 
     assert yaml.safe_load(declaration_to_yaml(Declaration(profile="p", version="v1.2.3")))["version"] == "1.2.3"
     # A non-pin string (no digit after v) is left untouched — only the legacy pin form is stripped.
     assert yaml.safe_load(declaration_to_yaml(Declaration(profile="p", version="vegetable")))["version"] == "vegetable"
+
+
+def test_non_utf8_declaration_raises_declaration_error_not_raw_unicode(tmp_path) -> None:
+    # R5-4-DECL: a non-UTF-8 aviato.yaml must map to DeclarationError (an AviatoError), not leak a
+    # raw UnicodeDecodeError past main()'s net / abort a fleet scan.
+    import pytest
+
+    from aviato.core.declaration import load_declaration
+    from aviato.core.errors import DeclarationError
+
+    f = tmp_path / "aviato.yaml"
+    f.write_bytes(b"profile: python-library\nversion: \xff\xfe v1\n")
+    with pytest.raises(DeclarationError, match="not valid UTF-8"):
+        load_declaration(f)
