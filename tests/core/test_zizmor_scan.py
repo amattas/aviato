@@ -10,15 +10,18 @@ from aviato.plugins import zizmor_scan
 def _fake_run(stdout: str, returncode: int = 0):
     def _run(command, *, cwd=None, check=True):
         return subprocess.CompletedProcess(command, returncode, stdout, "")
+
     return _run
 
 
 def test_filters_to_gated_audits_only(tmp_path, monkeypatch):
     (tmp_path / "w.yml").write_text("on: push\n", encoding="utf-8")
-    findings = json.dumps([
-        {"ident": "unpinned-uses", "locations": [{"symbolic": {"key": {"Local": {"given_path": "w.yml"}}}}]},
-        {"ident": "template-injection", "locations": [{"symbolic": {"key": {"Local": {"given_path": "w.yml"}}}}]},
-    ])
+    findings = json.dumps(
+        [
+            {"ident": "unpinned-uses", "locations": [{"symbolic": {"key": {"Local": {"given_path": "w.yml"}}}}]},
+            {"ident": "template-injection", "locations": [{"symbolic": {"key": {"Local": {"given_path": "w.yml"}}}}]},
+        ]
+    )
     monkeypatch.setattr(zizmor_scan, "_zizmor_available", lambda: True)
     monkeypatch.setattr(zizmor_scan, "run", _fake_run(findings))
     out = zizmor_scan.zizmor_uses_image_violations(tmp_path)

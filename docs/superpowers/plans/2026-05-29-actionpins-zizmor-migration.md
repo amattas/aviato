@@ -60,7 +60,7 @@ In `pyproject.toml`, change the `dependencies` list to:
 dependencies = [
   "PyYAML>=6.0",
   # §11.3: zizmor performs uses:/image pin enforcement; pinned EXACTLY (Dependabot bumps it).
-  "zizmor==1.20.0",
+  "zizmor==1.25.2",
 ]
 ```
 
@@ -133,8 +133,8 @@ def _fake_run(stdout: str, returncode: int = 0):
 def test_filters_to_gated_audits_only(tmp_path, monkeypatch):
     (tmp_path / "w.yml").write_text("on: push\n", encoding="utf-8")
     findings = json.dumps([
-        {"ident": "unpinned-uses", "locations": [{"symbolic": {"key": {"filename": "w.yml"}}}]},
-        {"ident": "template-injection", "locations": [{"symbolic": {"key": {"filename": "w.yml"}}}]},
+        {"ident": "unpinned-uses", "locations": [{"symbolic": {"key": {"Local": {"given_path": "w.yml"}}}}]},
+        {"ident": "template-injection", "locations": [{"symbolic": {"key": {"Local": {"given_path": "w.yml"}}}}]},
     ])
     monkeypatch.setattr(zizmor_scan, "_zizmor_available", lambda: True)
     monkeypatch.setattr(zizmor_scan, "run", _fake_run(findings))
@@ -210,11 +210,18 @@ def _zizmor_available() -> bool:
 
 
 def _finding_location(finding: dict) -> str:
-    """Best-effort 'file' string from a zizmor JSON finding (schema-tolerant)."""
+    """Best-effort 'file' string from a zizmor JSON finding (schema-tolerant).
+
+    Real shape verified against zizmor 1.25.2:
+    locations[i]["symbolic"]["key"]["Local"]["given_path"].
+    """
     for loc in finding.get("locations") or []:
-        if isinstance(loc, dict):
-            key = (loc.get("symbolic") or {}).get("key") or {}
-            name = key.get("filename") or loc.get("path")
+        if not isinstance(loc, dict):
+            continue
+        key = (loc.get("symbolic") or {}).get("key")
+        local = key.get("Local") if isinstance(key, dict) else None
+        if isinstance(local, dict):
+            name = local.get("given_path") or local.get("prefix")
             if name:
                 return str(name)
     return finding.get("ident", "?")
@@ -866,4 +873,4 @@ git commit -m "chore: green the strict gate after zizmor migration"
 ## Self-review notes
 - **Spec coverage:** §3.1 (Task 4/5/6), §3.2 zizmor+config (Task 1/2), §3.3 scaffold (Task 4), §3.4 fail-closed (Task 3), §3.5 pip kept (Task 4 tests), §3.6 CI (Task 5), §3.7 validate (Task 6/7), §5 docs (Task 8), §6 tests (Tasks 2-6), §9 acceptance (Task 9). Covered.
 - **Type consistency:** `zizmor_uses_image_violations(Path) -> list[str]`, `fetch_execute_violations(str) -> list[str]`, `unpinned_tool_invocations(str) -> list[str]`, `action_pin_violations(Path) -> list[str]`, `ZizmorUnavailable` — names used identically across Tasks 2/3/4/6.
-- **Open risk carried into execution:** zizmor JSON field names for `_finding_location` (Task 2 Step 6 verifies against real output and adjusts) and the exact latest zizmor version (Task 1 Step 3 pins `1.20.0`; bump to current stable).
+- **Open risk carried into execution:** zizmor JSON field names for `_finding_location` (Task 2 Step 6 verifies against real output and adjusts). Version pin resolved: PyPI latest stable is `1.25.2` (verified reachable), pinned in Task 1.

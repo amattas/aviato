@@ -60,9 +60,9 @@ def _fold_logical_lines(text: str) -> list[str]:
     handles the common multi-line pipeline forms a physical-line scan misses (cycle-9 R9-2):
     a pipe at end-of-line (`curl … |⏎ bash`) and a pipe at start-of-next-line (`curl …⏎ | bash`).
     """
-    text = re.sub(r"\\\n[ \t]*", " ", text)        # shell line-continuation
+    text = re.sub(r"\\\n[ \t]*", " ", text)  # shell line-continuation
     text = re.sub(r"\|[ \t]*\n[ \t]*", "| ", text)  # pipe at EOL → join with next
-    text = re.sub(r"\n[ \t]*\|", " |", text)        # pipe leads next line → join with prev
+    text = re.sub(r"\n[ \t]*\|", " |", text)  # pipe leads next line → join with prev
     return text.splitlines()
 
 
@@ -205,8 +205,7 @@ def unpinned_tool_invocations(text: str) -> list[str]:
     (see REQUIREMENTS §11.3 scope note).
     """
     no_comments = "\n".join(
-        line for line in "\n".join(_fold_logical_lines(text)).splitlines()
-        if not line.lstrip().startswith("#")
+        line for line in "\n".join(_fold_logical_lines(text)).splitlines() if not line.lstrip().startswith("#")
     )
     violations: list[str] = list(fetch_execute_violations(no_comments))
     for match in _PIP_INSTALL_RE.finditer(no_comments):

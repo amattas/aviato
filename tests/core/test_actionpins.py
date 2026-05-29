@@ -10,10 +10,9 @@ _SHA = "a" * 40
 
 # --- uses: SHA check (kept for scaffold bodies; placeholder-aware in action_pin_violations) ---
 
+
 def test_flags_third_party_mutable_tag():
-    assert unpinned_third_party_uses("      - uses: docker/build-push-action@v5\n") == [
-        "docker/build-push-action@v5"
-    ]
+    assert unpinned_third_party_uses("      - uses: docker/build-push-action@v5\n") == ["docker/build-push-action@v5"]
 
 
 def test_third_party_pinned_to_sha_is_ok():
@@ -22,9 +21,7 @@ def test_third_party_pinned_to_sha_is_ok():
 
 def test_first_party_and_library_self_ref_exempt():
     assert unpinned_third_party_uses("      - uses: actions/checkout@v4\n") == []
-    assert unpinned_third_party_uses(
-        "      - uses: amattas/aviato/.github/workflows/x.yml@v1\n"
-    ) == []
+    assert unpinned_third_party_uses("      - uses: amattas/aviato/.github/workflows/x.yml@v1\n") == []
 
 
 def test_uses_with_space_before_colon_still_checked():
@@ -32,6 +29,7 @@ def test_uses_with_space_before_colon_still_checked():
 
 
 # --- pip exact-version (kept) ---
+
 
 def test_flags_floating_pip_install():
     out = unpinned_tool_invocations("          pip install build pytest>=8\n")
@@ -55,8 +53,10 @@ def test_unpinned_requirements_lines_flags_floors_not_exact():
 
 # --- end-to-end (zizmor stubbed so the unit suite is hermetic) ---
 
+
 def test_action_pin_scan_flags_floor_seeded_requirements(tmp_path, monkeypatch):
     from aviato.plugins import zizmor_scan
+
     monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: [])
     seed = tmp_path / "aviato" / "library" / "scaffold" / "files"
     seed.mkdir(parents=True)
@@ -67,6 +67,7 @@ def test_action_pin_scan_flags_floor_seeded_requirements(tmp_path, monkeypatch):
 
 def test_action_pin_scan_flags_fetch_execute_in_workflow(tmp_path, monkeypatch):
     from aviato.plugins import zizmor_scan
+
     monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: [])
     wf = tmp_path / ".github" / "workflows"
     wf.mkdir(parents=True)
@@ -77,9 +78,8 @@ def test_action_pin_scan_flags_fetch_execute_in_workflow(tmp_path, monkeypatch):
 
 def test_action_pin_scan_surfaces_zizmor_uses_finding(tmp_path, monkeypatch):
     from aviato.plugins import zizmor_scan
-    monkeypatch.setattr(
-        zizmor_scan, "zizmor_uses_image_violations", lambda _d: ["unpinned-uses: ci.yml"]
-    )
+
+    monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: ["unpinned-uses: ci.yml"])
     wf = tmp_path / ".github" / "workflows"
     wf.mkdir(parents=True)
     (wf / "ci.yml").write_text("on: push\n", encoding="utf-8")
@@ -89,6 +89,7 @@ def test_action_pin_scan_surfaces_zizmor_uses_finding(tmp_path, monkeypatch):
 
 def test_action_pin_scan_tolerates_non_utf8_workflow(tmp_path, monkeypatch):
     from aviato.plugins import zizmor_scan
+
     monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: [])
     wf = tmp_path / ".github" / "workflows"
     wf.mkdir(parents=True)

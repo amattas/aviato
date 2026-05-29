@@ -56,9 +56,7 @@ def zizmor_uses_image_violations(workflow_dir: Path) -> list[str]:
     if not workflow_dir.is_dir():
         return []
     if not _zizmor_available():
-        raise ZizmorUnavailable(
-            "zizmor is not on PATH; it is a pinned dependency of aviato (pip install aviato)"
-        )
+        raise ZizmorUnavailable("zizmor is not on PATH; it is a pinned dependency of aviato (pip install aviato)")
     # --no-exit-codes: findings no longer set exit 11-14, so a non-zero code means a real ERROR
     # (1 audit error / 2 argparse / 3 no inputs). We detect findings from the JSON, not the code.
     result = run(
