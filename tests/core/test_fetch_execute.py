@@ -1,6 +1,5 @@
 from aviato.plugins.actionpins import fetch_execute_violations as fev
 
-
 # Must FLAG — these execute fetched bytes. Includes the cycle-9 bypasses (R9-1..R9-4) AND the
 # cycle-10 fail-open holes (R10-1 checksum-word, R10-2 chaining-after-sink, R10-N1 fetch-to-file).
 FLAGGED = [
