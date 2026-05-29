@@ -1388,9 +1388,25 @@ the network is **checksum-verified** before execution; and a tool installed from
 package index that exposes no digest (e.g. a `pip`/`npm` package) is pinned to an
 **exact version**, never a floating latest. (Distro packages installed via the
 runner's system package manager inherit the pinned runner-image snapshot.) The
-agnostic checker (`aviato.plugins.actionpins`) and the in-CI gate enforce the
-digest-pinned classes (actions, images, curl-fetched binaries); exact-version tool
-pins are carried as workflow inputs (e.g. `actionlint-version`, `yamllint-version`).
+checker (`aviato.plugins.actionpins`, surfaced as `aviato lint-actions`) and the in-CI
+gate enforce the digest-pinned classes; exact-version tool pins are carried as workflow
+inputs (e.g. `actionlint-version`, `yamllint-version`).
+**Enforcement is delegated + fail-closed (and runs as ONE implementation).** Action and
+container-image pinning (`uses:` clauses, `container:`/`services:` images) are enforced by
+**zizmor** (`unpinned-uses`/`unpinned-images`) via a bundled policy config
+(`aviato/library/zizmor.yml`: `actions/*`, `github/*`, and the `amattas/aviato/*` self-ref are
+ref-pinnable, everything else SHA-required). Fetch-and-execute (`curl … | bash`) is enforced by a
+**fail-closed** rule: any `curl`/`wget` that is piped or command/process-substituted is rejected
+**unless** integrity is proven on the line (a checksum/verify — `sha256sum -c`, `cosign verify`,
+`gpg --verify`) **or** the output flows only into an allowlisted non-executing sink
+(`jq`/`grep`/`tee`→file/`>`→file). **It does NOT enumerate interpreters — do not re-introduce that:
+the enumeration approach fails open (an unrecognized interpreter/wrapper = a silent miss) and
+flapped across eight commits (review cycle 9, findings R9-1…R9-5).** The in-CI gate runs the *same*
+`aviato lint-actions` (no separate grep mirror — the two-implementation drift was R9-5), installing
+the pinned Aviato Library (which carries the pinned zizmor) at the caller's `aviato-ref`.
+**Scope note:** a `docker run img:tag` inside a shell `run:` block is intentionally **not** gated
+(use a `container:`/`services:` image, which zizmor pins, or pin the tag in the Dockerfile); the
+old shell-`docker run` token check was dropped with the enumeration machinery (R9-4).
 **Day-zero exception (macOS Homebrew tools, deferred):** the Swift verify install
 (`brew install swift-format swiftlint`, §12.3) is **not** version/checksum-pinned —
 neither tool ships a versioned Homebrew formula, and unlike a Linux distro package a

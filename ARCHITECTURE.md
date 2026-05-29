@@ -125,6 +125,14 @@ identifier from `aviato/plugins/denylist.txt`) and checked as part of
 (the §5.10 module-source tree: `aviato/library/<profile>.yaml`, `aviato/library/bundles/`,
 `aviato/library/scaffold/`), loaded by `aviato/core/registry.py`. See `CLAUDE.md` for the module map.
 
+Supply-chain pin enforcement (§11.3) is a plug-in concern. `uses:`/container-image pinning is
+delegated to **zizmor** (a pinned dependency) configured by bundled policy data at
+`aviato/library/zizmor.yml`; `curl|bash` fetch-execute uses a **fail-closed** rule (reject anything
+not provably checksum-verified or piped to an allowlisted data sink — deliberately *not* an
+interpreter enumeration, which fails open). Both run through the one `aviato lint-actions`
+entrypoint, invoked identically by `aviato validate` and by every consumer's `reusable-common-lint`
+CI — a single implementation, no grep mirror.
+
 ### Scripts
 
 The Python CLI lives in `aviato/`.

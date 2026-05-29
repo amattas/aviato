@@ -40,7 +40,7 @@ aviato next-version --current 1.2.3 --commit "feat: x"  # SemVer from Convention
 aviato bump-version 1.3.0 /path/to/consumer  # write version into version-source locations (§3.3)
 aviato provision OWNER/REPO --profile python-library [--var k=v --public]  # create + stage-protect + scaffold a NEW repo (§5.2/§2.11)
 aviato is-highest 1.2.3 1.0.0 1.2.3          # exit 0 iff arg1 is the highest release among the rest (§8.14 alias gate)
-aviato lint-actions [PATH]                    # report unpinned third-party actions / shell-fetched tools (§11.3)
+aviato lint-actions [PATH]                    # §11.3 supply-chain gate: zizmor (unpinned uses:/images) + fail-closed curl|bash + non-exact pip pins
 aviato validate                              # validate policy infra + agnosticism + digest pins + template parity + inline monotonic-alias parity
 ```
 
@@ -125,7 +125,7 @@ wheel and a pip-installed `aviato` can render rulesets — §5.6/§11.3). Loader
 
 ### Validation is the gate
 
-`aviato/validation.py` (`validate()`) is what CI runs and what guards correctness. It checks required files exist, YAML/JSON parse, `policy.yml` examples actually match/reject the pattern, pattern drift across embedded copies, template `uses:` references point at workflows that exist, release workflows are tag-only (no `release/*`, no checkout by repository name, must reference `GITHUB_REF_TYPE`/`tag`), third-party actions/tools are digest-pinned (§11.3, `_check_action_pins`), the `templates/profile-*.yml` examples match the rendered scaffold (`_check_template_scaffold_parity`), and the inline `highest.py` heredocs embedded in the GHCR/Pages deploy workflows still agree with `core.versioning.is_highest` (§8.14/§13.2, `_check_monotonic_alias_parity` — runs the snippet against a battery of cases so a hand-copied comparator can't silently drift). Adding a new required workflow/file or release workflow means updating `REQUIRED_FILES` / `RELEASE_WORKFLOWS`.
+`aviato/validation.py` (`validate()`) is what CI runs and what guards correctness. It checks required files exist, YAML/JSON parse, `policy.yml` examples actually match/reject the pattern, pattern drift across embedded copies, template `uses:` references point at workflows that exist, release workflows are tag-only (no `release/*`, no checkout by repository name, must reference `GITHUB_REF_TYPE`/`tag`), third-party actions/tools are digest-pinned (§11.3, `_check_action_pins` → `aviato lint-actions`, which delegates `uses:`/image pinning to a bundled-config **zizmor** and runs a **fail-closed** `curl|bash` check — never interpreter enumeration, which fails open and flapped for 8 cycles; the same impl runs in every consumer's CI via `reusable-common-lint.yml`, with no grep mirror to drift), the `templates/profile-*.yml` examples match the rendered scaffold (`_check_template_scaffold_parity`), and the inline `highest.py` heredocs embedded in the GHCR/Pages deploy workflows still agree with `core.versioning.is_highest` (§8.14/§13.2, `_check_monotonic_alias_parity` — runs the snippet against a battery of cases so a hand-copied comparator can't silently drift). Adding a new required workflow/file or release workflow means updating `REQUIRED_FILES` / `RELEASE_WORKFLOWS`.
 
 ### Reusable workflows share one command contract
 
