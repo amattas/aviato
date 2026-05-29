@@ -39,68 +39,113 @@ def unpinned_third_party_uses(text: str) -> list[str]:
     return violations
 
 
-# §11.3 FAIL-CLOSED fetch-execute detection. DO NOT convert this back to interpreter enumeration:
-# that approach fails OPEN (an unknown interpreter/wrapper = a miss) and flapped for 8 commits
-# (cycle-9 findings R9-1..R9-5). Here the DEFAULT for anything not provably safe is REJECT.
+# §11.3 FAIL-CLOSED fetch-execute detection. DO NOT re-introduce interpreter enumeration: that fails
+# OPEN (an unknown interpreter/wrapper = a silent miss) and flapped for 8 commits (cycle-9 R9-1..R9-5);
+# the first fail-closed cut still had fail-OPEN edges — a checksum WORD anywhere on the line, and an
+# executor chained after an allowlisted sink (cycle-10 R10-1/R10-2/R10-N1). This rule is the INVERSE
+# and convergent: it enumerates only OBVIOUSLY-SAFE pure data sinks + a real verify COMMAND, and
+# treats everything else fetched bytes can reach as a violation. There is nothing to enumerate on the
+# danger side — new executors are caught by default. The safe shapes are exactly two: a pure data
+# pipeline (`curl … | jq`) and download → verify → use.
 _FETCH_RE = re.compile(r"\b(?:curl|wget)\b")
-# A substitution that can execute fetched output: process-sub `<(`/`>(`, command-sub `$(`, backtick.
+# An executing substitution next to a fetch: process-sub `<(`/`>(`, command-sub `$(`, backtick. A
+# stream into one of these cannot be checksum-gated → always a violation.
 _SUBST_RE = re.compile(r"<\(|>\(|\$\(|`")
-# Proof of integrity on the same logical line → allowed.
-_CHECKSUM_RE = re.compile(r"\b(?:sha256sum|sha512sum|shasum|md5sum|cosign|gpg)\b")
-# The ONLY downstream pipe targets that pass WITHOUT a checksum: non-executing data sinks.
-# Intentionally minimal (spec §3.4); add a tool here only after confirming it cannot execute its
-# stdin. NOT included on purpose: awk/sed (can `-f -`), xargs, any shell.
-_ALLOWED_SINKS = frozenset({"jq", "grep", "tee", "cat", "sort", "uniq", "head", "tail", "wc"})
+# PURE data sinks: consume stdin, emit to stdout/console only — they neither execute their input nor
+# write a file. Deliberately EXCLUDES tee/redirects (file write → taint), awk/sed (`-f`/`-e` execute),
+# xargs, and every shell/interpreter (the danger we do NOT enumerate — those fall through to violation).
+_PURE_SINKS = frozenset(
+    {"jq", "grep", "egrep", "fgrep", "rg", "head", "tail", "sort", "uniq", "wc", "cut", "tr", "less", "more", "nl"}
+)
+# A REAL verify COMMAND (verb + check mode), not a bare mention — clears download-file taint so the
+# canonical "download → verify → use" pattern passes. A comment/URL/`--version` does NOT match (R10-1).
+_VERIFY_RE = re.compile(
+    r"\b(?:sha(?:1|256|512)sum|shasum|b2sum|md5sum)\b[^\n]*?(?:\s-c\b|\s--check\b)"
+    r"|\bcosign\s+verify(?:-blob)?\b"
+    r"|\bgpg\b[^\n]*?\s--(?:verify|decrypt)\b"
+    r"|\bminisign\b[^\n]*?\s-V\b"
+)
+# Command-sequence separators (NOT the single pipe `|`, which stays within one pipeline/command).
+_SEQ_RE = re.compile(r"&&|\|\||;|&")
+_OUT_FLAG_RE = re.compile(r"(?:^|\s)(?:-o|-O|--output)(?:=|\s+)(\S+)")
+_REDIR_RE = re.compile(r">>?\s*(\S+)")
+_TEE_RE = re.compile(r"\btee\b\s+((?:-\S+\s+)*)(\S+)")
+
+
+def _strip_comments(text: str) -> str:
+    """Drop shell line comments (`#` at line start or after whitespace, to EOL). A `#` mid-token (a
+    URL fragment) is preserved. Comments must never be able to satisfy a safety check (R10-1)."""
+    return re.sub(r"(?m)(^|\s)#.*$", r"\1", text)
 
 
 def _fold_logical_lines(text: str) -> list[str]:
-    """Fold shell `\\`-newline continuations and split-pipe YAML scalars into logical lines.
-
-    Folding only ever JOINS lines, so it can add flags, never remove them (fail-closed safe). It
-    handles the common multi-line pipeline forms a physical-line scan misses (cycle-9 R9-2):
-    a pipe at end-of-line (`curl … |⏎ bash`) and a pipe at start-of-next-line (`curl …⏎ | bash`).
-    """
+    """Fold `\\`-newline continuations and split-pipe scalars into logical lines. Folding only JOINS,
+    so it can add flags, never remove them (fail-closed safe; closes the cycle-9 R9-2 fold cases)."""
     text = re.sub(r"\\\n[ \t]*", " ", text)  # shell line-continuation
     text = re.sub(r"\|[ \t]*\n[ \t]*", "| ", text)  # pipe at EOL → join with next
     text = re.sub(r"\n[ \t]*\|", " |", text)  # pipe leads next line → join with prev
     return text.splitlines()
 
 
-def _pipe_targets_all_allowlisted(line: str) -> bool:
-    """True iff EVERY command downstream of a `|` is a known non-executing data sink."""
-    for segment in line.split("|")[1:]:
+def _basename(token: str) -> str:
+    return token.rsplit("/", 1)[-1]
+
+
+def _download_targets(unit: str) -> set[str]:
+    """Files an unverified download writes in this command unit (curl -o / `>` redirect / tee)."""
+    targets: set[str] = set(_OUT_FLAG_RE.findall(unit))
+    targets.update(_REDIR_RE.findall(unit))
+    for _flags, name in _TEE_RE.findall(unit):
+        targets.add(name)
+    return {t for t in targets if not t.startswith(("&", "/dev/")) and t != "-"}
+
+
+def _fetch_streams_into_executor(unit: str) -> bool:
+    """A fetch unit whose output streams into execution: an executing substitution, or a pipe whose
+    downstream is anything other than a pure data sink or `tee` (a file write, handled via taint)."""
+    if _SUBST_RE.search(unit):
+        return True
+    for segment in unit.split("|")[1:]:
         tokens = segment.split()
         if not tokens:
-            return False
-        first = tokens[0].rsplit("/", 1)[-1]  # basename, so /usr/bin/jq → jq
-        if first not in _ALLOWED_SINKS:
-            return False
-    return True
+            return True  # dangling pipe — cannot prove safe
+        head = _basename(tokens[0])
+        if head not in _PURE_SINKS and head != "tee":
+            return True  # a possible executor (bash/sh/python/xargs/$VAR/…) — not enumerated, just "not safe"
+    return False
 
 
 def fetch_execute_violations(text: str) -> list[str]:
-    """Fail-closed §11.3 fetch-execute check.
+    """Fail-closed §11.3 fetch-execute check (design contract in the module comment above).
 
-    A logical line containing curl/wget AND a pipe-into-command or executing substitution is a
-    violation UNLESS it proves safety: a checksum/verify token on the line, OR (pipe-only, no
-    substitution) every downstream pipe target is an allowlisted data sink. Anything the rule does
-    not positively recognize as safe is flagged.
+    Walks the comment-stripped, folded text as an ORDERED sequence of command units (split on
+    ``;``/``&&``/``||``/``&``; the pipe ``|`` stays within a unit). A downloaded file is TAINTED; a
+    real verify command clears taint. A unit is a violation when it (a) contains a fetch that streams
+    into an executing substitution or a non-pure-sink pipe target, or (b) uses a tainted download that
+    no verify command has cleared. Only a pure data pipeline (`curl … | jq`) and download → verify →
+    use are clean.
     """
     violations: list[str] = []
-    for line in _fold_logical_lines(text):
-        if line.lstrip().startswith("#"):
+    tainted: set[str] = set()
+    for line in _fold_logical_lines(_strip_comments(text)):
+        if not line.strip():
             continue
-        if not _FETCH_RE.search(line):
-            continue
-        has_subst = bool(_SUBST_RE.search(line))
-        has_pipe = "|" in line
-        if not (has_subst or has_pipe):
-            continue  # a bare fetch (curl … -o file) is fine
-        if _CHECKSUM_RE.search(line):
-            continue  # operator proved integrity
-        if has_pipe and not has_subst and _pipe_targets_all_allowlisted(line):
-            continue  # piped only into non-executing data sinks
-        violations.append(f"fetch-and-execute without checksum: {line.strip()}")
+        for unit in _SEQ_RE.split(line):
+            if not unit.strip():
+                continue
+            if _VERIFY_RE.search(unit):
+                tainted.clear()  # operator gated integrity for the sequence
+                continue
+            if _FETCH_RE.search(unit):
+                if _fetch_streams_into_executor(unit):
+                    violations.append(f"fetch-and-execute without checksum: {line.strip()}")
+                else:
+                    tainted |= _download_targets(unit)  # download(s) to file → tainted until verified
+                continue
+            if tainted:
+                tokens = set(unit.split()) | {_basename(t) for t in unit.split()}
+                if tainted & tokens:
+                    violations.append(f"unverified downloaded file used: {line.strip()}")
     return violations
 
 
