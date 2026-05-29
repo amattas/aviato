@@ -1,0 +1,15 @@
+# §11.3 single source of truth for action/image pinning, shipped in the wheel and passed to
+# zizmor via `--config` by `aviato lint-actions` (so every consumer gets the Library policy
+# without authoring their own config). Most-specific pattern wins.
+#
+# Only `unpinned-uses` and `unpinned-images` are GATED by aviato today (see
+# aviato/plugins/zizmor_scan.py:_GATED_AUDITS). zizmor still runs its other audits; their
+# findings are intentionally ignored here until explicitly adopted.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        actions/*: ref-pin          # first-party GitHub — branch/tag allowed
+        github/*: ref-pin
+        amattas/aviato/*: ref-pin    # the one sanctioned mutable Library self-ref (§6.1/§11.3)
+        "*": hash-pin                # everything else: 40-hex SHA required

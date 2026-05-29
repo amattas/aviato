@@ -9,6 +9,8 @@ description = "Reusable GitHub policy, CI, release, and onboarding conventions."
 requires-python = ">=3.11"
 dependencies = [
   "PyYAML>=6.0",
+  # §11.3: zizmor performs uses:/image pin enforcement; pinned EXACTLY (Dependabot bumps it).
+  "zizmor==1.25.2",
 ]
 
 [project.optional-dependencies]
