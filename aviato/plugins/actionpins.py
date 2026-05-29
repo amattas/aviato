@@ -64,6 +64,72 @@ _DOCKER_RUN_RE = re.compile(r"\bdocker\s+(?:run|pull|image\s+pull|container\s+ru
 # not bytes. R2-2-SC2 (fetch-to-file-then-execute) stays out of scope as before; the high-signal
 # pipe form is the deliberate scope.
 _FETCH_CMD_RE = re.compile(r"\b(?:curl|wget)\b")
+
+# §11.3 FAIL-CLOSED fetch-execute detection. DO NOT convert this back to interpreter enumeration:
+# that approach fails OPEN (an unknown interpreter/wrapper = a miss) and flapped for 8 commits
+# (cycle-9 findings R9-1..R9-5). Here the DEFAULT for anything not provably safe is REJECT.
+_FETCH_RE = re.compile(r"\b(?:curl|wget)\b")
+# A substitution that can execute fetched output: process-sub `<(`/`>(`, command-sub `$(`, backtick.
+_SUBST_RE = re.compile(r"<\(|>\(|\$\(|`")
+# Proof of integrity on the same logical line → allowed.
+_CHECKSUM_RE = re.compile(r"\b(?:sha256sum|sha512sum|shasum|md5sum|cosign|gpg)\b")
+# The ONLY downstream pipe targets that pass WITHOUT a checksum: non-executing data sinks.
+# Intentionally minimal (spec §3.4); add a tool here only after confirming it cannot execute its
+# stdin. NOT included on purpose: awk/sed (can `-f -`), xargs, any shell.
+_ALLOWED_SINKS = frozenset({"jq", "grep", "tee", "cat", "sort", "uniq", "head", "tail", "wc"})
+
+
+def _fold_logical_lines(text: str) -> list[str]:
+    """Fold shell `\\`-newline continuations and split-pipe YAML scalars into logical lines.
+
+    Folding only ever JOINS lines, so it can add flags, never remove them (fail-closed safe). It
+    handles the common multi-line pipeline forms a physical-line scan misses (cycle-9 R9-2):
+    a pipe at end-of-line (`curl … |⏎ bash`) and a pipe at start-of-next-line (`curl …⏎ | bash`).
+    """
+    text = re.sub(r"\\\n[ \t]*", " ", text)        # shell line-continuation
+    text = re.sub(r"\|[ \t]*\n[ \t]*", "| ", text)  # pipe at EOL → join with next
+    text = re.sub(r"\n[ \t]*\|", " |", text)        # pipe leads next line → join with prev
+    return text.splitlines()
+
+
+def _pipe_targets_all_allowlisted(line: str) -> bool:
+    """True iff EVERY command downstream of a `|` is a known non-executing data sink."""
+    for segment in line.split("|")[1:]:
+        tokens = segment.split()
+        if not tokens:
+            return False
+        first = tokens[0].rsplit("/", 1)[-1]  # basename, so /usr/bin/jq → jq
+        if first not in _ALLOWED_SINKS:
+            return False
+    return True
+
+
+def fetch_execute_violations(text: str) -> list[str]:
+    """Fail-closed §11.3 fetch-execute check.
+
+    A logical line containing curl/wget AND a pipe-into-command or executing substitution is a
+    violation UNLESS it proves safety: a checksum/verify token on the line, OR (pipe-only, no
+    substitution) every downstream pipe target is an allowlisted data sink. Anything the rule does
+    not positively recognize as safe is flagged.
+    """
+    violations: list[str] = []
+    for line in _fold_logical_lines(text):
+        if line.lstrip().startswith("#"):
+            continue
+        if not _FETCH_RE.search(line):
+            continue
+        has_subst = bool(_SUBST_RE.search(line))
+        has_pipe = "|" in line
+        if not (has_subst or has_pipe):
+            continue  # a bare fetch (curl … -o file) is fine
+        if _CHECKSUM_RE.search(line):
+            continue  # operator proved integrity
+        if has_pipe and not has_subst and _pipe_targets_all_allowlisted(line):
+            continue  # piped only into non-executing data sinks
+        violations.append(f"fetch-and-execute without checksum: {line.strip()}")
+    return violations
+
+
 # Closed sets: a new wrapper or interpreter convention is a one-line list edit. The lists are
 # bigger than they look — POSIX shells, shell BUILTINS that execute stdin (source/eval/sh -c),
 # scripting languages run on real CI (lua/tclsh/R/julia/osascript/awk -f -/m4/groovy/swift/jjs),
