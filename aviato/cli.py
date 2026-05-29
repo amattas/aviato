@@ -1433,20 +1433,23 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
 
 
 def cmd_lint_actions(args: argparse.Namespace) -> int:
-    """Flag third-party actions not pinned by commit digest (§11.3); exit 1 on any."""
+    """Report §11.3 supply-chain pin violations (unpinned uses/images, unchecked fetch-execute,
+    non-exact pip pins); exit 1 on any. (R10-7: the rows span several check classes, so the message
+    is generic — not just 'unpinned action'.)"""
     from .plugins.actionpins import action_pin_violations
 
     violations = action_pin_violations(Path(args.path))
     for violation in violations:
-        print(f"unpinned third-party action: {violation}", file=sys.stderr)
+        print(f"§11.3 supply-chain violation: {violation}", file=sys.stderr)
     if violations:
         print(
-            f"{len(violations)} third-party action(s) not pinned to a commit digest (§11.3); "
-            f"pin each `uses: owner/repo@<40-hex-sha>` (Dependabot keeps them current).",
+            f"{len(violations)} §11.3 supply-chain violation(s): pin third-party `uses:`/images by "
+            f"digest, checksum-verify any fetched-and-executed download, and pin pip tools to an "
+            f"exact version (Dependabot keeps digests current).",
             file=sys.stderr,
         )
         return 1
-    print("All third-party actions are digest-pinned.")
+    print("Supply-chain pins OK: actions/images digest-pinned, no unchecked fetch-execute.")
     return 0
 
 

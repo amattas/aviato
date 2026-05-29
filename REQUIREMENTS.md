@@ -1395,18 +1395,26 @@ inputs (e.g. `actionlint-version`, `yamllint-version`).
 container-image pinning (`uses:` clauses, `container:`/`services:` images) are enforced by
 **zizmor** (`unpinned-uses`/`unpinned-images`) via a bundled policy config
 (`aviato/library/zizmor.yml`: `actions/*`, `github/*`, and the `amattas/aviato/*` self-ref are
-ref-pinnable, everything else SHA-required). Fetch-and-execute (`curl … | bash`) is enforced by a
-**fail-closed** rule: any `curl`/`wget` that is piped or command/process-substituted is rejected
-**unless** integrity is proven on the line (a checksum/verify — `sha256sum -c`, `cosign verify`,
-`gpg --verify`) **or** the output flows only into an allowlisted non-executing sink
-(`jq`/`grep`/`tee`→file/`>`→file). **It does NOT enumerate interpreters — do not re-introduce that:
-the enumeration approach fails open (an unrecognized interpreter/wrapper = a silent miss) and
-flapped across eight commits (review cycle 9, findings R9-1…R9-5).** The in-CI gate runs the *same*
-`aviato lint-actions` (no separate grep mirror — the two-implementation drift was R9-5), installing
-the pinned Aviato Library (which carries the pinned zizmor) at the caller's `aviato-ref`.
-**Scope note:** a `docker run img:tag` inside a shell `run:` block is intentionally **not** gated
-(use a `container:`/`services:` image, which zizmor pins, or pin the tag in the Dockerfile); the
-old shell-`docker run` token check was dropped with the enumeration machinery (R9-4).
+ref-pinnable, everything else SHA-required). zizmor is invoked
+`--offline --persona=auditor --no-ignores`: offline because the gated audits are syntactic and must
+not be coupled to GitHub-API availability (R10-3); auditor persona because `unpinned-images` is
+silent at the default persona (R10-4); and `--no-ignores` so a consumer's inline
+`# zizmor: ignore[…]` cannot waive the Library-mandated gate (R10-8).
+Fetch-and-execute (`curl … | bash`) is enforced by a **fail-closed taint** rule (NOT a checksum-word
+or sink allowlist — those fail open, cycle-10 R10-1/R10-2): over each command sequence (split on
+`;`/`&&`/`||`/`&`), a `curl`/`wget` is a violation if its output streams into an executing
+substitution or a non-pure-sink pipe target; a download to a file is **tainted**, and any later use
+of a tainted file is a violation **unless a real verify *command*** (`sha256sum -c`, `cosign verify`,
+`gpg --verify`, …) has cleared it. Only two shapes are clean: a pure data pipeline (`curl … | jq`)
+and **download → verify → use**. **Do NOT re-introduce interpreter enumeration — it fails open and
+flapped for eight commits (cycle-9 R9-1…R9-5);** the taint rule enumerates only obviously-safe data
+sinks, so new executors are caught by default. The in-CI gate runs the *same* `aviato lint-actions`
+(no grep mirror — the two-implementation drift was R9-5), installing the pinned Aviato Library
+(which carries the pinned zizmor) at the caller's `aviato-ref`.
+**Scope note:** `docker run`/`docker pull`/`docker image pull`/`docker container run` of a mutable
+`img:tag` inside a shell `run:` block is intentionally **not** gated (use a `container:`/`services:`
+image, which zizmor pins, or pin the tag in the Dockerfile); the old shell-`docker` token checks were
+dropped with the enumeration machinery (R9-4 / R10-N2).
 **Day-zero exception (macOS Homebrew tools, deferred):** the Swift verify install
 (`brew install swift-format swiftlint`, §12.3) is **not** version/checksum-pinned —
 neither tool ships a versioned Homebrew formula, and unlike a Linux distro package a
