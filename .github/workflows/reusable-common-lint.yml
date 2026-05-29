@@ -25,6 +25,13 @@ on:
         required: false
         type: string
         default: "1.35.1"
+      aviato-ref:
+        description: >-
+          Pinned Aviato Library ref (version X.Y.Z, a prerelease, or floating major N) to install
+          the matching `aviato` CLI from for the §11.3 supply-chain pin gate. Passed by the caller.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -63,112 +70,26 @@ jobs:
           sudo tar -xz -C /usr/local/bin -f "${tarball}" actionlint
           actionlint
 
-      # §11.3 (blocking): third-party actions MUST be pinned by 40-hex commit digest.
-      # Exempt: first-party (actions/*, github/*), local (./...), and the consumer's own
-      # Aviato Library reusable refs (amattas/aviato/.github/workflows/*) — the one sanctioned
-      # mutable ref. A NON-Library reusable workflow is third-party and must be digest-pinned.
-      # Mirrors aviato.plugins.actionpins so the convention is ENFORCED in every consumer's CI.
-      - name: Third-party action digest pin (blocking)
+      # §11.3 (blocking): ONE implementation, shared with `aviato validate`. Installs the pinned
+      # Aviato CLI (which brings the pinned zizmor) and runs the single detector — zizmor
+      # (unpinned-uses/unpinned-images) + fail-closed fetch-execute + pip exact-version. Replaces
+      # the former grep mirror that drifted from the Python detector (cycle-9 R9-5).
+      - name: Supply-chain pins (blocking)
         shell: bash
+        env:
+          AVIATO_REF: ${{ inputs.aviato-ref }}
         run: |
           set -euo pipefail
           if [ ! -d .github/workflows ]; then
             echo "No workflows to check."; exit 0
           fi
-          violations=0
-          while IFS= read -r line; do
-            ref="$(printf '%s' "${line}" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//; s/[[:space:]#].*$//')"
-            case "${ref}" in
-              ""|./*|actions/*|github/*) continue ;;
-              # The consumer's pinned Aviato Library reference is the one sanctioned mutable
-              # ref (§6.1/§11.3); a NON-Library reusable workflow is third-party and must be
-              # digest-pinned like an action (a blanket */.github/workflows/* exemption would
-              # let other-org/repo/.github/workflows/x.yml@main through).
-              amattas/aviato/.github/workflows/*) continue ;;
-            esac
-            case "${ref}" in *@*) ;; *) continue ;; esac
-            version="${ref#*@}"
-            if ! printf '%s' "${version}" | grep -Eq '^[0-9a-f]{40}$'; then
-              echo "::error::Unpinned third-party action (§11.3): ${ref} — pin to a 40-hex commit SHA (Dependabot keeps it current)."
-              violations=$((violations + 1))
-            fi
-          done < <(grep -rEh '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows || true)
-          if [ "${violations}" -gt 0 ]; then
-            echo "::error::${violations} third-party action(s) not digest-pinned."
+          # §11.3: never run the gate off unpinned Library code.
+          if [[ ! "${AVIATO_REF}" =~ ^[0-9]+(\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?)?$ ]]; then
+            echo "::error::aviato-ref '${AVIATO_REF}' is not a pinned version (expected X.Y.Z, X.Y.Z-alphaN/-betaN, or a floating major N)."
             exit 1
           fi
-          echo "All third-party actions are digest-pinned."
-
-      # §11.3: the in-CI gate enforces the digest-pinned classes — actions (above), container
-      # IMAGES, and curl-fetched BINARIES. (Exact pip/tool-version pins are carried as workflow
-      # inputs, e.g. yamllint-version/actionlint-version, not greppable here.) Mirrors the
-      # remaining aviato.plugins.actionpins.unpinned_tool_invocations checks so a consumer's own
-      # workflow cannot run an unpinned image or pipe a download straight into a shell.
-      - name: Container image + fetched-binary pin (blocking)
-        shell: bash
-        run: |
-          set -uo pipefail
-          if [ ! -d .github/workflows ]; then
-            echo "No workflows to check."; exit 0
-          fi
-          violations=0
-          # A `docker run`/`docker pull` image MUST be digest-pinned (@sha256:…). review #9: an
-          # earlier version substring-matched `@sha256:` against the WHOLE line, so an `@sha256:`
-          # in an unrelated arg (e.g. `--label x@sha256:…`) masked an unpinned image. We now
-          # extract the actual IMAGE token (skipping flags AND the value after value-taking flags
-          # like `-e VAR=x`/`-v a:b`) exactly like aviato.plugins.actionpins._docker_run_image, and
-          # test the pin on that token alone. A line ending in `\` is a continuation (image on the
-          # next line) — skipped, matching the checker's same-line scope.
-          value_flags=" -e --env -v --volume -p --publish -w --workdir --mount -l --label --name --network --net -u --user --entrypoint --add-host --device --tmpfs --cap-add --cap-drop --platform -h --hostname --env-file --restart --pull "
-          while IFS= read -r line; do
-            cmd="${line%%#*}"                       # drop any trailing comment
-            case "${cmd}" in *\\) continue ;; esac  # line-continuation: image on next line
-            rest="${cmd#*docker }"                   # args after the first `docker `
-            # shellcheck disable=SC2086 # intentional word-splitting of the command tokens
-            set -- ${rest}
-            if [ "${1:-}" = "run" ] || [ "${1:-}" = "pull" ]; then shift; fi
-            image=""
-            skip_next=0
-            for tok in "$@"; do
-              if [ "${skip_next}" -eq 1 ]; then skip_next=0; continue; fi
-              case "${tok}" in
-                -*)
-                  # `--flag=value` carries its own value; a bare value-taking flag eats the next token.
-                  case "${tok}" in
-                    *=*) : ;;
-                    *) case "${value_flags}" in *" ${tok} "*) skip_next=1 ;; esac ;;
-                  esac
-                  continue ;;
-              esac
-              image="${tok}"; break
-            done
-            [ -z "${image}" ] && continue
-            case "${image}" in *@sha256:*) continue ;; esac
-            echo "::error::Container image not digest-pinned (§11.3): ${image} — pin to @sha256:<digest>."
-            violations=$((violations + 1))
-          done < <(grep -rhE '\bdocker[[:space:]]+(run|pull)\b' .github/workflows || true)
-          # A network download piped straight into a shell/extractor has no checksum gate. The
-          # `[^|;]*` (no semicolon) keeps the fetch and the pipe in ONE command, so an unrelated
-          # later `; … | bash` on the same line is not a false positive. R7-4-CILINT-DRIFT /
-          # R8-9-PARITY-TEST: the interpreter alternation MIRRORS the Python detector's
-          # aviato/plugins/actionpins.py:_INTERPRETERS so the two enforcement layers (this in-CI
-          # shell gate + `aviato validate`'s Python detector) agree on coverage —
-          # tests/test_workflow_guards.py::test_cilint_interps_mirror_actionpins parses this
-          # exact `interps=` line and asserts parity with `_INTERPRETERS` to prevent drift.
-          # The grep can't represent multi-token forms (`. /dev/stdin`, `> (bash)`,
-          # `$(echo bash)`, line-continuation folds, builtins like `source`/`.`/`eval`); those
-          # are covered by the Python detector layer only.
-          interps='sh|bash|dash|zsh|ksh|fish|csh|tcsh|mksh|tar|python[0-9.]*|node|nodejs|ruby|perl|pwsh|php|lua|tclsh|julia|r|rscript|osascript|awk|gawk|mawk|sed|m4|groovy|swift|jjs'
-          if grep -rqE "\b(curl|wget)\b[^|;]*\|[^|]*\b(${interps})\b" .github/workflows; then
-            echo "::error::Fetch-and-execute without a checksum (§11.3): download to a file, verify with sha256sum -c, then run."
-            grep -rnE "\b(curl|wget)\b[^|;]*\|[^|]*\b(${interps})\b" .github/workflows
-            violations=$((violations + 1))
-          fi
-          if [ "${violations}" -gt 0 ]; then
-            echo "::error::${violations} unpinned image/fetch invocation(s) (§11.3)."
-            exit 1
-          fi
-          echo "Container images digest-pinned; no unchecked fetch-and-execute."
+          python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
+          aviato lint-actions .
 
       - name: hadolint (blocking, where a Dockerfile exists)
         shell: bash

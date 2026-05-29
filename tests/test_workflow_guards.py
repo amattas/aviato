@@ -204,7 +204,7 @@ def test_aviato_ref_pin_guard_present_and_regex_correct() -> None:
     import re
 
     guard_re = re.compile(r"AVIATO_REF.*?=~\s+(\S+)\s+\]\]")
-    for name in ("reusable-release.yml", "reusable-consumer-automation.yml"):
+    for name in ("reusable-release.yml", "reusable-consumer-automation.yml", "reusable-common-lint.yml"):
         body = (WORKFLOWS / name).read_text()
         m = guard_re.search(body)
         assert m, f"{name} missing the AVIATO_REF pin guard"
@@ -352,39 +352,8 @@ def test_app_store_secrets_not_exposed_to_operator_eval_steps() -> None:
             assert not version_leak, f"version-command step sees secrets: {sorted(version_leak)}"
 
 
-def test_cilint_interps_mirror_actionpins() -> None:
-    """R8-9-PARITY-TEST: the in-CI shell `interps='…'` alternation in reusable-common-lint.yml
-    must mirror `aviato/plugins/actionpins.py:_INTERPRETERS` so the two enforcement layers
-    (shell grep + Python detector) cover the same interpreter set. Without this test the in-CI
-    grep would silently rot as `_INTERPRETERS` grows (R8-10-INTERP-INCOMPLETE was exactly this
-    drift mode: `_INTERPRETERS` grew while the grep didn't).
-    """
-    import re as _re
-
-    from aviato.plugins.actionpins import _INTERPRETERS
-
-    workflow = (WORKFLOWS / "reusable-common-lint.yml").read_text(encoding="utf-8")
-    match = _re.search(r"interps='([^']+)'", workflow)
-    assert match, "reusable-common-lint.yml no longer declares `interps='…'` — update this test"
-    grep_tokens = set(match.group(1).split("|"))
-    # `python[0-9.]*` represents the Python family that the Python detector matches via
-    # `_PYTHON_INTERP_RE` (not a literal in `_INTERPRETERS`); drop it from grep-side comparison.
-    grep_tokens.discard("python[0-9.]*")
-
-    # The Python detector also catches multi-token / syntax-form interpreters the shell grep
-    # CANNOT represent (`.`, `source`, `eval` — these match either as builtins after a pipe or
-    # via the proc-sub/cmd-sub pre-scan). Carve them out so the parity assertion only compares
-    # what BOTH layers can plausibly scan for.
-    python_only_extras: set[str] = {".", "source", "eval"}
-    python_set = _INTERPRETERS - python_only_extras
-
-    missing_in_grep = python_set - grep_tokens
-    extra_in_grep = grep_tokens - python_set
-    assert not missing_in_grep, (
-        f"in-CI grep `interps=` is missing interpreters the Python detector catches: "
-        f"{sorted(missing_in_grep)} — add them to reusable-common-lint.yml's `interps='…'`"
-    )
-    assert not extra_in_grep, (
-        f"in-CI grep `interps=` has interpreters the Python detector does not: "
-        f"{sorted(extra_in_grep)} — add to _INTERPRETERS or remove from the grep"
-    )
+def test_common_lint_runs_aviato_lint_actions_not_grep() -> None:
+    wf = (WORKFLOWS / "reusable-common-lint.yml").read_text(encoding="utf-8")
+    assert "aviato lint-actions" in wf, "common-lint must run the single aviato lint-actions impl"
+    assert "interps=" not in wf, "the grep mirror must be gone (parity flap removed)"
+    assert "docker[[:space:]]+(run|pull)" not in wf, "the docker grep extractor must be gone"

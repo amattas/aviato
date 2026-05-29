@@ -44,6 +44,8 @@ jobs:
   common-lint:
     if: ${{ github.ref_type != 'tag' }}
     uses: amattas/aviato/.github/workflows/reusable-common-lint.yml@0.1.0
+    with:
+      aviato-ref: 0.1.0
 
   release:
     if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
