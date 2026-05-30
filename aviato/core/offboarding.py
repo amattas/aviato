@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .errors import AviatoError
 from .marker import parse_marker_from_text, strip_marker_from_text
 from .scaffold import atomic_write
 
@@ -74,9 +75,24 @@ def offboard(root: Path, managed_outputs: Sequence[str], *, keep_files: bool) ->
         try:
             text = target.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            continue  # not UTF-8 ⇒ cannot carry an Aviato marker ⇒ operator-owned, leave alone
+            # N3: an AUTOMATION workflow that exists but can't be marker-verified must NOT be silently
+            # skipped — offboarding then removes the declaration and leaves it running unmanaged (it
+            # would fail/no-op on every schedule). Fail closed so the operator handles it. A passive
+            # non-UTF-8 file is genuinely operator-owned — leave it.
+            if _is_consumer_automation(output):
+                raise AviatoError(
+                    f"automation workflow {output} is not valid UTF-8, so its Aviato marker cannot be "
+                    "verified; offboarding would leave it running unmanaged. Remove or fix it, then re-run."
+                ) from None
+            continue
         if parse_marker_from_text(text) is None:
-            continue  # unmanaged / malformed — operator owns it, leave alone
+            if _is_consumer_automation(output):
+                raise AviatoError(
+                    f"automation workflow {output} carries no Aviato marker; offboarding would remove the "
+                    "declaration and leave this workflow running unmanaged. Remove or restore its marker, "
+                    "then re-run."
+                )
+            continue  # passive unmanaged / operator-owned file — leave alone
         # Automation workflows are always removed (§5.13); only passive managed files
         # honor the operator's keep-files choice.
         if keep_files and not _is_consumer_automation(output):

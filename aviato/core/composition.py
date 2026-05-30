@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import Any
 
 from .errors import CompositionError
@@ -80,7 +81,32 @@ def _validated_locations(vs: object, *, context: str) -> tuple[str, ...]:
             f"{context} 'locations' must be a non-empty list of non-blank path strings (§12.3) — "
             f"e.g. version_source: {{locations: ['path/to/your/version-file']}}"
         )
+    # R9-15: confine to the consumer repo. An absolute path or a `..` component would let
+    # `aviato bump-version` (run during the release workflow) write OUTSIDE the checkout. The
+    # version-source is always a repo-relative path; reject anything that can escape root.
+    for p in locations:
+        pure = PurePosixPath(p)
+        if pure.is_absolute() or p.startswith("\\") or ".." in pure.parts:
+            raise CompositionError(
+                f"{context} 'locations' must be repo-relative paths without '..' (§12.3); "
+                f"refusing {p!r} (it could write outside the repository)"
+            )
     return tuple(locations)
+
+
+def _override_pipeline_list(value: object, field: str) -> tuple[str, ...]:
+    """Validate a ``pipelines`` override's ``add``/``remove`` (R9-16).
+
+    A PRESENT-but-null (`add:` with no value → ``None``) or absent key is an empty no-op. Anything
+    else must be a list of non-blank strings — without this guard a present-null fed ``None`` into
+    ``merge_list``'s ``list(add)``, raising a raw ``TypeError`` that escaped ``scan_fleet``'s
+    AviatoError guard and aborted the operator's whole fleet scan (§5.11).
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(not isinstance(x, str) or not x.strip() for x in value):
+        raise CompositionError(f"pipelines override {field!r} must be a list of non-blank strings (§4.2)")
+    return tuple(value)
 
 
 def _settings_override_lists(override: dict[str, Any], _prefix: str = "") -> list[str]:
@@ -228,8 +254,8 @@ def resolve_profile(
         pipelines = tuple(
             merge_list(
                 list(pipelines),
-                add=pipeline_override.get("add", ()),
-                remove=pipeline_override.get("remove", ()),
+                add=_override_pipeline_list(pipeline_override.get("add"), "add"),
+                remove=_override_pipeline_list(pipeline_override.get("remove"), "remove"),
             )
         )
 

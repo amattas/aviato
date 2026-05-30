@@ -252,10 +252,14 @@ def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> str:
     name = payload.get("name")
     if not isinstance(name, str) or not name:
         raise ValueError("ruleset payload must include a non-empty name")
-
+    # N1 (cycle 11): match the live ruleset by (name, target), not name alone. Drift detection keys
+    # by (name, target) (rulesets.drifted_ruleset_names), so a name-only match here could UPDATE a
+    # same-named ruleset on the WRONG target (e.g. overwrite the branch ruleset with a tag payload)
+    # instead of creating the missing one. The rendered payload always carries `target`.
+    target = payload.get("target")
     existing_id = None
     for ruleset in repository_rulesets(slug):
-        if ruleset.get("name") == name:
+        if ruleset.get("name") == name and ruleset.get("target") == target:
             existing_id = ruleset.get("id")
             break
 

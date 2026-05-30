@@ -169,8 +169,11 @@ def drifted_ruleset_names(desired_payloads: list[dict[str, Any]], live_payloads:
     drifted: list[str] = []
     for desired in desired_payloads:
         name = desired.get("name")
-        if not isinstance(name, str):
-            continue
+        if not isinstance(name, str) or not name:
+            # R9-18 (§5.14): a desired ruleset without a string `name` has no identity, so it could
+            # never be matched and its absence would read CLEAN. That is a library-data error — fail
+            # loud (run `aviato validate`), never silently drop a required ruleset from drift.
+            raise ValueError("desired ruleset payload is missing a non-empty string 'name'")
         live = live_by_key.get((name, desired.get("target")))
         if live is None or ruleset_content_drift(desired, live):
             drifted.append(name)

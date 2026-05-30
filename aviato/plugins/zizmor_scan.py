@@ -67,8 +67,12 @@ def zizmor_uses_image_violations(workflow_dir: Path) -> list[str]:
     #   default persona it is gated in name only (container:/services: image tags pass). auditor does
     #   NOT loosen `unpinned-uses` — the bundled config's ref-pin policy still exempts actions/*,
     #   github/*, and the self-ref; we filter to _GATED_AUDITS, so auditor's other findings are dropped.
-    # --no-ignores (R10-8): a consumer's inline `# zizmor: ignore[unpinned-uses]` must NOT waive the
-    #   Library-mandated §11.3 gate — without this, any consumer opts out of the gate with a comment.
+    # --no-ignores (R10-8): a consumer's inline `# zizmor: ignore[...]` must NOT waive the Library-
+    #   mandated §11.3 gate — without this, any consumer opts out with a comment. N9 (accepted): the
+    #   trade is that a legitimately-dynamic `container.image: ${{ inputs.image }}` (caller passes a
+    #   digest) cannot be inline-waived either. That is intentional — the gate is mandatory; a digest
+    #   LITERAL is the supported form. If a dynamic image is ever genuinely required, add a reviewed
+    #   exception to the bundled config (Library-owned), never a raw consumer inline ignore.
     result = run(
         [
             "zizmor",

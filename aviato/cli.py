@@ -65,7 +65,9 @@ def _read_repos_file(path: Path) -> list[str]:
     # AviatoError handler), not a raw OSError traceback.
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
+        # N8: UnicodeDecodeError is a ValueError, NOT an OSError, so a non-UTF-8 repos file would
+        # otherwise escape this net as a raw traceback. Map both to a clean operator error.
         raise AviatoError(f"could not read --repos-file {path}: {exc}") from exc
     repos: list[str] = []
     for line in text.splitlines():
@@ -288,24 +290,30 @@ def _desired_settings(resolved) -> dict:
     return {key: value for key, value in flat.items() if key in RECONCILABLE_SETTING_KEYS}
 
 
-def _drifted_rulesets(slug: str, platform, profile: str, *, required_approvals: int | None = None) -> tuple[str, ...]:
+def _drifted_rulesets(
+    slug: str,
+    platform,
+    *,
+    required_approvals: int | None = None,
+    extra_status_checks: list[str] | None = None,
+) -> tuple[str, ...]:
     """Names of desired rulesets MISSING from, or content-DRIFTED on, the live platform (§5.6).
 
-    The GitHub-specific work (render the desired payloads with the profile's verify checks, read
+    The GitHub-specific work (render the desired payloads with the resolved verify checks, read
     the live payloads, compare presence + content) lives here in the binding layer, NOT the
     agnostic flow. Reads are admin-scoped and fail closed (SettingsReadError) like other settings
     reads, so the caller's existing fail-closed/fail-loud handling covers them.
 
-    CX#1: ``required_approvals`` is the consumer's resolved ``required_reviews`` override (§4.2). It
-    must flow into the rendered ruleset so the RULESET surface and the classic branch-protection
-    reconcile (which already honors the override) agree on the approval count — otherwise a
-    consumer that overrides required_reviews sees phantom ruleset drift / an apply that resets it.
+    R9-21 (cycle 9, fixed cycle 11): ``extra_status_checks`` is the consumer's **override-resolved**
+    required status checks (from ``resolved.settings``), NOT the base profile's. Using the base
+    profile here reported phantom drift for a consumer that removed a pipeline via overrides, and the
+    suggested `apply-rulesets --profile` remediation would re-add a required check whose workflow no
+    longer runs (unmergeable PRs). CX#1: ``required_approvals`` is the resolved ``required_reviews``
+    override, flowed in for the same reason (ruleset + classic-protection agree on the count).
     """
     from .rulesets import drifted_ruleset_names, render_all_rulesets
 
-    desired = render_all_rulesets(
-        required_approvals=required_approvals, extra_status_checks=_profile_status_checks(profile)
-    )
+    desired = render_all_rulesets(required_approvals=required_approvals, extra_status_checks=extra_status_checks or [])
     live = platform.read_rulesets(slug)
     return tuple(drifted_ruleset_names(desired, live))
 
@@ -1392,11 +1400,12 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         try:
             # CX#1: pass the consumer's resolved required_reviews override so the ruleset render
             # matches the classic-protection desired state (both express the same approval count).
+            _db = resolved.settings.get("default_branch", {})
             drifted_rulesets = _drifted_rulesets(
                 slug,
                 platform,
-                declaration.profile,
-                required_approvals=resolved.settings.get("default_branch", {}).get("required_reviews"),
+                required_approvals=_db.get("required_reviews"),
+                extra_status_checks=list(_db.get("required_status_checks", [])),
             )
             settings_outcome = run_settings_drift(
                 platform,
@@ -1420,9 +1429,11 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
             )
             if args.require_settings:
                 return 1
-        except GitHubAPIError as exc:
-            # The issue channel (not the settings read) failed. §5.6 requires this to fail
-            # loud — never a silent skip — so §5.4 diagnosis can flag the broken channel.
+        except (GitHubAPIError, CommandError) as exc:
+            # The issue channel (not the settings read) failed. §5.6 requires this to fail loud —
+            # never a silent skip — so §5.4 diagnosis can flag the broken channel. N5: the issue
+            # WRITE (open_or_update_issue → gh) raises CommandError, not GitHubAPIError, so without
+            # catching it the failure fell through to main()'s exit 2 instead of this fail-loud exit 1.
             print(
                 f"settings drift: FAILED — the tracking-issue channel is unavailable ({exc}); "
                 "the drift report was not delivered (§5.6). This is not a settings-read skip.",

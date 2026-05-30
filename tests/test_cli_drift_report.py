@@ -236,9 +236,22 @@ def test_drifted_rulesets_honors_required_reviews_override() -> None:
     from aviato.cli import _drifted_rulesets, _profile_status_checks
     from aviato.rulesets import render_all_rulesets
 
-    live = render_all_rulesets(required_approvals=2, extra_status_checks=_profile_status_checks("python-library"))
+    checks = _profile_status_checks("python-library")
+    live = render_all_rulesets(required_approvals=2, extra_status_checks=checks)
     platform = FakePlatform(rulesets=live)
     # With the override threaded through, desired==live → NO drift.
-    assert _drifted_rulesets("o/r", platform, "python-library", required_approvals=2) == ()
+    assert _drifted_rulesets("o/r", platform, required_approvals=2, extra_status_checks=checks) == ()
     # Without it (policy default 1), desired (1) != live (2) → the branch ruleset reports drift.
-    assert _drifted_rulesets("o/r", platform, "python-library") != ()
+    assert _drifted_rulesets("o/r", platform, extra_status_checks=checks) != ()
+
+
+def test_drifted_rulesets_uses_resolved_checks_not_base_profile() -> None:
+    # R9-21 (cycle 11): drift compares against the OVERRIDE-RESOLVED required status checks supplied
+    # by the caller, not the base profile. A consumer that removed a pipeline (→ empty extra checks)
+    # must not see phantom drift against live rulesets that also carry no extra checks.
+    from aviato.cli import _drifted_rulesets
+    from aviato.rulesets import render_all_rulesets
+
+    live = render_all_rulesets(extra_status_checks=[])
+    platform = FakePlatform(rulesets=live)
+    assert _drifted_rulesets("o/r", platform, extra_status_checks=[]) == ()

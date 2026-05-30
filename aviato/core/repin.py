@@ -126,15 +126,20 @@ def plan_repin(
 
     # A pipeline override that removes a pipeline no longer present at the target is
     # orphaned — report it (don't let merge_list raise remove-of-absent, §5.12/§4.2).
-    pipeline_override = declaration.overrides.get("pipelines", {})
-    for name in pipeline_override.get("remove", ()):
+    # N7: the target base profile is resolved WITHOUT overrides, so a malformed `pipelines` override
+    # (a bare list, or present-null `add:`/`remove:`) is not validated by composition before reaching
+    # here — guard it so it is a clean CompositionError, not a raw AttributeError/TypeError.
+    pipeline_override = declaration.overrides.get("pipelines") or {}
+    if not isinstance(pipeline_override, dict):
+        raise CompositionError("pipelines override must use add/remove, not a bare list (§4.2)")
+    for name in pipeline_override.get("remove") or ():
         if name not in resolved.pipelines:
             plan.orphaned_overrides.append(name)
     # A pipeline override that ADDS a pipeline the target version now bundles collides
     # (add-of-already-present, §4.2). Surface it at PLAN time and block — otherwise the
     # plan reports ok, the pin is written, and the next `aviato sync` (which resolves WITH
     # overrides) crashes with CompositionError at a far more disruptive point (§5.12).
-    for name in pipeline_override.get("add", ()):
+    for name in pipeline_override.get("add") or ():
         if name in resolved.pipelines:
             plan.conflicting_overrides.append(name)
 

@@ -355,3 +355,30 @@ def test_profile_declared_version_source_locations_validated_like_override() -> 
     ):
         with pytest.raises(CompositionError):
             _validated_locations(bad, context="x")
+
+
+def test_validated_locations_rejects_paths_that_escape_root() -> None:
+    # R9-15: an absolute path or a `..` component would let `aviato bump-version` write outside the
+    # repo checkout during a release. Reject them; a normal repo-relative path is accepted.
+    from aviato.core.composition import _validated_locations
+    from aviato.core.errors import CompositionError
+
+    for bad in (["/etc/x"], ["../x"], ["a/../../b"]):
+        with pytest.raises(CompositionError):
+            _validated_locations({"locations": bad}, context="x")
+    assert _validated_locations({"locations": ["pyproject.toml", "src/_version.py"]}, context="x") == (
+        "pyproject.toml",
+        "src/_version.py",
+    )
+
+
+def test_pipelines_override_present_null_does_not_raise_typeerror() -> None:
+    # R9-16: a present-null `add:`/`remove:` must be a clean no-op (not a raw TypeError that aborts a
+    # fleet scan); a non-list value is a clean CompositionError.
+    from aviato.core.composition import _override_pipeline_list
+    from aviato.core.errors import CompositionError
+
+    assert _override_pipeline_list(None, "add") == ()
+    assert _override_pipeline_list(["ci"], "remove") == ("ci",)
+    with pytest.raises(CompositionError):
+        _override_pipeline_list("ci", "add")

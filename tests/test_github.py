@@ -76,6 +76,24 @@ def test_upsert_ruleset_puts_to_existing_id_when_present(monkeypatch: pytest.Mon
     assert "repos/o/r/rulesets/4242" in calls[0]
 
 
+def test_upsert_ruleset_matches_by_name_and_target_not_name_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    # N1 (cycle 11): a live ruleset that shares a NAME but targets a different ref kind must NOT be
+    # updated — that would overwrite the wrong protected resource. The desired payload creates its own.
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+    )
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"name": "Protect", "target": "tag", "id": 99}])
+    result = github.upsert_ruleset("o/r", {"name": "Protect", "target": "branch"}, apply=True)
+    assert "Created" in result
+    assert calls[0][calls[0].index("--method") + 1] == "POST"
+    # Same (name, target) → update the matching one.
+    calls.clear()
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"name": "Protect", "target": "branch", "id": 7}])
+    result2 = github.upsert_ruleset("o/r", {"name": "Protect", "target": "branch"}, apply=True)
+    assert "Updated" in result2 and "repos/o/r/rulesets/7" in calls[0]
+
+
 def test_upsert_ruleset_dry_run_does_not_mutate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: [])
     monkeypatch.setattr(

@@ -80,6 +80,19 @@ def test_multiword_denylist_token_matches_any_whitespace(tmp_path: Path) -> None
     assert denylist_violations(other, {"app store"}) == []
 
 
+def test_multiword_denylist_token_matches_hyphen_and_concatenated(tmp_path: Path) -> None:
+    # R9-20: a two-word token must also catch the hyphenated, underscored, and concatenated forms of
+    # the same identifier — the exact day-zero deployment-environment spellings that a `\s+`-only
+    # join missed and that let a concrete env name slip into the agnostic core.
+    core = tmp_path / "core"
+    core.mkdir()
+    (core / "hyphen.py").write_text("env = 'app-store-connect'\n")
+    (core / "concat.py").write_text("ENV = 'APPSTORE'\n")
+    assert denylist_violations(core, {"app store"}) != []
+    for name in ("hyphen.py", "concat.py"):
+        assert any(name in v for v in denylist_violations(core, {"app store"})), name
+
+
 def test_dynamic_import_edge_detected_in_synthetic_core(tmp_path: Path) -> None:
     # §9b: the check flags ANY dynamic import in core, not just one whose argument literally
     # spells the plug-in tree. That breadth is the point — core has no legitimate dynamic-import
