@@ -39,64 +39,50 @@ def unpinned_third_party_uses(text: str) -> list[str]:
     return violations
 
 
-# §11.3 fetch-execute detection — DELIBERATELY COARSE, fail-closed, FROZEN. This is a LINT, not a
-# sandbox. Three prior shapes flapped: interpreter enumeration (fail-open on unknown executors,
-# cycle-9 R9-1..R9-5), checksum-word + sink allowlist (fail-open on comments/chaining, cycle-10
-# R10-1/R10-2), and regex-split taint (fail-open on `2>&1`/quotes/`-fsSLo`/YAML-as-shell, cycle-11
-# C11-1..C11-9). The lesson (both review engines): you cannot decide "do fetched bytes reach
-# execution" by regex-splitting shell — every refinement opens a new shell-grammar hole. So we STOP
-# trying to be precise. The rule, over each YAML `run:` block: an unverified `curl`/`wget` is a
-# violation UNLESS the block carries a real verify command, and the fetch is a *trivial safe shape* —
-# a bare fetch to stdout, or a pipe into ONLY pure data sinks. Anything else (a pipe to a non-sink, a
-# substitution, any command sequencing on the line, ANY download-to-a-file) is flagged. We accept the
-# resulting false positives (e.g. `curl … | jq && echo` flags) as the cost of a decidable, stable
-# gate — and we do NOT keep refining it. DO NOT add executor names, parse quotes, or chase edge cases.
-_FETCH_RE = re.compile(r"\b(?:curl|wget)\b")
-# Pure data sinks: consume stdin, emit to stdout only. A fetch piped into ONLY these is data handling.
-_PURE_SINKS = frozenset(
-    {"jq", "grep", "egrep", "fgrep", "rg", "head", "tail", "sort", "uniq", "wc", "cut", "tr", "less", "more", "nl"}
-)
-# A real verify COMMAND anywhere in the block grants block-level trust (download → verify → use). This
-# is intentionally LOOSE — binding the verifier to the exact artifact needs a shell parser, which is
-# the precision we are deliberately forgoing (a stray/unrelated verify clearing trust is a documented,
-# accepted limitation of a coarse lint; an operator who checksums the wrong file has a footgun, not an
-# attacker). A bare WORD does not match — the verb + check mode is required (closes cycle-10 R10-1).
-_VERIFY_RE = re.compile(
-    r"\b(?:sha(?:1|256|512)sum|shasum|b2sum|md5sum)\b[^\n]*?(?:\s-c\b|\s--check\b)"
-    r"|\bcosign\s+verify(?:-blob)?\b"
-    r"|\bgpg\b[^\n]*?\s--(?:verify|decrypt)\b"
-    r"|\bminisign\b[^\n]*?\s-V\b"
-)
-# Substitution / sequencing / file-write signals — ANY of these on a fetch line means "not a trivial
-# safe shape" → flag. Presence checks only (no splitting → immune to `2>&1`, quoted operators, etc.).
-_SUBST_RE = re.compile(r"<\(|>\(|\$\(|`")
-_SEQ_RE = re.compile(r"&&|\|\||;|&")
-_REDIR_FILE_RE = re.compile(r">>?\s*(?!/dev/null\b|&)")  # `>`/`>>` to a real file (not /dev/null, not >&)
-_CURL_OUT_RE = re.compile(r"(?:^|\s)(?:-o|-O|--output)(?:[=\s]|$)")
-# wget writes a FILE by default; it streams to stdout only with an explicit `-O-`/`-qO-`/… form.
-_WGET_STDOUT_RE = re.compile(r"-O\s*-(?:\s|$)|-O\s*/dev/stdout|-qO-|--output-document\s*=?\s*-")
-_RUN_KEY_RE = re.compile(r"(?m)^\s*-?\s*run:")
-_RUN_LINE_RE = re.compile(r"^(?P<indent>\s*)-?\s*run:\s*(?P<rest>.*)$")
-_BLOCK_SCALAR = {"|", ">", "|-", ">-", "|+", ">+"}
+# §11.3 fetch-execute detection — built on a REAL shell parser (bashlex), not regex. Four prior
+# regex/string shapes flapped (cycle-9 enumeration, cycle-10 checksum-word+sink, cycle-11 regex-split
+# taint, cycle-12 "coarse" — each reopened a shell-grammar hole: quotes, comments, `2>&1`, option
+# clusters, substitution). The lesson (both review engines): you cannot decide "do fetched bytes reach
+# execution" by matching shell text. bashlex tokenizes correctly — comments are dropped, `2>&1` is a
+# redirect not a separator, `-fsSLo` is one word, `$(…)`/`<(…)` are real nodes — so the decision is a
+# clean AST walk. The rule: a `curl`/`wget` is a violation if its output can reach execution —
+#   (A) it sits inside a command/process substitution (its bytes become a command/arg), or
+#   (B) it pipes into anything that is not a pure data sink, or
+#   (C) it writes a file that a later command uses and no verify command covers that file.
+# A bare fetch to stdout, or a pipe into pure data sinks only, is clean; download → verify → use is
+# clean. Undecidable cases (a dynamic command word like `$CMD`, a fetch in a block bashlex can't parse)
+# fail CLOSED. This is the convergent design; do not revert it to text matching.
+_FETCH_RE = re.compile(r"\b(?:curl|wget)\b")  # cheap pre-filter only; the real check is the AST walk
+_FETCH_NAMES = frozenset({"curl", "wget"})
+# Pure data sinks: consume stdin and emit to stdout only — never execute stdin nor (without an explicit
+# redirect) write a file. Deliberately EXCLUDES sort (`--compress-program=CMD` executes, cycle-12
+# C12-9), less/more (shell escapes), awk/sed (`-f`/`-e`), xargs, tee (writes a file), and every shell.
+_PURE_SINKS = frozenset({"jq", "grep", "egrep", "fgrep", "rg", "head", "tail", "cut", "tr", "nl", "wc", "cat"})
+# Verifier commands (a verifier tool + its check/verify subcommand) are recognised as real command
+# nodes only, in `_is_verifier` — a checksum word in a comment/string is dropped by the lexer, so it
+# can no longer grant trust (closes cycle-12 C12-5).
+_RUN_KEY_RE = re.compile(r"(?m)^\s*-?\s*run\s*:")
+_RUN_LINE_RE = re.compile(r"^(?P<indent>\s*)-?\s*run\s*:\s*(?P<rest>.*)$")
+_SCALAR_RE = re.compile(r"^[|>][+-]?[0-9]*$")  # block-scalar indicator: |, >, |-, |2, >+2, … (C12-8)
 
 
 def _fold_logical_lines(text: str) -> list[str]:
     """Fold `\\`-newline continuations and split-pipe scalars into logical lines. Folding only JOINS,
-    so it can add flags, never remove them (fail-closed safe; closes the cycle-9 R9-2 fold cases)."""
-    text = re.sub(r"\\\n[ \t]*", " ", text)  # shell line-continuation
-    text = re.sub(r"\|[ \t]*\n[ \t]*", "| ", text)  # pipe at EOL → join with next
-    text = re.sub(r"\n[ \t]*\|", " |", text)  # pipe leads next line → join with prev
+    so it can add flags, never remove them (fail-closed safe). Used by the pip-pin scan only."""
+    text = re.sub(r"\\\n[ \t]*", " ", text)
+    text = re.sub(r"\|[ \t]*\n[ \t]*", "| ", text)
+    text = re.sub(r"\n[ \t]*\|", " |", text)
     return text.splitlines()
 
 
 def _basename(token: str) -> str:
-    return token.rsplit("/", 1)[-1]
+    return token.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
 
 
 def _run_blocks(text: str) -> list[str]:
-    """Extract shell ``run:`` block bodies so workflow METADATA is never analyzed as shell (cycle-11
-    C11-5). Tolerant of templated (`{{ … }}`) bodies — line/indentation based, not a YAML parse. If
-    the text has no ``run:`` marker it is treated as one raw shell block (so a bare snippet works)."""
+    """Extract shell ``run:`` block bodies so workflow METADATA is never analyzed as shell (C11-5).
+    Handles `run :` (space), block-scalar indicators (`|2`/`|-`/`>+`), and a trailing `# comment` on
+    the indicator line (C12-8). Tolerant of templated (`{{ … }}`) bodies. No ``run:`` → one raw block."""
     if not _RUN_KEY_RE.search(text):
         return [text]
     lines = text.splitlines()
@@ -107,8 +93,8 @@ def _run_blocks(text: str) -> list[str]:
         if not match:
             i += 1
             continue
-        rest = match.group("rest").strip()
-        if rest in _BLOCK_SCALAR:
+        rest = re.sub(r"\s+#.*$", "", match.group("rest")).strip()  # drop a trailing YAML comment
+        if _SCALAR_RE.match(rest):
             base = len(match.group("indent"))
             body: list[str] = []
             i += 1
@@ -120,49 +106,220 @@ def _run_blocks(text: str) -> list[str]:
                 i += 1
             blocks.append("\n".join(body))
         else:
-            blocks.append(rest)  # inline run:
+            blocks.append(match.group("rest"))  # inline run:
             i += 1
     return blocks
 
 
-def _fetch_line_is_trivially_safe(line: str) -> bool:
-    """A fetch line is safe ONLY as a bare fetch to stdout or a pipe into pure data sinks — no
-    substitution, no command sequencing, and no download-to-a-file. Presence checks (not splitting),
-    so `curl … 2>&1 | bash` (the `&` is sequencing) and quoted operators are caught, not evaded."""
-    if _SUBST_RE.search(line) or _SEQ_RE.search(line) or _REDIR_FILE_RE.search(line):
+def _node_words(node: object) -> list[str]:
+    """Literal command-line words of a CommandNode, including `>`/`>>` redirect targets."""
+    words: list[str] = []
+    for part in getattr(node, "parts", []):
+        kind = getattr(part, "kind", None)
+        if kind == "word":
+            words.append(part.word)
+        elif kind == "redirect":
+            out = getattr(part, "output", None)
+            if out is not None and getattr(out, "kind", None) == "word":
+                words.append(out.word)
+    return words
+
+
+def _command_name(node: object) -> str | None:
+    for part in getattr(node, "parts", []):
+        if getattr(part, "kind", None) == "word":
+            return _basename(part.word)
+    return None
+
+
+def _is_verifier(node: object) -> bool:
+    """A real verify command: a verifier tool with its check/verify subcommand or flag."""
+    words = _node_words(node)
+    if not words:
         return False
-    if re.search(r"\bcurl\b", line) and _CURL_OUT_RE.search(line):
-        return False  # curl -o/-O/--output writes a file
-    if re.search(r"\bwget\b", line) and not _WGET_STDOUT_RE.search(line):
-        return False  # wget writes a file unless explicitly streaming to stdout
-    for segment in line.split("|")[1:]:  # any pipe target must be a pure data sink
-        tokens = segment.split()
-        if not tokens or _basename(tokens[0]) not in _PURE_SINKS:
-            return False
-    return True
+    name = _basename(words[0])
+    rest = words[1:]
+    if name in {"sha256sum", "sha512sum", "sha1sum", "shasum", "b2sum", "md5sum"}:
+        return any(w in ("-c", "--check") for w in rest)
+    if name == "cosign":
+        return any(w in ("verify", "verify-blob") for w in rest)
+    if name == "gpg":
+        return any(w in ("--verify", "--decrypt") for w in rest)
+    if name == "minisign":
+        return "-V" in rest
+    return False
+
+
+def _fetch_output_files(node: object) -> set[str]:
+    """Files a curl/wget command writes (so later use of them is "used unverified fetched bytes").
+
+    Parses the KNOWN output options of curl/wget (bounded + stable, unlike whole-line regex) plus any
+    `>`/`>>` redirect target. Empty set ⇒ the fetch streams to stdout (a bare/piped fetch)."""
+    parts = getattr(node, "parts", [])
+    words = [p.word for p in parts if getattr(p, "kind", None) == "word"]
+    if not words:
+        return set()
+    tool = _basename(words[0])
+    files: set[str] = set()
+    # `>`/`>>` redirect targets are downloads regardless of tool.
+    for part in parts:
+        if getattr(part, "kind", None) == "redirect" and getattr(part, "type", None) in (">", ">>"):
+            out = getattr(part, "output", None)
+            if out is not None and getattr(out, "kind", None) == "word" and out.word not in ("/dev/null",):
+                files.add(out.word)
+    urls = [w for w in words[1:] if "://" in w]
+    args = words[1:]
+    i = 0
+    while i < len(args):
+        w = args[i]
+        if w in ("-o", "--output") and i + 1 < len(args):
+            files.add(args[i + 1])
+            i += 2
+            continue
+        if w.startswith("--output="):
+            files.add(w.split("=", 1)[1])
+        elif w.startswith("--output-document="):  # wget
+            val = w.split("=", 1)[1]
+            if val != "-":
+                files.add(val)
+        elif w == "--output-document" and i + 1 < len(args):
+            if args[i + 1] != "-":
+                files.add(args[i + 1])
+            i += 2
+            continue
+        elif w in ("--remote-name", "--remote-name-all", "-O") and tool == "curl":
+            files.update(_basename(u) for u in urls)  # curl -O / --remote-name → remote basename
+        elif tool == "curl" and re.fullmatch(r"-[a-zA-Z]*o", w):  # short-option cluster ending in `o`
+            if i + 1 < len(args):
+                files.add(args[i + 1])
+                i += 2
+                continue
+        elif tool == "curl" and re.fullmatch(r"-[a-zA-Z]*O[a-zA-Z]*", w):  # cluster containing `O`
+            files.update(_basename(u) for u in urls)
+        i += 1
+    # wget writes a file by default (remote basename) unless it streams to stdout.
+    if tool == "wget" and not files:
+        stdout = any(
+            w in ("-O-", "-qO-", "--output-document=-") or (w in ("-O", "--output-document") and "-" in args)
+            for w in args
+        ) or any("/dev/stdout" in w for w in args)
+        if not stdout:
+            files.update(_basename(u) for u in urls)
+    return files
+
+
+class _FetchWalk:
+    """Walks a bashlex AST collecting what's needed to decide §11.3 fetch-execute violations."""
+
+    def __init__(self) -> None:
+        self.violations: list[str] = []
+        self.downloads: set[str] = set()  # files holding unverified fetched bytes
+        self.has_verifier: bool = False  # a real verify command anywhere → downloads are vetted
+        self.used: set[str] = set()  # words used by non-fetch, non-verifier commands
+
+    def walk(self, node: object, in_subst: bool) -> None:
+        kind = getattr(node, "kind", None)
+        if kind == "pipeline":
+            self._pipeline(node)
+            for part in node.parts:
+                self.walk(part, in_subst)
+            return
+        if kind == "command":
+            self._command(node, in_subst)
+            for part in getattr(node, "parts", []):
+                self.walk(part, in_subst)  # words may carry substitutions
+            return
+        if kind in ("commandsubstitution", "processsubstitution"):
+            cmd = getattr(node, "command", None)
+            if cmd is not None:
+                self.walk(cmd, True)
+            return
+        if kind == "word":
+            for part in getattr(node, "parts", []):
+                self.walk(part, in_subst)
+            return
+        for part in getattr(node, "parts", []):  # list/compound/etc.
+            self.walk(part, in_subst)
+        for attr in ("list", "command"):
+            child = getattr(node, attr, None)
+            if child is not None and getattr(child, "kind", None):
+                self.walk(child, in_subst)
+
+    def _pipeline(self, node: object) -> None:
+        commands = [p for p in node.parts if getattr(p, "kind", None) == "command"]
+        pipe_has_fetch = any(_command_name(c) in _FETCH_NAMES for c in commands)
+        for idx, cmd in enumerate(commands):
+            if _command_name(cmd) in _FETCH_NAMES:
+                downstream = commands[idx + 1 :]
+                if any(_command_name(d) not in _PURE_SINKS for d in downstream):
+                    # (B) fetch streams into something that is not a pure data sink — a stream cannot
+                    # be checksum-verified mid-flight, so a verifier elsewhere never excuses it (C12-1).
+                    self.violations.append("fetch piped into a non-data-sink command")
+        if pipe_has_fetch:
+            # Files written ANYWHERE in a fetch-bearing pipeline (`curl | cat > f`) hold fetched bytes.
+            for cmd in commands:
+                if _command_name(cmd) in _FETCH_NAMES:
+                    self.downloads |= _fetch_output_files(cmd)
+                else:
+                    self.downloads |= _redirect_files(cmd)
+
+    def _command(self, node: object, in_subst: bool) -> None:
+        name = _command_name(node)
+        if name in _FETCH_NAMES:
+            if in_subst:
+                # (A) a fetch inside `$(…)`/`<(…)`/`>(…)` — its bytes become a command/arg/file; a
+                # stream into a command position cannot be verified, so this always flags.
+                self.violations.append("fetch inside a command/process substitution")
+            self.downloads |= _fetch_output_files(node)
+            return
+        if _is_verifier(node):
+            # A real verify COMMAND (not a comment/string — the lexer dropped those) vets DOWNLOADS in
+            # this block. It does NOT vet streamed fetches (handled above). Binding the verifier to the
+            # exact artifact is not attempted: a deliberately-fake verify (`sha256sum -c /dev/null`) on
+            # a download is a documented out-of-scope evasion — same class as a dynamic command word —
+            # because this is an honest-mistake gate, not a defense against a self-attacking author.
+            self.has_verifier = True
+            return
+        self.used |= set(_node_words(node))
+
+
+def _redirect_files(node: object) -> set[str]:
+    files: set[str] = set()
+    for part in getattr(node, "parts", []):
+        if getattr(part, "kind", None) == "redirect" and getattr(part, "type", None) in (">", ">>"):
+            out = getattr(part, "output", None)
+            if out is not None and getattr(out, "kind", None) == "word" and out.word != "/dev/null":
+                files.add(out.word)
+    return files
 
 
 def fetch_execute_violations(text: str) -> list[str]:
-    """Coarse, fail-closed §11.3 fetch-execute check (design contract in the module comment above).
+    """Fail-closed §11.3 fetch-execute check over a real shell AST (design contract above).
 
-    Per YAML ``run:`` block: if the block contains a `curl`/`wget` and NO real verify command, every
-    fetch line must be a trivial safe shape (bare fetch to stdout, or a pipe into pure data sinks) —
-    otherwise the block is flagged. Deliberately coarse and FROZEN: it accepts false positives rather
-    than chase shell-grammar edge cases, because a stable lint beats another fail-open detector.
-    """
+    For each ``run:`` block: parse it with bashlex and walk the AST. A `curl`/`wget` is flagged when
+    its output can reach execution (substitution / non-sink pipe / a downloaded file used unverified).
+    A block bashlex cannot parse but that mentions curl/wget fails CLOSED (flagged)."""
+    import bashlex
+
     violations: list[str] = []
     for block in _run_blocks(text):
         if not _FETCH_RE.search(block):
             continue
-        if _VERIFY_RE.search(block):
-            continue  # download → verify → use (block-level trust; see _VERIFY_RE comment)
-        for line in _fold_logical_lines(block):
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            if _FETCH_RE.search(line) and not _fetch_line_is_trivially_safe(line):
-                violations.append(f"fetch-and-execute without checksum: {stripped}")
-                break
+        try:
+            trees = bashlex.parse(block)
+        except Exception:  # noqa: BLE001 — ANY parse failure (templated/garbled) → cannot prove safe
+            # Unparseable but it mentions curl/wget → fail closed.
+            violations.append(f"fetch-and-execute without checksum (unparsed block): {block.strip()[:80]}")
+            continue
+        walk = _FetchWalk()
+        for tree in trees:
+            walk.walk(tree, False)
+        reasons = list(walk.violations)
+        if not walk.has_verifier and (walk.downloads & walk.used):
+            # (C) a downloaded file is used by a later command and the block has no verify command.
+            reasons.append(f"unverified downloaded file used: {sorted(walk.downloads & walk.used)}")
+        if reasons:
+            violations.append(f"fetch-and-execute without checksum: {reasons[0]}")
     return violations
 
 
