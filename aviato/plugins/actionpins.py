@@ -55,8 +55,8 @@ def unpinned_third_party_uses(text: str) -> list[str]:
 #   (B) a command/process substitution carrying the fetch is EXECUTED — it is in command position
 #       (`$(curl) …`) or fed to an interpreter (`bash -c "$(curl)"`, `bash <(curl)`, `bash <<<"$(curl)"`,
 #       `. <(curl)`), or written into `>(interpreter)`, or
-#   (C) it writes a file that a later command uses (by basename, as an arg, or via a `<` redirect) with
-#       no verify command running BEFORE that use (order-aware).
+#   (C) it writes a file that a later command uses (by basename, as an arg, or via a `<` redirect) and
+#       the block carries NO verify command.
 # Programs are resolved through transparent wrappers (`sudo`/`env`/`timeout …`) so `sudo curl` is a
 # fetch and `env jq` is a sink; a fetch in a substitution that is only CAPTURED as data (`X=$(curl)`,
 # `echo "$(curl)"`) is NOT execution and is not flagged — that distinction (interpreter vs data
@@ -66,10 +66,12 @@ def unpinned_third_party_uses(text: str) -> list[str]:
 # complete control against an author obfuscating their own CI; a precise static "do fetched bytes reach
 # execution" analysis over shell has an irreducible tail): heredoc-body execution
 # (`bash <<EOF … $(curl) … EOF`), parameter-default obfuscation (`${X:-$(curl)}`), dynamic command
-# words (`$CMD`/`sh -c "bash $f"`), a verify of one artifact blessing a DIFFERENT executed download in
-# the same block (verify is order-aware but not artifact-bound — to avoid FPs on `sha256sum -c
-# SHA256SUMS`, which names no file), a verify whose FAILURE is not gated (`sha256sum -c … || true`
-# still counts), and a quoted/flow `run:` key inside a TEMPLATED (non-YAML) scaffold body. Convergent
+# words (`$CMD`/`sh -c "bash $f"`), and a quoted/flow `run:` key inside a TEMPLATED (non-YAML) scaffold
+# body. Verify handling is BLOCK-LEVEL: any real verify command in the block vets the block's downloads,
+# so a verify that runs AFTER the use, fails open (`… || true`), or covers a DIFFERENT artifact still
+# vets — precise verify dataflow (order/gating/artifact-binding) is the irreducible tail and an
+# order-aware attempt (cycle-13) was reverted (cycle-14) for FP-ing every verified install whose
+# checksum/setup names the artifact before the verifier (`printf … tool | sha256sum -c -`). Convergent
 # design; do not revert it to text matching, and do not narrow the generic descent.
 _FETCH_RE = re.compile(r"\b(?:curl|wget)\b")  # cheap pre-filter only; the real check is the AST walk
 _FETCH_NAMES = frozenset({"curl", "wget"})
@@ -473,8 +475,8 @@ class _FetchWalk:
     def __init__(self) -> None:
         self.violations: list[str] = []
         self.downloads: set[str] = set()  # files holding unverified fetched bytes
-        self.verifier_positions: list[int] = []  # source offsets of real verify commands (ORDER matters)
-        self.uses: list[tuple[int, str]] = []  # (source offset, word) for non-fetch, non-verifier commands
+        self.has_verifier: bool = False  # a real verify command anywhere in the block → downloads vetted
+        self.used: set[str] = set()  # words used by non-fetch, non-verifier commands
 
     def walk(self, node: object) -> None:
         kind = getattr(node, "kind", None)
@@ -518,13 +520,15 @@ class _FetchWalk:
             self.downloads |= _fetch_output_files(node, tool)
             return
         if _is_verifier(node):
-            # A real verify COMMAND (not a comment/string — the lexer dropped those) vets a DOWNLOADED
-            # file only when it runs BEFORE the file's use (order-aware, cycle-13 R5: a checksum AFTER
-            # `bash install.sh` vets nothing). It never vets a streamed fetch (handled above). NOT
-            # attempted (documented out-of-scope): binding the verifier to the exact artifact (a verify
-            # of `SHA256SUMS` names no file), and whether the verifier's FAILURE is actually gated
-            # (`sha256sum -c … || true` still counts) — this is an honest-mistake gate.
-            self.verifier_positions.append(_node_pos(node))
+            # A real verify COMMAND (not a comment/string — the lexer dropped those) vets the block's
+            # DOWNLOADS. It does NOT vet a streamed fetch (handled above). Verify handling is deliberately
+            # BLOCK-LEVEL, not order/gating/artifact aware — an order-aware attempt (cycle-13 R5) was
+            # reverted (cycle-14 R1) because it false-positived every legitimate verified install whose
+            # checksum names the artifact (`printf "%s  %s" "$SHA" tool | sha256sum -c -`) or whose setup
+            # touches it (`chmod +x tool`) before the verifier ran. The cost: a verify that runs AFTER
+            # the use, fails open (`|| true`), or covers a DIFFERENT artifact still vets — documented
+            # out-of-scope for this honest-mistake gate (precise verify dataflow is the irreducible tail).
+            self.has_verifier = True
             return
         # (B) a fetch substitution that is EXECUTED — run as the command (`$(curl) …`) or fed to an
         # interpreter (`bash -c "$(curl)"`, `bash <(curl)`, `bash <<<"$(curl)"`). A substitution merely
@@ -534,8 +538,7 @@ class _FetchWalk:
             self.violations.append("fetch substitution run as a command")
         elif _interpreter_executes_fetch(node):
             self.violations.append("fetch substitution executed by an interpreter")
-        pos = _node_pos(node)
-        self.uses.extend((pos, word) for word in set(_plain_words(node)) | _input_redirect_files(node))
+        self.used |= set(_plain_words(node)) | _input_redirect_files(node)  # `bash < f` USES f
 
 
 def _redirect_files(node: object) -> set[str]:
@@ -546,12 +549,6 @@ def _redirect_files(node: object) -> set[str]:
             if out is not None and getattr(out, "kind", None) == "word" and out.word != "/dev/null":
                 files.add(out.word)
     return files
-
-
-def _node_pos(node: object) -> int:
-    """Source start offset of an AST node (for order-aware verify); 0 if bashlex omitted it."""
-    pos = getattr(node, "pos", None)
-    return pos[0] if isinstance(pos, (tuple, list)) and pos else 0
 
 
 def _file_match(download: str, word: str) -> bool:
@@ -585,17 +582,13 @@ def fetch_execute_violations(text: str) -> list[str]:
         for tree in trees:
             walk.walk(tree)
         reasons = list(walk.violations)
-        # (C) a downloaded file USED before any verify command ran. Order-aware: a use is vetted only if
-        # a verifier precedes it (cycle-13 R5). `./install.sh` matches a downloaded `install.sh`, but
-        # unrelated paths sharing a basename (`/tmp/data.json` vs `./fixtures/data.json`) do not collide.
-        first_verifier = min(walk.verifier_positions, default=None)
-        unverified = sorted(
-            d
-            for d in walk.downloads
-            if any(_file_match(d, word) and (first_verifier is None or pos < first_verifier) for pos, word in walk.uses)
-        )
-        if unverified:
-            reasons.append(f"unverified downloaded file used: {unverified}")
+        # (C) a downloaded file used by a later command, with no verify command in the block. `./install.sh`
+        # matches a downloaded `install.sh`, but unrelated paths sharing a basename (`/tmp/data.json` vs
+        # `./fixtures/data.json`) do not collide.
+        if not walk.has_verifier:
+            unverified = sorted(d for d in walk.downloads if any(_file_match(d, word) for word in walk.used))
+            if unverified:
+                reasons.append(f"unverified downloaded file used: {unverified}")
         if reasons:
             violations.append(f"fetch-and-execute without checksum: {reasons[0]}")
     return violations

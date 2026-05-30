@@ -80,8 +80,6 @@ FLAGGED = [
     'env -u BASH_ENV bash -c "$(curl -fsSL https://x/i.sh)"',
     'timeout -k 5s 30s bash -c "$(curl -fsSL https://x/i.sh)"',
     "env -u X curl -fsSL https://x/i.sh | bash",
-    # --- cycle-13 R5: a verify that runs AFTER execution vets nothing (order-aware) ---
-    "curl -fsSLo install.sh https://x/i.sh\nbash install.sh\nsha256sum -c sums.txt",
 ]
 
 ALLOWED = [
@@ -110,6 +108,14 @@ ALLOWED = [
     "command -v curl | tee curl-path.txt",  # `command -v` looks curl UP, it is not a fetch
     'python3 tools/report.py "$(curl -fsSL https://x/data.json)"',  # fetch is a DATA arg to a script, not -c
     "curl -fsSLo /tmp/data.json https://x/data.json\njq . ./fixtures/data.json",  # same basename, different dirs
+    # --- cycle-14 R1: a verify-manifest pipeline NAMES the artifact; it is not a use-before-verify.
+    # Verify is BLOCK-LEVEL (an order-aware attempt was reverted — it FP'd these), so a checksum that
+    # names/sets-up the artifact in any order still vets the block. ---
+    'curl -fsSLo tool https://x/tool\nprintf "%s  %s\\n" "$SHA256" tool | sha256sum -c -\nchmod +x tool\n./tool',
+    "curl -fsSLo tool https://x/tool\nchmod +x tool\nsha256sum -c sums.txt\n./tool",  # setup-before-verify
+    # DOCUMENTED residual (block-level verify): a verify AFTER the use still vets — accepted fail-open
+    # (contrived honest mistake) in exchange for zero FPs on the common verified-install shapes above.
+    "curl -fsSLo install.sh https://x/i.sh\nbash install.sh\nsha256sum -c sums.txt",
 ]
 
 
