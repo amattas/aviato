@@ -97,6 +97,7 @@ _INTERPRETERS = frozenset(
 _SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh", "ash"})
 _CODE_FLAGS = frozenset({"-c", "-e", "-E", "--command", "--eval"})  # operand is code, not a filename
 _CODE_FLAG_PREFIXES = ("-c", "-e", "-E", "--command=", "--eval=")  # a GLUED code operand: `-c"$(curl)"`
+_MAX_SHELL_DEPTH = 4  # recursion guard for `bash -c '… bash -c "…" …'` nesting (cycle-15)
 # Verifier commands (a verifier tool + its check/verify subcommand) are recognised as real command
 # nodes only, in `_is_verifier` — a checksum word in a comment/string is dropped by the lexer, so it
 # can no longer grant trust (closes cycle-12 C12-5).
@@ -282,13 +283,45 @@ def _fetch_tool(node: object) -> str | None:
 
 def _is_interpreter(node: object) -> bool:
     """True if the command runs an interpreter (`bash`/`sh`/`eval`/`source`/`.`/`python`/…) — a
-    substitution fed to one is EXECUTED, not merely captured as data. Matches ANY command word so a
-    wrapper with arg-taking options (`sudo -u root bash -c …`, `timeout -k 5s 30s bash -c …`) can't hide
-    the interpreter (cycle-13 R4); a bare interpreter token as data (`echo bash`) is a rare, harmless
-    over-flag, unlike a literal `curl` which is common as a grep target."""
+    substitution fed to one is EXECUTED, not merely captured as data. Resolves the PROGRAM through
+    wrappers, with a wrapper-present fallback to any interpreter word (mirrors `_fetch_tool`) so
+    `sudo -u root bash -c …`/`timeout -k 5s 30s bash -c …` are caught WITHOUT misreading a literal
+    interpreter token in an ordinary command's args (`grep bash -e …`) as an interpreter (cycle-15)."""
     if getattr(node, "kind", None) != "command":
         return False
-    return any(_basename(word) in _INTERPRETERS for word in _plain_words(node))
+    if _resolved_program(node) in _INTERPRETERS:
+        return True
+    words = _plain_words(node)
+    return bool(words) and _basename(words[0]) in _WRAPPERS and any(_basename(w) in _INTERPRETERS for w in words)
+
+
+def _is_shell(node: object) -> bool:
+    """True if the command runs a POSIX shell (`bash`/`sh`/…) — whose `-c` operand is itself shell, vs
+    `python`/`perl`/`ruby` whose `-c`/`-e` operand is that LANGUAGE's code (never re-parsed as shell)."""
+    if getattr(node, "kind", None) != "command":
+        return False
+    if _resolved_program(node) in _SHELLS:
+        return True
+    words = _plain_words(node)
+    return bool(words) and _basename(words[0]) in _WRAPPERS and any(_basename(w) in _SHELLS for w in words)
+
+
+def _static_code_operands(node: object) -> list[str]:
+    """The LITERAL (substitution-free) string operands of a shell's `-c`/`-e` flag. These are shell to be
+    recursively scanned (`bash -c 'curl | bash'`); an operand carrying a substitution is already handled
+    by `_interpreter_executes_fetch`, so it is skipped here to avoid double work."""
+    word_parts = [p for p in getattr(node, "parts", []) if getattr(p, "kind", None) == "word"]
+    operands: list[str] = []
+    for i, part in enumerate(word_parts):
+        if part.word in _CODE_FLAGS and i + 1 < len(word_parts):
+            nxt = word_parts[i + 1]
+            has_subst = any(
+                getattr(c, "kind", None) in ("commandsubstitution", "processsubstitution")
+                for c in getattr(nxt, "parts", [])
+            )
+            if not has_subst:
+                operands.append(nxt.word)
+    return operands
 
 
 def _subtree_has_fetch(node: object) -> bool:
@@ -476,11 +509,12 @@ def _fetch_output_files(node: object, tool: str) -> set[str]:
 class _FetchWalk:
     """Walks a bashlex AST collecting what's needed to decide §11.3 fetch-execute violations."""
 
-    def __init__(self) -> None:
+    def __init__(self, depth: int = 0) -> None:
         self.violations: list[str] = []
         self.downloads: set[str] = set()  # files holding unverified fetched bytes
         self.has_verifier: bool = False  # a real verify command anywhere in the block → downloads vetted
         self.used: set[str] = set()  # words used by non-fetch, non-verifier commands
+        self.depth: int = depth  # recursion depth into shell `-c` strings (cycle-15)
 
     def walk(self, node: object) -> None:
         kind = getattr(node, "kind", None)
@@ -542,6 +576,12 @@ class _FetchWalk:
             self.violations.append("fetch substitution run as a command")
         elif _interpreter_executes_fetch(node):
             self.violations.append("fetch substitution executed by an interpreter")
+        # cycle-15: a shell's static `-c`/`-e` STRING operand is itself shell — recursively scan it so
+        # `bash -c 'curl | bash'` (literal code, not a substitution) is not a fail-open. Depth-guarded.
+        if self.depth < _MAX_SHELL_DEPTH and _is_shell(node):
+            for operand in _static_code_operands(node):
+                for reason in _scan_block(operand, self.depth + 1):
+                    self.violations.append(f"shell -c string: {reason}")
         self.used |= set(_plain_words(node)) | _input_redirect_files(node)  # `bash < f` USES f
 
 
@@ -564,35 +604,42 @@ def _file_match(download: str, word: str) -> bool:
     return d == u or ("/" not in d and _basename(u) == d) or ("/" not in u and _basename(d) == u)
 
 
+def _scan_block(block: str, depth: int = 0) -> list[str]:
+    """Parse one shell block and return its fetch-execute violation reasons. Recursive: a shell's static
+    `-c`/`-e` string operand IS more shell, so it is scanned at ``depth+1`` (cycle-15: `bash -c 'curl |
+    bash'` is a literal code string, not a substitution). A block that mentions curl/wget but bashlex
+    cannot parse fails CLOSED."""
+    import bashlex
+
+    if not _FETCH_RE.search(block):
+        return []
+    try:
+        trees = bashlex.parse(block)
+    except Exception:  # noqa: BLE001 — ANY parse failure (templated/garbled) → cannot prove safe
+        return [f"(unparsed block): {block.strip()[:80]}"]
+    walk = _FetchWalk(depth)
+    for tree in trees:
+        walk.walk(tree)
+    reasons = list(walk.violations)
+    # (C) a downloaded file used by a later command, with no verify command in the block. `./install.sh`
+    # matches a downloaded `install.sh`, but unrelated paths sharing a basename (`/tmp/data.json` vs
+    # `./fixtures/data.json`) do not collide.
+    if not walk.has_verifier:
+        unverified = sorted(d for d in walk.downloads if any(_file_match(d, word) for word in walk.used))
+        if unverified:
+            reasons.append(f"unverified downloaded file used: {unverified}")
+    return reasons
+
+
 def fetch_execute_violations(text: str) -> list[str]:
     """Fail-closed §11.3 fetch-execute check over a real shell AST (design contract above).
 
     For each ``run:`` block: parse it with bashlex and walk the AST. A `curl`/`wget` is flagged when
     its output reaches execution (non-sink pipe / executed substitution / a downloaded file used
-    unverified). A block bashlex cannot parse but that mentions curl/wget fails CLOSED (flagged)."""
-    import bashlex
-
+    unverified / a shell `-c` string that itself fetch-executes)."""
     violations: list[str] = []
     for block in _run_blocks(text):
-        if not _FETCH_RE.search(block):
-            continue
-        try:
-            trees = bashlex.parse(block)
-        except Exception:  # noqa: BLE001 — ANY parse failure (templated/garbled) → cannot prove safe
-            # Unparseable but it mentions curl/wget → fail closed.
-            violations.append(f"fetch-and-execute without checksum (unparsed block): {block.strip()[:80]}")
-            continue
-        walk = _FetchWalk()
-        for tree in trees:
-            walk.walk(tree)
-        reasons = list(walk.violations)
-        # (C) a downloaded file used by a later command, with no verify command in the block. `./install.sh`
-        # matches a downloaded `install.sh`, but unrelated paths sharing a basename (`/tmp/data.json` vs
-        # `./fixtures/data.json`) do not collide.
-        if not walk.has_verifier:
-            unverified = sorted(d for d in walk.downloads if any(_file_match(d, word) for word in walk.used))
-            if unverified:
-                reasons.append(f"unverified downloaded file used: {unverified}")
+        reasons = _scan_block(block, 0)
         if reasons:
             violations.append(f"fetch-and-execute without checksum: {reasons[0]}")
     return violations

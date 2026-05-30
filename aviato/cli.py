@@ -1667,11 +1667,14 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument(
         "--required-approvals", type=_non_negative_int, help="Override required PR approval count (>= 0)."
     )
-    apply.add_argument(
+    # C12-3: --profile (base) and --declaration (override-aware) are mutually exclusive — passing both
+    # silently let the declaration win, which is a confusing footgun. argparse now rejects both.
+    apply_source = apply.add_mutually_exclusive_group()
+    apply_source.add_argument(
         "--profile",
         help="Inject the profile's language verify status checks (e.g. ci / Python CI) into the branch ruleset.",
     )
-    apply.add_argument(
+    apply_source.add_argument(
         "--declaration",
         help="Path to a consumer .github/aviato.yaml: resolve status checks + approvals WITH its "
         "overrides (C12-3), so a ruleset apply does not re-add a check the consumer removed.",

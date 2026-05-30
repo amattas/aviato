@@ -962,3 +962,21 @@ def test_classic_pr_bypass_allowance_surfaces_as_unenforced_pr() -> None:
     # without a bypass allowance, the same protection reads as a real PR requirement
     no_bypass = {"required_pull_request_reviews": {"required_approving_review_count": 1}}
     assert map_branch_settings([], no_bypass)["requires_pull_request"] is True
+
+
+def test_ruleset_does_not_satisfy_enforce_admins_when_classic_is_unenforced() -> None:
+    # cycle-15: a ruleset enforces its OWN rules on admins, but it must not READ as enforce_admins=True
+    # when a CLASSIC protection is present with enforce_admins disabled (admins can still bypass the
+    # classic protections). That must drift, not hide the bypass.
+    from aviato.github_platform import map_branch_settings
+
+    ruleset = [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "ci"}]}}]
+    classic_unenforced = {
+        "enforce_admins": {"enabled": False},
+        "required_pull_request_reviews": {"required_approving_review_count": 1},
+    }
+    assert map_branch_settings(ruleset, classic_unenforced)["enforce_admins"] is False
+    # ruleset-only (no classic) still reads enforce_admins=True (the ruleset enforces on admins)
+    assert map_branch_settings(ruleset, {})["enforce_admins"] is True
+    # classic enforce_admins=true is honoured
+    assert map_branch_settings(ruleset, {"enforce_admins": {"enabled": True}})["enforce_admins"] is True
