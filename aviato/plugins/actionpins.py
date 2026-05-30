@@ -39,43 +39,45 @@ def unpinned_third_party_uses(text: str) -> list[str]:
     return violations
 
 
-# §11.3 FAIL-CLOSED fetch-execute detection. DO NOT re-introduce interpreter enumeration: that fails
-# OPEN (an unknown interpreter/wrapper = a silent miss) and flapped for 8 commits (cycle-9 R9-1..R9-5);
-# the first fail-closed cut still had fail-OPEN edges — a checksum WORD anywhere on the line, and an
-# executor chained after an allowlisted sink (cycle-10 R10-1/R10-2/R10-N1). This rule is the INVERSE
-# and convergent: it enumerates only OBVIOUSLY-SAFE pure data sinks + a real verify COMMAND, and
-# treats everything else fetched bytes can reach as a violation. There is nothing to enumerate on the
-# danger side — new executors are caught by default. The safe shapes are exactly two: a pure data
-# pipeline (`curl … | jq`) and download → verify → use.
+# §11.3 fetch-execute detection — DELIBERATELY COARSE, fail-closed, FROZEN. This is a LINT, not a
+# sandbox. Three prior shapes flapped: interpreter enumeration (fail-open on unknown executors,
+# cycle-9 R9-1..R9-5), checksum-word + sink allowlist (fail-open on comments/chaining, cycle-10
+# R10-1/R10-2), and regex-split taint (fail-open on `2>&1`/quotes/`-fsSLo`/YAML-as-shell, cycle-11
+# C11-1..C11-9). The lesson (both review engines): you cannot decide "do fetched bytes reach
+# execution" by regex-splitting shell — every refinement opens a new shell-grammar hole. So we STOP
+# trying to be precise. The rule, over each YAML `run:` block: an unverified `curl`/`wget` is a
+# violation UNLESS the block carries a real verify command, and the fetch is a *trivial safe shape* —
+# a bare fetch to stdout, or a pipe into ONLY pure data sinks. Anything else (a pipe to a non-sink, a
+# substitution, any command sequencing on the line, ANY download-to-a-file) is flagged. We accept the
+# resulting false positives (e.g. `curl … | jq && echo` flags) as the cost of a decidable, stable
+# gate — and we do NOT keep refining it. DO NOT add executor names, parse quotes, or chase edge cases.
 _FETCH_RE = re.compile(r"\b(?:curl|wget)\b")
-# An executing substitution next to a fetch: process-sub `<(`/`>(`, command-sub `$(`, backtick. A
-# stream into one of these cannot be checksum-gated → always a violation.
-_SUBST_RE = re.compile(r"<\(|>\(|\$\(|`")
-# PURE data sinks: consume stdin, emit to stdout/console only — they neither execute their input nor
-# write a file. Deliberately EXCLUDES tee/redirects (file write → taint), awk/sed (`-f`/`-e` execute),
-# xargs, and every shell/interpreter (the danger we do NOT enumerate — those fall through to violation).
+# Pure data sinks: consume stdin, emit to stdout only. A fetch piped into ONLY these is data handling.
 _PURE_SINKS = frozenset(
     {"jq", "grep", "egrep", "fgrep", "rg", "head", "tail", "sort", "uniq", "wc", "cut", "tr", "less", "more", "nl"}
 )
-# A REAL verify COMMAND (verb + check mode), not a bare mention — clears download-file taint so the
-# canonical "download → verify → use" pattern passes. A comment/URL/`--version` does NOT match (R10-1).
+# A real verify COMMAND anywhere in the block grants block-level trust (download → verify → use). This
+# is intentionally LOOSE — binding the verifier to the exact artifact needs a shell parser, which is
+# the precision we are deliberately forgoing (a stray/unrelated verify clearing trust is a documented,
+# accepted limitation of a coarse lint; an operator who checksums the wrong file has a footgun, not an
+# attacker). A bare WORD does not match — the verb + check mode is required (closes cycle-10 R10-1).
 _VERIFY_RE = re.compile(
     r"\b(?:sha(?:1|256|512)sum|shasum|b2sum|md5sum)\b[^\n]*?(?:\s-c\b|\s--check\b)"
     r"|\bcosign\s+verify(?:-blob)?\b"
     r"|\bgpg\b[^\n]*?\s--(?:verify|decrypt)\b"
     r"|\bminisign\b[^\n]*?\s-V\b"
 )
-# Command-sequence separators (NOT the single pipe `|`, which stays within one pipeline/command).
+# Substitution / sequencing / file-write signals — ANY of these on a fetch line means "not a trivial
+# safe shape" → flag. Presence checks only (no splitting → immune to `2>&1`, quoted operators, etc.).
+_SUBST_RE = re.compile(r"<\(|>\(|\$\(|`")
 _SEQ_RE = re.compile(r"&&|\|\||;|&")
-_OUT_FLAG_RE = re.compile(r"(?:^|\s)(?:-o|-O|--output)(?:=|\s+)(\S+)")
-_REDIR_RE = re.compile(r">>?\s*(\S+)")
-_TEE_RE = re.compile(r"\btee\b\s+((?:-\S+\s+)*)(\S+)")
-
-
-def _strip_comments(text: str) -> str:
-    """Drop shell line comments (`#` at line start or after whitespace, to EOL). A `#` mid-token (a
-    URL fragment) is preserved. Comments must never be able to satisfy a safety check (R10-1)."""
-    return re.sub(r"(?m)(^|\s)#.*$", r"\1", text)
+_REDIR_FILE_RE = re.compile(r">>?\s*(?!/dev/null\b|&)")  # `>`/`>>` to a real file (not /dev/null, not >&)
+_CURL_OUT_RE = re.compile(r"(?:^|\s)(?:-o|-O|--output)(?:[=\s]|$)")
+# wget writes a FILE by default; it streams to stdout only with an explicit `-O-`/`-qO-`/… form.
+_WGET_STDOUT_RE = re.compile(r"-O\s*-(?:\s|$)|-O\s*/dev/stdout|-qO-|--output-document\s*=?\s*-")
+_RUN_KEY_RE = re.compile(r"(?m)^\s*-?\s*run:")
+_RUN_LINE_RE = re.compile(r"^(?P<indent>\s*)-?\s*run:\s*(?P<rest>.*)$")
+_BLOCK_SCALAR = {"|", ">", "|-", ">-", "|+", ">+"}
 
 
 def _fold_logical_lines(text: str) -> list[str]:
@@ -91,61 +93,76 @@ def _basename(token: str) -> str:
     return token.rsplit("/", 1)[-1]
 
 
-def _download_targets(unit: str) -> set[str]:
-    """Files an unverified download writes in this command unit (curl -o / `>` redirect / tee)."""
-    targets: set[str] = set(_OUT_FLAG_RE.findall(unit))
-    targets.update(_REDIR_RE.findall(unit))
-    for _flags, name in _TEE_RE.findall(unit):
-        targets.add(name)
-    return {t for t in targets if not t.startswith(("&", "/dev/")) and t != "-"}
+def _run_blocks(text: str) -> list[str]:
+    """Extract shell ``run:`` block bodies so workflow METADATA is never analyzed as shell (cycle-11
+    C11-5). Tolerant of templated (`{{ … }}`) bodies — line/indentation based, not a YAML parse. If
+    the text has no ``run:`` marker it is treated as one raw shell block (so a bare snippet works)."""
+    if not _RUN_KEY_RE.search(text):
+        return [text]
+    lines = text.splitlines()
+    blocks: list[str] = []
+    i = 0
+    while i < len(lines):
+        match = _RUN_LINE_RE.match(lines[i])
+        if not match:
+            i += 1
+            continue
+        rest = match.group("rest").strip()
+        if rest in _BLOCK_SCALAR:
+            base = len(match.group("indent"))
+            body: list[str] = []
+            i += 1
+            while i < len(lines):
+                line = lines[i]
+                if line.strip() and (len(line) - len(line.lstrip())) <= base:
+                    break  # dedent ends the block scalar
+                body.append(line)
+                i += 1
+            blocks.append("\n".join(body))
+        else:
+            blocks.append(rest)  # inline run:
+            i += 1
+    return blocks
 
 
-def _fetch_streams_into_executor(unit: str) -> bool:
-    """A fetch unit whose output streams into execution: an executing substitution, or a pipe whose
-    downstream is anything other than a pure data sink or `tee` (a file write, handled via taint)."""
-    if _SUBST_RE.search(unit):
-        return True
-    for segment in unit.split("|")[1:]:
+def _fetch_line_is_trivially_safe(line: str) -> bool:
+    """A fetch line is safe ONLY as a bare fetch to stdout or a pipe into pure data sinks — no
+    substitution, no command sequencing, and no download-to-a-file. Presence checks (not splitting),
+    so `curl … 2>&1 | bash` (the `&` is sequencing) and quoted operators are caught, not evaded."""
+    if _SUBST_RE.search(line) or _SEQ_RE.search(line) or _REDIR_FILE_RE.search(line):
+        return False
+    if re.search(r"\bcurl\b", line) and _CURL_OUT_RE.search(line):
+        return False  # curl -o/-O/--output writes a file
+    if re.search(r"\bwget\b", line) and not _WGET_STDOUT_RE.search(line):
+        return False  # wget writes a file unless explicitly streaming to stdout
+    for segment in line.split("|")[1:]:  # any pipe target must be a pure data sink
         tokens = segment.split()
-        if not tokens:
-            return True  # dangling pipe — cannot prove safe
-        head = _basename(tokens[0])
-        if head not in _PURE_SINKS and head != "tee":
-            return True  # a possible executor (bash/sh/python/xargs/$VAR/…) — not enumerated, just "not safe"
-    return False
+        if not tokens or _basename(tokens[0]) not in _PURE_SINKS:
+            return False
+    return True
 
 
 def fetch_execute_violations(text: str) -> list[str]:
-    """Fail-closed §11.3 fetch-execute check (design contract in the module comment above).
+    """Coarse, fail-closed §11.3 fetch-execute check (design contract in the module comment above).
 
-    Walks the comment-stripped, folded text as an ORDERED sequence of command units (split on
-    ``;``/``&&``/``||``/``&``; the pipe ``|`` stays within a unit). A downloaded file is TAINTED; a
-    real verify command clears taint. A unit is a violation when it (a) contains a fetch that streams
-    into an executing substitution or a non-pure-sink pipe target, or (b) uses a tainted download that
-    no verify command has cleared. Only a pure data pipeline (`curl … | jq`) and download → verify →
-    use are clean.
+    Per YAML ``run:`` block: if the block contains a `curl`/`wget` and NO real verify command, every
+    fetch line must be a trivial safe shape (bare fetch to stdout, or a pipe into pure data sinks) —
+    otherwise the block is flagged. Deliberately coarse and FROZEN: it accepts false positives rather
+    than chase shell-grammar edge cases, because a stable lint beats another fail-open detector.
     """
     violations: list[str] = []
-    tainted: set[str] = set()
-    for line in _fold_logical_lines(_strip_comments(text)):
-        if not line.strip():
+    for block in _run_blocks(text):
+        if not _FETCH_RE.search(block):
             continue
-        for unit in _SEQ_RE.split(line):
-            if not unit.strip():
+        if _VERIFY_RE.search(block):
+            continue  # download → verify → use (block-level trust; see _VERIFY_RE comment)
+        for line in _fold_logical_lines(block):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
                 continue
-            if _VERIFY_RE.search(unit):
-                tainted.clear()  # operator gated integrity for the sequence
-                continue
-            if _FETCH_RE.search(unit):
-                if _fetch_streams_into_executor(unit):
-                    violations.append(f"fetch-and-execute without checksum: {line.strip()}")
-                else:
-                    tainted |= _download_targets(unit)  # download(s) to file → tainted until verified
-                continue
-            if tainted:
-                tokens = set(unit.split()) | {_basename(t) for t in unit.split()}
-                if tainted & tokens:
-                    violations.append(f"unverified downloaded file used: {line.strip()}")
+            if _FETCH_RE.search(line) and not _fetch_line_is_trivially_safe(line):
+                violations.append(f"fetch-and-execute without checksum: {stripped}")
+                break
     return violations
 
 
@@ -249,10 +266,12 @@ def unpinned_tool_invocations(text: str) -> list[str]:
     ad-hoc `docker run img:tag` inside a shell `run:` block is intentionally no longer gated
     (see REQUIREMENTS §11.3 scope note).
     """
-    no_comments = "\n".join(
-        line for line in "\n".join(_fold_logical_lines(text)).splitlines() if not line.lstrip().startswith("#")
-    )
-    violations: list[str] = list(fetch_execute_violations(no_comments))
+    # fetch_execute_violations takes RAW text — it extracts `run:` blocks itself, so we must NOT
+    # pre-fold (folding would join the `run: |` block-scalar marker into its first body line).
+    violations: list[str] = list(fetch_execute_violations(text))
+    # The pip scan is line-oriented and fine on folded, comment-stripped text.
+    folded = "\n".join(_fold_logical_lines(text))
+    no_comments = "\n".join(line for line in folded.splitlines() if not line.lstrip().startswith("#"))
     for match in _PIP_INSTALL_RE.finditer(no_comments):
         for pkg in _unpinned_pip_packages(match.group("rest")):
             violations.append(f"pip-installed tool not pinned to an exact version: {pkg}")
