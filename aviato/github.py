@@ -134,6 +134,29 @@ def gh_json_optional(endpoint: str, *, default: Any = None) -> Any:
         raise GitHubAPIError(endpoint, result.returncode, f"invalid JSON response: {exc}") from exc
 
 
+def gh_json_paginated_optional(endpoint: str, *, default: Any = None) -> Any:
+    """Paginated read (C12-R3-2/N2) of a LIST endpoint that may legitimately 404, fail-closed (§2.7).
+
+    Combines ``gh_json_paginated``'s ``--paginate --slurp`` (so a later-page entry — a stale
+    consent-bearing issue, an active branch rule, a tag ruleset — can never hide behind page 1) with
+    ``gh_json_optional``'s posture: a genuine 404 returns ``default``; any other error raises.
+    """
+    result = run(["gh", "api", "--paginate", "--slurp", endpoint], check=False)
+    if result.returncode != 0:
+        if "http 404" in result.stderr.lower():
+            return default
+        raise GitHubAPIError(endpoint, result.returncode, result.stderr)
+    if not result.stdout.strip():
+        return default
+    try:
+        pages = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise GitHubAPIError(endpoint, result.returncode, f"invalid JSON response: {exc}") from exc
+    if isinstance(pages, list) and pages and all(isinstance(page, list) for page in pages):
+        return [item for page in pages for item in page]
+    return pages
+
+
 def default_branch(slug: str) -> str:
     response = gh_json(f"repos/{slug}")
     if not isinstance(response, dict):
@@ -211,8 +234,9 @@ def pages_source_is_actions(slug: str) -> bool | None:
 
 
 def active_branch_rules(slug: str, branch: str) -> list[dict[str, Any]]:
-    # Fail closed on an ambiguous read (§2.7): only a genuine 404 is empty.
-    response = gh_json_optional(f"repos/{slug}/rules/branches/{_branch_seg(branch)}", default=[])
+    # Fail closed on an ambiguous read (§2.7): only a genuine 404 is empty. N2: paginate — a repo with
+    # >30 active branch rules must not hide a later-page rule from the read/apply guards.
+    response = gh_json_paginated_optional(f"repos/{slug}/rules/branches/{_branch_seg(branch)}", default=[])
     return response if isinstance(response, list) else []
 
 
@@ -223,8 +247,9 @@ def classic_branch_protection(slug: str, branch: str) -> dict[str, Any]:
 
 def tag_ruleset_names(slug: str) -> list[str]:
     # Fail closed on an ambiguous read (§2.7): only a genuine 404 is empty, so an
-    # auth/5xx/rate-limit error raises rather than masquerading as "no tag ruleset".
-    response = gh_json_optional(f"repos/{slug}/rulesets?targets=tag", default=[])
+    # auth/5xx/rate-limit error raises rather than masquerading as "no tag ruleset". N2: paginate so a
+    # later-page tag ruleset is not invisible.
+    response = gh_json_paginated_optional(f"repos/{slug}/rulesets?targets=tag", default=[])
     if not isinstance(response, list):
         return []
     names = [item.get("name") for item in response if isinstance(item, dict) and item.get("target") == "tag"]

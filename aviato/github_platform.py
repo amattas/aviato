@@ -606,7 +606,7 @@ class GitHubPlatform:
         # Fail-closed read (§2.7): a transient auth/5xx must RAISE rather than read as "no
         # existing issue", which would POST a DUPLICATE tracking issue every flaky run and
         # fragment the consent/audit trail. A genuine ``200 []`` (no match) still creates one.
-        existing = github.gh_json_optional(f"repos/{repo}/issues?state=open&labels={_seg(key)}", default=[])
+        existing = github.gh_json_paginated_optional(f"repos/{repo}/issues?state=open&labels={_seg(key)}", default=[])
         # A malformed 200 (issue object without "number") must not crash the scheduled
         # drift-report; fall through to creating a fresh issue rather than KeyError. When
         # several issues share the label, act on ONE deterministically (oldest), with a warn.
@@ -622,7 +622,7 @@ class GitHubPlatform:
         # Fail-closed read (§2.7): a transient auth/5xx must RAISE rather than silently drop
         # the audit comment (the §5.7 record of a privileged change). A genuine ``200 []``
         # (no issue to comment on) stays a no-op.
-        existing = github.gh_json_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
+        existing = github.gh_json_paginated_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
         chosen = _select_issue(existing, repo, key)
         number = chosen.get("number") if chosen else None
         if number is not None:
@@ -637,7 +637,7 @@ class GitHubPlatform:
         raises (the scheduled run then fails loud, §5.6), while a genuine 404 — the label is
         already absent — is the desired end state and tolerated.
         """
-        existing = github.gh_json_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
+        existing = github.gh_json_paginated_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
         chosen = _select_issue(existing, repo, key)
         number = chosen.get("number") if chosen else None
         if number is None:

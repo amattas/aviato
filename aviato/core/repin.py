@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .composition import _unknown_settings_override_paths, resolve_profile
+from .composition import _override_pipeline_list, _unknown_settings_override_paths, resolve_profile
 from .declaration import Declaration
 from .errors import CompositionError
 from .registry import Registry
@@ -132,14 +132,17 @@ def plan_repin(
     pipeline_override = declaration.overrides.get("pipelines") or {}
     if not isinstance(pipeline_override, dict):
         raise CompositionError("pipelines override must use add/remove, not a bare list (§4.2)")
-    for name in pipeline_override.get("remove") or ():
+    # C12-4: validate add/remove are LISTS of non-blank strings (reuse composition's guard) — a bare
+    # string `add: common-lint` would otherwise iterate as characters, so plan.ok reads True on a
+    # malformed override and `--write` later fails at a more disruptive point (§4.2/§5.12).
+    for name in _override_pipeline_list(pipeline_override.get("remove"), "remove"):
         if name not in resolved.pipelines:
             plan.orphaned_overrides.append(name)
     # A pipeline override that ADDS a pipeline the target version now bundles collides
     # (add-of-already-present, §4.2). Surface it at PLAN time and block — otherwise the
     # plan reports ok, the pin is written, and the next `aviato sync` (which resolves WITH
     # overrides) crashes with CompositionError at a far more disruptive point (§5.12).
-    for name in pipeline_override.get("add") or ():
+    for name in _override_pipeline_list(pipeline_override.get("add"), "add"):
         if name in resolved.pipelines:
             plan.conflicting_overrides.append(name)
 

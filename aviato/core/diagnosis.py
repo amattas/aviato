@@ -59,7 +59,16 @@ def _has_drift_automation(root: Path, markers: Sequence[str]) -> bool:
     # "drift automation absent" (matches validation/actionpins dual-extension scans).
     for ext in ("*.yml", "*.yaml"):
         for path in workflows.glob(ext):
-            text = path.read_text(encoding="utf-8", errors="replace")
+            # C12-R3-4 (§5.11/§2.4): a glob hit can be a DIRECTORY (`aviato-drift.yml/`) or otherwise
+            # unreadable — `read_text` then raises `IsADirectoryError`/`OSError` outside the AviatoError
+            # net and crashes `doctor` / a whole fleet scan. Skip non-files; treat a read error as "this
+            # file provides no drift automation", never a crash.
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
             if any(marker in text for marker in markers):
                 return True
     return False

@@ -58,7 +58,11 @@ def test_issue_reads_fail_closed_on_transient_error(monkeypatch: pytest.MonkeyPa
     def boom(endpoint: str, **__: object) -> object:
         raise github.GitHubAPIError(endpoint, 1, "HTTP 503: server error")
 
+    # C12-R3-2: the issue-channel reads now paginate (`gh_json_paginated` /
+    # `gh_json_paginated_optional`); a transient (non-404) error must still RAISE through them.
     monkeypatch.setattr(github, "gh_json_optional", boom)
+    monkeypatch.setattr(github, "gh_json_paginated", boom)
+    monkeypatch.setattr(github, "gh_json_paginated_optional", boom)
     with pytest.raises(github.GitHubAPIError):
         GitHubPlatform().get_issue("o/r", "k")
     with pytest.raises(github.GitHubAPIError):

@@ -182,8 +182,14 @@ def bump_files(root: Path, locations: list[str], new_version: str, build_number:
     pending: list[tuple[Path, str, str]] = []
     for location in locations:
         path = Path(root) / location
-        if not path.is_file():
+        # C12-R3-3 (§2.5 never-half-apply): distinguish ABSENT (skippable — a profile may list optional
+        # locations) from PRESENT-BUT-BROKEN. A configured location that exists but is a directory /
+        # symlink / non-regular file is a real misconfiguration: skipping it the same as absent lets the
+        # bump half-apply (other locations written) and exit success. Fail closed BEFORE any write.
+        if not path.exists():
             continue
+        if not path.is_file():
+            raise AviatoError(f"version-source location exists but is not a regular file, cannot bump: {location}")
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
@@ -192,6 +198,9 @@ def bump_files(root: Path, locations: list[str], new_version: str, build_number:
             # traceback, and never a silent skip that lets the caller report a false "nothing to
             # bump" success when the version was in fact never written (§3.3/§5.9).
             raise AviatoError(f"version-source file is not valid UTF-8, cannot bump: {location}") from exc
+        except OSError as exc:
+            # An unreadable present file (permissions, etc.) is present-but-broken, not absent.
+            raise AviatoError(f"version-source file cannot be read, cannot bump: {location}: {exc}") from exc
         bumped = bump_text(location, text, new_version, build_number)  # may raise AviatoError (bad manifest)
         if bumped != text:
             pending.append((path, bumped, location))
