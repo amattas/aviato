@@ -39,29 +39,68 @@ def unpinned_third_party_uses(text: str) -> list[str]:
     return violations
 
 
-# §11.3 fetch-execute detection — built on a REAL shell parser (bashlex), not regex. Four prior
-# regex/string shapes flapped (cycle-9 enumeration, cycle-10 checksum-word+sink, cycle-11 regex-split
-# taint, cycle-12 "coarse" — each reopened a shell-grammar hole: quotes, comments, `2>&1`, option
-# clusters, substitution). The lesson (both review engines): you cannot decide "do fetched bytes reach
-# execution" by matching shell text. bashlex tokenizes correctly — comments are dropped, `2>&1` is a
-# redirect not a separator, `-fsSLo` is one word, `$(…)`/`<(…)` are real nodes — so the decision is a
-# clean AST walk. The rule: a `curl`/`wget` is a violation if its output can reach execution —
-#   (A) it sits inside a command/process substitution (its bytes become a command/arg), or
-#   (B) it pipes into anything that is not a pure data sink, or
-#   (C) it writes a file that a later command uses and no verify command covers that file.
-# A bare fetch to stdout, or a pipe into pure data sinks only, is clean; download → verify → use is
-# clean. Undecidable cases (a dynamic command word like `$CMD`, a fetch in a block bashlex can't parse)
-# fail CLOSED. This is the convergent design; do not revert it to text matching.
+# §11.3 fetch-execute detection — built on REAL parsers (PyYAML for `run:` extraction, bashlex for the
+# shell AST), not regex. Five prior text/partial-AST shapes flapped (cycle-9 enumeration, cycle-10
+# checksum-word+sink, cycle-11 regex-split taint, cycle-12 "coarse", cycle-13 the first bashlex walk —
+# each reopened a hole: quotes, comments, `2>&1`, option clusters, substitution, and then — once the
+# lexer was right — STRUCTURAL holes the walk skipped: compound/subshell/loop bodies, redirect-target
+# substitutions, command wrappers, quoted/flow `run:` keys). The convergent lesson (both engines):
+# the parser must be real AND the traversal must be total. So:
+#   - `run:` blocks are pulled from a real YAML parse (quoted keys / flow-style steps can't hide), with
+#     a tolerant line fallback only for templated scaffold bodies that aren't valid YAML.
+#   - the AST is walked GENERICALLY — every child node of every node, regardless of the attribute that
+#     holds it (`parts`/`list`/`command`/`output`/heredoc/…) — so no subtree is ever skipped.
+# The rule: a `curl`/`wget` is a violation if its output reaches EXECUTION —
+#   (A) it pipes into a downstream pipeline element that is not a pure-data-sink command, or
+#   (B) a command/process substitution carrying the fetch is EXECUTED — it is in command position
+#       (`$(curl) …`) or fed to an interpreter (`bash -c "$(curl)"`, `bash <(curl)`, `bash <<<"$(curl)"`,
+#       `. <(curl)`), or written into `>(interpreter)`, or
+#   (C) it writes a file that a later command uses (by basename, as an arg, or via a `<` redirect) with
+#       no verify command running BEFORE that use (order-aware).
+# Programs are resolved through transparent wrappers (`sudo`/`env`/`timeout …`) so `sudo curl` is a
+# fetch and `env jq` is a sink; a fetch in a substitution that is only CAPTURED as data (`X=$(curl)`,
+# `echo "$(curl)"`) is NOT execution and is not flagged — that distinction (interpreter vs data
+# context) is what keeps the gate usable. A bare fetch to stdout, a pipe into pure sinks only, and
+# download → verify → use are clean. Fail CLOSED on the undecidable: a block bashlex can't parse, an
+# unrecognised pipeline element. DOCUMENTED out-of-scope (best-effort gate for HONEST mistakes — NOT a
+# complete control against an author obfuscating their own CI; a precise static "do fetched bytes reach
+# execution" analysis over shell has an irreducible tail): heredoc-body execution
+# (`bash <<EOF … $(curl) … EOF`), parameter-default obfuscation (`${X:-$(curl)}`), dynamic command
+# words (`$CMD`/`sh -c "bash $f"`), a verify of one artifact blessing a DIFFERENT executed download in
+# the same block (verify is order-aware but not artifact-bound — to avoid FPs on `sha256sum -c
+# SHA256SUMS`, which names no file), a verify whose FAILURE is not gated (`sha256sum -c … || true`
+# still counts), and a quoted/flow `run:` key inside a TEMPLATED (non-YAML) scaffold body. Convergent
+# design; do not revert it to text matching, and do not narrow the generic descent.
 _FETCH_RE = re.compile(r"\b(?:curl|wget)\b")  # cheap pre-filter only; the real check is the AST walk
 _FETCH_NAMES = frozenset({"curl", "wget"})
 # Pure data sinks: consume stdin and emit to stdout only — never execute stdin nor (without an explicit
 # redirect) write a file. Deliberately EXCLUDES sort (`--compress-program=CMD` executes, cycle-12
 # C12-9), less/more (shell escapes), awk/sed (`-f`/`-e`), xargs, tee (writes a file), and every shell.
 _PURE_SINKS = frozenset({"jq", "grep", "egrep", "fgrep", "rg", "head", "tail", "cut", "tr", "nl", "wc", "cat"})
+# Transparent wrappers peeled to resolve a command's real program: `sudo curl`/`env curl`/`timeout 5
+# curl` are fetches, `env jq` is a sink. Resolving by program position (not "any word") also stops a
+# literal `curl`/`wget` ARGUMENT (`grep curl`) being mistaken for a fetch.
+_WRAPPERS = frozenset(
+    {"sudo", "env", "command", "nice", "ionice", "nohup", "stdbuf", "setsid", "time", "timeout", "doas", "chronic"}
+)
+# Interpreters: a substitution fed to one of these is EXECUTED (vs merely captured as data). The dual of
+# _PURE_SINKS for the substitution rule. `python`/`perl`/`ruby`/`node` are included conservatively.
+_INTERPRETERS = frozenset(
+    {"bash", "sh", "dash", "zsh", "ksh", "ash", "eval", "source", ".", "xargs",
+     "python", "python2", "python3", "perl", "ruby", "node", "nodejs", "php", "pwsh", "powershell"}
+)  # fmt: skip
+# Shells run their FIRST positional as a script and their stdin as code; the others need an explicit
+# code flag. A fetch substitution flags as executed only in a CODE position, never as a data arg to a
+# script (`python report.py "$(curl)"`), so the interpreter rule stays usable (cycle-13 R4).
+_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh", "ash"})
+_CODE_FLAGS = frozenset({"-c", "-e", "-E", "--command", "--eval"})  # operand is code, not a filename
 # Verifier commands (a verifier tool + its check/verify subcommand) are recognised as real command
 # nodes only, in `_is_verifier` — a checksum word in a comment/string is dropped by the lexer, so it
 # can no longer grant trust (closes cycle-12 C12-5).
-_RUN_KEY_RE = re.compile(r"(?m)^\s*-?\s*run\s*:")
+# A run key anywhere (block `run:`, quoted `"run":`, or flow `{…, run: …}`) → try structural YAML
+# extraction. Broad on purpose: a false trigger just enters the (robust) YAML path; the line fallback
+# below handles templated bodies.
+_RUN_KEY_RE = re.compile(r"""(?m)(?:^|[\s,{])['"]?run['"]?\s*:""")
 _RUN_LINE_RE = re.compile(r"^(?P<indent>\s*)-?\s*run\s*:\s*(?P<rest>.*)$")
 _SCALAR_RE = re.compile(r"^[|>][+-]?[0-9]*$")  # block-scalar indicator: |, >, |-, |2, >+2, … (C12-8)
 
@@ -79,14 +118,47 @@ def _basename(token: str) -> str:
     return token.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
 
 
+def _collect_run_blocks(doc: object) -> list[str]:
+    """Every ``run:`` scalar in a parsed-YAML workflow, found STRUCTURALLY (recurse dicts/lists). A
+    real YAML parse normalises quoted keys (`"run":`), flow-mapping steps (`{run: …}`), and block
+    scalars — so none can hide a `curl|bash` from the gate the way a line regex let them (cycle-13
+    Group D)."""
+    blocks: list[str] = []
+    if isinstance(doc, dict):
+        for key, value in doc.items():
+            if isinstance(key, str) and key.strip() == "run" and isinstance(value, str):
+                blocks.append(value)
+            else:
+                blocks.extend(_collect_run_blocks(value))
+    elif isinstance(doc, list):
+        for item in doc:
+            blocks.extend(_collect_run_blocks(item))
+    return blocks
+
+
 def _run_blocks(text: str) -> list[str]:
     """Extract shell ``run:`` block bodies so workflow METADATA is never analyzed as shell (C11-5).
-    Handles `run :` (space), block-scalar indicators (`|2`/`|-`/`>+`), and a trailing `# comment` on
-    the indicator line (C12-8). Tolerant of templated (`{{ … }}`) bodies. No ``run:`` → one raw block."""
+
+    A real YAML parse finds every ``run:`` value structurally (quoted/flow keys, block scalars — closes
+    cycle-13 Group D). Templated scaffold bodies (`{{ … }}`) are not valid YAML and fall back to the
+    tolerant line extractor — which handles `run :` (space), block-scalar indicators (`|2`/`|-`/`>+`),
+    and a trailing `# comment` (C12-8). Raw shell (no ``run:`` at all, e.g. a unit-test snippet) is
+    returned whole."""
     if not _RUN_KEY_RE.search(text):
         return [text]
+    try:
+        import yaml
+
+        doc = yaml.safe_load(text)
+    except Exception:  # noqa: BLE001 — not valid YAML (templated scaffold) → line-extractor fallback
+        doc = None
+    if doc is not None and not isinstance(doc, str):
+        blocks = _collect_run_blocks(doc)
+        if blocks:
+            return blocks
+    # Fallback: tolerant line extractor (templated bodies, or a YAML doc with no run: scalar).
     lines = text.splitlines()
-    blocks: list[str] = []
+    blocks = []
     i = 0
     while i < len(lines):
         match = _RUN_LINE_RE.match(lines[i])
@@ -132,6 +204,182 @@ def _command_name(node: object) -> str | None:
     return None
 
 
+def _children(node: object) -> list[object]:
+    """Every child AST node, regardless of the attribute that holds it. bashlex stores children under
+    differently-named attrs (`parts`, `list`, `command`, `output`, `heredoc`, …) and some as Python
+    lists (`CompoundNode.list`). A generic descent over all node-valued attrs is the ONLY way to reach
+    compound/subshell/loop bodies and redirect-target substitutions — a named-attr probe silently skips
+    them and the walk fails OPEN (cycle-13 Group A)."""
+    children: list[object] = []
+    for value in vars(node).values():
+        if getattr(value, "kind", None):
+            children.append(value)
+        elif isinstance(value, (list, tuple)):
+            children.extend(v for v in value if getattr(v, "kind", None))
+    return children
+
+
+def _plain_words(node: object) -> list[str]:
+    """The literal WORD tokens of a CommandNode (excludes assignments and redirect operators)."""
+    return [p.word for p in getattr(node, "parts", []) if getattr(p, "kind", None) == "word"]
+
+
+def _resolved_program(node: object) -> str | None:
+    """The basename of a CommandNode's real PROGRAM, peeling transparent wrappers and their operands so
+    `sudo curl`/`env A=1 curl`/`timeout 5 curl` resolve to `curl`. Resolving by program POSITION (vs
+    matching any word) keeps `sudo curl` a fetch while a literal `curl` ARGUMENT (`grep curl`) is not."""
+    if getattr(node, "kind", None) != "command":
+        return None
+    words = _plain_words(node)
+    i = 0
+    while i < len(words):
+        base = _basename(words[i])
+        if base not in _WRAPPERS:
+            return base
+        i += 1
+        while i < len(words) and words[i].startswith("-"):  # skip the wrapper's own flags
+            i += 1
+        if base == "env":  # env VAR=val … program
+            while i < len(words) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[i]):
+                i += 1
+        elif base == "timeout" and i < len(words) and re.fullmatch(r"[0-9]+(\.[0-9]+)?[smhd]?", words[i]):
+            i += 1  # timeout DURATION program
+    return None
+
+
+def _is_introspection(node: object) -> bool:
+    """`command -v X` / `type X` / `which X` look a program UP — they neither fetch nor execute it, so
+    `command -v curl` must not read as a curl fetch (cycle-13 R4)."""
+    words = _plain_words(node)
+    if not words:
+        return False
+    prog = _basename(words[0])
+    if prog == "command":
+        return any(w in ("-v", "-V", "--version") for w in words)
+    return prog in ("type", "which", "hash", "whereis")
+
+
+def _fetch_tool(node: object) -> str | None:
+    """'curl'/'wget' if this CommandNode runs one (through wrappers, cycle-13 Group B)."""
+    if _is_introspection(node):
+        return None
+    prog = _resolved_program(node)
+    if prog in _FETCH_NAMES:
+        return prog
+    # A wrapper whose options take ARGUMENTS (`env -u X curl`, `sudo -u root curl`) can hide the program
+    # from the position-based resolve. When the command STARTS with a wrapper, fall back to any
+    # curl/wget word (fail-closed). `grep curl` has no wrapper, so it is unaffected (no false fetch).
+    words = _plain_words(node)
+    if words and _basename(words[0]) in _WRAPPERS:
+        for word in words:
+            if _basename(word) in _FETCH_NAMES:
+                return _basename(word)
+    return None
+
+
+def _is_interpreter(node: object) -> bool:
+    """True if the command runs an interpreter (`bash`/`sh`/`eval`/`source`/`.`/`python`/…) — a
+    substitution fed to one is EXECUTED, not merely captured as data. Matches ANY command word so a
+    wrapper with arg-taking options (`sudo -u root bash -c …`, `timeout -k 5s 30s bash -c …`) can't hide
+    the interpreter (cycle-13 R4); a bare interpreter token as data (`echo bash`) is a rare, harmless
+    over-flag, unlike a literal `curl` which is common as a grep target."""
+    if getattr(node, "kind", None) != "command":
+        return False
+    return any(_basename(word) in _INTERPRETERS for word in _plain_words(node))
+
+
+def _subtree_has_fetch(node: object) -> bool:
+    """True if any CommandNode anywhere in this node's subtree runs curl/wget — so a fetch hidden in a
+    group/subshell pipeline element (`{ curl; } | bash`) is still seen as a source."""
+    if _fetch_tool(node):
+        return True
+    return any(_subtree_has_fetch(child) for child in _children(node))
+
+
+def _is_pure_sink(node: object) -> bool:
+    """A downstream pipeline element is "safe" only if its resolved program is a pure-sink (`env jq`
+    counts). A compound / subshell / loop, or a wrapped non-sink (`sudo bash`), is an executor."""
+    return getattr(node, "kind", None) == "command" and _resolved_program(node) in _PURE_SINKS
+
+
+def _word_has_fetch_subst(word: object) -> bool:
+    """True if a WORD node carries a command/process substitution whose subtree runs curl/wget
+    (`"$(curl)"`, `<(curl)`)."""
+    return any(
+        getattr(p, "kind", None) in ("commandsubstitution", "processsubstitution") and _subtree_has_fetch(p)
+        for p in getattr(word, "parts", [])
+    )
+
+
+def _command_position_fetch_subst(node: object) -> bool:
+    """True if the command-position word is a fetch substitution (`$(curl …) arg` runs the fetched
+    bytes as the command)."""
+    for part in getattr(node, "parts", []):
+        if getattr(part, "kind", None) == "word":
+            return _word_has_fetch_subst(part)  # first word is the program position
+        if getattr(part, "kind", None) == "assignment":
+            continue
+    return False
+
+
+def _interpreter_executes_fetch(node: object) -> bool:
+    """True if a fetch substitution reaches an interpreter in a CODE position — the operand of `-c`/`-e`,
+    an `eval`/`source` argument, a shell's first positional (`bash <(curl)`), or its stdin
+    (`bash <<<"$(curl)"`, `bash < <(curl)`). A fetch passed as a DATA arg to a script
+    (`python3 report.py "$(curl)"`) is not execution and is not flagged (cycle-13 R4)."""
+    if not _is_interpreter(node) or _is_introspection(node):
+        return False
+    word_parts = [p for p in getattr(node, "parts", []) if getattr(p, "kind", None) == "word"]
+    names = {_basename(p.word) for p in word_parts}
+    # eval / source / . : every argument is code.
+    if names & {"eval", "source", "."} and any(_word_has_fetch_subst(p) for p in word_parts):
+        return True
+    # the operand of a code flag (`-c`/`-e`) carries the fetch.
+    for i, part in enumerate(word_parts):
+        if part.word in _CODE_FLAGS and i + 1 < len(word_parts) and _word_has_fetch_subst(word_parts[i + 1]):
+            return True
+    # a shell runs its FIRST positional as a script (`bash <(curl)`); later words are its data args.
+    if names & _SHELLS:
+        for part in word_parts[1:]:
+            if part.word.startswith("-"):
+                continue
+            if _word_has_fetch_subst(part):
+                return True
+            break
+    # stdin fed to the interpreter is code (`bash <<<"$(curl)"`, `bash < <(curl)`, `xargs sh < <(curl)`).
+    for part in getattr(node, "parts", []):
+        if getattr(part, "kind", None) == "redirect" and getattr(part, "type", None) in ("<", "<<<"):
+            out = getattr(part, "output", None)
+            if out is not None and _word_has_fetch_subst(out):
+                return True
+    return False
+
+
+def _redirects_to_interpreter_procsub(node: object) -> bool:
+    """True if a `>`/`>>` redirect target of this command is a process substitution running an
+    interpreter (`curl … > >(bash)`, `… | cat > >(bash)`) — the bytes are written into a shell."""
+    for part in getattr(node, "parts", []):
+        if getattr(part, "kind", None) == "redirect" and getattr(part, "type", None) in (">", ">>"):
+            out = getattr(part, "output", None)
+            for sub in getattr(out, "parts", []):
+                if getattr(sub, "kind", None) == "processsubstitution" and _is_interpreter(
+                    getattr(sub, "command", None)
+                ):
+                    return True
+    return False
+
+
+def _input_redirect_files(node: object) -> set[str]:
+    """Filenames a command reads via a `<`/`0<` redirect (`bash < f` USES f)."""
+    files: set[str] = set()
+    for part in getattr(node, "parts", []):
+        if getattr(part, "kind", None) == "redirect" and getattr(part, "type", None) in ("<", "0<"):
+            out = getattr(part, "output", None)
+            if out is not None and getattr(out, "kind", None) == "word":
+                files.add(out.word)
+    return files
+
+
 def _is_verifier(node: object) -> bool:
     """A real verify command: a verifier tool with its check/verify subcommand or flag."""
     words = _node_words(node)
@@ -150,61 +398,72 @@ def _is_verifier(node: object) -> bool:
     return False
 
 
-def _fetch_output_files(node: object) -> set[str]:
-    """Files a curl/wget command writes (so later use of them is "used unverified fetched bytes").
+def _fetch_output_files(node: object, tool: str) -> set[str]:
+    """Files a curl/wget command writes (a later use of one is "used unverified fetched bytes").
 
-    Parses the KNOWN output options of curl/wget (bounded + stable, unlike whole-line regex) plus any
-    `>`/`>>` redirect target. Empty set ⇒ the fetch streams to stdout (a bare/piped fetch)."""
-    parts = getattr(node, "parts", [])
-    words = [p.word for p in parts if getattr(p, "kind", None) == "word"]
-    if not words:
-        return set()
-    tool = _basename(words[0])
+    Parses the bounded, stable curl/wget output grammar — `-o`/`--output`(`=`)`, the curl `-O`/
+    `--remote-name` and clustered/glued `-fsSLo FILE`/`-oFILE` forms, the wget `-O`/`-OFILE`/
+    `--output-document` forms, `--output-dir`/`-P`/`--directory-prefix` path prefixes, the wget
+    default-basename download, and any `>`/`>>` redirect target. Over-detecting a written file is
+    fail-closed; under-detecting (cycle-13 Group C: `wget -O`, glued `-o`, `--output-dir`) is the bug
+    this closes. Empty set ⇒ the fetch streams to stdout."""
+    words = _plain_words(node)
     files: set[str] = set()
-    # `>`/`>>` redirect targets are downloads regardless of tool.
-    for part in parts:
-        if getattr(part, "kind", None) == "redirect" and getattr(part, "type", None) in (">", ">>"):
-            out = getattr(part, "output", None)
-            if out is not None and getattr(out, "kind", None) == "word" and out.word not in ("/dev/null",):
-                files.add(out.word)
-    urls = [w for w in words[1:] if "://" in w]
-    args = words[1:]
+    files |= _redirect_files(node)
+    urls = [w for w in words if "://" in w]
+    out_dir: str | None = None
     i = 0
-    while i < len(args):
-        w = args[i]
-        if w in ("-o", "--output") and i + 1 < len(args):
-            files.add(args[i + 1])
+    while i < len(words):
+        w = words[i]
+        nxt = words[i + 1] if i + 1 < len(words) else None
+        if w in ("--output-dir", "-P", "--directory-prefix") and nxt is not None:
+            out_dir = nxt
             i += 2
             continue
-        if w.startswith("--output="):
+        if w.startswith("--output-dir=") or w.startswith("--directory-prefix="):
+            out_dir = w.split("=", 1)[1]
+        elif w in ("-o", "--output") and nxt is not None:  # curl output; wget -o is a logfile → fail-closed
+            files.add(nxt.lstrip("="))
+            i += 2
+            continue
+        elif w.startswith("--output="):
             files.add(w.split("=", 1)[1])
-        elif w.startswith("--output-document="):  # wget
+        elif tool == "wget" and w in ("-O", "--output-document") and nxt is not None:
+            if nxt != "-":
+                files.add(nxt.lstrip("="))
+            i += 2
+            continue
+        elif tool == "wget" and w.startswith("--output-document="):
             val = w.split("=", 1)[1]
             if val != "-":
                 files.add(val)
-        elif w == "--output-document" and i + 1 < len(args):
-            if args[i + 1] != "-":
-                files.add(args[i + 1])
+        elif tool == "wget" and re.fullmatch(r"-O.+", w):  # glued wget -OFILE / -O=FILE
+            val = w[2:].lstrip("=")
+            if val != "-":
+                files.add(val)
+        elif tool == "curl" and w in ("-O", "--remote-name", "--remote-name-all"):
+            files.update(_basename(u) for u in urls)
+        elif tool == "curl" and re.fullmatch(r"-[a-zA-Z]*o", w) and nxt is not None:  # cluster -…o FILE
+            files.add(nxt.lstrip("="))
             i += 2
             continue
-        elif w in ("--remote-name", "--remote-name-all", "-O") and tool == "curl":
-            files.update(_basename(u) for u in urls)  # curl -O / --remote-name → remote basename
-        elif tool == "curl" and re.fullmatch(r"-[a-zA-Z]*o", w):  # short-option cluster ending in `o`
-            if i + 1 < len(args):
-                files.add(args[i + 1])
-                i += 2
-                continue
-        elif tool == "curl" and re.fullmatch(r"-[a-zA-Z]*O[a-zA-Z]*", w):  # cluster containing `O`
+        elif tool == "curl" and not w.startswith("--") and re.fullmatch(r"-[a-zA-Z]*o=?.+", w):  # glued -oFILE
+            files.add(re.sub(r"^-[a-zA-Z]*o=?", "", w))
+        elif tool == "curl" and re.fullmatch(r"-[a-zA-Z]*O[a-zA-Z]*", w):  # cluster containing O
             files.update(_basename(u) for u in urls)
         i += 1
-    # wget writes a file by default (remote basename) unless it streams to stdout.
+    # wget writes the remote basename by default unless it streams to stdout.
     if tool == "wget" and not files:
-        stdout = any(
-            w in ("-O-", "-qO-", "--output-document=-") or (w in ("-O", "--output-document") and "-" in args)
-            for w in args
-        ) or any("/dev/stdout" in w for w in args)
-        if not stdout:
+        streams = any(
+            w in ("-O-", "-qO-", "--output-document=-") or (w in ("-O", "--output-document") and "-" in words)
+            for w in words
+        ) or any("/dev/stdout" in w for w in words)
+        if not streams:
             files.update(_basename(u) for u in urls)
+    if out_dir:  # a path prefix yields both the bare basename and the prefixed path
+        prefix = out_dir.rstrip("/")
+        files |= {f"{prefix}/{_basename(f)}" for f in list(files)}
+        files |= {f"{prefix}/{_basename(u)}" for u in urls}
     return files
 
 
@@ -214,73 +473,69 @@ class _FetchWalk:
     def __init__(self) -> None:
         self.violations: list[str] = []
         self.downloads: set[str] = set()  # files holding unverified fetched bytes
-        self.has_verifier: bool = False  # a real verify command anywhere → downloads are vetted
-        self.used: set[str] = set()  # words used by non-fetch, non-verifier commands
+        self.verifier_positions: list[int] = []  # source offsets of real verify commands (ORDER matters)
+        self.uses: list[tuple[int, str]] = []  # (source offset, word) for non-fetch, non-verifier commands
 
-    def walk(self, node: object, in_subst: bool) -> None:
+    def walk(self, node: object) -> None:
         kind = getattr(node, "kind", None)
         if kind == "pipeline":
             self._pipeline(node)
-            for part in node.parts:
-                self.walk(part, in_subst)
-            return
-        if kind == "command":
-            self._command(node, in_subst)
-            for part in getattr(node, "parts", []):
-                self.walk(part, in_subst)  # words may carry substitutions
-            return
-        if kind in ("commandsubstitution", "processsubstitution"):
-            cmd = getattr(node, "command", None)
-            if cmd is not None:
-                self.walk(cmd, True)
-            return
-        if kind == "word":
-            for part in getattr(node, "parts", []):
-                self.walk(part, in_subst)
-            return
-        for part in getattr(node, "parts", []):  # list/compound/etc.
-            self.walk(part, in_subst)
-        for attr in ("list", "command"):
-            child = getattr(node, attr, None)
-            if child is not None and getattr(child, "kind", None):
-                self.walk(child, in_subst)
+        elif kind == "command":
+            self._command(node)
+        # GENERIC descent — every child node, whatever attribute holds it (including the inner command
+        # of a substitution, walked here so its own fetches are still collected). Never narrow this to
+        # named attributes: that is exactly how cycle-13 Group A failed open (compound/subshell/loop
+        # bodies and redirect-target substitutions were skipped). Whether a substitution EXECUTES is
+        # decided by its enclosing command in `_command`, not by the bare fact of being a substitution.
+        for child in _children(node):
+            self.walk(child)
 
     def _pipeline(self, node: object) -> None:
-        commands = [p for p in node.parts if getattr(p, "kind", None) == "command"]
-        pipe_has_fetch = any(_command_name(c) in _FETCH_NAMES for c in commands)
-        for idx, cmd in enumerate(commands):
-            if _command_name(cmd) in _FETCH_NAMES:
-                downstream = commands[idx + 1 :]
-                if any(_command_name(d) not in _PURE_SINKS for d in downstream):
-                    # (B) fetch streams into something that is not a pure data sink — a stream cannot
-                    # be checksum-verified mid-flight, so a verifier elsewhere never excuses it (C12-1).
-                    self.violations.append("fetch piped into a non-data-sink command")
-        if pipe_has_fetch:
-            # Files written ANYWHERE in a fetch-bearing pipeline (`curl | cat > f`) hold fetched bytes.
-            for cmd in commands:
-                if _command_name(cmd) in _FETCH_NAMES:
-                    self.downloads |= _fetch_output_files(cmd)
-                else:
-                    self.downloads |= _redirect_files(cmd)
+        elements = [p for p in node.parts if getattr(p, "kind", None) != "pipe"]
+        for idx, element in enumerate(elements):
+            # (A) a fetch's bytes flow into a downstream element. Safe only if EVERY downstream element
+            # is a pure-sink command — a stream cannot be checksum-verified mid-flight, so a verifier
+            # elsewhere never excuses it (C12-1), and a compound / subshell / wrapped non-sink counts as
+            # an executor (cycle-13 Group A/B).
+            if _subtree_has_fetch(element) and any(not _is_pure_sink(d) for d in elements[idx + 1 :]):
+                self.violations.append("fetch piped into a non-data-sink command")
+        if any(_subtree_has_fetch(e) for e in elements):
+            for element in elements:
+                if getattr(element, "kind", None) != "command":
+                    continue
+                if _redirects_to_interpreter_procsub(element):  # `curl | cat > >(bash)`
+                    self.violations.append("fetch written into a process substitution running a shell")
+                # Files written ANYWHERE in a fetch-bearing pipeline (`curl | cat > f`) hold fetched bytes.
+                tool = _fetch_tool(element)
+                self.downloads |= _fetch_output_files(element, tool) if tool else _redirect_files(element)
 
-    def _command(self, node: object, in_subst: bool) -> None:
-        name = _command_name(node)
-        if name in _FETCH_NAMES:
-            if in_subst:
-                # (A) a fetch inside `$(…)`/`<(…)`/`>(…)` — its bytes become a command/arg/file; a
-                # stream into a command position cannot be verified, so this always flags.
-                self.violations.append("fetch inside a command/process substitution")
-            self.downloads |= _fetch_output_files(node)
+    def _command(self, node: object) -> None:
+        tool = _fetch_tool(node)
+        if tool:
+            if _redirects_to_interpreter_procsub(node):
+                # `curl … > >(bash)` — the fetch's bytes are written straight into a shell. Execution.
+                self.violations.append("fetch written into a process substitution running a shell")
+            self.downloads |= _fetch_output_files(node, tool)
             return
         if _is_verifier(node):
-            # A real verify COMMAND (not a comment/string — the lexer dropped those) vets DOWNLOADS in
-            # this block. It does NOT vet streamed fetches (handled above). Binding the verifier to the
-            # exact artifact is not attempted: a deliberately-fake verify (`sha256sum -c /dev/null`) on
-            # a download is a documented out-of-scope evasion — same class as a dynamic command word —
-            # because this is an honest-mistake gate, not a defense against a self-attacking author.
-            self.has_verifier = True
+            # A real verify COMMAND (not a comment/string — the lexer dropped those) vets a DOWNLOADED
+            # file only when it runs BEFORE the file's use (order-aware, cycle-13 R5: a checksum AFTER
+            # `bash install.sh` vets nothing). It never vets a streamed fetch (handled above). NOT
+            # attempted (documented out-of-scope): binding the verifier to the exact artifact (a verify
+            # of `SHA256SUMS` names no file), and whether the verifier's FAILURE is actually gated
+            # (`sha256sum -c … || true` still counts) — this is an honest-mistake gate.
+            self.verifier_positions.append(_node_pos(node))
             return
-        self.used |= set(_node_words(node))
+        # (B) a fetch substitution that is EXECUTED — run as the command (`$(curl) …`) or fed to an
+        # interpreter (`bash -c "$(curl)"`, `bash <(curl)`, `bash <<<"$(curl)"`). A substitution merely
+        # CAPTURED as data (`X=$(curl)`, `echo "$(curl)"`) is not flagged — that is what keeps the gate
+        # usable on the dominant "fetch a value" pattern.
+        if _command_position_fetch_subst(node):
+            self.violations.append("fetch substitution run as a command")
+        elif _interpreter_executes_fetch(node):
+            self.violations.append("fetch substitution executed by an interpreter")
+        pos = _node_pos(node)
+        self.uses.extend((pos, word) for word in set(_plain_words(node)) | _input_redirect_files(node))
 
 
 def _redirect_files(node: object) -> set[str]:
@@ -293,12 +548,27 @@ def _redirect_files(node: object) -> set[str]:
     return files
 
 
+def _node_pos(node: object) -> int:
+    """Source start offset of an AST node (for order-aware verify); 0 if bashlex omitted it."""
+    pos = getattr(node, "pos", None)
+    return pos[0] if isinstance(pos, (tuple, list)) and pos else 0
+
+
+def _file_match(download: str, word: str) -> bool:
+    """Whether a used `word` references a downloaded file. Normalises a leading `./` and matches on
+    basename ONLY when one side carries no directory — so `./install.sh` matches a downloaded
+    `install.sh`, but `/tmp/data.json` and `./fixtures/data.json` (different dirs) do NOT collide."""
+    d = download[2:] if download.startswith("./") else download
+    u = word[2:] if word.startswith("./") else word
+    return d == u or ("/" not in d and _basename(u) == d) or ("/" not in u and _basename(d) == u)
+
+
 def fetch_execute_violations(text: str) -> list[str]:
     """Fail-closed §11.3 fetch-execute check over a real shell AST (design contract above).
 
     For each ``run:`` block: parse it with bashlex and walk the AST. A `curl`/`wget` is flagged when
-    its output can reach execution (substitution / non-sink pipe / a downloaded file used unverified).
-    A block bashlex cannot parse but that mentions curl/wget fails CLOSED (flagged)."""
+    its output reaches execution (non-sink pipe / executed substitution / a downloaded file used
+    unverified). A block bashlex cannot parse but that mentions curl/wget fails CLOSED (flagged)."""
     import bashlex
 
     violations: list[str] = []
@@ -313,11 +583,19 @@ def fetch_execute_violations(text: str) -> list[str]:
             continue
         walk = _FetchWalk()
         for tree in trees:
-            walk.walk(tree, False)
+            walk.walk(tree)
         reasons = list(walk.violations)
-        if not walk.has_verifier and (walk.downloads & walk.used):
-            # (C) a downloaded file is used by a later command and the block has no verify command.
-            reasons.append(f"unverified downloaded file used: {sorted(walk.downloads & walk.used)}")
+        # (C) a downloaded file USED before any verify command ran. Order-aware: a use is vetted only if
+        # a verifier precedes it (cycle-13 R5). `./install.sh` matches a downloaded `install.sh`, but
+        # unrelated paths sharing a basename (`/tmp/data.json` vs `./fixtures/data.json`) do not collide.
+        first_verifier = min(walk.verifier_positions, default=None)
+        unverified = sorted(
+            d
+            for d in walk.downloads
+            if any(_file_match(d, word) and (first_verifier is None or pos < first_verifier) for pos, word in walk.uses)
+        )
+        if unverified:
+            reasons.append(f"unverified downloaded file used: {unverified}")
         if reasons:
             violations.append(f"fetch-and-execute without checksum: {reasons[0]}")
     return violations
