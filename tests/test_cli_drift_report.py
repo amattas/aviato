@@ -101,7 +101,9 @@ def test_drift_report_reports_content_drifted_ruleset(
     out = capsys.readouterr().out
     assert rc == 0
     assert "Common: release tag format" in out
-    assert "--profile python-library" in out
+    # C12-3: the remediation now points at the override-aware `--declaration` form, so an apply does
+    # not re-add a check the consumer removed via overrides.
+    assert "--declaration" in out and ".github/aviato.yaml" in out
 
 
 def test_drift_report_file_only_skips_settings(

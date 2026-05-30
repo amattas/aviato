@@ -282,11 +282,22 @@ def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> str:
     # same-named ruleset on the WRONG target (e.g. overwrite the branch ruleset with a tag payload)
     # instead of creating the missing one. The rendered payload always carries `target`.
     target = payload.get("target")
+    same_name = [r for r in repository_rulesets(slug) if isinstance(r, dict) and r.get("name") == name]
     existing_id = None
-    for ruleset in repository_rulesets(slug):
-        if ruleset.get("name") == name and ruleset.get("target") == target:
+    for ruleset in same_name:  # prefer an exact (name, target) match
+        if ruleset.get("target") == target:
             existing_id = ruleset.get("id")
             break
+    else:
+        # C12-2: GitHub's ruleset LIST summary may OMIT `target`. A same-name candidate whose target is
+        # absent/None can only be THIS ruleset (it cannot be on a different target if the field is not
+        # returned), so fall back to it rather than POSTing a duplicate (and risking a 422). When the
+        # list DOES carry target, this fallback is never reached. Avoids a name-only match that would
+        # overwrite a genuinely different-target ruleset.
+        for ruleset in same_name:
+            if ruleset.get("target") is None:
+                existing_id = ruleset.get("id")
+                break
 
     if not apply:
         if existing_id:

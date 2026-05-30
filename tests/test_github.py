@@ -166,3 +166,14 @@ def test_pages_source_is_actions_resolves_workflow_vs_legacy(monkeypatch) -> Non
     assert gh.pages_source_is_actions("o/r") is True
     monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: {"build_type": "legacy"})
     assert gh.pages_source_is_actions("o/r") is False
+
+
+def test_upsert_ruleset_matches_when_list_omits_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    # C12-2: GitHub's ruleset LIST summary may omit `target`. A same-name candidate with no target can
+    # only be THIS ruleset, so upsert must UPDATE it (not POST a duplicate / 422).
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"id": 7, "name": "protect"}])
+    msg = github.upsert_ruleset("o/r", {"name": "protect", "target": "branch"}, apply=False)
+    assert "would update" in msg and "7" in msg
+    # A same-name ruleset on a DIFFERENT, explicit target must NOT match (would create the missing one).
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"id": 9, "name": "protect", "target": "tag"}])
+    assert "would create" in github.upsert_ruleset("o/r", {"name": "protect", "target": "branch"}, apply=False)

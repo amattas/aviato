@@ -95,12 +95,14 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
-def _profile_status_checks(profile: str | None) -> list[str]:
+def _profile_status_checks(profile: str | None, overrides: dict[str, object] | None = None) -> list[str]:
     """The resolved profile's required status-check contexts (§10.3 composition; §5.6 gate), or [] if none.
 
     Lets `apply-rulesets`/`render-rulesets` inject the language verify job (e.g.
     `ci / Python CI`) into the otherwise-static branch ruleset so it matches the
-    profile composed for the repo.
+    profile composed for the repo. C12-3: pass the consumer's ``overrides`` so a ruleset
+    apply resolves the SAME status checks drift detection uses — never re-adding a check
+    the consumer removed via `pipelines.remove`.
     """
     if not profile:
         return []
@@ -108,7 +110,7 @@ def _profile_status_checks(profile: str | None) -> list[str]:
     from .core.registry import Registry
     from .paths import MODULE_SOURCE_ROOT
 
-    resolved = resolve_profile(Registry(MODULE_SOURCE_ROOT), profile)
+    resolved = resolve_profile(Registry(MODULE_SOURCE_ROOT), profile, overrides=overrides or {})
     return list(resolved.settings.get("default_branch", {}).get("required_status_checks", []))
 
 
@@ -129,8 +131,25 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
         print(f"invalid repository slug(s) {bad}; expected OWNER/REPO", file=sys.stderr)
         return 2
 
+    # C12-3: if a consumer declaration is given, resolve the profile WITH its overrides so the applied
+    # rulesets carry the SAME status checks + approvals drift detection used — never re-adding a check
+    # the consumer removed. Otherwise fall back to the base profile (operator-direct provisioning).
+    required_approvals = args.required_approvals
     try:
-        extra_checks = _profile_status_checks(getattr(args, "profile", None))
+        if getattr(args, "declaration", None):
+            declaration = load_declaration(Path(args.declaration))
+            extra_checks = _profile_status_checks(declaration.profile, declaration.overrides)
+            if required_approvals is None:
+                from .core.composition import resolve_profile
+                from .core.registry import Registry
+                from .paths import MODULE_SOURCE_ROOT
+
+                _db = resolve_profile(
+                    Registry(MODULE_SOURCE_ROOT), declaration.profile, overrides=declaration.overrides
+                ).settings.get("default_branch", {})
+                required_approvals = _db.get("required_reviews")
+        else:
+            extra_checks = _profile_status_checks(getattr(args, "profile", None))
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -150,7 +169,7 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
         for message in apply_rulesets(
             slugs,
             apply=args.apply,
-            required_approvals=args.required_approvals,
+            required_approvals=required_approvals,
             extra_status_checks=extra_checks,
         ):
             print(message)
@@ -1414,12 +1433,15 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
                 issue_key=SETTINGS_DRIFT_ISSUE_KEY,
                 drifted_rulesets=drifted_rulesets,
                 profile=declaration.profile,
+                # C12-3: the issue-body remediation points at apply-rulesets --declaration so the
+                # restored ruleset honours this consumer's overrides (the standard consumer path).
+                declaration_path=".github/aviato.yaml",
             )
             print(f"settings drift: {settings_outcome.status} (destructive={settings_outcome.destructive})")
             if settings_outcome.drifted_rulesets:
                 print(
                     f"  missing/drifted rulesets (apply with `aviato apply-rulesets {slug} "
-                    f"--apply --profile {declaration.profile}`): {list(settings_outcome.drifted_rulesets)}"
+                    f"--apply --declaration {declaration_path}`): {list(settings_outcome.drifted_rulesets)}"
                 )
         except SettingsReadError as exc:
             print(
@@ -1648,6 +1670,11 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument(
         "--profile",
         help="Inject the profile's language verify status checks (e.g. ci / Python CI) into the branch ruleset.",
+    )
+    apply.add_argument(
+        "--declaration",
+        help="Path to a consumer .github/aviato.yaml: resolve status checks + approvals WITH its "
+        "overrides (C12-3), so a ruleset apply does not re-add a check the consumer removed.",
     )
     apply.set_defaults(func=cmd_apply_rulesets)
 
