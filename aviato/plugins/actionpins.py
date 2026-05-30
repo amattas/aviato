@@ -96,6 +96,7 @@ _INTERPRETERS = frozenset(
 # script (`python report.py "$(curl)"`), so the interpreter rule stays usable (cycle-13 R4).
 _SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh", "ash"})
 _CODE_FLAGS = frozenset({"-c", "-e", "-E", "--command", "--eval"})  # operand is code, not a filename
+_CODE_FLAG_PREFIXES = ("-c", "-e", "-E", "--command=", "--eval=")  # a GLUED code operand: `-c"$(curl)"`
 # Verifier commands (a verifier tool + its check/verify subcommand) are recognised as real command
 # nodes only, in `_is_verifier` — a checksum word in a comment/string is dropped by the lexer, so it
 # can no longer grant trust (closes cycle-12 C12-5).
@@ -336,9 +337,12 @@ def _interpreter_executes_fetch(node: object) -> bool:
     # eval / source / . : every argument is code.
     if names & {"eval", "source", "."} and any(_word_has_fetch_subst(p) for p in word_parts):
         return True
-    # the operand of a code flag (`-c`/`-e`) carries the fetch.
+    # a code flag carries the fetch — its SEPARATE operand (`-c "$(curl)"`) OR a GLUED operand
+    # (`-c"$(curl)"`, which bashlex tokenises as one `-c$(…)` word; cycle-14 R3 fail-open).
     for i, part in enumerate(word_parts):
         if part.word in _CODE_FLAGS and i + 1 < len(word_parts) and _word_has_fetch_subst(word_parts[i + 1]):
+            return True
+        if part.word.startswith(_CODE_FLAG_PREFIXES) and _word_has_fetch_subst(part):
             return True
     # a shell runs its FIRST positional as a script (`bash <(curl)`); later words are its data args.
     if names & _SHELLS:
