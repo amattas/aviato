@@ -942,3 +942,23 @@ def test_select_issue_handles_non_list_and_numberless(monkeypatch: pytest.Monkey
     assert _select_issue([], "o/r", "k") is None
     # No usable int number → fall back to the first dict (so callers can still open afresh).
     assert _select_issue([{"title": "x"}], "o/r", "k") == {"title": "x"}
+
+
+def test_classic_pr_bypass_allowance_surfaces_as_unenforced_pr() -> None:
+    # N3 (§2.13/§5.6): a classic protection that requires review BUT lets a user bypass it must NOT read
+    # as a fully-enforced PR requirement — otherwise an otherwise-clean repo never drifts and the bypass
+    # persists undetected. Model the bypass as requires_pull_request=False so it drifts from the desired.
+    from aviato.github_platform import map_branch_settings
+
+    protection = {
+        "required_pull_request_reviews": {
+            "required_approving_review_count": 1,
+            "bypass_pull_request_allowances": {"users": [{"login": "alice"}], "teams": [], "apps": []},
+        }
+    }
+    mapped = map_branch_settings([], protection)
+    assert mapped["requires_pull_request"] is False
+    assert mapped["required_reviews"] == 0
+    # without a bypass allowance, the same protection reads as a real PR requirement
+    no_bypass = {"required_pull_request_reviews": {"required_approving_review_count": 1}}
+    assert map_branch_settings([], no_bypass)["requires_pull_request"] is True

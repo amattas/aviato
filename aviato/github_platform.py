@@ -250,6 +250,14 @@ def _norm_setting(key: str, value: Any) -> Any:
     return value
 
 
+def _has_bypass_allowance(allowances: Any) -> bool:
+    """True if a classic ``bypass_pull_request_allowances`` block names any user/team/app — i.e. some
+    actor may merge WITHOUT review, so the PR requirement is not reliably enforced (N3)."""
+    if not isinstance(allowances, dict):
+        return False
+    return any(allowances.get(kind) for kind in ("users", "teams", "apps"))
+
+
 def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any]) -> dict[str, Any]:
     """Map live default-branch rules/protection into the flat comparable settings map (§5.6, §2.9).
 
@@ -265,6 +273,11 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     pr_params = (pr_rule.get("parameters") or {}) if pr_rule else {}
     classic_reviews = protection.get("required_pull_request_reviews") or {}
     requires_pr = pr_rule is not None or protection.get("required_pull_request_reviews") is not None
+    # N3 (§2.13/§5.6): a classic PR-review BYPASS allowance lets named actors merge without review, so
+    # the requirement is not reliably enforced. Model it as PR-not-required so it DRIFTS from the desired
+    # "review required, no bypass" (a wholesale apply then clobbers the bypass). The RULESET pull_request
+    # bypass is a separate path, covered by rulesets.ruleset_content_drift (bypass_actors).
+    pr_bypassed = _has_bypass_allowance(classic_reviews.get("bypass_pull_request_allowances"))
 
     if pr_rule is not None:
         required_reviews = int(pr_params.get("required_approving_review_count", 0))
@@ -309,6 +322,10 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     classic_enforce_admins = bool((protection.get("enforce_admins") or {}).get("enabled", False))
     ruleset_owns_branch = any(rule.get("type") in _MODELED_RULE_TYPES for rule in rules)
     enforce_admins = classic_enforce_admins or ruleset_owns_branch
+
+    if pr_bypassed:  # N3: surface the bypass as a weakened PR requirement (review not enforced)
+        requires_pr = False
+        required_reviews = 0
 
     return {
         "requires_pull_request": requires_pr,

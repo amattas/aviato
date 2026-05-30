@@ -147,6 +147,50 @@ def _unknown_settings_override_paths(
     return unknown
 
 
+def _leaf_type(value: object) -> str:
+    """A coarse type name for settings-leaf validation. ``bool`` is checked BEFORE ``int`` because
+    ``isinstance(True, int)`` is True at runtime — a bool is not an acceptable required-reviews int, nor
+    an int an acceptable boolean toggle."""
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, str):
+        return "str"
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, dict):
+        return "dict"
+    return type(value).__name__
+
+
+def _validate_settings_leaf_types(baseline: dict[str, Any], resolved: dict[str, Any], block: str) -> None:
+    """Reject an override that changed a managed leaf's TYPE or removed it (N1, §2.9/§5.7).
+
+    Every key the baseline declares must survive resolution with the SAME coarse type. A string where a
+    bool/int is expected (`required_reviews: "NaN"` → `int()` crashes the apply; `block_force_push:
+    "false"` → truthy → force-push protection INVERTED), a null that drops a key, or a list/dict where a
+    scalar belongs are all rejected here — at resolve time, before any privileged write.
+    """
+    if not isinstance(resolved, dict):
+        raise CompositionError(
+            f"settings override replaced the managed {block} block with a non-mapping ({resolved!r}) "
+            "(§4.2/§2.13); it cannot be disabled or retyped wholesale"
+        )
+    for key, base_value in baseline.items():
+        if key not in resolved:
+            raise CompositionError(
+                f"settings override removed managed {block} key {key!r} (§2.9); a dropped protection "
+                "key would silently weaken the apply — keep the baseline key or override its value"
+            )
+        if _leaf_type(resolved[key]) != _leaf_type(base_value):
+            raise CompositionError(
+                f"settings override set {block}.{key} to a {_leaf_type(resolved[key])} "
+                f"({resolved[key]!r}); the managed type is {_leaf_type(base_value)} — a mismatched type "
+                "would crash or silently invert the privileged apply (N1, §2.9)"
+            )
+
+
 def _chain(load, name: str) -> list:
     """Walk an ``extends`` chain from ``name`` to its root, root-first.
 
@@ -246,6 +290,11 @@ def resolve_profile(
     # the core names no specific scanner; it only enforces that the composed baseline
     # cannot be silently omitted or weakened by an override below.
     baseline_security = dict(settings.get("security", {}))
+    # N1 (§5.7/§2.9): also capture the branch-protection baseline so a consumer override that changes a
+    # leaf's TYPE (`required_reviews: "NaN"`, `block_force_push: "false"`) — which would crash the apply
+    # (`int("NaN")`) or silently INVERT protection (a non-empty string is truthy) — is rejected at
+    # resolve time, not discovered at the privileged write.
+    baseline_default_branch = dict(settings.get("default_branch", {}))
 
     pipeline_override = overrides.get("pipelines")
     if pipeline_override is not None:
@@ -288,6 +337,11 @@ def resolve_profile(
                 "apply time. Use an exact baseline key."
             )
         settings = deep_merge(settings, settings_override)
+        # N1: every managed leaf must keep its baseline TYPE and stay present — a string/null where a
+        # bool/int/list is expected would crash or silently invert the apply (§2.9). Validate the
+        # branch-protection and security blocks against the baseline shape.
+        _validate_settings_leaf_types(baseline_default_branch, settings.get("default_branch", {}), "default_branch")
+        _validate_settings_leaf_types(baseline_security, settings.get("security", {}), "security")
         # §2.13: the security baseline is always-on — "there is no composition that
         # silently omits it." An override may strengthen a toggle but may never remove
         # or weaken one (true→false, etc.); doing so is a hard composition error, the

@@ -394,3 +394,20 @@ def test_template_module_path_is_confined() -> None:
         with pytest.raises(CompositionError):
             _confined_relpath(bad, "output_path")
     assert _confined_relpath(".github/workflows/aviato-ci.yml", "output_path") == ".github/workflows/aviato-ci.yml"
+
+
+def test_settings_override_rejects_mismatched_leaf_type() -> None:
+    # N1 (§2.9/§5.7): a consumer override that retypes a managed leaf — `required_reviews: "NaN"`
+    # (crashes int() at apply) or `block_force_push: "false"` (a truthy string INVERTS protection) —
+    # or drops a key must fail at resolve time, not at the privileged write.
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    for bad in ({"required_reviews": "NaN"}, {"block_force_push": "false"}, {"required_reviews": [1]}):
+        with pytest.raises(CompositionError):
+            resolve_profile(registry, "python-library", overrides={"settings": {"default_branch": bad}})
+    # a same-typed override is still accepted
+    resolved = resolve_profile(
+        registry, "python-library", overrides={"settings": {"default_branch": {"required_reviews": 2}}}
+    )
+    assert resolved.settings["default_branch"]["required_reviews"] == 2
