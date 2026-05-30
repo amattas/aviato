@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -53,6 +53,18 @@ def _load_optional_manifest(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise CompositionError(f"manifest is not a mapping: {path}")
     return data
+
+
+def _confined_relpath(value: object, field: str) -> str:
+    """A template module's repo-relative path, confined (N6). Reject absolute paths and `..`
+    components so a malformed/hostile module manifest cannot make scaffold/proposal reads or writes
+    escape the module-source tree or the consumer repo (defense-in-depth for library data)."""
+    if not isinstance(value, str) or not value.strip():
+        raise CompositionError(f"template module {field!r} must be a non-empty path string")
+    pure = PurePosixPath(value)
+    if pure.is_absolute() or value.startswith("\\") or ".." in pure.parts:
+        raise CompositionError(f"template module {field!r} must be a repo-relative path without '..': {value!r}")
+    return value
 
 
 class Registry:
@@ -165,8 +177,8 @@ class Registry:
     def template_module(self, name: str) -> TemplateModule:
         doc = _load_doc(self.root / "scaffold" / f"{name}.yaml")
         return TemplateModule(
-            output_path=doc["output_path"],
-            source=doc["source"],
+            output_path=_confined_relpath(doc.get("output_path"), "output_path"),
+            source=_confined_relpath(doc.get("source"), "source"),
             seed_once=bool(doc.get("seed_once", False)),
             comment=doc.get("comment"),
             required_variables=tuple(doc.get("required_variables", ())),

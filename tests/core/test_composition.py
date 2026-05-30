@@ -382,3 +382,15 @@ def test_pipelines_override_present_null_does_not_raise_typeerror() -> None:
     assert _override_pipeline_list(["ci"], "remove") == ("ci",)
     with pytest.raises(CompositionError):
         _override_pipeline_list("ci", "add")
+
+
+def test_template_module_path_is_confined() -> None:
+    # N6: a template module's output_path/source must be repo-relative — reject absolute / `..`
+    # so a malformed library module cannot make scaffold reads/writes escape the trees.
+    from aviato.core.errors import CompositionError
+    from aviato.core.registry import _confined_relpath
+
+    for bad in ("/etc/x", "../../x", "a/../../b"):
+        with pytest.raises(CompositionError):
+            _confined_relpath(bad, "output_path")
+    assert _confined_relpath(".github/workflows/aviato-ci.yml", "output_path") == ".github/workflows/aviato-ci.yml"
