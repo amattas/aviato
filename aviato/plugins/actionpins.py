@@ -85,6 +85,20 @@ _PURE_SINKS = frozenset({"jq", "grep", "egrep", "fgrep", "rg", "head", "tail", "
 _WRAPPERS = frozenset(
     {"sudo", "env", "command", "nice", "ionice", "nohup", "stdbuf", "setsid", "time", "timeout", "doas", "chronic"}
 )
+# Wrapper options that take a SEPARATE argument — resolving the real program must skip both the flag AND
+# its operand (`sudo -u root bash` → `bash`, not `root`). Resolving correctly removes the need for an
+# any-word fallback that misread a literal interpreter token in a wrapped command's args as the program
+# (`sudo grep bash …`, cycle-15 R3). A rare un-listed arg-flag degrades to fail-closed (over-detect).
+_WRAPPER_ARG_FLAGS = {
+    "sudo": {"-u", "-g", "-C", "-p", "-r", "-t", "-U", "-h", "-R", "-D",
+             "--user", "--group", "--chdir", "--prompt", "--role", "--type", "--host", "--close-from"},
+    "doas": {"-u", "-C"},
+    "env": {"-u", "-C", "-S", "--unset", "--chdir", "--split-string"},
+    "timeout": {"-s", "-k", "--signal", "--kill-after"},
+    "nice": {"-n", "--adjustment"},
+    "ionice": {"-c", "-n", "-p", "-P", "-t", "--class", "--classdata", "--pid"},
+    "stdbuf": {"-i", "-o", "-e", "--input", "--output", "--error"},
+}  # fmt: skip
 # Interpreters: a substitution fed to one of these is EXECUTED (vs merely captured as data). The dual of
 # _PURE_SINKS for the substitution rule. `python`/`perl`/`ruby`/`node` are included conservatively.
 _INTERPRETERS = frozenset(
@@ -240,9 +254,13 @@ def _resolved_program(node: object) -> str | None:
         base = _basename(words[i])
         if base not in _WRAPPERS:
             return base
+        arg_flags = _WRAPPER_ARG_FLAGS.get(base, frozenset())
         i += 1
-        while i < len(words) and words[i].startswith("-"):  # skip the wrapper's own flags
+        while i < len(words) and words[i].startswith("-"):  # skip the wrapper's own flags …
+            flag = words[i]
             i += 1
+            if "=" not in flag and flag in arg_flags and i < len(words):
+                i += 1  # … and the SEPARATE operand of an arg-taking option (`sudo -u root`)
         if base == "env":  # env VAR=val … program
             while i < len(words) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[i]):
                 i += 1
@@ -264,56 +282,37 @@ def _is_introspection(node: object) -> bool:
 
 
 def _fetch_tool(node: object) -> str | None:
-    """'curl'/'wget' if this CommandNode runs one (through wrappers, cycle-13 Group B)."""
+    """'curl'/'wget' if this CommandNode runs one — resolved through wrappers (`sudo -u root curl`),
+    by PROGRAM position so a literal `curl` ARGUMENT (`grep curl`) is not a fetch (cycle-13 Group B)."""
     if _is_introspection(node):
         return None
-    prog = _resolved_program(node)
-    if prog in _FETCH_NAMES:
-        return prog
-    # A wrapper whose options take ARGUMENTS (`env -u X curl`, `sudo -u root curl`) can hide the program
-    # from the position-based resolve. When the command STARTS with a wrapper, fall back to any
-    # curl/wget word (fail-closed). `grep curl` has no wrapper, so it is unaffected (no false fetch).
-    words = _plain_words(node)
-    if words and _basename(words[0]) in _WRAPPERS:
-        for word in words:
-            if _basename(word) in _FETCH_NAMES:
-                return _basename(word)
-    return None
+    return _resolved_program(node) if _resolved_program(node) in _FETCH_NAMES else None
 
 
 def _is_interpreter(node: object) -> bool:
-    """True if the command runs an interpreter (`bash`/`sh`/`eval`/`source`/`.`/`python`/…) — a
-    substitution fed to one is EXECUTED, not merely captured as data. Resolves the PROGRAM through
-    wrappers, with a wrapper-present fallback to any interpreter word (mirrors `_fetch_tool`) so
-    `sudo -u root bash -c …`/`timeout -k 5s 30s bash -c …` are caught WITHOUT misreading a literal
-    interpreter token in an ordinary command's args (`grep bash -e …`) as an interpreter (cycle-15)."""
-    if getattr(node, "kind", None) != "command":
-        return False
-    if _resolved_program(node) in _INTERPRETERS:
-        return True
-    words = _plain_words(node)
-    return bool(words) and _basename(words[0]) in _WRAPPERS and any(_basename(w) in _INTERPRETERS for w in words)
+    """True if the command's resolved program is an interpreter (`bash`/`sh`/`eval`/`source`/`.`/
+    `python`/…) — a substitution fed to one is EXECUTED, not merely captured as data. Resolving the
+    PROGRAM through wrappers (incl. their arg-taking options) catches `sudo -u root bash -c …` WITHOUT
+    misreading a literal interpreter token in an ordinary command's args (`grep bash …`, cycle-15)."""
+    return getattr(node, "kind", None) == "command" and _resolved_program(node) in _INTERPRETERS
 
 
 def _is_shell(node: object) -> bool:
-    """True if the command runs a POSIX shell (`bash`/`sh`/…) — whose `-c` operand is itself shell, vs
-    `python`/`perl`/`ruby` whose `-c`/`-e` operand is that LANGUAGE's code (never re-parsed as shell)."""
-    if getattr(node, "kind", None) != "command":
-        return False
-    if _resolved_program(node) in _SHELLS:
-        return True
-    words = _plain_words(node)
-    return bool(words) and _basename(words[0]) in _WRAPPERS and any(_basename(w) in _SHELLS for w in words)
+    """True if the command's resolved program is a POSIX shell (`bash`/`sh`/…) — whose `-c` operand is
+    itself shell, vs `python`/`perl`/`ruby` whose `-c`/`-e` operand is that LANGUAGE's code (never
+    re-parsed as shell)."""
+    return getattr(node, "kind", None) == "command" and _resolved_program(node) in _SHELLS
 
 
 def _static_code_operands(node: object) -> list[str]:
-    """The LITERAL (substitution-free) string operands of a shell's `-c`/`-e` flag. These are shell to be
-    recursively scanned (`bash -c 'curl | bash'`); an operand carrying a substitution is already handled
-    by `_interpreter_executes_fetch`, so it is skipped here to avoid double work."""
+    """The LITERAL (substitution-free) string operands of a shell's `-c`/`--command` flag (the ONLY
+    shell inline-code flag — `-e` is `errexit`, NOT code, cycle-15 R3). These are shell to be recursively
+    scanned (`bash -c 'curl | bash'`); an operand carrying a substitution is already handled by
+    `_interpreter_executes_fetch`, so it is skipped here to avoid double work."""
     word_parts = [p for p in getattr(node, "parts", []) if getattr(p, "kind", None) == "word"]
     operands: list[str] = []
     for i, part in enumerate(word_parts):
-        if part.word in _CODE_FLAGS and i + 1 < len(word_parts):
+        if part.word in ("-c", "--command") and i + 1 < len(word_parts):
             nxt = word_parts[i + 1]
             has_subst = any(
                 getattr(c, "kind", None) in ("commandsubstitution", "processsubstitution")
