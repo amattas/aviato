@@ -41,25 +41,29 @@ def run_reconcile(
     diff = classify_settings(desired=desired_settings, live=live)
     current_diff_id = diff_identity(diff)
 
-    state = ReconcileState(
-        issue_open=issue.open,
-        consent_present=issue.consent_diff_id is not None,
-        consent_diff_id=issue.consent_diff_id,
-        current_diff_id=current_diff_id,
-        actor_type=issue.consent_actor_type,
-        role=issue.consent_role,
-        role_lookup_ok=issue.consent_role_lookup_ok,
-        issue_edited_by_nonhuman_since_grant=issue.edited_by_nonhuman_since_grant,
-        confirmed_diff_id=confirmed_diff_id,
-        desired_settings=desired_settings,
-        live_settings=live,
-        tool_version=tool_version,
-        pin=pin,
-        recorded_version=recorded_version,
-        override_version_pin=override_version_pin,
-        issue_ambiguous=issue.ambiguous,
-    )
+    def _state(issue_obj: Any, diff_id: str, live_settings: dict[str, Any]) -> ReconcileState:
+        # Build the decision input from a (possibly re-read) issue + diff. Version-pin / confirmed-id
+        # inputs are constant across reads; only the consent channel and the live diff can change.
+        return ReconcileState(
+            issue_open=issue_obj.open,
+            consent_present=issue_obj.consent_diff_id is not None,
+            consent_diff_id=issue_obj.consent_diff_id,
+            current_diff_id=diff_id,
+            actor_type=issue_obj.consent_actor_type,
+            role=issue_obj.consent_role,
+            role_lookup_ok=issue_obj.consent_role_lookup_ok,
+            issue_edited_by_nonhuman_since_grant=issue_obj.edited_by_nonhuman_since_grant,
+            confirmed_diff_id=confirmed_diff_id,
+            desired_settings=desired_settings,
+            live_settings=live_settings,
+            tool_version=tool_version,
+            pin=pin,
+            recorded_version=recorded_version,
+            override_version_pin=override_version_pin,
+            issue_ambiguous=issue_obj.ambiguous,
+        )
 
+    state = _state(issue, current_diff_id, live)
     outcome = reconcile_decision(state)
     # R2-6/§5.7: a non-human edit since the grant VOIDS consent — actually revoke the grant label
     # (not just comment), so a subsequent run doesn't re-evaluate a stale grant. The decision
@@ -74,6 +78,35 @@ def run_reconcile(
     )
 
     if outcome.action == "apply":
+        # C12-R3-1 (§5.7/§2.8): RE-READ the consent channel + live settings IMMEDIATELY before the
+        # privileged write and re-authorize against the RECOMPUTED diff. The entry-time decision can be
+        # stale — a consent label revoked, the issue closed, or the live settings/diff changed between
+        # the entry read and here must ABORT, never apply on stale authorization. (The docstring's
+        # apply-time re-read promise was previously unfulfilled.)
+        fresh_issue = platform.get_issue(repo, issue_key)
+        if fresh_issue is None or not fresh_issue.open:
+            return dataclasses.replace(
+                ReconcileOutcome("refuse", "tracking issue became missing/closed before apply; re-run"),
+                diff_id=current_diff_id,
+                changes=dict(diff.changes),
+                values=dict(diff.values),
+            )
+        live = platform.read_settings(repo)
+        diff = classify_settings(desired=desired_settings, live=live)
+        current_diff_id = diff_identity(diff)
+        recheck = reconcile_decision(_state(fresh_issue, current_diff_id, live))
+        if recheck.action != "apply":
+            with contextlib.suppress(Exception):
+                platform.comment_issue(
+                    repo, issue_key, f"Apply ABORTED — consent/state changed before apply: {recheck.reason}"
+                )
+            return dataclasses.replace(
+                recheck, diff_id=current_diff_id, changes=dict(diff.changes), values=dict(diff.values)
+            )
+        # Re-authorized on the fresh read: carry the recomputed diff into the apply + audit below.
+        outcome = dataclasses.replace(
+            recheck, diff_id=current_diff_id, changes=dict(diff.changes), values=dict(diff.values)
+        )
         # Apply the full DESIRED state, not the diff. The platform binding constructs
         # the purpose-built write payload(s) from this (§2.9): branch protection is a
         # wholesale PUT whose accepted payload is the complete protection object, so a
