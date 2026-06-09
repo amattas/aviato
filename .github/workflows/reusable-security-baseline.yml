@@ -137,7 +137,7 @@ jobs:
       # the SARIF too, so medium/low would be neither blocked NOR reported — the §2.13 policy
       # requires medium/low to be reported (without blocking).
       - name: Report dependency findings (all severities, no gate)
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: "."
@@ -156,7 +156,7 @@ jobs:
           category: aviato-dependency-scan
 
       - name: Gate on high/critical dependencies (§2.13)
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: "."
@@ -179,7 +179,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Scan for secrets
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: "."
