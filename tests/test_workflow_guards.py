@@ -281,8 +281,11 @@ def test_npm_workflows_harden_installs_before_installing() -> None:
         install = next(s for s in steps if s.get("name") == "Install")
         run = harden["run"]
         assert 'npm_version="$(npm --version)"' in run
-        assert '[[ "${npm_major}" =~ ^[0-9]+$ ]]' in run
+        # finding 13: min-release-age is DEFINED from npm 11.10.0 (verified
+        # empirically); the gate must check the minor, not just the major.
+        assert '[[ "${npm_major}" =~ ^[0-9]+$ && "${npm_minor}" =~ ^[0-9]+$ ]]' in run
         assert '[ "${npm_major}" -lt 11 ]' in run
+        assert '[ "${npm_minor}" -lt 10 ]' in run
         assert "::error::npm ${npm_version} does not support min-release-age" in run
         assert "exit 1" in run
         assert "npm config set ignore-scripts true --location=user" in run

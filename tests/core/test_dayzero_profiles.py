@@ -193,7 +193,7 @@ def test_docs_opt_in_scaffolds_runnable_docusaurus_site() -> None:
     assert '"lint": "eslint ."' in pkg.body
     assert '"build": "docusaurus build"' in pkg.body
     assert '"node": ">=24.0"' in pkg.body
-    assert '"npm": ">=11.0.0"' in pkg.body
+    assert '"npm": ">=11.10.0"' in pkg.body  # finding 13: min-release-age needs npm >=11.10
 
     config = next(i for i in items_on if i.output == "website/docusaurus.config.js")
     assert "markdown: { mermaid: true }" in config.body
@@ -363,7 +363,7 @@ def test_node_projects_scaffold_npm_hardening_config(variant: str) -> None:
     assert "engine-strict=true" in npmrc.body
     pkg = next(i for i in items if i.output == "package.json")
     assert '"node": ">=24.0"' in pkg.body
-    assert '"npm": ">=11.0.0"' in pkg.body
+    assert '"npm": ">=11.10.0"' in pkg.body  # finding 13: min-release-age needs npm >=11.10
 
 
 def test_node_javascript_has_no_fake_build_gate() -> None:

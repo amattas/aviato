@@ -101,8 +101,10 @@ def load_declaration(path: Path) -> Declaration:
         version=version,
         docs=_as_bool(data.get("docs", False), "docs", path),
         bootstrap=_as_bool(data.get("bootstrap", False), "bootstrap", path),
-        variables=dict(data.get("variables", {})),
-        overrides=dict(data.get("overrides", {})),
+        # `or {}`: a bare `variables:` / `overrides:` key (no entries) loads as None,
+        # which the isinstance guard above tolerates — dict(None) must not crash.
+        variables=dict(data.get("variables") or {}),
+        overrides=dict(data.get("overrides") or {}),
     )
 
 

@@ -32,6 +32,9 @@ jobs:
       install-command: "python -m pip install -e .[dev]"
       lint-command: "python -m ruff check ."
       test-command: "python -m pytest --cov --cov-report=term-missing"
+      build-command: "python -m build"
+      run-typecheck: true
+      run-build: true
 
   security:
     # Runs on PRs AND on the release tag, so source scans gate the verify pipeline
