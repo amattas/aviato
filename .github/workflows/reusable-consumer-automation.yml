@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: main
+      local-install:
+        description: Install Aviato from the checked-out repository for Library bootstrap.
+        required: false
+        type: boolean
+        default: false
       python-version:
         required: false
         type: string
@@ -58,6 +63,7 @@ jobs:
       # the admin settings-token must never be visible to the install step or the file-drift
       # writes — only to the read-only settings-drift step.
       AVIATO_REF: ${{ inputs.aviato-ref }}
+      AVIATO_LOCAL_INSTALL: ${{ inputs.local-install }}
     steps:
       - name: Jitter
         shell: bash
@@ -71,9 +77,32 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
 
-      - name: Install Aviato (pinned)
+      - name: Install Aviato
         shell: bash
-        run: python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
+        run: |
+          set -euo pipefail
+          if [ "${AVIATO_LOCAL_INSTALL}" = "true" ]; then
+            required_anchors=(
+              "aviato/core/__init__.py"
+              "aviato/library/bundles"
+              "aviato/library/scaffold"
+              "aviato/library/policy.yml"
+              ".github/aviato.yaml"
+            )
+            for anchor in "${required_anchors[@]}"; do
+              if [ ! -e "${anchor}" ]; then
+                echo "::error::local-install is only valid for Library bootstrap; missing structural anchor ${anchor} (§5.10)."
+                exit 1
+              fi
+            done
+            if ! sed 's/#.*$//' .github/aviato.yaml | grep -Eiq '^[[:space:]]*bootstrap:[[:space:]]*true[[:space:]]*$'; then
+              echo "::error::local-install requires .github/aviato.yaml to declare bootstrap: true (§5.10)."
+              exit 1
+            fi
+            python -m pip install -e .
+          else
+            python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
+          fi
 
       - name: File drift (platform token; contents/PR/issue writes only)
         shell: bash

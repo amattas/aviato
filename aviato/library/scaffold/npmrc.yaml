@@ -1,0 +1,5 @@
+name: npmrc
+output_path: .npmrc
+source: files/npmrc.txt
+comment: "#"
+seed_once: false

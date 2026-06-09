@@ -479,7 +479,11 @@ from flag / declaration / environment and **fails closed** (lists the missing
 variable) when unset; populating the auto-detection tier with safe, normalized
 sources is a post-day-zero refinement.
 **Preconditions:** every *required* variable resolves; for adopt, the working
-tree is clean unless overridden.
+tree is clean unless overridden. A fresh provision/adopt **must** record an
+explicit Library pin supplied by the operator; the process never fabricates a
+default pin. That pin must resolve to a published Library tag/branch before
+write/provision proceeds. A dedicated unresolved-pin escape hatch is permitted
+only for intentional offline/test scaffolds and must be named as such.
 **Two paths, one shape:**
 - *Provision-new*: create the repository, apply **minimal** protection (§2.11),
   scaffold, first commit, then apply **full** protection.
@@ -543,6 +547,9 @@ byte-identical output across runs.
 the Library by **self-contained local path**, not by a released reference.
 **Failure handling:** a template whose required variables are missing fails
 loudly (no silent placeholder); idempotent on a clean tree; atomic per file.
+When an operator explicitly forces a managed rewrite, the marker is restamped
+even if the rendered body is otherwise unchanged, so profile migrations and
+re-pins cannot leave a valid body carrying stale management metadata.
 
 ```mermaid
 flowchart TD
@@ -825,6 +832,12 @@ verify, **and the release pipeline** — resolves its module/action references t
 self-contained local paths. The first release the pipeline produces is what makes
 released references exist; nothing in the bootstrap path may require one to
 pre-exist.
+The workflow-level `local-install` path is part of this bootstrap exception only:
+it is valid only when the operated-on checkout satisfies the structural Library
+predicate **and** its declaration sets `bootstrap: true`. If either condition is
+false, the workflow fails before installing from the local checkout. This prevents
+a Consumer from hand-editing `local-install: true` and executing unreviewed local
+code in place of the pinned Library reference.
 
 ```mermaid
 flowchart TD
@@ -994,6 +1007,9 @@ surface, specified normatively below.
     language plug-in's docs step emits API/reference material as md/mdx (§12) and
     the docs deploy consumes it; when `false` (default), no docs site is built or
     published and no docs step runs.
+  - `bootstrap` (boolean, optional, default `false`) — valid only for the Library
+    repository itself (§5.10). It enables local self-reference during bootstrap
+    and is rejected for non-Library repositories.
   - `variables` (map) — resolved variable values (§6.6), written by onboarding.
   - `overrides` (map, optional) — convention overrides under the §4.2 semantics.
 - It is **declarative** (the Consumer states intent; the engine realizes it),
@@ -1384,8 +1400,19 @@ package index that exposes no digest (e.g. a `pip`/`npm` package) is pinned to a
 **exact version**, never a floating latest. (Distro packages installed via the
 runner's system package manager inherit the pinned runner-image snapshot.) The
 agnostic checker (`aviato.plugins.actionpins`) and the in-CI gate enforce the
-digest-pinned classes (actions, images, curl-fetched binaries); exact-version tool
-pins are carried as workflow inputs (e.g. `actionlint-version`, `yamllint-version`).
+digest-pinned classes (actions, images, curl-fetched binaries) and unsafe `npx`
+registry fetches; exact-version tool pins are carried as workflow inputs (e.g.
+`actionlint-version`, `yamllint-version`) or explicit exact package specs.
+For npm install paths, Aviato adds an additional supply-chain guard: Node and
+Docusaurus installs must run with npm **11 or newer**, because older npm rejects
+the `min-release-age` option. The reusable Node and docs workflows fail closed on
+npm <11 before any install command runs, set `ignore-scripts=true`, and set
+`engine-strict=true` and `min-release-age=7`. Managed Node and docs scaffolds
+include `.npmrc` with the same values, and package manifests declare
+`node >=24` / `npm >=11`, so local project installs inherit and enforce the
+posture. Node tool invocations that use `npx` must pass `--no-install` unless
+they are explicitly exact-version tool fetches documented as such; both
+`aviato validate` and the common lint workflow enforce this boundary.
 **Day-zero exception (macOS Homebrew tools, deferred):** the Swift verify install
 (`brew install swift-format swiftlint`, §12.3) is **not** version/checksum-pinned —
 neither tool ships a versioned Homebrew formula, and unlike a Linux distro package a
@@ -1479,7 +1506,8 @@ measured-but-not-gated exception (threshold opt-in, §12.1).
 - **actionlint** — `.github/workflows/*` (catches the reusable-workflow
   privilege/syntax errors of the §8.9 class).
 - **yamllint** — YAML files.
-- **hadolint** — the Dockerfile, where one exists (GHCR publishers, §13.2).
+- **hadolint** — every discovered Dockerfile, where any exist (GHCR publishers,
+  §13.2).
 - **shellcheck** — shell scripts, where any exist.
 - **helm lint** — Helm charts, where a `Chart.yaml` exists. (This lints charts
   that are present; k8s/Helm *deployment* stays out of day-zero scope, §10.1.)
@@ -1535,9 +1563,11 @@ A **single** plug-in covers both. Type-checking is **required for TypeScript** a
 **omitted for JavaScript**, selected by the `language-variant` enum variable
 (§6.6), not by forking the plug-in.
 
-**Scaffold bundle (managed files):** lint config, format config, TypeScript
+**Scaffold bundle (managed files):** npm install-hardening config (`.npmrc`),
+lint config, format config, TypeScript
 compiler config (TS), language ignore rules, editor config, package-manifest
-fragment (scripts + engines). Lockfiles and JSON-only files are seed-once (§6.3).
+fragment (scripts + engines requiring Node >=24 and npm >=11). Lockfiles and
+JSON-only files are seed-once (§6.3).
 
 **Required tooling/standards (named, all gates blocking):** **ESLint** (flat
 config) for linting; **Prettier** for formatting; **`tsc --noEmit`** type-checking
@@ -1549,6 +1579,9 @@ build/bundle suitable for a containerized service; Conventional Commits enforced
 **Workflows bundle (pipelines):**
 - **Verify** (Linux): ESLint + Prettier `--check` + `tsc --noEmit` (TS) +
   tests+coverage (lint/format/type blocking), plus the common lint (§12 intro).
+  The reusable workflow defaults to Node 24 and refuses npm <11 before install so
+  `min-release-age=7` can be enforced; ESLint/Prettier/TypeScript are invoked
+  through local package binaries (`npx --no-install`).
 - **Docs** (only when `docs: true`, §6.1): emit API reference as **md/mdx** via
   TypeDoc (markdown output) into the docs source tree for the Docusaurus site
   (§13.3). No docs step runs when `docs: false`.
@@ -1697,15 +1730,23 @@ valid narrative-only site.
   release. Versioned snapshots live on the published **`gh-pages` artifact**, not
   the source branch. (Replaces the previous mkdocs + `mike` setup; unlike `mike` it
   is append-only/reviewable — but the **cap** is what keeps it bounded.)
-- **Search:** **local offline search** (`@easyops-cn/docusaurus-search-local`) —
-  index built at build time; **no external service, no API key, no stored secret**
-  (consistent with §2.13 / §11.2 / §11.4).
-- **Theme:** `@docusaurus/preset-classic`, **docs-first** (no blog), with the
-  version dropdown and a light/dark toggle. No custom theme day-zero.
+- **Search:** Algolia DocSearch via `@docusaurus/theme-search-algolia`, configured
+  with the public application ID, public search API key, and index name. These are
+  not stored secrets, but the operator must provision the Algolia index or override
+  search before publishing (§17).
+- **Theme/features:** `@docusaurus/preset-classic`, **docs-first** (no blog), with
+  the version dropdown and a light/dark toggle; `@docusaurus/theme-mermaid` with
+  `markdown.mermaid: true`; sitemap configuration through the classic preset; and
+  the first-party Docusaurus ESLint plugin as a blocking docs-site lint.
+- **Install hardening:** docs scaffolds include `website/.npmrc` with
+  `ignore-scripts=true`, `min-release-age=7`, and `engine-strict=true`; the docs
+  package manifest declares Node >=24 and npm >=11, and the docs workflow
+  defaults to Node 24 and refuses npm <11 before install.
 
-**Stages:** gather authored + emitted md/mdx → `docusaurus docs:version` for the
-release tag (cut a new version) → **prune to the retention cap** → build the static
-site (versioning + local search index) → publish to Pages via the platform token →
+**Stages:** gather authored + emitted md/mdx → install hardened npm dependencies →
+lint the docs site → `docusaurus docs:version` for the release tag (cut a new
+version) → **prune to the retention cap** → build the static site (versioning,
+Algolia search UI, Mermaid diagrams, sitemap) → publish to Pages via the platform token →
 **move the `latest` alias only if this release is the highest released version**
 (monotonic guard), under a **per-alias deploy concurrency group** so a slower
 older-release deploy cannot regress `latest`/docs (§8.14).
@@ -1734,13 +1775,14 @@ interface.
 (§17).
 **DoD:** a real multi-version Pages publish on a tag — the new version is
 reachable, the **version dropdown lists it**, the **`latest` alias resolves** to
-it, and **local search returns results** on the published site.
+it, **Algolia search returns results**, Mermaid diagrams render, and
+`/sitemap.xml` is present on the published site.
 
 ```mermaid
 flowchart TD
     A["Version tag (release cut), docs=true"] --> B["Gather md/mdx: authored + language-emitted (§12)"]
     B --> C["docs:version (new version) + prune to retention cap"]
-    C --> D["Build Docusaurus site (versioning + local offline search)"]
+    C --> D["Build Docusaurus site (versioning + Algolia search + Mermaid + sitemap)"]
     D --> E["Publish to Pages (pages: write, no stored secret)"]
     E --> G["Move 'latest' ONLY if highest released version<br/>(per-alias concurrency group; §8.14)"]
     G --> F["Confirm: version in dropdown, 'latest' resolves, search works"]
@@ -1766,7 +1808,10 @@ certificate + private key (`.p12`); provisioning profile.
 #### 13.4.3 Secret handling
 Per §11.4: deploy-job-only, tag-only, protected environment with required
 reviewers, ephemeral-runner isolation as the primary guarantee, never reachable by
-non-deploy automation.
+non-deploy automation. Within the deploy job, stored Apple secrets are scoped to
+the individual steps that need them. Caller-controlled version/build-number logic
+runs **before** signing assets or App Store Connect private-key material are
+installed, so arbitrary versioning commands cannot read Apple credentials.
 
 #### 13.4.4 Required privileges
 `contents: read`; all platform authority comes from the App Store Connect API key.
@@ -1886,7 +1931,8 @@ full and is not relaxed — §9 Precedence):
    shellcheck/helm-lint), all blocking.
 3. Its deployment pipeline performs a **real publish** to a real target (TestPyPI
    for PyPI; a test image for GHCR; a real **multi-version Docusaurus** Pages
-   publish when `docs: true` — new version reachable, `latest` alias resolves)
+   publish when `docs: true` — new version reachable, `latest` alias resolves,
+   Algolia search works, Mermaid renders, and `/sitemap.xml` exists)
    with test-artifact hygiene (§11.6) — **except** App Store Connect,
    operator-verified via a real TestFlight upload (§13.4.7). A **zero-deploy
    profile** (`python-component`) has no deployment pipeline; its DoD is verify +
@@ -1914,8 +1960,10 @@ adoption-time warnings.
 - **GHCR:** ensure the seed-once container build definition exists **(probeable)**;
   set package visibility/permissions to link the package to the repository.
 - **Docusaurus docs (only when `docs: true`):** enable GitHub Pages for the
-  repository with the **GitHub Actions** source **(probeable)**. No extra setup —
-  the Docusaurus/Node build runs on the standard Linux runner.
+  repository with the **GitHub Actions** source **(probeable)**. Configure the
+  Algolia DocSearch application ID, public search API key, and index name in the
+  scaffolded Docusaurus config, or consciously override the search integration.
+  The Docusaurus/Node build runs on the standard Linux runner with Node 24/npm 11+.
 - **Security baseline (§2.13):** enable code scanning, secret scanning + push
   protection, and Dependabot for the repository **(probeable)**. On private
   repositories these may require the relevant security features to be enabled at
@@ -1973,11 +2021,12 @@ adoption-time warnings.
 - **Deployment authorization** — the §2.12 model: release-cut is the human gate,
   plus a protected-environment reviewer gate for secret-bearing deploys.
 - **Documentation site** — the Consumer's published docs: a **multi-version
-  Docusaurus** site (version dropdown + `latest` alias, local offline search, the
-  classic docs-first preset) built from authored md/mdx plus language-emitted API
-  md/mdx (§12) and deployed to GitHub Pages on a release tag (§13.3). **Opt-in**
-  via `docs: true` (§6.1); off by default. The docs deploy consumes md/mdx only —
-  language-agnostic, never inspecting source (§2.9).
+  Docusaurus** site (version dropdown + `latest` alias, Algolia search, Mermaid
+  rendering, sitemap, and the classic docs-first preset) built from authored
+  md/mdx plus language-emitted API md/mdx (§12) and deployed to GitHub Pages on a
+  release tag (§13.3). **Opt-in** via `docs: true` (§6.1); off by default. The
+  docs deploy consumes md/mdx only — language-agnostic, never inspecting source
+  (§2.9).
 - **Security baseline** — the always-on security scanning every profile includes
   (§2.13, §5.14): SAST, secret scanning + push protection, dependency/
   supply-chain scanning, and published-artifact security (image scan + SBOM +

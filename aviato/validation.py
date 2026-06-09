@@ -35,6 +35,9 @@ REQUIRED_FILES = [
     ".github/workflows/reusable-security-baseline.yml",
     ".github/workflows/reusable-common-lint.yml",
     ".github/workflows/reusable-consumer-automation.yml",
+    ".github/aviato.yaml",
+    ".github/workflows/aviato-ci.yml",
+    ".github/workflows/aviato-drift.yml",
     "templates/profile-python-service.yml",
     "templates/profile-python-library.yml",
     "templates/profile-python-component.yml",
@@ -155,6 +158,10 @@ def _check_template_references(root: Path, errors: list[str]) -> None:
                 errors.append(f"{path.relative_to(root)} references missing workflow {workflow_file}")
             if not ref:
                 errors.append(f"{path.relative_to(root)} references {workflow_file} without a ref")
+            if ref == "main":
+                errors.append(
+                    f"{path.relative_to(root)} advertises @{ref}; template examples must use a placeholder pin"
+                )
 
 
 def _check_release_workflow_contract(root: Path, errors: list[str]) -> None:
@@ -250,6 +257,7 @@ _TEMPLATE_EXAMPLE_VARS: dict[str, dict[str, str]] = {
     "node-service": {"project-name": "your-app", "language-variant": "typescript"},
     "swift-app": {
         "product-scheme": "App",
+        "workspace": "App.xcworkspace",
         "bundle-identifier": "com.example.app",
         "team-id": "TEAMID1234",
         "export-method": "app-store",
@@ -262,6 +270,7 @@ _PROFILE_TEMPLATE_FILES = {
     "node-service": "templates/profile-node-service.yml",
     "swift-app": "templates/profile-swift-app.yml",
 }
+TEMPLATE_EXAMPLE_PIN = "EXAMPLE_PIN"
 
 
 def _rendered_caller(root: Path, profile: str, output: str) -> str | None:
@@ -269,7 +278,9 @@ def _rendered_caller(root: Path, profile: str, output: str) -> str | None:
     from .core.registry import Registry
 
     registry = Registry(root / "aviato" / "library")
-    artifacts = resolved_artifacts(registry, profile, _TEMPLATE_EXAMPLE_VARS[profile], pin="main", docs=False)
+    artifacts = resolved_artifacts(
+        registry, profile, _TEMPLATE_EXAMPLE_VARS[profile], pin=TEMPLATE_EXAMPLE_PIN, docs=False
+    )
     return next((a.body for a in artifacts if a.output == output), None)
 
 
@@ -295,7 +306,7 @@ def _check_scaffold_workflow_yaml(root: Path, errors: list[str]) -> None:
     for profile, example_vars in _TEMPLATE_EXAMPLE_VARS.items():
         for docs in (False, True):
             try:
-                artifacts = resolved_artifacts(registry, profile, example_vars, pin="main", docs=docs)
+                artifacts = resolved_artifacts(registry, profile, example_vars, pin=TEMPLATE_EXAMPLE_PIN, docs=docs)
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"scaffold render failed for {profile!r} (docs={docs}): {exc}")
                 continue
@@ -338,6 +349,61 @@ def _check_template_scaffold_parity(root: Path, errors: list[str]) -> None:
                 f"{rel_path} is stale: it does not match the rendered scaffold caller for "
                 f"{profile!r}. Regenerate with scripts/regen-templates.py."
             )
+
+
+def _check_library_bootstrap(root: Path, errors: list[str]) -> None:
+    """The Library's own managed artifacts must bootstrap through local workflow refs (§5.10)."""
+    from .core.declaration import load_declaration
+    from .core.onboarding import resolved_artifacts
+    from .core.registry import Registry
+    from .core.scaffold import ScaffoldItem, render_managed
+
+    declaration_path = root / ".github" / "aviato.yaml"
+    if not declaration_path.exists():
+        return  # absence is already reported by REQUIRED_FILES
+    try:
+        declaration = load_declaration(declaration_path)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f".github/aviato.yaml is invalid: {exc}")
+        return
+    if not declaration.bootstrap:
+        errors.append(".github/aviato.yaml must declare bootstrap: true for the Library self-reference path (§5.10)")
+        return
+
+    registry = Registry(root / "aviato" / "library")
+    try:
+        artifacts = resolved_artifacts(
+            registry,
+            declaration.profile,
+            declaration.variables,
+            pin=declaration.version,
+            docs=declaration.docs,
+            bootstrap=True,
+            overrides=declaration.overrides,
+        )
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Library bootstrap scaffold render failed: {exc}")
+        return
+
+    expected = {}
+    for artifact in artifacts:
+        if artifact.seed_once:
+            continue
+        item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+        expected[artifact.output] = render_managed(item, profile=declaration.profile, version=declaration.version)
+    if not expected:
+        errors.append("Library bootstrap declaration resolves no managed artifacts (§5.10)")
+        return
+    for rel_path, body in expected.items():
+        path = root / rel_path
+        if not path.exists():
+            errors.append(f"missing Library bootstrap managed artifact: {rel_path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        if text != body:
+            errors.append(f"{rel_path} is stale: it does not match the rendered Library bootstrap artifact (§5.10)")
+        if f"{LIBRARY_SLUG}/.github/workflows/" in text:
+            errors.append(f"{rel_path} uses a released Aviato ref in bootstrap; use local workflow refs (§5.10)")
 
 
 # Workflows that embed an inline `highest.py` reimplementation of the §8.14/§13.2 monotonic
@@ -477,6 +543,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_action_pins(root, errors)
     _check_template_scaffold_parity(root, errors)
     _check_scaffold_workflow_yaml(root, errors)
+    _check_library_bootstrap(root, errors)
     _check_monotonic_alias_parity(root, errors)
 
     return errors

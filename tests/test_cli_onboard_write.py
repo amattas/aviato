@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import aviato.cli as cli
 from aviato.cli import main
 
 
@@ -25,6 +26,7 @@ def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureF
             "--allow-dirty",
             "--pin",
             "v0",
+            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",
@@ -55,6 +57,9 @@ def test_reonboard_preserves_docs_opt_in(tmp_path: Path) -> None:
         "python-library",
         "--write",
         "--allow-dirty",
+        "--pin",
+        "0",
+        "--allow-unresolved-pin",
         "--var",
         "distribution-name=acme",
         "--var",
@@ -96,8 +101,56 @@ def test_reonboard_docs_true_also_scaffolds_docs_workflow(tmp_path: Path) -> Non
 
 
 def test_onboard_write_fails_on_missing_required_var(tmp_path: Path) -> None:
-    rc = main(["onboard", str(tmp_path), "--profile", "python-library", "--write"])
+    rc = main(["onboard", str(tmp_path), "--profile", "python-library", "--write", "--pin", "0"])
     assert rc == 2
+    assert not (tmp_path / ".github" / "aviato.yaml").exists()
+
+
+def test_fresh_onboard_write_requires_explicit_pin(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    rc = main(
+        [
+            "onboard",
+            str(tmp_path),
+            "--profile",
+            "python-library",
+            "--write",
+            "--allow-dirty",
+            "--var",
+            "distribution-name=a",
+            "--var",
+            "import-name=a",
+        ]
+    )
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "--pin" in err
+    assert not (tmp_path / ".github" / "aviato.yaml").exists()
+
+
+def test_fresh_onboard_write_refuses_unpublished_pin(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: False)
+    rc = main(
+        [
+            "onboard",
+            str(tmp_path),
+            "--profile",
+            "python-library",
+            "--write",
+            "--allow-dirty",
+            "--pin",
+            "0",
+            "--var",
+            "distribution-name=a",
+            "--var",
+            "import-name=a",
+        ]
+    )
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "does not resolve" in err
+    assert "--allow-unresolved-pin" in err
     assert not (tmp_path / ".github" / "aviato.yaml").exists()
 
 
@@ -133,6 +186,9 @@ def test_onboard_write_refuses_dirty_tree_without_override(tmp_path: Path) -> No
             "--profile",
             "python-library",
             "--write",
+            "--pin",
+            "0",
+            "--allow-unresolved-pin",
             "--var",
             "distribution-name=a",
             "--var",
@@ -152,6 +208,9 @@ def test_onboard_write_adopts_clean_git_repo(tmp_path: Path) -> None:
             "--profile",
             "python-library",
             "--write",
+            "--pin",
+            "0",
+            "--allow-unresolved-pin",
             "--var",
             "distribution-name=a",
             "--var",

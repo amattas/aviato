@@ -6,6 +6,8 @@ add:
   - wf-ci-python-service
   - wf-drift
   - wf-docs-python-service
+  - docs-npmrc
+  - docs-eslint-config
   - docusaurus-config
   - docs-package
   - docs-sidebars

@@ -29,9 +29,9 @@ def test_pipeline_privileges_match_workflow_permissions(pipeline: str, workflow:
 
     perms = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / workflow).read_text())["permissions"]
     workflow_privs = {f"{key}: {value}" for key, value in perms.items()}
-    assert set(module.privileges) == workflow_privs, (
-        f"{pipeline} module privileges {set(module.privileges)} != {workflow} permissions {workflow_privs}"
-    )
+    module_privileges = set(module.privileges)
+    message = f"{pipeline} module privileges {module_privileges} != {workflow} permissions {workflow_privs}"
+    assert module_privileges == workflow_privs, message
 
 
 @pytest.mark.parametrize("pipeline,workflow", PIPELINE_WORKFLOWS.items())
@@ -45,6 +45,7 @@ def test_pipeline_secrets_match_workflow_call_secrets(pipeline: str, workflow: s
     wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / workflow).read_text())
     on_block = wf.get("on") or wf.get(True)  # YAML 1.1 parses the `on:` key as boolean True
     call_secrets = (on_block.get("workflow_call") or {}).get("secrets") or {}
-    assert set(module.secrets) == set(call_secrets), (
-        f"{pipeline} module secrets {set(module.secrets)} != {workflow} workflow_call.secrets {set(call_secrets)}"
-    )
+    module_secrets = set(module.secrets)
+    workflow_secrets = set(call_secrets)
+    message = f"{pipeline} module secrets {module_secrets} != {workflow} workflow_call.secrets {workflow_secrets}"
+    assert module_secrets == workflow_secrets, message

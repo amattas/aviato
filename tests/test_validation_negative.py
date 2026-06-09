@@ -113,6 +113,29 @@ def test_template_scaffold_parity_drift_is_detected(repo_copy: Path) -> None:
     assert any("does not match" in e or "Regenerate" in e or "parity" in e.lower() for e in errors)
 
 
+def test_template_main_ref_is_detected(repo_copy: Path) -> None:
+    # Documentation examples must not advertise a mutable production ref. They render
+    # with EXAMPLE_PIN; a regression to @main is a validation error, not just a docs nit.
+    target = repo_copy / "templates" / "profile-python-library.yml"
+    text = target.read_text(encoding="utf-8")
+    drifted = text.replace("@EXAMPLE_PIN", "@main", 1)
+    assert drifted != text, "fixture did not contain an EXAMPLE_PIN reusable-workflow ref"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("advertises @main" in e for e in errors)
+
+
+def test_library_bootstrap_profile_mismatch_is_detected(repo_copy: Path) -> None:
+    # The Library declaration must match the artifacts it actually self-applies. If it
+    # points back at the public python-library scaffold, validation must catch the extra
+    # expected managed files instead of checking only the two workflow callers.
+    decl = repo_copy / ".github" / "aviato.yaml"
+    text = decl.read_text(encoding="utf-8").replace("profile: aviato-library", "profile: python-library")
+    decl.write_text(text, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("missing Library bootstrap managed artifact" in e for e in errors)
+
+
 def test_static_ruleset_pattern_drift_is_detected(repo_copy: Path) -> None:
     # The static ruleset template literal is render-injected from policy, but it must still
     # be drift-checked against policy — otherwise editing it (e.g. re-adding a leading v)

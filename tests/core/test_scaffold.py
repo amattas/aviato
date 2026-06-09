@@ -82,6 +82,19 @@ def test_refuses_to_overwrite_marker_from_different_profile_unless_forced(tmp_pa
     assert "profile=p " in (tmp_path / "cfg.py").read_text()
 
 
+def test_force_restamps_foreign_profile_marker_even_when_body_matches(tmp_path: Path) -> None:
+    # A forceful profile migration must refresh the marker even if the rendered body is
+    # unchanged; otherwise the next diagnosis still classifies the file as foreign drift.
+    item = ScaffoldItem("cfg.py", "X = 1\n", "#", False)
+    scaffold(tmp_path, [item], profile="old-profile", version="v1")
+
+    forced = scaffold(tmp_path, [item], profile="new-profile", version="v1", force=True)
+    text = (tmp_path / "cfg.py").read_text()
+    assert forced.written == ["cfg.py"]
+    assert "profile=new-profile " in text
+    assert "profile=old-profile " not in text
+
+
 def test_refuses_to_overwrite_marker_with_unknown_version_unless_forced(tmp_path: Path) -> None:
     # §5.4: a marker recording an unknown/unparseable version cannot be reasoned about for
     # compatibility, so scaffold mirrors diagnosis dirty-drift and never silently regenerates it.

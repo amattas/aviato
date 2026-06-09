@@ -160,8 +160,29 @@ def test_docs_opt_in_scaffolds_runnable_docusaurus_site() -> None:
 
     pkg = next(i for i in items_on if i.output == "website/package.json")
     assert "@docusaurus/preset-classic" in pkg.body
-    assert "@easyops-cn/docusaurus-search-local" in pkg.body
+    assert "@docusaurus/theme-search-algolia" in pkg.body
+    assert "@docusaurus/theme-mermaid" in pkg.body
+    assert "@docusaurus/eslint-plugin" in pkg.body
+    assert '"lint": "eslint ."' in pkg.body
     assert '"build": "docusaurus build"' in pkg.body
+    assert '"node": ">=24.0"' in pkg.body
+    assert '"npm": ">=11.0.0"' in pkg.body
+
+    config = next(i for i in items_on if i.output == "website/docusaurus.config.js")
+    assert "markdown: { mermaid: true }" in config.body
+    assert "'@docusaurus/theme-mermaid'" in config.body
+    assert "'@docusaurus/theme-search-algolia'" in config.body
+    assert "algolia:" in config.body
+    assert "sitemap:" in config.body
+
+    npmrc = next(i for i in items_on if i.output == "website/.npmrc")
+    assert "min-release-age=7" in npmrc.body
+    assert "ignore-scripts=true" in npmrc.body
+    assert "engine-strict=true" in npmrc.body
+
+    eslint = next(i for i in items_on if i.output == "website/eslint.config.mjs")
+    assert 'import docusaurus from "@docusaurus/eslint-plugin"' in eslint.body
+    assert "...docusaurus.configs.recommended.rules" in eslint.body
 
 
 def test_python_profile_scaffolds_pyproject_manifest() -> None:
@@ -228,19 +249,42 @@ def test_swift_caller_consumes_declared_variables() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {
         "product-scheme": "Acme",
+        "workspace": "AcmeApp.xcworkspace",
         "bundle-identifier": "com.acme.app",
         "team-id": "ABCDE12345",
         "export-method": "app-store",
+        "environment-name": "production",
+        "export-options-plist": "Config/ExportOptions.plist",
+        "version-command": "./scripts/set-version.sh",
     }
     ci = next(
         i for i in materialize_items(reg, "swift-app", variables) if i.output == ".github/workflows/aviato-ci.yml"
     )
     assert 'scheme: "Acme"' in ci.body
+    assert 'workspace: "AcmeApp.xcworkspace"' in ci.body
+    assert 'environment-name: "production"' in ci.body
+    assert 'export-options-plist: "Config/ExportOptions.plist"' in ci.body
+    assert 'version-command: "./scripts/set-version.sh"' in ci.body
     assert 'bundle-identifier: "com.acme.app"' in ci.body
     assert 'team-id: "ABCDE12345"' in ci.body
     assert 'export-method: "app-store"' in ci.body
     assert "com.example.app" not in ci.body
     assert "TEAMID1234" not in ci.body
+
+
+def test_swift_caller_requires_workspace_or_project() -> None:
+    from aviato.core.errors import DeclarationError
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    variables = {
+        "product-scheme": "Acme",
+        "bundle-identifier": "com.acme.app",
+        "team-id": "ABCDE12345",
+        "export-method": "app-store",
+    }
+    with pytest.raises(DeclarationError, match="workspace|project"):
+        materialize_items(reg, "swift-app", variables)
 
 
 @pytest.mark.parametrize("name", DAYZERO)
@@ -272,6 +316,21 @@ def test_node_eslint_config_is_runnable(variant: str) -> None:
     pkg = next(i for i in items if i.output == "package.json")
     assert "eslint-plugin-security" in pkg.body  # imported plugin is declared
     assert "@eslint/js" in pkg.body  # imported config is declared
+
+
+@pytest.mark.parametrize("variant", ["typescript", "javascript"])
+def test_node_projects_scaffold_npm_hardening_config(variant: str) -> None:
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": variant})
+    npmrc = next(i for i in items if i.output == ".npmrc")
+    assert "min-release-age=7" in npmrc.body
+    assert "ignore-scripts=true" in npmrc.body
+    assert "engine-strict=true" in npmrc.body
+    pkg = next(i for i in items if i.output == "package.json")
+    assert '"node": ">=24.0"' in pkg.body
+    assert '"npm": ">=11.0.0"' in pkg.body
 
 
 def test_node_javascript_has_no_fake_build_gate() -> None:
@@ -308,6 +367,7 @@ def test_swift_caller_installs_apple_swift_format() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {
         "product-scheme": "Acme",
+        "workspace": "AcmeApp.xcworkspace",
         "bundle-identifier": "com.acme.app",
         "team-id": "ABCDE12345",
         "export-method": "app-store",

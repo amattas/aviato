@@ -1,0 +1,6 @@
+name: aviato-library-sc
+# Internal Library bootstrap scaffold: only the self-applied automation that can
+# safely resolve through local workflow refs before any published Aviato ref exists.
+templates:
+  - wf-ci-python-library
+  - wf-drift

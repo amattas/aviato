@@ -24,39 +24,41 @@ permissions:
 jobs:
   ci:
     if: ${{ github.ref_type != 'tag' && github.event_name != 'schedule' }}
-    uses: amattas/aviato/.github/workflows/reusable-python-ci.yml@{{ aviato-ref }}
+    uses: {{ aviato-workflow-prefix }}reusable-python-ci.yml{{ aviato-workflow-suffix }}
     with:
       python-version: "3.12"
       install-command: "python -m pip install -e .[dev]"
       lint-command: "python -m ruff check ."
       test-command: "python -m pytest --cov --cov-report=term-missing"
       build-command: "python -m build"
+      run-typecheck: {{ run-typecheck }}
       run-build: true
 
   security:
     # Runs on PRs AND on the release tag, so source scans gate the verify pipeline
     # and are re-run on the release ref before any deploy (§2.13/§5.14).
-    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@{{ aviato-ref }}
+    uses: {{ aviato-workflow-prefix }}reusable-security-baseline.yml{{ aviato-workflow-suffix }}
     with:
       codeql-languages: "python"
 
   common-lint:
     if: ${{ github.ref_type != 'tag' }}
-    uses: amattas/aviato/.github/workflows/reusable-common-lint.yml@{{ aviato-ref }}
+    uses: {{ aviato-workflow-prefix }}reusable-common-lint.yml{{ aviato-workflow-suffix }}
 
   release:
     if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
     needs: [ci, security, common-lint]
-    uses: amattas/aviato/.github/workflows/reusable-release.yml@{{ aviato-ref }}
+    uses: {{ aviato-workflow-prefix }}reusable-release.yml{{ aviato-workflow-suffix }}
     with:
       aviato-ref: {{ aviato-ref }}
+      local-install: {{ aviato-local-install }}
 
   # Gate before deploy. Two entry points: IN-RUN (release just tagged on this push;
   # release-tag = its output) or a manual tag push (classic tag-ref context).
   release-gate:
     needs: [release]
     if: ${{ always() && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
-    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@{{ aviato-ref }}
+    uses: {{ aviato-workflow-prefix }}reusable-release-gate.yml{{ aviato-workflow-suffix }}
     with:
       default-branch: main
       require-merged-pr: true
@@ -65,10 +67,9 @@ jobs:
   pypi:
     needs: [release, release-gate, security]
     if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
-    uses: amattas/aviato/.github/workflows/reusable-pypi-publish.yml@{{ aviato-ref }}
+    uses: {{ aviato-workflow-prefix }}reusable-pypi-publish.yml{{ aviato-workflow-suffix }}
     with:
       python-version: "3.12"
       working-directory: "."
       packages-dir: "dist"
       release-tag: ${{ needs.release.outputs.tag }}
-

@@ -5,6 +5,7 @@ import atexit
 import contextlib
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -45,6 +46,7 @@ from .validation import validate
 # Library artifact name, so it lives OUTSIDE the agnostic core (review #18) and is passed into
 # diagnose() as data — core never hardcodes a specific library workflow name.
 DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
+LIBRARY_REMOTE_URL = "https://github.com/amattas/aviato.git"
 
 
 def _non_negative_int(value: str) -> int:
@@ -290,6 +292,7 @@ def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[Ex
             declaration.variables,
             pin=declaration.version,
             docs=declaration.docs,
+            bootstrap=declaration.bootstrap,
             overrides=declaration.overrides,
         )
     ]
@@ -314,6 +317,33 @@ def _env_vars(specs) -> dict[str, str]:
     return env
 
 
+def _published_library_ref_exists(pin: str) -> bool:
+    """True iff the requested consumer pin resolves to a published Library branch/tag (§6.1)."""
+    refs = [f"refs/tags/{pin}", f"refs/heads/{pin}"]
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--exit-code", LIBRARY_REMOTE_URL, *refs],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _require_published_pin(pin: str, *, allow_unresolved: bool) -> None:
+    """Fail closed before writing consumer refs that GitHub cannot resolve (§2.6/§6.1)."""
+    if allow_unresolved or _published_library_ref_exists(pin):
+        return
+    raise DeclarationError(
+        f"Library pin {pin!r} does not resolve to a published Aviato branch or tag at {LIBRARY_REMOTE_URL}; "
+        "refusing to write consumer workflows that would call a missing reusable workflow ref. "
+        "Publish the ref first, or pass --allow-unresolved-pin only for an intentional offline/test scaffold."
+    )
+
+
 def _resolve_onboard_pin(args: argparse.Namespace, existing) -> str:
     """Resolve the version pin to record (§6.1/§5.12).
 
@@ -336,7 +366,13 @@ def _resolve_onboard_pin(args: argparse.Namespace, existing) -> str:
             f"already adopted at version {current!r}; onboarding will not move the pin. "
             f"Use `aviato repin <repo> {explicit}` to change it (§5.12)."
         )
-    return explicit if explicit is not None else "0"
+    if explicit is not None:
+        _require_published_pin(explicit, allow_unresolved=args.allow_unresolved_pin)
+        return explicit
+    raise DeclarationError(
+        "fresh onboarding requires an explicit --pin (X.Y.Z or N) that already resolves in the "
+        "published Aviato Library; bootstrap/local self-reference is only valid for the Library (§2.10/§6.1)."
+    )
 
 
 def _resolve_onboard_declaration(args: argparse.Namespace, registry: Registry, resolved, existing):
@@ -414,7 +450,13 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
     # Scaffold with the RESOLVED declaration.docs (the preserved/effective value), so the docs
     # artifacts always match what the declaration records (§5.2/§6.1/§13.3) — never args.docs.
     items = materialize_items(
-        registry, args.profile, variables, pin=args.pin, docs=declaration.docs, overrides=declaration.overrides
+        registry,
+        args.profile,
+        variables,
+        pin=args.pin,
+        docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
+        overrides=declaration.overrides,
     )
     result = scaffold(target, items, profile=args.profile, version=args.pin)
     for output in result.written:
@@ -474,7 +516,13 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved) ->
     # Use the RESOLVED declaration.docs (preserved from the clone's existing declaration), so the
     # proposed docs artifacts match the declaration written above — never the raw args.docs (§13.3).
     for artifact in resolved_artifacts(
-        registry, args.profile, variables, pin=args.pin, docs=declaration.docs, overrides=declaration.overrides
+        registry,
+        args.profile,
+        variables,
+        pin=args.pin,
+        docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
+        overrides=declaration.overrides,
     ):
         present = (clone / artifact.output).exists()
         if artifact.seed_once:
@@ -657,6 +705,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             declaration.variables,
             pin=declaration.version,
             docs=declaration.docs,
+            bootstrap=declaration.bootstrap,
             overrides=declaration.overrides,
         )
     except AviatoError as exc:
@@ -795,6 +844,7 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
         declaration.variables,
         pin=declaration.version,
         docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
         overrides=declaration.overrides,
     ):
         if artifact.seed_once:
@@ -870,6 +920,7 @@ def cmd_repin(args: argparse.Namespace) -> int:
         profile=declaration.profile,
         version=plan.target_version,
         docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
         variables=declaration.variables,
         overrides=declaration.overrides,
     )
@@ -881,6 +932,7 @@ def cmd_repin(args: argparse.Namespace) -> int:
         updated.variables,
         pin=updated.version,
         docs=updated.docs,
+        bootstrap=updated.bootstrap,
         overrides=updated.overrides,
     )
     result = scaffold(root, items, profile=updated.profile, version=updated.version)
@@ -1070,7 +1122,13 @@ def cmd_provision(args: argparse.Namespace) -> int:
     try:
         # Canonicalize the pin to bare SemVer (§6.1) before it lands in the declaration
         # or markers; a legacy ``v`` is stripped and a malformed pin is refused.
+        if args.pin is None:
+            raise DeclarationError(
+                "provision requires --pin (X.Y.Z or N) so generated workflows reference a published "
+                "Aviato Library ref (§6.1)."
+            )
         args.pin = normalize_pin(args.pin)
+        _require_published_pin(args.pin, allow_unresolved=args.allow_unresolved_pin)
         resolved = resolve_profile(registry, args.profile, docs=args.docs)
         variables = resolve_variables(
             resolved.variables,
@@ -1245,6 +1303,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
             declaration.variables,
             pin=declaration.version,
             docs=declaration.docs,
+            bootstrap=declaration.bootstrap,
             overrides=declaration.overrides,
         ):
             if artifact.seed_once:
@@ -1320,20 +1379,21 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
 
 
 def cmd_lint_actions(args: argparse.Namespace) -> int:
-    """Flag third-party actions not pinned by commit digest (§11.3); exit 1 on any."""
+    """Flag unpinned actions/tools (§11.3); exit 1 on any."""
     from .plugins.actionpins import action_pin_violations
 
     violations = action_pin_violations(Path(args.path))
     for violation in violations:
-        print(f"unpinned third-party action: {violation}", file=sys.stderr)
+        print(f"unpinned third-party action/tool: {violation}", file=sys.stderr)
     if violations:
         print(
-            f"{len(violations)} third-party action(s) not pinned to a commit digest (§11.3); "
-            f"pin each `uses: owner/repo@<40-hex-sha>` (Dependabot keeps them current).",
+            f"{len(violations)} action/tool invocation(s) violate §11.3 pinning; "
+            "pin GitHub Actions by 40-hex SHA, container images by digest, fetched "
+            "binaries by checksum, and registry tools by exact version or --no-install.",
             file=sys.stderr,
         )
         return 1
-    print("All third-party actions are digest-pinned.")
+    print("All scanned action/tool invocations satisfy §11.3 pinning.")
     return 0
 
 
@@ -1545,9 +1605,14 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument(
         "--pin",
         default=None,
-        help="Library version pin (X.Y.Z or N) to record. Defaults to floating major 0 for a "
-        "fresh adopt; for an already-adopted repo the existing pin is preserved (use `aviato "
+        help="Library version pin (X.Y.Z or N) to record. Required for a fresh write/proposal; "
+        "for an already-adopted repo the existing pin is preserved (use `aviato "
         "repin` to move it, §5.12).",
+    )
+    onboard.add_argument(
+        "--allow-unresolved-pin",
+        action="store_true",
+        help="Skip the published-ref check for an intentional offline/test scaffold.",
     )
     onboard.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     onboard.add_argument(
@@ -1636,7 +1701,12 @@ def build_parser() -> argparse.ArgumentParser:
     provision.add_argument("slug", help="New repository as OWNER/REPO.")
     provision.add_argument("--profile", default="python-service")
     provision.add_argument("--docs", action="store_true", help="Compose the opt-in docs deploy (§13.3).")
-    provision.add_argument("--pin", default="0", help="Library version pin to record in the declaration.")
+    provision.add_argument("--pin", default=None, help="Library version pin to record in the declaration.")
+    provision.add_argument(
+        "--allow-unresolved-pin",
+        action="store_true",
+        help="Skip the published-ref check for an intentional offline/test scaffold.",
+    )
     provision.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     provision.add_argument("--public", action="store_true", help="Create a public repo (default: private).")
     provision.set_defaults(func=cmd_provision)
@@ -1676,7 +1746,7 @@ def build_parser() -> argparse.ArgumentParser:
     highest.set_defaults(func=cmd_is_highest)
 
     lint_actions = subparsers.add_parser(
-        "lint-actions", help="Flag third-party actions not pinned by commit digest (§11.3)."
+        "lint-actions", help="Flag action/tool invocations that violate §11.3 supply-chain pinning."
     )
     lint_actions.add_argument("path", nargs="?", default=".", help="Repository root (default: .).")
     lint_actions.set_defaults(func=cmd_lint_actions)

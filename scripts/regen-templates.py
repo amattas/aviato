@@ -15,11 +15,13 @@ from __future__ import annotations
 from aviato.core.onboarding import resolved_artifacts
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT, REPO_ROOT
-from aviato.validation import _PROFILE_TEMPLATE_FILES, _TEMPLATE_EXAMPLE_VARS
+from aviato.validation import _PROFILE_TEMPLATE_FILES, _TEMPLATE_EXAMPLE_VARS, TEMPLATE_EXAMPLE_PIN
 
 
 def _body(registry: Registry, profile: str, output: str) -> str:
-    artifacts = resolved_artifacts(registry, profile, _TEMPLATE_EXAMPLE_VARS[profile], pin="main", docs=False)
+    artifacts = resolved_artifacts(
+        registry, profile, _TEMPLATE_EXAMPLE_VARS[profile], pin=TEMPLATE_EXAMPLE_PIN, docs=False
+    )
     return next(a.body for a in artifacts if a.output == output)
 
 

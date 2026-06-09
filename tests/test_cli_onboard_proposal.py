@@ -38,6 +38,7 @@ def test_onboard_open_pr_builds_proposal(tmp_path: Path, monkeypatch: pytest.Mon
             "python-library",
             "--pin",
             "v0",
+            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",

@@ -47,6 +47,46 @@ def test_provision_rejects_bad_slug() -> None:
     assert main(["provision", "no-slash", "--profile", "python-library"]) == 2
 
 
+def test_provision_requires_explicit_pin(capsys: pytest.CaptureFixture[str]) -> None:
+    rc = main(
+        [
+            "provision",
+            "o/r",
+            "--profile",
+            "python-library",
+            "--var",
+            "distribution-name=acme",
+            "--var",
+            "import-name=acme",
+        ]
+    )
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "--pin" in err
+
+
+def test_provision_refuses_unpublished_pin(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: False)
+    rc = main(
+        [
+            "provision",
+            "o/r",
+            "--profile",
+            "python-library",
+            "--pin",
+            "0",
+            "--var",
+            "distribution-name=acme",
+            "--var",
+            "import-name=acme",
+        ]
+    )
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "does not resolve" in err
+    assert "--allow-unresolved-pin" in err
+
+
 def test_provision_partial_outcome_reports_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: object())
     monkeypatch.setattr(
@@ -67,6 +107,9 @@ def test_provision_partial_outcome_reports_recovery(monkeypatch: pytest.MonkeyPa
             "o/r",
             "--profile",
             "python-library",
+            "--pin",
+            "0",
+            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",
@@ -88,7 +131,19 @@ def test_provision_exposed_state_reports_unprotected_and_recovery(
         lambda *a, **k: ProvisionOutcome(created=True, minimal_applied=False, partial=True, reason="403"),
     )
     rc = main(
-        ["provision", "o/r", "--profile", "python-library", "--var", "distribution-name=a", "--var", "import-name=a"]
+        [
+            "provision",
+            "o/r",
+            "--profile",
+            "python-library",
+            "--pin",
+            "0",
+            "--allow-unresolved-pin",
+            "--var",
+            "distribution-name=a",
+            "--var",
+            "import-name=a",
+        ]
     )
     assert rc == 1
     err = capsys.readouterr().err
@@ -110,6 +165,9 @@ def test_provision_success_exit_zero(monkeypatch: pytest.MonkeyPatch) -> None:
             "o/r",
             "--profile",
             "python-library",
+            "--pin",
+            "0",
+            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",

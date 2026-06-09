@@ -85,6 +85,125 @@ def test_consumer_automation_jitters_scheduled_runs() -> None:
     assert any("sleep" in run and "RANDOM" in run for run in runs), "no anti-stampede jitter step found"
 
 
+def test_local_install_is_limited_to_structural_library_bootstrap() -> None:
+    # §5.10: local-install is only for the Library bootstrapping itself before a
+    # released ref exists. A consumer hand-editing local-install:true must fail before
+    # `pip install -e .` unless the checkout has the Library anchors and bootstrap:true.
+    for name, job_name in (
+        ("reusable-release.yml", "release"),
+        ("reusable-consumer-automation.yml", "drift-report"),
+    ):
+        wf = _load(name)
+        install = next(s for s in wf["jobs"][job_name]["steps"] if s.get("name") == "Install Aviato")
+        run = install["run"]
+        for anchor in (
+            "aviato/core/__init__.py",
+            "aviato/library/bundles",
+            "aviato/library/scaffold",
+            "aviato/library/policy.yml",
+            ".github/aviato.yaml",
+        ):
+            assert anchor in run, f"{name} local install guard missing {anchor}"
+        assert "bootstrap: true" in run, f"{name} local install guard must require bootstrap:true"
+        assert run.index("local-install is only valid") < run.index("python -m pip install -e .")
+
+
+def test_common_lint_lints_every_dockerfile() -> None:
+    # §14.1: common lint covers Dockerfiles where present; discovering many files
+    # must not silently lint only the first one.
+    body = (WORKFLOWS / "reusable-common-lint.yml").read_text(encoding="utf-8")
+    assert 'for dockerfile in "${dockerfiles[@]}"' in body
+    assert "${dockerfiles[0]}" not in body
+
+
+def test_npm_workflows_harden_installs_before_installing() -> None:
+    # npm min-release-age and ignore-scripts reduce dependency-confusion / postinstall
+    # risk. npm 11+ is required because older npm rejects min-release-age.
+    for name, job_name in (
+        ("reusable-node-ci.yml", "node-ci"),
+        ("reusable-docs-pages.yml", "publish-docs"),
+    ):
+        wf = _load(name)
+        on_block = wf.get("on") or wf.get(True)
+        assert on_block["workflow_call"]["inputs"]["node-version"]["default"] == "24"
+        steps = wf["jobs"][job_name]["steps"]
+        harden = next(s for s in steps if s.get("name") == "Harden npm install behavior")
+        install = next(s for s in steps if s.get("name") == "Install")
+        run = harden["run"]
+        assert 'npm_version="$(npm --version)"' in run
+        assert '[[ "${npm_major}" =~ ^[0-9]+$ ]]' in run
+        assert '[ "${npm_major}" -lt 11 ]' in run
+        assert "::error::npm ${npm_version} does not support min-release-age" in run
+        assert "exit 1" in run
+        assert "npm config set ignore-scripts true --location=user" in run
+        assert "npm config set engine-strict true --location=user" in run
+        assert "NPM_CONFIG_IGNORE_SCRIPTS=true" in run
+        assert "NPM_CONFIG_ENGINE_STRICT=true" in run
+        assert "NPM_CONFIG_MIN_RELEASE_AGE=7" in run
+        assert "npm config set min-release-age 7 --location=user" in run
+        assert steps.index(harden) < steps.index(install), f"{name} must harden npm before install"
+
+
+def test_node_service_scaffold_uses_npm11_capable_node_default() -> None:
+    body = (SCAFFOLD_FILES / "wf-node-service.yml").read_text(encoding="utf-8")
+    assert 'node-version: "24"' in body
+    assert 'node-version: "22"' not in body
+    assert 'lint-command: "npx --no-install eslint ."' in body
+
+
+def test_docs_publish_lints_docusaurus_site_after_install() -> None:
+    wf = _load("reusable-docs-pages.yml")
+    on_block = wf.get("on") or wf.get(True)
+    lint_input = on_block["workflow_call"]["inputs"]["lint-command"]
+    assert lint_input["default"] == "npm run lint --if-present"
+    steps = wf["jobs"]["publish-docs"]["steps"]
+    install = next(s for s in steps if s.get("name") == "Install")
+    lint = next(s for s in steps if s.get("name") == "Lint docs site")
+    assert steps.index(install) < steps.index(lint)
+    assert "LINT_COMMAND" in lint.get("env", {})
+
+
+def test_common_lint_blocks_unsafe_npx_registry_fetches() -> None:
+    wf = _load("reusable-common-lint.yml")
+    steps = wf["jobs"]["common-lint"]["steps"]
+    npx = next(s for s in steps if s.get("name") == "npx registry fetch pin (blocking)")
+    run = npx["run"]
+    assert "npx may fetch an unpinned registry tool" in run
+    assert "--no-install" in run
+    assert "exact_package" in run
+
+
+def test_app_store_connect_secrets_are_step_scoped() -> None:
+    # §11.2: App Store credentials must not be job-wide, and caller-controlled version
+    # commands must run before signing assets are installed and without Apple secrets.
+    wf = _load("reusable-app-store-connect.yml")
+    job = wf["jobs"]["app-store-connect"]
+    job_env = str(job.get("env", {}))
+    for name in (
+        "APP_STORE_CONNECT_ISSUER_ID",
+        "APP_STORE_CONNECT_KEY_ID",
+        "APP_STORE_CONNECT_API_PRIVATE_KEY",
+        "APPLE_CERTIFICATE_P12_BASE64",
+        "APPLE_CERTIFICATE_PASSWORD",
+        "APPLE_PROVISIONING_PROFILE_BASE64",
+    ):
+        assert name not in job_env, f"{name} must not be job-wide"
+
+    steps = job["steps"]
+    version = next(s for s in steps if s.get("name") == "Apply version command")
+    signing = next(s for s in steps if s.get("name") == "Install signing assets")
+    upload = next(s for s in steps if s.get("name") == "Upload to App Store Connect")
+    assert steps.index(version) < steps.index(signing), "version command must run before signing assets are installed"
+    assert "APP_STORE_CONNECT" not in str(version.get("env", {}))
+    assert "APPLE_" not in str(version.get("env", {}))
+    assert "APP_STORE_CONNECT_API_PRIVATE_KEY" in signing.get("env", {})
+    assert "APPLE_CERTIFICATE_P12_BASE64" in signing.get("env", {})
+    assert "APPLE_PROVISIONING_PROFILE_BASE64" in signing.get("env", {})
+    assert "APP_STORE_CONNECT_ISSUER_ID" in upload.get("env", {})
+    assert "APP_STORE_CONNECT_KEY_ID" in upload.get("env", {})
+    assert "APP_STORE_CONNECT_API_PRIVATE_KEY" not in upload.get("env", {})
+
+
 def test_security_baseline_jitters_scheduled_scans_at_the_chokepoint() -> None:
     # §5.14/§5.5: SAST/secret/dependency scans run on a JITTERED schedule so a fleet on the
     # same weekly cron does not stampede the platform. The jitter must (a) live on the
@@ -96,9 +215,9 @@ def test_security_baseline_jitters_scheduled_scans_at_the_chokepoint() -> None:
 
     # (a) every scan job funnels through privilege-probe — the chokepoint the jitter relies on.
     for scan_job in ("codeql", "dependency-review", "dependency-scan", "secret-scan"):
-        assert jobs[scan_job].get("needs") == "privilege-probe", (
-            f"{scan_job} must `needs: privilege-probe` so the jitter on that job defers it"
-        )
+        needs = jobs[scan_job].get("needs")
+        message = f"{scan_job} must `needs: privilege-probe` so the jitter on that job defers it"
+        assert needs == "privilege-probe", message
 
     # (b) privilege-probe has a schedule-gated RANDOM sleep before it does any work.
     probe_steps = jobs["privilege-probe"]["steps"]

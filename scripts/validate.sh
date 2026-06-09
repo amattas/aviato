@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Local gate. ruff/pytest/shellcheck/actionlint run when installed. Missing tools are
+# Local gate. ruff/black/pytest/shellcheck/actionlint run when installed. Missing tools are
 # SKIPPED (so the gate is usable without them) but reported in a LOUD banner at the
 # end — because CI *does* run them, and a silent skip lets workflow-lint failures slip
 # through to CI (e.g. shellcheck findings in reusable workflows). Set
@@ -16,6 +16,12 @@ if command -v ruff >/dev/null 2>&1; then
   ruff format --check .
 else
   SKIPPED+=("ruff (lint + format)")
+fi
+
+if command -v black >/dev/null 2>&1; then
+  black --check --line-length 120 --target-version py311 aviato tests scripts
+else
+  SKIPPED+=("black (formatter compatibility)")
 fi
 
 if command -v pytest >/dev/null 2>&1; then
@@ -44,7 +50,7 @@ if [ "${#SKIPPED[@]}" -gt 0 ]; then
   for tool in "${SKIPPED[@]}"; do
     echo "##   - ${tool}"
   done
-  echo "## Install them (e.g. 'brew install shellcheck actionlint ruff')"
+  echo "## Install them (e.g. 'python3 -m pip install -e .[dev]' and 'brew install shellcheck actionlint')"
   echo "## or run with AVIATO_STRICT_TOOLS=1 to fail on missing tools."
   echo "############################################################"
   if [ "${AVIATO_STRICT_TOOLS:-0}" = "1" ]; then

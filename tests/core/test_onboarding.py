@@ -60,6 +60,27 @@ def test_pin_is_stamped_into_generated_workflows() -> None:
     assert "aviato-ref: v1.2.3" in drift
 
 
+def test_bootstrap_uses_local_workflow_refs_and_local_install() -> None:
+    reg = Registry(MODULE_SOURCE_ROOT)
+    items = {
+        i.output: i
+        for i in materialize_items(
+            reg,
+            "python-library",
+            {"distribution-name": "aviato", "import-name": "aviato"},
+            pin="0",
+            bootstrap=True,
+        )
+    }
+    ci = items[".github/workflows/aviato-ci.yml"].body
+    assert "uses: ./.github/workflows/reusable-python-ci.yml" in ci
+    assert "uses: amattas/aviato/.github/workflows/" not in ci
+    assert "local-install: true" in ci
+    drift = items[".github/workflows/aviato-drift.yml"].body
+    assert "uses: ./.github/workflows/reusable-consumer-automation.yml" in drift
+    assert "local-install: true" in drift
+
+
 def test_javascript_variant_omits_tsconfig_and_disables_typecheck() -> None:
     from aviato.core.onboarding import render_variables
 

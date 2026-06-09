@@ -166,6 +166,28 @@ def test_pip_glued_exact_pin_with_marker_is_ok() -> None:
     assert unpinned_tool_invocations(text) == []
 
 
+def test_flags_npx_that_can_fetch_floating_registry_tool() -> None:
+    text = "          npx eslint .\n"
+    assert unpinned_tool_invocations(text) == ["npx may fetch an unpinned registry tool: npx eslint ."]
+
+
+def test_npx_no_install_is_ok() -> None:
+    text = "          npx --no-install eslint .\n"
+    assert unpinned_tool_invocations(text) == []
+
+
+def test_npx_exact_package_fetch_is_ok() -> None:
+    text = "          npx -y -p typedoc@0.27.9 -p typedoc-plugin-markdown@4.4.1 typedoc \\\n"
+    assert unpinned_tool_invocations(text) == []
+
+
+def test_flags_npx_package_fetch_without_exact_version() -> None:
+    text = "          npx -y -p typedoc -p typedoc-plugin-markdown@latest typedoc\n"
+    out = unpinned_tool_invocations(text)
+    expected = "npx may fetch an unpinned registry tool: npx -y -p typedoc -p typedoc-plugin-markdown@latest typedoc"
+    assert out == [expected]
+
+
 def test_lint_definition_file_exempt_from_tool_invocation_scan(tmp_path) -> None:
     # §11.3: the in-CI lint DEFINITION embeds the docker/fetch detector patterns (grep args +
     # comments); the text scan can't tell those from real invocations, so reusable-common-lint.yml

@@ -38,6 +38,7 @@ def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[Ex
             declaration.variables,
             pin=declaration.version,
             docs=declaration.docs,
+            bootstrap=declaration.bootstrap,
             overrides=declaration.overrides,
         )
     ]

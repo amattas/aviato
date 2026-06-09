@@ -6,7 +6,7 @@ on:
       node-version:
         required: false
         type: string
-        default: "22"
+        default: "24"
       working-directory:
         required: false
         type: string
@@ -24,12 +24,12 @@ on:
       format-command:
         required: false
         type: string
-        default: "npx prettier --check ."
+        default: "npx --no-install prettier --check ."
       typecheck-command:
         description: TypeScript type-check. Set empty for JavaScript projects (language-variant=javascript).
         required: false
         type: string
-        default: "npx tsc --noEmit"
+        default: "npx --no-install tsc --noEmit"
       test-command:
         required: false
         type: string
@@ -85,6 +85,25 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
 
+      - name: Harden npm install behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_version="$(npm --version)"
+          npm_major="${npm_version%%.*}"
+          if ! [[ "${npm_major}" =~ ^[0-9]+$ ]] || [ "${npm_major}" -lt 11 ]; then
+            echo "::error::npm ${npm_version} does not support min-release-age. Use Node/npm with npm >=11 before running installs."
+            exit 1
+          fi
+          npm config set ignore-scripts true --location=user
+          npm config set engine-strict true --location=user
+          {
+            echo "NPM_CONFIG_IGNORE_SCRIPTS=true"
+            echo "NPM_CONFIG_ENGINE_STRICT=true"
+            echo "NPM_CONFIG_MIN_RELEASE_AGE=7"
+          } >> "${GITHUB_ENV}"
+          npm config set min-release-age 7 --location=user
+
       - name: Install
         if: ${{ inputs.run-install && inputs.install-command != '' }}
         shell: bash
@@ -134,4 +153,3 @@ jobs:
         env:
           BUILD_COMMAND: ${{ inputs.build-command }}
         run: eval "$BUILD_COMMAND"
-
