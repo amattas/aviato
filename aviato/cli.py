@@ -10,6 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from . import __version__
 from .audit import audit_repos, discover_and_audit, render_json, render_tsv
@@ -33,7 +34,7 @@ from .core.settings_drift_flow import run_settings_drift
 from .core.variables import resolve_variables, writeback_variables
 from .core.version import is_compatible, is_known_version_pin, most_restrictive_recorded, normalize_pin
 from .core.versioning import classify_commits, is_highest, next_version
-from .github import GitHubAPIError, SettingsReadError, is_archived
+from .github import GitHubAPIError, SettingsReadError, gh_json_paginated_optional, is_archived
 from .github_platform import GitHubPlatform, UnmodeledProtectionError
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from .plugins.version_formats import bump_files
@@ -46,6 +47,10 @@ from .validation import validate
 # Library artifact name, so it lives OUTSIDE the agnostic core (review #18) and is passed into
 # diagnose() as data — core never hardcodes a specific library workflow name.
 DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
+# findings 30/31: the drift caller's repo path, for the API-state probe (enabled +
+# last scheduled-run conclusion). A Library artifact name — passed to the binding as
+# data, like the markers above.
+DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
 LIBRARY_REMOTE_URL = "https://github.com/amattas/aviato.git"
 
 
@@ -793,7 +798,14 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             report.issue_channel_available,
             report.scan_heartbeat_present,
             report.prerequisites_remote,
-        ) = GitHubPlatform().probe_health(slug, environments=environments, probe_pages=declaration.docs)
+        ) = GitHubPlatform().probe_health(
+            slug,
+            environments=environments,
+            probe_pages=declaration.docs,
+            # findings 30/31/32: API-state probes — drift caller enabled + last-run
+            # conclusion, and code-scanning enablement (§2.13/§17 "probeable").
+            drift_workflow_path=DRIFT_CALLER_PATH,
+        )
 
     print(f"doctor: {declaration.profile} @ {declaration.version} ({root})")
     for output_path, status in sorted(report.statuses.items()):
@@ -900,6 +912,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
         registry,
         include_archived=args.include_archived,
         archived_probe=_archived_probe,
+        # finding 33: full §5.4 parity with doctor — the fleet sweep probes the drift
+        # automation and §17 prerequisites too.
+        drift_automation_markers=DRIFT_AUTOMATION_MARKERS,
     )
     rc = 0
     for scan in scans:
@@ -921,6 +936,14 @@ def cmd_scan(args: argparse.Namespace) -> int:
         # seed-once tracking exists to provide.
         if scan.seed_divergence:
             print(f"  seed divergence: {', '.join(sorted(scan.seed_divergence))}", file=sys.stderr)
+        # finding 33: the §5.4 probes the sweep previously dropped.
+        if scan.drift_automation_present is False:
+            print("  drift automation: MISSING", file=sys.stderr)
+        missing_prereqs = sorted(name for name, ok in scan.prerequisites.items() if not ok)
+        if missing_prereqs:
+            print(f"  missing prerequisites: {', '.join(missing_prereqs)}", file=sys.stderr)
+        if args.audit:
+            _print_repo_audit(Path(scan.path))
         if args.fix and _scan_has_file_drift(scan):
             try:
                 outcome = _propose_file_drift(registry, Path(scan.path), override_version_pin=args.override_version_pin)
@@ -931,6 +954,31 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 print(f"  fix ERROR: {exc}", file=sys.stderr)
                 rc = 1
     return rc
+
+
+def _print_repo_audit(root: Path) -> None:
+    """§5.11 read-only audit aggregation (finding 36): the per-Consumer audit trail
+    already lives on each repo's tracking issues — surface the open settings-drift
+    issue inline so fleet-level visibility doesn't require visiting every repo.
+    Ephemeral operator-side OUTPUT only — no inventory is stored (§2.2); a per-repo
+    read failure degrades to a note, never aborts the sweep."""
+    slug = normalize_slug(remote_url(root))
+    if not slug:
+        print("  audit: no github remote", file=sys.stderr)
+        return
+    try:
+        issues = gh_json_paginated_optional(
+            f"repos/{slug}/issues?state=open&labels={quote(SETTINGS_DRIFT_ISSUE_KEY, safe='')}", default=[]
+        )
+    except GitHubAPIError as exc:
+        print(f"  audit: unreadable ({exc})", file=sys.stderr)
+        return
+    rows = [issue for issue in issues if isinstance(issue, dict)] if isinstance(issues, list) else []
+    if not rows:
+        print("  audit: no open settings-drift issue")
+        return
+    for issue in rows:
+        print(f"  audit: #{issue.get('number')} {str(issue.get('title'))!r} updated {issue.get('updated_at')}")
 
 
 def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin: bool = False):
@@ -2008,6 +2056,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-archived",
         action="store_true",
         help="Also scan archived repositories (skipped by default, §5.11).",
+    )
+    scan.add_argument(
+        "--audit",
+        action="store_true",
+        help="Also surface each repo's open settings-drift tracking issue (read-only, §5.11).",
     )
     scan.set_defaults(func=cmd_scan)
 

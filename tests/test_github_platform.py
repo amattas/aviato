@@ -1059,3 +1059,46 @@ def test_feature_unavailable_requires_client_error_status() -> None:
     assert _is_feature_unavailable(wordless) is False
     genuine = CommandError(["gh"], 1, "Secret scanning is not enabled for this repository (HTTP 422)")
     assert _is_feature_unavailable(genuine) is True
+
+
+def test_probe_health_reports_code_scanning_and_drift_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    # findings 30/31/32: doctor's remote probes must surface code-scanning enablement
+    # and the drift caller's API state (enabled + last scheduled-run conclusion) —
+    # local file presence alone read a UI-disabled or persistently-failing workflow
+    # as healthy.
+    def fake_optional(endpoint: str, *, default=None):
+        if "code-scanning/analyses" in endpoint:
+            return []  # 200 with no analyses yet ⇒ enabled
+        if endpoint.endswith("actions/workflows?per_page=100"):
+            wf = {"id": 5, "path": ".github/workflows/aviato-drift.yml", "state": "disabled_manually"}
+            return {"workflows": [wf]}
+        if "actions/workflows/5/runs" in endpoint:
+            return {"workflow_runs": [{"conclusion": "failure"}]}
+        if endpoint.startswith("repos/o/r"):
+            return {"has_issues": True, "default_branch": "main"}
+        return default
+
+    monkeypatch.setattr(github, "gh_json_optional", fake_optional)
+    monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
+    _, _, remote = GitHubPlatform().probe_health("o/r", drift_workflow_path=".github/workflows/aviato-drift.yml")
+    assert remote["code_scanning"] is True
+    assert remote["drift_automation_enabled"] is False  # disabled in the UI ⇒ flagged
+    assert remote["drift_automation_last_run_ok"] is False  # last run failed ⇒ flagged
+
+
+def test_probe_health_drift_workflow_absent_reads_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_optional(endpoint: str, *, default=None):
+        if "code-scanning/analyses" in endpoint:
+            return default  # genuine 404 ⇒ not enabled
+        if endpoint.endswith("actions/workflows?per_page=100"):
+            return {"workflows": []}
+        if endpoint.startswith("repos/o/r"):
+            return {"has_issues": True, "default_branch": "main"}
+        return default
+
+    monkeypatch.setattr(github, "gh_json_optional", fake_optional)
+    monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
+    _, _, remote = GitHubPlatform().probe_health("o/r", drift_workflow_path=".github/workflows/aviato-drift.yml")
+    assert remote["code_scanning"] is False
+    assert remote["drift_automation_enabled"] is False
+    assert remote["drift_automation_last_run_ok"] is None
