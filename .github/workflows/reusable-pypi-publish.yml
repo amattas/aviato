@@ -95,6 +95,7 @@ jobs:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           # C12-W2: build from the IMMUTABLE gated commit, not the mutable tag.
           ref: ${{ inputs.gated-sha }}
           fetch-depth: 0
@@ -237,6 +238,7 @@ jobs:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           # Reads pyproject.toml for "confirm resolvable" and re-verifies the tag right
           # before the upload (C12-W2) — checkout the gated commit, with tags for the check.
           ref: ${{ inputs.gated-sha }}

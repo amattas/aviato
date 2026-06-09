@@ -148,6 +148,29 @@ def test_callers_pass_gated_sha_to_deploys() -> None:
         )
 
 
+def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
+    # finding 6: the job token must not sit in .git/config while consumer/build code
+    # runs. Only workflows that legitimately push (or fetch) from the checkout keep
+    # credentials: the release write job (pushes tags/branches; its derive job is
+    # pinned to false by the split test), the gate (post-checkout `git fetch origin`),
+    # and the drift automation (open_or_update_proposal pushes the proposal branch
+    # from the working tree).
+    exempt = {"reusable-release.yml", "reusable-release-gate.yml", "reusable-consumer-automation.yml"}
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        if path.name in exempt:
+            continue
+        wf = _load(path.name)
+        for job_name, job in (wf.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps", []) or []:
+                if not str(step.get("uses", "")).startswith("actions/checkout"):
+                    continue
+                assert (step.get("with") or {}).get("persist-credentials") is False, (
+                    f"{path.name}:{job_name}: checkout must set persist-credentials: false"
+                )
+
+
 def test_release_workflow_splits_derive_from_write_job() -> None:
     # C12-W1: the heavy derive phase (pip install + aviato over full history) must hold
     # NO write token; only the propose/tag job gets contents/pull-requests write, and

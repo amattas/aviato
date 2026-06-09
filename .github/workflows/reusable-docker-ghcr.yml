@@ -84,6 +84,7 @@ jobs:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           # C12-W2: build from the IMMUTABLE gated commit, not the mutable tag.
           ref: ${{ inputs.gated-sha }}
           fetch-depth: 0
