@@ -148,6 +148,18 @@ def test_callers_pass_gated_sha_to_deploys() -> None:
         )
 
 
+def test_ghcr_publishes_only_scanned_digests() -> None:
+    # C12-W3: no rebuild between scan and publish — the workflow must scan local OCI
+    # archives and promote those exact bytes by digest, asserting pushed == scanned.
+    body = (WORKFLOWS / "reusable-docker-ghcr.yml").read_text(encoding="utf-8")
+    assert "docker/build-push-action" not in body, "scan-then-rebuild reintroduced (C12-W3)"
+    assert '--output "type=oci,dest=oci/${slug}.tar"' in body, "build must emit a local OCI archive"
+    assert '--input "oci/${slug}.tar"' in body, "trivy must scan the archive, not a rebuilt image"
+    assert "skopeo copy --digestfile" in body, "push must promote the archive bytes"
+    assert '"${pushed_digest}" != "${local_digest}"' in body, "pushed==scanned digest assert missing"
+    assert body.index("trivy image") < body.index("skopeo copy"), "scan must precede push"
+
+
 def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
     # finding 6: the job token must not sit in .git/config while consumer/build code
     # runs. Only workflows that legitimately push (or fetch) from the checkout keep
