@@ -418,6 +418,64 @@ def test_apply_settings_fails_closed_on_nonstrict_status_checks(monkeypatch: pyt
         GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
 
 
+def test_apply_settings_fails_closed_on_app_bound_classic_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-4: a live app-BOUND classic check (app_id) would lose its binding in the wholesale
+    # PUT (bare context names only) — fail closed instead of clobbering.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(
+        github,
+        "classic_branch_protection",
+        lambda repo, branch: {"required_status_checks": {"strict": True, "checks": [{"context": "ci", "app_id": 123}]}},
+    )
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT")))
+    with pytest.raises(UnmodeledProtectionError, match="app_bound_checks"):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
+
+
+def test_apply_settings_fails_closed_on_nonstrict_ruleset_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-4: a live ruleset with strict_required_status_checks_policy=false is state the
+    # strict-true PUT path would shadow — fail closed.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(
+        github,
+        "active_branch_rules",
+        lambda repo, branch: [
+            {
+                "type": "required_status_checks",
+                "parameters": {"strict_required_status_checks_policy": False, "required_status_checks": []},
+            }
+        ],
+    )
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT")))
+    with pytest.raises(UnmodeledProtectionError, match=r"ruleset\.required_status_checks\.strict=false"):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
+
+
+def test_apply_settings_fails_closed_on_app_bound_ruleset_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-4: an integration-bound ruleset check (integration_id) is a binding the flat model
+    # cannot represent; the PUT would shadow it — fail closed.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(
+        github,
+        "active_branch_rules",
+        lambda repo, branch: [
+            {
+                "type": "required_status_checks",
+                "parameters": {
+                    "strict_required_status_checks_policy": True,
+                    "required_status_checks": [{"context": "ci", "integration_id": 99}],
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT")))
+    with pytest.raises(UnmodeledProtectionError, match=r"ruleset\.required_status_checks\.app_bound_checks"):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
+
+
 def test_adapter_satisfies_platform_protocol() -> None:
     assert isinstance(GitHubPlatform(), Platform)
 

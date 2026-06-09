@@ -224,3 +224,55 @@ def test_monotonic_alias_inline_guard_removal_is_detected(repo_copy: Path) -> No
     f.write_text(stripped, encoding="utf-8")
     errors = validate(repo_copy)
     assert any("monotonic-alias guard is missing" in e for e in errors)
+
+
+def test_checkout_by_repository_name_in_release_workflow_is_detected(repo_copy: Path) -> None:
+    # §11.3: a release workflow that checks out Aviato by repository name can drift from
+    # the pinned workflow ref — the contract check is text-operative, so any occurrence
+    # of the slug-qualified checkout must flag.
+    wf = repo_copy / RELEASE_WORKFLOWS[0]
+    with wf.open("a", encoding="utf-8") as handle:
+        handle.write("\n# drift fixture:\n#          repository: amattas/aviato\n")
+    errors = validate(repo_copy)
+    assert any("checks out Aviato by repository name" in e for e in errors)
+
+
+def test_missing_required_file_is_detected(repo_copy: Path) -> None:
+    (repo_copy / "templates" / "consumer-automation.yml").unlink()
+    errors = validate(repo_copy)
+    assert any(e == "missing required file: templates/consumer-automation.yml" for e in errors)
+
+
+def test_stale_library_bootstrap_artifact_is_detected(repo_copy: Path) -> None:
+    # §5.10: a hand-edited bootstrap-managed artifact must be flagged as stale.
+    wf = repo_copy / ".github" / "workflows" / "aviato-ci.yml"
+    wf.write_text(wf.read_text(encoding="utf-8") + "# drift\n", encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any(".github/workflows/aviato-ci.yml is stale" in e and "Library bootstrap" in e for e in errors)
+
+
+def test_released_aviato_ref_in_bootstrap_artifact_is_detected(repo_copy: Path) -> None:
+    # §5.10: the Library's own callers must use local workflow refs, never a released
+    # amattas/aviato/... ref (a released self-reference would deadlock bootstrap).
+    wf = repo_copy / ".github" / "workflows" / "aviato-ci.yml"
+    text = wf.read_text(encoding="utf-8")
+    drifted = text.replace(
+        "uses: ./.github/workflows/reusable-python-ci.yml",
+        "uses: amattas/aviato/.github/workflows/reusable-python-ci.yml@1.2.3",
+    )
+    assert drifted != text, "fixture did not contain the expected local workflow ref"
+    wf.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("released Aviato ref in bootstrap" in e for e in errors)
+
+
+def test_scaffold_reference_to_missing_reusable_workflow_is_detected(repo_copy: Path) -> None:
+    # A scaffold caller body referencing a reusable workflow that doesn't ship would give
+    # every consumer a broken pipeline — the rendered-scaffold check must flag it.
+    body = repo_copy / "aviato" / "library" / "scaffold" / "files" / "wf-python-library.yml"
+    text = body.read_text(encoding="utf-8")
+    drifted = text.replace("reusable-python-ci.yml", "reusable-missing-ci.yml")
+    assert drifted != text, "fixture did not contain the expected reusable workflow reference"
+    body.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("references missing reusable workflow reusable-missing-ci.yml" in e for e in errors)

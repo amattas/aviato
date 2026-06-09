@@ -130,3 +130,12 @@ def test_real_zizmor_flags_unpinned_and_passes_first_party(tmp_path):
     )
     out = zizmor_scan.zizmor_uses_image_violations(wf)
     assert any("unpinned-uses" in v for v in out), out
+
+
+def test_raises_on_unparseable_zizmor_output(tmp_path, monkeypatch):
+    """Garbage (non-JSON) zizmor stdout must fail closed (ZizmorUnavailable), not read as clean."""
+    (tmp_path / "w.yml").write_text("on: push\n", encoding="utf-8")
+    monkeypatch.setattr(zizmor_scan, "_zizmor_available", lambda: True)
+    monkeypatch.setattr(zizmor_scan, "run", _fake_run("panic: not json{", 0))
+    with pytest.raises(zizmor_scan.ZizmorUnavailable):
+        zizmor_scan.zizmor_uses_image_violations(tmp_path)
