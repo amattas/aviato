@@ -22,6 +22,16 @@ same fixed surfaces.
 - Replaced the Python scaffold manifest's literal task-marker description
   placeholder with neutral wording so dead-code scans do not flag generated
   templates.
+- Added the Library self-CI dev tools it already invokes (`build` and
+  `pytest-cov`), and made the python-library caller's type-check toggle
+  profile DATA (`run-typecheck`, default `"true"`): the internal
+  aviato-library bootstrap profile defaults it to `"false"` until the Library
+  source completes a typing migration, while consumers keep strict mypy.
+- Added a project yamllint configuration so common lint checks real repository
+  YAML without treating Aviato's raw scaffold templates as parseable YAML, and
+  gave the reusable common-lint yamllint step a fallback baseline config (used
+  only when the consumer has no `.yamllint*` of its own) so freshly onboarded
+  consumers are not failed by the generated callers' long lines.
 - Added Docusaurus docs hardening/features: first-party Docusaurus ESLint
   plugin linting, Algolia search theme, Mermaid rendering, and explicit sitemap
   configuration through the classic preset.

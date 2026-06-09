@@ -5,6 +5,7 @@ settings: baseline
 variables:
   - {name: distribution-name, type: string}
   - {name: import-name, type: string}
+  - {name: run-typecheck, type: string, required: false, default: "true"}
 version_source:
   locations: [pyproject.toml]
 toolchain:

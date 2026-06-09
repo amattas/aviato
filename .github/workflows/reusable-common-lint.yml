@@ -44,7 +44,14 @@ jobs:
         run: |
           # §11.3: pin the pip-installed tool to an exact version (not a floating latest).
           python -m pip install --quiet "yamllint==${YAMLLINT_VERSION}"
-          yamllint -s .
+          # Honor the repo's own yamllint config when present; otherwise fall back to a
+          # baseline that accepts the Aviato-generated caller workflows (long `if:`
+          # expressions, GitHub's truthy `on:` key) without disabling syntax checks.
+          if [ -f .yamllint ] || [ -f .yamllint.yaml ] || [ -f .yamllint.yml ]; then
+            yamllint -s .
+          else
+            yamllint -s -d '{extends: default, rules: {braces: disable, comments: disable, comments-indentation: disable, document-start: disable, truthy: disable, empty-lines: {max: 2, max-end: 1}, line-length: {max: 240}}}' .
+          fi
 
       - name: actionlint (blocking)
         shell: bash

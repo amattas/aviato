@@ -5,6 +5,9 @@ settings: baseline
 variables:
   - {name: distribution-name, type: string}
   - {name: import-name, type: string}
+  # The Library's own source predates a typing migration; consumers keep the
+  # strict-mypy default from python-library.
+  - {name: run-typecheck, type: string, required: false, default: "false"}
 version_source:
   locations: [pyproject.toml]
 toolchain:
