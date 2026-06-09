@@ -90,6 +90,8 @@ def test_local_install_is_limited_to_structural_library_bootstrap() -> None:
     # released ref exists. A consumer hand-editing local-install:true must fail before
     # `pip install -e .` unless the checkout has the Library anchors and bootstrap:true.
     for name, job_name in (
+        # C12-W1: BOTH release jobs install Aviato; each must carry the full guard.
+        ("reusable-release.yml", "derive"),
         ("reusable-release.yml", "release"),
         ("reusable-consumer-automation.yml", "drift-report"),
     ):
@@ -106,6 +108,23 @@ def test_local_install_is_limited_to_structural_library_bootstrap() -> None:
             assert anchor in run, f"{name} local install guard missing {anchor}"
         assert "bootstrap: true" in run, f"{name} local install guard must require bootstrap:true"
         assert run.index("local-install is only valid") < run.index("python -m pip install -e .")
+
+
+def test_release_workflow_splits_derive_from_write_job() -> None:
+    # C12-W1: the heavy derive phase (pip install + aviato over full history) must hold
+    # NO write token; only the propose/tag job gets contents/pull-requests write, and
+    # nothing is granted at workflow level.
+    wf = _load("reusable-release.yml")
+    assert wf["permissions"] == {}, "reusable-release must grant nothing at workflow level"
+    derive = wf["jobs"]["derive"]
+    assert derive["permissions"] == {"contents": "read"}
+    assert "GH_TOKEN" not in (derive.get("env") or {}), "derive must not receive the job token"
+    checkout = next(s for s in derive["steps"] if str(s.get("uses", "")).startswith("actions/checkout"))
+    assert checkout["with"].get("persist-credentials") is False
+    release = wf["jobs"]["release"]
+    assert release["permissions"] == {"contents": "write", "pull-requests": "write"}
+    assert release["needs"] == "derive"
+    assert "release == 'true'" in str(release.get("if", ""))
 
 
 def test_common_lint_lints_every_dockerfile() -> None:

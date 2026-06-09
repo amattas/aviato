@@ -19,6 +19,15 @@ name: Reusable Release
 # cannot be a separate tag-triggered workflow without a forbidden secret. Instead
 # the caller chains deploy off this job's outputs in the SAME run — fully
 # automatic, secret-free, and still gated by the release gate (merged-PR check).
+#
+# C12-W1 (privilege split): the DERIVE phase — install Aviato and run it over the
+# full commit history, the largest third-party-execution surface in the release
+# path — runs in a `contents: read` job with no GH_TOKEN and no persisted checkout
+# credentials. Only the propose/tag job holds `contents: write` +
+# `pull-requests: write`. RESIDUAL (documented, accepted): the write job still
+# installs the pinned Aviato with the write token ambient — a step cannot drop job
+# permissions — so the split is defense-in-depth for the heavy phase, not complete
+# token elimination; AVIATO_REF stays pin-validated (R4-6) in both jobs.
 
 on:
   workflow_call:
@@ -58,29 +67,31 @@ concurrency:
   group: aviato-release-${{ github.repository }}
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  pull-requests: write
+# C12-W1: no workflow-level grants — each job declares exactly what it needs.
+permissions: {}
 
 jobs:
-  release:
-    name: Cut release
+  derive:
+    name: Derive next version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
-      released: ${{ steps.tag.outputs.released }}
-      # R2-1-REL-TAG: sourced from the TAG-phase step (set only when a tag was cut), so it is empty
-      # on a propose/no-release run — matching the `tag` output's documented "set only when released".
-      tag: ${{ steps.tag.outputs.tag }}
+      last: ${{ steps.derive.outputs.last }}
+      next: ${{ steps.derive.outputs.next }}
+      release: ${{ steps.derive.outputs.release }}
+      phase: ${{ steps.phase.outputs.phase }}
     env:
-      GH_TOKEN: ${{ github.token }}
       AVIATO_REF: ${{ inputs.aviato-ref }}
       AVIATO_LOCAL_INSTALL: ${{ inputs.local-install }}
-      BUILD_NUMBER: ${{ inputs.build-number || github.run_number }}
     steps:
       - name: Checkout (full history)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # The derive job never pushes; do not leave the job token in .git/config
+          # while third-party code (pip install, aviato over full history) runs.
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -174,12 +185,81 @@ jobs:
             echo "phase=propose" >> "${GITHUB_OUTPUT}"
           fi
 
+  release:
+    name: Cut release
+    runs-on: ubuntu-latest
+    needs: derive
+    if: ${{ needs.derive.outputs.release == 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      released: ${{ steps.tag.outputs.released }}
+      # R2-1-REL-TAG: sourced from the TAG-phase step (set only when a tag was cut), so it is empty
+      # on a propose/no-release run — matching the `tag` output's documented "set only when released".
+      tag: ${{ steps.tag.outputs.tag }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AVIATO_REF: ${{ inputs.aviato-ref }}
+      AVIATO_LOCAL_INSTALL: ${{ inputs.local-install }}
+      BUILD_NUMBER: ${{ inputs.build-number || github.run_number }}
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # This job pushes (release branch, tags, floating major) — credentials persist.
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Verify Aviato ref is pinned (§11.3 fail-closed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # R4-6 (re-asserted in the WRITE job): each privileged job is self-contained — a future
+          # edit cannot detach the write job from the pin guard by reordering jobs.
+          if [[ ! "${AVIATO_REF}" =~ ^[0-9]+(\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?)?$ ]]; then
+            echo "::error::aviato-ref '${AVIATO_REF}' is not a pinned version (expected X.Y.Z, X.Y.Z-alphaN/-betaN, or a floating major N)."
+            exit 1
+          fi
+
+      - name: Install Aviato (pinned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${AVIATO_LOCAL_INSTALL}" = "true" ]; then
+            required_anchors=(
+              "aviato/core/__init__.py"
+              "aviato/library/bundles"
+              "aviato/library/scaffold"
+              "aviato/library/policy.yml"
+              ".github/aviato.yaml"
+            )
+            for anchor in "${required_anchors[@]}"; do
+              if [ ! -e "${anchor}" ]; then
+                echo "::error::local-install is only valid for Library bootstrap; missing structural anchor ${anchor} (§5.10)."
+                exit 1
+              fi
+            done
+            if ! sed 's/#.*$//' .github/aviato.yaml | grep -Eiq '^[[:space:]]*bootstrap:[[:space:]]*true[[:space:]]*$'; then
+              echo "::error::local-install requires .github/aviato.yaml to declare bootstrap: true (§5.10)."
+              exit 1
+            fi
+            python -m pip install -e .
+          else
+            python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
+          fi
+
       - name: Propose release PR
-        if: ${{ steps.phase.outputs.phase == 'propose' }}
+        if: ${{ needs.derive.outputs.phase == 'propose' }}
         shell: bash
         env:
-          NEXT: ${{ steps.derive.outputs.next }}
-          LAST: ${{ steps.derive.outputs.last }}
+          NEXT: ${{ needs.derive.outputs.next }}
+          LAST: ${{ needs.derive.outputs.last }}
         run: |
           set -euo pipefail
           branch="release/${NEXT}"
@@ -205,11 +285,11 @@ jobs:
 
       - name: Tag release, advance floating major, publish
         id: tag
-        if: ${{ steps.phase.outputs.phase == 'tag' }}
+        if: ${{ needs.derive.outputs.phase == 'tag' }}
         shell: bash
         env:
-          NEXT: ${{ steps.derive.outputs.next }}
-          LAST: ${{ steps.derive.outputs.last }}
+          NEXT: ${{ needs.derive.outputs.next }}
+          LAST: ${{ needs.derive.outputs.last }}
         run: |
           set -euo pipefail
           git config user.name aviato-bot
