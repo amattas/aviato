@@ -130,3 +130,23 @@ def test_action_pin_scan_tolerates_non_utf8_workflow(tmp_path, monkeypatch):
     wf.mkdir(parents=True)
     (wf / "bad.yml").write_bytes(b"\xff\xfe not utf8")
     action_pin_violations(tmp_path)  # must not raise
+
+
+def test_seeded_pyproject_dev_extras_must_be_exact_pinned():
+    """finding 12: floors in the seeded pyproject's extras floated invisibly — CI installs
+    them via `pip install -e .[dev]`, which the pip-token scan correctly exempts."""
+    from aviato.plugins.actionpins import unpinned_pyproject_extra_lines
+
+    text = (
+        "[project]\n"
+        'name = "{{ distribution-name }}"\n'
+        "[project.optional-dependencies]\n"
+        "dev = [\n"
+        '  "pytest>=8.0",\n'
+        '  "ruff==0.8.0",\n'
+        '  "{{ tool-placeholder }}",\n'
+        "]\n"
+        "[tool.other]\n"
+        '"quoted-but-outside>=1"\n'
+    )
+    assert unpinned_pyproject_extra_lines(text) == ["pytest>=8.0"]

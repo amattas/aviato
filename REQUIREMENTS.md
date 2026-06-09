@@ -1658,8 +1658,10 @@ the docs build when `docs: true`); GHCR deploy meets its DoD.
 ### 12.3 Swift
 
 **Scaffold bundle (managed files):** format config, lint config, language ignore
-rules, editor config, package/project-manifest fragment. The Xcode project and app
-entrypoints are seed-once operator-owned (§6.3).
+rules, editor config. (No package/project-manifest fragment is seeded — finding 48:
+the Xcode project IS the manifest and it is seed-once operator-owned per the next
+sentence, so a fragment would have nothing meaningful to manage.) The Xcode project
+and app entrypoints are seed-once operator-owned (§6.3).
 
 **Required tooling/standards (named, all gates blocking):** **swift-format**
 (Apple) for formatting; **SwiftLint `--strict`** for linting (blocking);

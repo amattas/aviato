@@ -1,0 +1,4 @@
+name: pr-template
+output_path: .github/pull_request_template.md
+source: files/pr-template.md.txt
+seed_once: true

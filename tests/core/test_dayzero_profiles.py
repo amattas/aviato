@@ -173,6 +173,35 @@ def test_required_status_checks_include_language_verify(registry: Registry, name
     assert "security / Security baseline heartbeat" in checks
 
 
+def test_common_scaffold_ships_shared_governance_files() -> None:
+    # §12.1 (finding 48): contributing, code owners, and issue/PR templates come from
+    # the common scaffold — seed-once, so the consumer owns them after seeding.
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    expected = {
+        "CONTRIBUTING.md",
+        ".github/CODEOWNERS",
+        ".github/ISSUE_TEMPLATE/bug_report.md",
+        ".github/ISSUE_TEMPLATE/feature_request.md",
+        ".github/pull_request_template.md",
+    }
+    for profile, variables in (
+        ("python-library", {"distribution-name": "a", "import-name": "a"}),
+        ("node-service", {"project-name": "a", "language-variant": "typescript"}),
+    ):
+        items = materialize_items(reg, profile, variables, pin="0")
+        outputs = {i.output for i in items}
+        assert expected <= outputs, (profile, expected - outputs)
+        assert all(i.seed_once for i in items if i.output in expected)
+
+    owned = materialize_items(
+        reg, "python-library", {"distribution-name": "a", "import-name": "a", "owner": "octocat"}, pin="0"
+    )
+    codeowners = next(i for i in owned if i.output == ".github/CODEOWNERS")
+    assert "* @octocat" in codeowners.body
+
+
 def test_algolia_opt_in_renders_templated_search_config() -> None:
     # finding 20: algolia=true selects the templated variant — exactly one config
     # renders (the same-output_path variants are mutually exclusive by `when`), the
@@ -285,7 +314,14 @@ def test_python_profile_scaffolds_pyproject_manifest() -> None:
     assert item.seed_once is True
     assert 'version = "0.1.0"' in item.body
     assert "pytest-cov" in item.body
-    assert "build>=" in item.body
+    # finding 12: the seeded dev extras are EXACT-pinned (==), like requirements-dev —
+    # CI installs them via `-e .[dev]`, so floors would float invisibly (§11.3).
+    assert "build==" in item.body
+    assert ">=" not in item.body.split("[project.optional-dependencies]", 1)[1].split("[", 1)[0]
+    # §12.1 (finding 48): measure-only test+coverage config ships in the manifest.
+    assert "[tool.pytest.ini_options]" in item.body
+    assert "[tool.coverage.run]" in item.body
+    assert 'source = ["acme"]' in item.body
     assert 'name = "acme"' in item.body  # lenient render filled the package name
 
 

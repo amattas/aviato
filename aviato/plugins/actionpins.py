@@ -813,6 +813,34 @@ def unpinned_requirements_lines(text: str) -> list[str]:
     return flagged
 
 
+def unpinned_pyproject_extra_lines(text: str) -> list[str]:
+    """Optional-dependency entries in a SEEDED pyproject that are not ``==``-pinned.
+
+    finding 12: python-library/component CI installs ``pip install -e .[dev]``, which the
+    pip-install scanner correctly exempts (an editable path is not a package token) — so
+    floor pins inside the seeded manifest's extras floated invisibly while the sibling
+    requirements-dev file was exact-pinned for the same §11.3 reason. Line-wise scan, NOT
+    tomllib: the template body carries ``{{ }}`` placeholders. Only quoted requirement
+    strings between ``[project.optional-dependencies]`` and the next section are checked;
+    placeholder-bearing entries are resolved at scaffold time and skipped.
+    """
+    flagged: list[str] = []
+    in_extras = False
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line.startswith("["):
+            in_extras = line == "[project.optional-dependencies]"
+            continue
+        if not in_extras:
+            continue
+        match = re.match(r'^"([^"]+)"', line)
+        if not match or "{{" in match.group(1):
+            continue
+        if "==" not in match.group(1):
+            flagged.append(match.group(1))
+    return flagged
+
+
 def unpinned_tool_invocations(text: str) -> list[str]:
     """Shell-invoked tools not pinned (§11.3): fail-closed fetch-execute + non-exact pip installs.
 
@@ -878,4 +906,10 @@ def action_pin_violations(root: Path) -> list[str]:
     for req in sorted(scaffold_dir.glob("requirements*.txt.txt")):
         for pkg in unpinned_requirements_lines(req.read_text(encoding="utf-8", errors="replace")):
             violations.append(f"{req.name}: requirement not pinned to an exact version: {pkg}")
+
+    # 5. Seeded pyproject dev extras (finding 12: installed via `pip install -e .[dev]`,
+    # which the pip-install scan exempts — the floor pins floated invisibly).
+    for manifest in sorted(scaffold_dir.glob("pyproject*.toml.txt")):
+        for pkg in unpinned_pyproject_extra_lines(manifest.read_text(encoding="utf-8", errors="replace")):
+            violations.append(f"{manifest.name}: dev-extra requirement not pinned to an exact version: {pkg}")
     return violations

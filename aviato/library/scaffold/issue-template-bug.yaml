@@ -1,0 +1,4 @@
+name: issue-template-bug
+output_path: .github/ISSUE_TEMPLATE/bug_report.md
+source: files/issue-template-bug.md.txt
+seed_once: true
