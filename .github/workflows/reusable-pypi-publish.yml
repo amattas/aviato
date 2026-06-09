@@ -60,6 +60,14 @@ on:
         required: false
         type: string
         default: "2.7.3"
+      environment-name:
+        description: >-
+          GitHub deployment environment for the publish job (finding 7). Non-breaking
+          default: GitHub auto-creates it unprotected; the operator adds reviewer/
+          branch rules and binds the PyPI trusted publisher to this environment name.
+        required: false
+        type: string
+        default: pypi
 
 # review #26: serialize publishes per repo for parity with the GHCR/Pages deploys — a re-run or
 # two near-simultaneous in-run deploys for the same tag should queue, not race. Bounded anyway by
@@ -224,6 +232,10 @@ jobs:
     name: Publish Python package
     needs: build
     runs-on: ubuntu-latest
+    # finding 7: platform-level gate on the registry publish — parity with the Pages
+    # and App Store deploys; also lets PyPI trusted publishing bind to the env name.
+    environment:
+      name: ${{ inputs.environment-name }}
     # R3-2-PYPIJOB: ONLY this job holds the OIDC/attestation token, and it runs NO operator build
     # code — just download the vetted artifacts, attest them, and publish. No `eval` here.
     permissions:
@@ -261,7 +273,7 @@ jobs:
           fi
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: aviato-pypi-dist
           path: ${{ inputs.working-directory }}
@@ -279,7 +291,7 @@ jobs:
           subject-path: "${{ inputs.working-directory }}/${{ inputs.packages-dir }}/*"
 
       - name: Attest SBOM
-        uses: actions/attest-sbom@v1
+        uses: actions/attest-sbom@v4
         with:
           subject-path: "${{ inputs.working-directory }}/${{ inputs.packages-dir }}/*"
           sbom-path: "${{ inputs.working-directory }}/sbom.cyclonedx.json"

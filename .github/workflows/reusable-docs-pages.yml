@@ -67,10 +67,13 @@ on:
         required: true
         type: string
       docs-retention:
-        description: Number of most-recent versions to keep (§13.3 retention cap).
+        description: >-
+          Optional retention cap (§13.3). 0 — the default — keeps EVERY released
+          version's docs (operator decision, 2026-06); set N>0 to prune to the
+          newest N versions on each release.
         required: false
         type: number
-        default: 10
+        default: 0
 
 # C12-W4 (§13.3/§1530 least privilege): permissions are PER-JOB, not workflow-wide. The build job runs
 # the consumer's install/emit/build `eval`s and holds ONLY `contents: read` (+ `actions: read` to read
@@ -145,7 +148,7 @@ jobs:
           fi
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm
@@ -171,7 +174,7 @@ jobs:
           npm config set min-release-age 7 --location=user
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Install
         shell: bash
@@ -278,6 +281,12 @@ jobs:
           python3 - "${RETENTION}" <<'PY'
           import json, sys, pathlib, shutil
           cap = int(sys.argv[1])
+          # docs-retention <= 0 (the default) keeps EVERY released version (§13.3).
+          # NB: without this guard, versions[:0] would prune EVERYTHING — the exact
+          # inverse of "keep all" (finding 37 inversion hazard).
+          if cap <= 0:
+              print("docs-retention <= 0: keeping all versions")
+              raise SystemExit(0)
           vf = pathlib.Path("versions.json")
           if not vf.is_file():
               raise SystemExit(0)
@@ -333,4 +342,4 @@ jobs:
     steps:
       - name: Deploy Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

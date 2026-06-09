@@ -20,7 +20,9 @@ on:
       lint-command:
         required: false
         type: string
-        default: "npm run lint --if-present"
+        # finding 29: no --if-present — a consumer deleting the script from the
+        # operator-owned manifest must fail the gate loudly, not silently skip it.
+        default: "npm run lint"
       format-command:
         required: false
         type: string
@@ -35,7 +37,8 @@ on:
       test-command:
         required: false
         type: string
-        default: "npm test --if-present"
+        # finding 29: no --if-present (same loud-failure rationale as lint-command).
+        default: "npm test"
       build-command:
         required: false
         type: string
@@ -83,7 +86,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm

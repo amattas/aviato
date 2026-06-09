@@ -70,8 +70,17 @@ jobs:
             echo "::error::Missing security-events privilege required for SARIF upload (§8.16)."
             cat err.txt
             exit 1
+          elif grep -qiE 'HTTP 404' err.txt && grep -qiE 'no analysis|code scanning|not enabled|not set up' err.txt; then
+            # Genuine first-run absence (code scanning has produced no analyses yet) is
+            # the ONE tolerated failure shape — the scope itself is fine.
+            echo "No analyses yet / code scanning not initialized; scope check passes."
           else
-            echo "No analyses yet / code scanning not initialized; scope appears present."
+            # finding 8: an UNRECOGNIZED failure (5xx, rate limit, novel wording) must not
+            # read as "scope appears present" — fail closed here rather than letting the
+            # real failure surface later at SARIF upload (§5.14).
+            echo "::error::Could not determine security-events scope (unexpected API failure); failing closed (§5.14)."
+            cat err.txt
+            exit 1
           fi
 
   codeql:
@@ -118,7 +127,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Dependency review
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: ${{ inputs.dependency-review-fail-on-severity }}
 

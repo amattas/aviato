@@ -37,9 +37,14 @@ swift-verify:
   status_check: "ci / Swift CI"
 pypi-publish:
   privileges: ["contents: read", "id-token: write", "attestations: write"]
+  # finding 7: the publish job runs in a deployment environment (workflow default
+  # `pypi`); doctor probes existence + reviewer protection like app-store-connect.
+  environment: pypi
   runner: linux
 ghcr-publish:
   privileges: ["contents: read", "packages: write", "security-events: write", "id-token: write", "attestations: write"]
+  # finding 7: the docker job runs in a deployment environment (workflow default `ghcr`).
+  environment: ghcr
   runner: linux
 docs-pages:
   privileges: ["contents: read", "id-token: write", "pages: write", "actions: read"]

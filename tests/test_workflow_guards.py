@@ -148,6 +148,62 @@ def test_callers_pass_gated_sha_to_deploys() -> None:
         )
 
 
+def test_language_ci_contract_parity() -> None:
+    # §2.14 (finding 27): every language CI exposes the SAME command contract —
+    # unsupported steps carry an empty command + disabled default, never a missing input.
+    expected = {
+        "working-directory",
+        "install-command",
+        "lint-command",
+        "format-command",
+        "typecheck-command",
+        "test-command",
+        "build-command",
+        "run-install",
+        "run-lint",
+        "run-format",
+        "run-typecheck",
+        "run-tests",
+        "run-build",
+    }
+    for name in ("reusable-python-ci.yml", "reusable-node-ci.yml", "reusable-swift-ci.yml"):
+        wf = _load(name)
+        on_block = wf.get("on") or wf.get(True)
+        inputs = set(on_block["workflow_call"]["inputs"])
+        missing = expected - inputs
+        assert not missing, f"{name} missing shared-contract inputs: {sorted(missing)}"
+
+
+def test_node_ci_gates_fail_loud_without_if_present() -> None:
+    # finding 29: a consumer deleting the lint/test script from the operator-owned
+    # manifest must FAIL the verify gate, not silently skip it.
+    wf = _load("reusable-node-ci.yml")
+    on_block = wf.get("on") or wf.get(True)
+    inputs = on_block["workflow_call"]["inputs"]
+    assert inputs["lint-command"]["default"] == "npm run lint"
+    assert inputs["test-command"]["default"] == "npm test"
+
+
+def test_docs_retention_defaults_to_keep_all() -> None:
+    # finding 37 (operator decision): every released version's docs are kept; the
+    # pruner must special-case cap<=0 — versions[:0] would otherwise prune EVERYTHING.
+    wf = _load("reusable-docs-pages.yml")
+    on_block = wf.get("on") or wf.get(True)
+    assert on_block["workflow_call"]["inputs"]["docs-retention"]["default"] == 0
+    body = (WORKFLOWS / "reusable-docs-pages.yml").read_text(encoding="utf-8")
+    assert "keeping all versions" in body, "pruner missing the cap<=0 keep-all branch"
+    assert body.index("cap <= 0") < body.index("versions[:cap]"), "keep-all guard must precede the slice"
+
+
+def test_registry_publishes_run_in_deployment_environments() -> None:
+    # finding 7: PyPI/GHCR publishes get the same platform-level environment gate the
+    # Pages/App Store deploys already have.
+    pypi = _load("reusable-pypi-publish.yml")
+    assert pypi["jobs"]["publish"]["environment"]["name"] == "${{ inputs.environment-name }}"
+    ghcr = _load("reusable-docker-ghcr.yml")
+    assert ghcr["jobs"]["docker"]["environment"]["name"] == "${{ inputs.environment-name }}"
+
+
 def test_ghcr_publishes_only_scanned_digests() -> None:
     # C12-W3: no rebuild between scan and publish — the workflow must scan local OCI
     # archives and promote those exact bytes by digest, asserting pushed == scanned.

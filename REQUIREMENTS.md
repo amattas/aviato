@@ -1781,12 +1781,12 @@ valid narrative-only site.
 **Configuration (day-zero, fixed baseline):**
 - **Versioning & retention:** Docusaurus native versioning — a **version dropdown**
   and a **`latest` alias** at the newest release. Each cut copies the full docs tree
-  into `versioned_docs/version-X/`, so growth is bounded by a **retention policy:
-  keep the latest N versions (day-zero N = the current major's releases, hard cap
-  10) plus any explicitly pinned majors; older snapshots are pruned** on each
-  release. Versioned snapshots live on the published **`gh-pages` artifact**, not
-  the source branch. (Replaces the previous mkdocs + `mike` setup; unlike `mike` it
-  is append-only/reviewable — but the **cap** is what keeps it bounded.)
+  into `versioned_docs/version-X/`. **Retention (operator decision, 2026-06): every
+  released version's docs are KEPT** — `docs-retention` defaults to 0 (unlimited);
+  an operator may set N>0 to cap to the newest N versions, in which case older
+  snapshots are pruned on each release. Versioned snapshots live on the published
+  **`gh-pages` artifact**, not the source branch. (Replaces the previous mkdocs +
+  `mike` setup; append-only and reviewable.)
 - **Search:** Algolia DocSearch via `@docusaurus/theme-search-algolia`, configured
   with the public application ID, public search API key, and index name. These are
   not stored secrets, but the operator must provision the Algolia index or override
@@ -1802,7 +1802,7 @@ valid narrative-only site.
 
 **Stages:** gather authored + emitted md/mdx → install hardened npm dependencies →
 lint the docs site → `docusaurus docs:version` for the release tag (cut a new
-version) → **prune to the retention cap** → build the static site (versioning,
+version) → **prune only if a retention cap is set (default: keep all)** → build the static site (versioning,
 Algolia search UI, Mermaid diagrams, sitemap) → publish to Pages via the platform token →
 **move the `latest` alias only if this release is the highest released version**
 (monotonic guard), under a **per-alias deploy concurrency group** so a slower
