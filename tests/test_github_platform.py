@@ -36,7 +36,10 @@ def test_apply_settings_fails_closed_on_unresolved_default_branch(monkeypatch: p
 def test_open_or_update_issue_tolerates_missing_number(monkeypatch: pytest.MonkeyPatch) -> None:
     # A 200 response carrying a malformed issue object (no "number") must not crash the
     # scheduled drift-report with a KeyError; fall back to creating a fresh issue.
-    monkeypatch.setattr(github, "gh_json_optional", lambda *a, **k: [{"title": "stale"}])
+    # C12-R3-2: the issue-channel reads paginate; patch the paginated read or the lookup
+    # escapes to a real `gh` call (fails tokenless in CI, silently passes on a logged-in
+    # operator machine).
+    monkeypatch.setattr(github, "gh_json_paginated_optional", lambda *a, **k: [{"title": "stale"}])
     posted: list[list[str]] = []
     monkeypatch.setattr(GitHubPlatform, "_gh_input", lambda self, args, payload: posted.append(args))
     GitHubPlatform().open_or_update_issue("o/r", "k", "t", "b")
@@ -44,7 +47,7 @@ def test_open_or_update_issue_tolerates_missing_number(monkeypatch: pytest.Monke
 
 
 def test_comment_issue_tolerates_missing_number(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(github, "gh_json_optional", lambda *a, **k: [{"title": "stale"}])
+    monkeypatch.setattr(github, "gh_json_paginated_optional", lambda *a, **k: [{"title": "stale"}])
     monkeypatch.setattr(
         GitHubPlatform, "_gh_input", lambda self, args, payload: (_ for _ in ()).throw(AssertionError("no number"))
     )
