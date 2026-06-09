@@ -17,7 +17,12 @@ ZIZMOR_CONFIG = POLICY_DATA_ROOT / "zizmor.yml"
 
 # Audits aviato gates on today. zizmor runs all audits; we surface only these. Forward-compatible:
 # adopting another audit is a one-line addition here (plus a doc note), not a new detector.
-_GATED_AUDITS = frozenset({"unpinned-uses", "unpinned-images"})
+# finding 18 (operator decision, 2026-06): template-injection joins the gated set —
+# the worst workflow-vuln class, enforced by the upstream-maintained zizmor audit
+# (no hand-rolled detector, so no anti-flap concern). All Library workflows pass it
+# (env-indirection throughout). Other audits (dangerous-triggers, artipacked,
+# excessive-permissions, ...) remain surfaced-but-non-gating until adopted.
+_GATED_AUDITS = frozenset({"unpinned-uses", "unpinned-images", "template-injection"})
 
 
 class ZizmorUnavailable(RuntimeError):

@@ -1410,7 +1410,9 @@ tool pins are carried as workflow inputs (e.g. `actionlint-version`, `yamllint-v
 or explicit exact package specs.
 **Enforcement is delegated + fail-closed (and runs as ONE implementation).** Action and
 container-image pinning (`uses:` clauses, `container:`/`services:` images) are enforced by
-**zizmor** (`unpinned-uses`/`unpinned-images`) via a bundled policy config
+**zizmor** (`unpinned-uses`/`unpinned-images`, plus `template-injection` — gated since the
+2026-06 scope expansion: the audit is upstream-maintained, so gating it carries no
+hand-rolled-detector flap risk) via a bundled policy config
 (`aviato/library/zizmor.yml`: `actions/*`, `github/*`, and the `amattas/aviato/*` self-ref are
 ref-pinnable, everything else SHA-required). zizmor is invoked
 `--offline --persona=auditor --no-ignores`: offline because the gated audits are syntactic and must

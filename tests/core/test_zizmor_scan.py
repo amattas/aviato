@@ -15,18 +15,22 @@ def _fake_run(stdout: str, returncode: int = 0):
 
 
 def test_filters_to_gated_audits_only(tmp_path, monkeypatch):
+    # finding 18 (operator decision): template-injection IS gated now; audits outside
+    # the adopted set (e.g. artipacked) stay surfaced-but-non-gating.
     (tmp_path / "w.yml").write_text("on: push\n", encoding="utf-8")
     findings = json.dumps(
         [
             {"ident": "unpinned-uses", "locations": [{"symbolic": {"key": {"Local": {"given_path": "w.yml"}}}}]},
             {"ident": "template-injection", "locations": [{"symbolic": {"key": {"Local": {"given_path": "w.yml"}}}}]},
+            {"ident": "artipacked", "locations": [{"symbolic": {"key": {"Local": {"given_path": "w.yml"}}}}]},
         ]
     )
     monkeypatch.setattr(zizmor_scan, "_zizmor_available", lambda: True)
     monkeypatch.setattr(zizmor_scan, "run", _fake_run(findings))
     out = zizmor_scan.zizmor_uses_image_violations(tmp_path)
     assert any("unpinned-uses" in v for v in out)
-    assert not any("template-injection" in v for v in out)
+    assert any("template-injection" in v for v in out)
+    assert not any("artipacked" in v for v in out)
 
 
 def test_empty_when_no_findings(tmp_path, monkeypatch):
