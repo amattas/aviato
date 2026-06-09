@@ -18,6 +18,7 @@ def _adopt(tmp_path: Path, *extra: str) -> int:
             "python-library",
             "--write",
             "--allow-dirty",
+            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",

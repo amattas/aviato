@@ -27,7 +27,7 @@ aviato apply-rulesets OWNER/REPO            # dry-run rulesets
 aviato apply-rulesets OWNER/REPO --apply    # apply rulesets
 aviato apply-rulesets OWNER/REPO --required-approvals 0 --apply  # solo-repo override
 aviato render-rulesets                       # print rendered ruleset JSON
-aviato onboard PATH --profile python-library [--write --allow-dirty --var k=v]  # plan, or adopt a local repo (§5.2)
+aviato onboard PATH --profile python-library --pin 1.2.3 [--write --allow-dirty --var k=v]  # plan, or adopt a local repo (§5.2)
 aviato doctor /path/to/consumer              # classify managed artifacts + probe health (§5.4)
 aviato sync /path/to/consumer                # materialize managed artifacts incl. caller workflows (§5.3/§15)
 aviato scan /path/a /path/b [--fix]          # fleet diagnosis; --fix opens managed-file proposals (§5.11/§5.5)
@@ -39,7 +39,13 @@ aviato offboard /path/to/consumer [--write --delete-files | --open-pr]  # remove
 aviato next-version --current 1.2.3 --commit "feat: x"  # SemVer from Conventional Commits (§5.9)
 aviato bump-version 1.3.0 /path/to/consumer  # write version into version-source locations (§3.3)
 aviato validate                              # validate policy infra + agnosticism + digest pins + template parity + inline monotonic-alias parity
+aviato provision OWNER/REPO --profile node-service --pin 1.2.3  # create + scaffold with staged protection (§5.2)
 ```
+
+Fresh `onboard --write` and `provision` require an explicit Library pin that
+resolves to a published tag/branch. `--allow-unresolved-pin` is only for
+intentional offline/test scaffolds. Re-onboarding an adopted repo preserves the
+existing pin; use `aviato repin` to move it.
 
 **Onboarding materializes the caller workflows.** A profile's scaffold bundle includes
 the `.github/workflows/aviato-ci.yml` (verify/release/deploy/security) and
@@ -50,6 +56,18 @@ are the **authoritative source**. The top-level `templates/profile-*.yml` and
 `templates/consumer-automation.yml` are documented copyable EXAMPLES **rendered from**
 those scaffold bodies (run `python3 scripts/regen-templates.py` after editing a caller);
 `aviato validate` fails if they drift (`_check_template_scaffold_parity`).
+
+Node and docs callers now assume npm 11+ for install hardening. The reusable Node
+and Docusaurus workflows default to Node 24, fail closed on npm <11, and set
+`ignore-scripts=true` plus `min-release-age=7`; Node/docs scaffolds also include
+managed `.npmrc` files with `engine-strict=true` and package engines requiring
+Node 24/npm 11. Docs scaffolding includes Docusaurus ESLint, Algolia search,
+Mermaid rendering, and sitemap configuration.
+
+The Library's own declaration uses the internal `aviato-library` profile with
+`bootstrap: true`. `local-install: true` is valid only on this structural Library
+bootstrap path; consumer workflows must fail before `pip install -e .` if they
+try to enable local install.
 
 `scripts/audit-repos.sh` and `scripts/apply-rulesets.sh` are thin compatibility wrappers that exec the CLI.
 
@@ -121,7 +139,7 @@ wheel and a pip-installed `aviato` can render rulesets — §5.6/§11.3). Loader
 
 ### Validation is the gate
 
-`aviato/validation.py` (`validate()`) is what CI runs and what guards correctness. It checks required files exist, YAML/JSON parse, `policy.yml` examples actually match/reject the pattern, pattern drift across embedded copies, template `uses:` references point at workflows that exist, release workflows are tag-only (no `release/*`, no checkout by repository name, must reference `GITHUB_REF_TYPE`/`tag`), third-party actions/tools are digest-pinned (§11.3, `_check_action_pins`), the `templates/profile-*.yml` examples match the rendered scaffold (`_check_template_scaffold_parity`), and the inline `highest.py` heredocs embedded in the GHCR/Pages deploy workflows still agree with `core.versioning.is_highest` (§8.14/§13.2, `_check_monotonic_alias_parity` — runs the snippet against a battery of cases so a hand-copied comparator can't silently drift). Adding a new required workflow/file or release workflow means updating `REQUIRED_FILES` / `RELEASE_WORKFLOWS`.
+`aviato/validation.py` (`validate()`) is what CI runs and what guards correctness. It checks required files exist, YAML/JSON parse, `policy.yml` examples actually match/reject the pattern, pattern drift across embedded copies, template `uses:` references point at workflows that exist, release workflows are tag-only (no `release/*`, no checkout by repository name, must reference `GITHUB_REF_TYPE`/`tag`), third-party actions/tools are digest-pinned (§11.3, `_check_action_pins`), the `templates/profile-*.yml` examples match the rendered scaffold (`_check_template_scaffold_parity`), the Library bootstrap declaration resolves all managed artifacts through local refs (`_check_library_bootstrap`), and the inline `highest.py` heredocs embedded in the GHCR/Pages deploy workflows still agree with `core.versioning.is_highest` (§8.14/§13.2, `_check_monotonic_alias_parity` — runs the snippet against a battery of cases so a hand-copied comparator can't silently drift). Adding a new required workflow/file or release workflow means updating `REQUIRED_FILES` / `RELEASE_WORKFLOWS`.
 
 ### Reusable workflows share one command contract
 

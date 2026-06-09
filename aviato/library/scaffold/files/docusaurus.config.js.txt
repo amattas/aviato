@@ -1,4 +1,4 @@
-// Aviato docs baseline (§13.3): multi-version, local offline search, docs-first.
+// Aviato docs baseline (§13.3): multi-version, Algolia search, Mermaid, docs-first.
 // Seed-once: Aviato writes this when absent; you then own it. Language API md/mdx
 // (pdoc / TypeDoc / narrative) is emitted into docs/ by the docs build step (§12).
 // @ts-check
@@ -7,16 +7,32 @@ const config = {
   url: 'https://example.github.io',
   baseUrl: '/',
   onBrokenLinks: 'throw',
+  markdown: { mermaid: true },
   themeConfig: {
     colorMode: { defaultMode: 'light', respectPrefersColorScheme: true },
     navbar: { items: [{ type: 'docsVersionDropdown', position: 'right' }] },
+    algolia: {
+      appId: 'YOUR_ALGOLIA_APP_ID',
+      apiKey: 'YOUR_ALGOLIA_SEARCH_API_KEY',
+      indexName: 'YOUR_ALGOLIA_INDEX_NAME',
+    },
+    mermaid: {
+      theme: { light: 'neutral', dark: 'forest' },
+    },
   },
   presets: [
-    ['@docusaurus/preset-classic', { docs: { routeBasePath: '/', sidebarPath: './sidebars.js' }, blog: false }],
+    [
+      '@docusaurus/preset-classic',
+      {
+        docs: { routeBasePath: '/', sidebarPath: './sidebars.js' },
+        blog: false,
+        sitemap: { lastmod: 'date', changefreq: 'weekly', priority: 0.5, filename: 'sitemap.xml' },
+      },
+    ],
   ],
   themes: [
-    // Local offline search — no external service, no API key (§13.3 / §11.2).
-    ['@easyops-cn/docusaurus-search-local', { hashed: true, indexDocs: true }],
+    '@docusaurus/theme-mermaid',
+    '@docusaurus/theme-search-algolia',
   ],
 };
 module.exports = config;

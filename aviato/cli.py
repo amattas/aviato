@@ -5,6 +5,7 @@ import atexit
 import contextlib
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -45,6 +46,7 @@ from .validation import validate
 # Library artifact name, so it lives OUTSIDE the agnostic core (review #18) and is passed into
 # diagnose() as data — core never hardcodes a specific library workflow name.
 DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
+LIBRARY_REMOTE_URL = "https://github.com/amattas/aviato.git"
 
 
 def _non_negative_int(value: str) -> int:
@@ -315,6 +317,33 @@ def _env_vars(specs) -> dict[str, str]:
     return env
 
 
+def _published_library_ref_exists(pin: str) -> bool:
+    """True iff the requested consumer pin resolves to a published Library branch/tag (§6.1)."""
+    refs = [f"refs/tags/{pin}", f"refs/heads/{pin}"]
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--exit-code", LIBRARY_REMOTE_URL, *refs],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _require_published_pin(pin: str, *, allow_unresolved: bool) -> None:
+    """Fail closed before writing consumer refs that GitHub cannot resolve (§2.6/§6.1)."""
+    if allow_unresolved or _published_library_ref_exists(pin):
+        return
+    raise DeclarationError(
+        f"Library pin {pin!r} does not resolve to a published Aviato branch or tag at {LIBRARY_REMOTE_URL}; "
+        "refusing to write consumer workflows that would call a missing reusable workflow ref. "
+        "Publish the ref first, or pass --allow-unresolved-pin only for an intentional offline/test scaffold."
+    )
+
+
 def _resolve_onboard_pin(args: argparse.Namespace, existing) -> str:
     """Resolve the version pin to record (§6.1/§5.12).
 
@@ -338,6 +367,7 @@ def _resolve_onboard_pin(args: argparse.Namespace, existing) -> str:
             f"Use `aviato repin <repo> {explicit}` to change it (§5.12)."
         )
     if explicit is not None:
+        _require_published_pin(explicit, allow_unresolved=args.allow_unresolved_pin)
         return explicit
     raise DeclarationError(
         "fresh onboarding requires an explicit --pin (X.Y.Z or N) that already resolves in the "
@@ -1098,6 +1128,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
                 "Aviato Library ref (§6.1)."
             )
         args.pin = normalize_pin(args.pin)
+        _require_published_pin(args.pin, allow_unresolved=args.allow_unresolved_pin)
         resolved = resolve_profile(registry, args.profile, docs=args.docs)
         variables = resolve_variables(
             resolved.variables,
@@ -1577,6 +1608,11 @@ def build_parser() -> argparse.ArgumentParser:
         "for an already-adopted repo the existing pin is preserved (use `aviato "
         "repin` to move it, §5.12).",
     )
+    onboard.add_argument(
+        "--allow-unresolved-pin",
+        action="store_true",
+        help="Skip the published-ref check for an intentional offline/test scaffold.",
+    )
     onboard.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     onboard.add_argument(
         "--migrate-profile", action="store_true", help="Allow changing an already-declared profile (§5.2)."
@@ -1665,6 +1701,11 @@ def build_parser() -> argparse.ArgumentParser:
     provision.add_argument("--profile", default="python-service")
     provision.add_argument("--docs", action="store_true", help="Compose the opt-in docs deploy (§13.3).")
     provision.add_argument("--pin", default=None, help="Library version pin to record in the declaration.")
+    provision.add_argument(
+        "--allow-unresolved-pin",
+        action="store_true",
+        help="Skip the published-ref check for an intentional offline/test scaffold.",
+    )
     provision.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     provision.add_argument("--public", action="store_true", help="Create a public repo (default: private).")
     provision.set_defaults(func=cmd_provision)

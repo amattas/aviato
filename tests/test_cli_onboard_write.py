@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import aviato.cli as cli
 from aviato.cli import main
 
 
@@ -25,6 +26,7 @@ def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureF
             "--allow-dirty",
             "--pin",
             "v0",
+            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",
@@ -57,6 +59,7 @@ def test_reonboard_preserves_docs_opt_in(tmp_path: Path) -> None:
         "--allow-dirty",
         "--pin",
         "0",
+        "--allow-unresolved-pin",
         "--var",
         "distribution-name=acme",
         "--var",
@@ -124,6 +127,33 @@ def test_fresh_onboard_write_requires_explicit_pin(tmp_path: Path, capsys: pytes
     assert not (tmp_path / ".github" / "aviato.yaml").exists()
 
 
+def test_fresh_onboard_write_refuses_unpublished_pin(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: False)
+    rc = main(
+        [
+            "onboard",
+            str(tmp_path),
+            "--profile",
+            "python-library",
+            "--write",
+            "--allow-dirty",
+            "--pin",
+            "0",
+            "--var",
+            "distribution-name=a",
+            "--var",
+            "import-name=a",
+        ]
+    )
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "does not resolve" in err
+    assert "--allow-unresolved-pin" in err
+    assert not (tmp_path / ".github" / "aviato.yaml").exists()
+
+
 def test_onboard_write_refuses_profile_change_without_migrate(tmp_path: Path) -> None:
     github = tmp_path / ".github"
     github.mkdir()
@@ -158,6 +188,7 @@ def test_onboard_write_refuses_dirty_tree_without_override(tmp_path: Path) -> No
             "--write",
             "--pin",
             "0",
+            "--allow-unresolved-pin",
             "--var",
             "distribution-name=a",
             "--var",
@@ -179,6 +210,7 @@ def test_onboard_write_adopts_clean_git_repo(tmp_path: Path) -> None:
             "--write",
             "--pin",
             "0",
+            "--allow-unresolved-pin",
             "--var",
             "distribution-name=a",
             "--var",

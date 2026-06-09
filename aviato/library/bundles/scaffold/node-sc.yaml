@@ -3,6 +3,7 @@ extends: common
 add:
   - node-lint-config
   - node-format-config
+  - npmrc
   - node-tsconfig
   - node-manifest
   - node-manifest-js

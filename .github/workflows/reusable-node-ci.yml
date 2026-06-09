@@ -6,7 +6,7 @@ on:
       node-version:
         required: false
         type: string
-        default: "22"
+        default: "24"
       working-directory:
         required: false
         type: string
@@ -85,6 +85,21 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
 
+      - name: Harden npm install behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_version="$(npm --version)"
+          npm_major="${npm_version%%.*}"
+          if ! [[ "${npm_major}" =~ ^[0-9]+$ ]] || [ "${npm_major}" -lt 11 ]; then
+            echo "::error::npm ${npm_version} does not support min-release-age. Use Node/npm with npm >=11 before running installs."
+            exit 1
+          fi
+          npm config set ignore-scripts true --location=user
+          echo "NPM_CONFIG_IGNORE_SCRIPTS=true" >> "${GITHUB_ENV}"
+          echo "NPM_CONFIG_MIN_RELEASE_AGE=7" >> "${GITHUB_ENV}"
+          npm config set min-release-age 7 --location=user
+
       - name: Install
         if: ${{ inputs.run-install && inputs.install-command != '' }}
         shell: bash
@@ -134,4 +149,3 @@ jobs:
         env:
           BUILD_COMMAND: ${{ inputs.build-command }}
         run: eval "$BUILD_COMMAND"
-

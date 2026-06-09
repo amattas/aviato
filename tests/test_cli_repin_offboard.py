@@ -21,6 +21,7 @@ def _adopt(tmp_path: Path) -> None:
             "--allow-dirty",
             "--pin",
             "v0",
+            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",

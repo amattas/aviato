@@ -1,0 +1,16 @@
+name: aviato-library
+workflows: python-library-wf
+scaffold: aviato-library-sc
+settings: baseline
+variables:
+  - {name: distribution-name, type: string}
+  - {name: import-name, type: string}
+version_source:
+  locations: [pyproject.toml]
+toolchain:
+  linter: ruff
+  formatter: ruff
+  type_checker: mypy
+  test_runner: pytest
+notes:
+  - "Internal bootstrap profile for Aviato's own self-applied automation (§5.10)."

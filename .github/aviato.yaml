@@ -1,4 +1,4 @@
-profile: python-library
+profile: aviato-library
 version: '0'
 docs: false
 bootstrap: true

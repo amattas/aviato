@@ -160,8 +160,29 @@ def test_docs_opt_in_scaffolds_runnable_docusaurus_site() -> None:
 
     pkg = next(i for i in items_on if i.output == "website/package.json")
     assert "@docusaurus/preset-classic" in pkg.body
-    assert "@easyops-cn/docusaurus-search-local" in pkg.body
+    assert "@docusaurus/theme-search-algolia" in pkg.body
+    assert "@docusaurus/theme-mermaid" in pkg.body
+    assert "@docusaurus/eslint-plugin" in pkg.body
+    assert '"lint": "eslint ."' in pkg.body
     assert '"build": "docusaurus build"' in pkg.body
+    assert '"node": ">=24.0"' in pkg.body
+    assert '"npm": ">=11.0.0"' in pkg.body
+
+    config = next(i for i in items_on if i.output == "website/docusaurus.config.js")
+    assert "markdown: { mermaid: true }" in config.body
+    assert "'@docusaurus/theme-mermaid'" in config.body
+    assert "'@docusaurus/theme-search-algolia'" in config.body
+    assert "algolia:" in config.body
+    assert "sitemap:" in config.body
+
+    npmrc = next(i for i in items_on if i.output == "website/.npmrc")
+    assert "min-release-age=7" in npmrc.body
+    assert "ignore-scripts=true" in npmrc.body
+    assert "engine-strict=true" in npmrc.body
+
+    eslint = next(i for i in items_on if i.output == "website/eslint.config.mjs")
+    assert 'import docusaurus from "@docusaurus/eslint-plugin"' in eslint.body
+    assert "...docusaurus.configs.recommended.rules" in eslint.body
 
 
 def test_python_profile_scaffolds_pyproject_manifest() -> None:
@@ -295,6 +316,21 @@ def test_node_eslint_config_is_runnable(variant: str) -> None:
     pkg = next(i for i in items if i.output == "package.json")
     assert "eslint-plugin-security" in pkg.body  # imported plugin is declared
     assert "@eslint/js" in pkg.body  # imported config is declared
+
+
+@pytest.mark.parametrize("variant", ["typescript", "javascript"])
+def test_node_projects_scaffold_npm_hardening_config(variant: str) -> None:
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": variant})
+    npmrc = next(i for i in items if i.output == ".npmrc")
+    assert "min-release-age=7" in npmrc.body
+    assert "ignore-scripts=true" in npmrc.body
+    assert "engine-strict=true" in npmrc.body
+    pkg = next(i for i in items if i.output == "package.json")
+    assert '"node": ">=24.0"' in pkg.body
+    assert '"npm": ">=11.0.0"' in pkg.body
 
 
 def test_node_javascript_has_no_fake_build_gate() -> None:

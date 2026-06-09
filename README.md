@@ -84,6 +84,19 @@ Validate this repository:
 ./scripts/validate.sh
 ```
 
+Onboard or provision consumers with an explicit published Library pin:
+
+```bash
+aviato onboard /path/to/repo --profile python-library --pin 1.2.3 --write
+aviato provision amattas/example --profile node-service --pin 1.2.3
+```
+
+Fresh writes and provisioning refuse to invent a default pin. The requested pin
+must already resolve to a published Aviato tag or branch; use
+`--allow-unresolved-pin` only for intentional offline or test scaffolds. Already
+adopted repositories keep their recorded pin during onboarding; use
+`aviato repin` to move it.
+
 The legacy script names still work:
 
 ```bash
@@ -115,6 +128,13 @@ Language CI workflows share the same command contract:
 - `run-tests`
 - `run-build`
 
+`reusable-node-ci.yml` and the Docusaurus Pages workflow default to Node 24 and
+block npm versions below 11 before any install command. They set
+`ignore-scripts=true` and `min-release-age=7`; Node and docs scaffolds also
+write those values plus `engine-strict=true` into managed `.npmrc` files and
+declare `node >=24` / `npm >=11` in package manifests so local and CI installs
+share the same supply-chain posture.
+
 ## Profile Templates
 
 The `templates/profile-*.yml` files compose CI, security, release validation,
@@ -128,9 +148,20 @@ and deployment jobs for common repo shapes:
 These are **examples rendered from** the authoritative scaffold bundles
 (`aviato/library/scaffold/files/wf-*.yml`); `aviato validate` fails if they drift,
 and `python3 scripts/regen-templates.py` regenerates them. Prefer materializing the
-real workflows with `aviato sync` / `aviato onboard --write`. Use
+real workflows with `aviato sync` / `aviato onboard --write`; committed examples
+use the literal `EXAMPLE_PIN` placeholder instead of a production ref. Use
 `aviato onboard TARGET --profile PROFILE` to list the exact artifacts, secrets,
 environments, and rulesets for a repository.
+
+When `docs: true`, Aviato scaffolds a Docusaurus site under `website/` with the
+first-party Docusaurus ESLint plugin, Algolia search theme, Mermaid rendering,
+and sitemap configuration through the classic preset. The docs publish workflow
+installs, lints, versions, builds, and publishes the site on release refs.
+
+The Library's own `.github/aviato.yaml` uses the internal `aviato-library`
+profile and `bootstrap: true`. `local-install: true` is valid only for this
+structural Library bootstrap path; reusable workflows fail before
+`pip install -e .` if a consumer tries to enable it.
 
 ## App Store Connect
 
@@ -146,6 +177,10 @@ called behind a protected deployment environment. Required secrets are:
 
 The caller must provide project-specific Xcode inputs such as scheme, workspace
 or project, export options plist, and version/build-number command.
+
+Apple/App Store Connect credentials are scoped to the specific workflow steps
+that need them. The caller-controlled version command runs before signing assets
+are installed, so Apple secrets are not exposed to arbitrary versioning logic.
 
 ## Architecture
 

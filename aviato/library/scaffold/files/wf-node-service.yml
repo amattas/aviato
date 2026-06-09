@@ -27,7 +27,7 @@ jobs:
     if: ${{ github.ref_type != 'tag' && github.event_name != 'schedule' }}
     uses: {{ aviato-workflow-prefix }}reusable-node-ci.yml{{ aviato-workflow-suffix }}
     with:
-      node-version: "22"
+      node-version: "24"
       install-command: "if [ -f package-lock.json ]; then npm ci; else npm install; fi"
       # Required gates are explicit (no --if-present): a missing script fails the
       # verify pipeline (§12.2). Format-check (Prettier) and TS type-check (tsc,

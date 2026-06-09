@@ -15,7 +15,7 @@ those consumers.
 The current implementation is intentionally small:
 
 - reusable GitHub Actions workflows;
-- reusable caller workflow templates;
+- reusable caller workflow templates and composition-backed scaffold bodies;
 - GitHub repository ruleset payloads;
 - operator-run scripts for auditing and applying rulesets;
 - generated or local reporting artifacts.
@@ -54,14 +54,16 @@ Reusable workflows live in `.github/workflows` and are consumed through
 `workflow_call`.
 
 - `reusable-python-ci.yml` runs Python install, lint, and test commands.
-- `reusable-node-ci.yml` runs Node install, lint, test, and build commands.
+- `reusable-node-ci.yml` runs Node install, lint, test, and build commands;
+  defaults to Node 24; and blocks npm <11 before install so `min-release-age=7`
+  and `ignore-scripts=true` are enforceable.
 - `reusable-swift-ci.yml` runs Swift/Xcode lint, test, and build commands on
   macOS.
 - `reusable-docker-ghcr.yml` publishes release images to GHCR.
 - `reusable-pypi-publish.yml` publishes Python packages through PyPI trusted
   publishing.
-- `reusable-docs-pages.yml` builds and publishes Docusaurus docs to GitHub
-  Pages.
+- `reusable-docs-pages.yml` installs with the same npm hardening, lints the
+  Docusaurus site, versions it, and publishes it to GitHub Pages.
 - `reusable-app-store-connect.yml` archives, signs, exports, and uploads Apple
   app builds to App Store Connect.
 - `reusable-security-baseline.yml` provides CodeQL and dependency-review gates.
@@ -83,12 +85,21 @@ The CI workflows use a common language-module contract:
 Every language workflow should expose the same input names. Unsupported steps
 use an empty command and a disabled default.
 
+Docs-enabled profiles scaffold a Docusaurus `website/` with the first-party
+Docusaurus ESLint plugin, Algolia search, Mermaid rendering, and sitemap
+configuration through the classic preset. Node and docs scaffolds include
+managed `.npmrc` files with the npm supply-chain defaults and package engines
+requiring Node 24/npm 11.
+
 ### Caller Templates
 
 Caller templates live in `templates/`. They are examples or starting points for
 consumer repositories and are not the source of policy truth. They are **rendered
 from** the authoritative scaffold bundles (`aviato/library/scaffold/files/wf-*.yml`)
 via `scripts/regen-templates.py`; `aviato validate` fails if they drift.
+Committed examples use `EXAMPLE_PIN`; fresh onboarding/provisioning requires an
+explicit published Library pin, with `--allow-unresolved-pin` reserved for
+intentional offline/test scaffolds.
 
 The templates should stay thin. They should select a reusable workflow, provide
 repository-specific input values, and avoid duplicating release or protection
@@ -125,6 +136,11 @@ identifier from `aviato/plugins/denylist.txt`) and checked as part of
 `bundles/`, and `templates/scaffold/` (the §5.10 module-source tree), loaded by
 `aviato/core/registry.py`. See `CLAUDE.md` for the module map.
 
+The Library consumes itself through the internal `aviato-library` profile and a
+declaration that sets `bootstrap: true`. Bootstrap rendering is validated against
+every managed artifact resolved by that declaration, and local workflow/install
+references are accepted only on this structural Library path.
+
 ### Scripts
 
 The Python CLI lives in `aviato/`.
@@ -135,7 +151,11 @@ The Python CLI lives in `aviato/`.
 - `aviato render-rulesets` renders the ruleset payloads after policy injection.
 - `aviato validate` validates this repository's policy infrastructure.
 - `aviato onboard <path-or-owner/repo>` prints the composition-backed onboarding
-  plan (pipelines, templates, variables, settings) for one explicit target.
+  plan (pipelines, templates, variables, settings) for one explicit target. Fresh
+  writes require `--pin`; onboarding preserves an existing pin and directs pin
+  movement to `aviato repin`.
+- `aviato provision <owner/repo>` creates and scaffolds a new consumer repository
+  with staged protection; it also requires an explicit published pin.
 - `aviato doctor <path>` classifies a consumer's managed artifacts (§5.4).
 - `aviato sync <path>` materializes managed/seed-once artifacts into a consumer
   repository from its declaration (§5.3).
@@ -210,6 +230,8 @@ The reusable workflow:
 - run on a macOS runner;
 - require a protected deployment environment with required reviewers;
 - load Apple signing and App Store Connect API secrets only in the deploy job;
+- scope Apple secrets to the specific steps that need them, after any
+  caller-controlled version command has already run;
 - build and archive with Xcode;
 - export a signed distributable;
 - upload to App Store Connect / TestFlight;
@@ -249,6 +271,10 @@ Validation should cover:
 - drift checks that compare embedded release tag patterns against `policy.yml`,
   and that the inline `highest.py` monotonic-alias guards embedded in the deploy
   workflows still agree with the core `is_highest` comparator (§8.14/§13.2);
+- bootstrap checks that the Library declaration resolves every expected managed
+  artifact through local self-reference and that none use released refs;
+- workflow guard tests for npm install hardening, docs linting, App Store secret
+  scoping, and `local-install` bootstrap confinement;
 - Python tests once the CLI exists.
 
 CI should install required validation tools and run the validation script on

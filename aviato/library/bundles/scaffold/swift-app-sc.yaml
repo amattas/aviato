@@ -6,6 +6,8 @@ add:
   - wf-ci-swift-app
   - wf-drift
   - wf-docs-swift-app
+  - docs-npmrc
+  - docs-eslint-config
   - docusaurus-config
   - docs-package
   - docs-sidebars

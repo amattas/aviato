@@ -182,7 +182,12 @@ def scaffold(
                 # rendered content carries the new version), so `repin` never leaves a stale
                 # `version=` on non-pin-bearing files. Not skipped_modified: the body matches
                 # expected, so the `body_hash != expected_hash` guard below is False.
-                if body_hash == expected_hash and marker.hash == expected_hash and marker.version == version:
+                if (
+                    body_hash == expected_hash
+                    and marker.hash == expected_hash
+                    and marker.profile == profile
+                    and marker.version == version
+                ):
                     result.unchanged.append(output)
                     continue
                 # Body matches neither expected nor what Aviato last wrote → the operator

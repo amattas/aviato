@@ -1,4 +1,4 @@
-# aviato:managed profile=python-library version=0 hash=5ef1854084bdf4e3103c2d437f6115f0d90291375c563aa42f5a7973e16ceb17
+# aviato:managed profile=aviato-library version=0 hash=5ef1854084bdf4e3103c2d437f6115f0d90291375c563aa42f5a7973e16ceb17
 name: Aviato Python Library
 
 on:

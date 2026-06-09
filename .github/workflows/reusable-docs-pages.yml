@@ -11,7 +11,7 @@ on:
       node-version:
         required: false
         type: string
-        default: "22"
+        default: "24"
       working-directory:
         required: false
         type: string
@@ -29,6 +29,10 @@ on:
         # Reproducible install when a lockfile is committed; falls back to a plain
         # install on a freshly-scaffolded docs site that has none yet.
         default: "if [ -f package-lock.json ]; then npm ci; else npm install; fi"
+      lint-command:
+        required: false
+        type: string
+        default: "npm run lint --if-present"
       docs-emit-command:
         description: >-
           §12 language docs emission: a command that writes API/narrative md(x) into
@@ -126,6 +130,21 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
 
+      - name: Harden npm install behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_version="$(npm --version)"
+          npm_major="${npm_version%%.*}"
+          if ! [[ "${npm_major}" =~ ^[0-9]+$ ]] || [ "${npm_major}" -lt 11 ]; then
+            echo "::error::npm ${npm_version} does not support min-release-age. Use Node/npm with npm >=11 before running installs."
+            exit 1
+          fi
+          npm config set ignore-scripts true --location=user
+          echo "NPM_CONFIG_IGNORE_SCRIPTS=true" >> "${GITHUB_ENV}"
+          echo "NPM_CONFIG_MIN_RELEASE_AGE=7" >> "${GITHUB_ENV}"
+          npm config set min-release-age 7 --location=user
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
@@ -134,6 +153,13 @@ jobs:
         env:
           INSTALL_COMMAND: ${{ inputs.install-command }}
         run: eval "$INSTALL_COMMAND"
+
+      - name: Lint docs site
+        if: ${{ inputs.lint-command != '' }}
+        shell: bash
+        env:
+          LINT_COMMAND: ${{ inputs.lint-command }}
+        run: eval "$LINT_COMMAND"
 
       # §12: emit language API/narrative docs into the docs source tree BEFORE the
       # version cut, so the generated reference is captured in the versioned snapshot

@@ -25,7 +25,7 @@ permissions:
 jobs:
   ci:
     if: ${{ github.ref_type != 'tag' && github.event_name != 'schedule' }}
-    uses: amattas/aviato/.github/workflows/reusable-python-ci.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-python-ci.yml@EXAMPLE_PIN
     with:
       python-version: "3.12"
       install-command: "python -m pip install -e .[dev]"
@@ -35,20 +35,20 @@ jobs:
   security:
     # Runs on PRs AND on the release tag, so source scans gate the verify pipeline
     # and are re-run on the release ref before any deploy (§2.13/§5.14).
-    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@EXAMPLE_PIN
     with:
       codeql-languages: "python"
 
   common-lint:
     if: ${{ github.ref_type != 'tag' }}
-    uses: amattas/aviato/.github/workflows/reusable-common-lint.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-common-lint.yml@EXAMPLE_PIN
 
   release:
     if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
     needs: [ci, security, common-lint]
-    uses: amattas/aviato/.github/workflows/reusable-release.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-release.yml@EXAMPLE_PIN
     with:
-      aviato-ref: main
+      aviato-ref: EXAMPLE_PIN
       local-install: false
 
   # Gate before deploy. Two entry points: IN-RUN (release just tagged on this push;
@@ -56,7 +56,7 @@ jobs:
   release-gate:
     needs: [release]
     if: ${{ always() && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
-    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@EXAMPLE_PIN
     with:
       default-branch: main
       require-merged-pr: true
@@ -65,7 +65,7 @@ jobs:
   docker:
     needs: [release, release-gate, security]
     if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
-    uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@main
+    uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@EXAMPLE_PIN
     with:
       image-name: "your-image"
       context: "."
