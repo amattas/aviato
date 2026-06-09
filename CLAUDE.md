@@ -129,7 +129,7 @@ wheel and a pip-installed `aviato` can render rulesets — §5.6/§11.3). Loader
 `paths.POLICY_DATA_ROOT` (= `aviato/library`); `is_library`/§5.10 keys off
 `aviato/library/policy.yml`. (`aviato validate` runs from a source checkout only.)
 
-`aviato/library/policy.yml` owns policy constants — most importantly the release tag pattern (`^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$`) and default required PR approvals. That pattern is **intentionally duplicated** into several places that need a literal at definition time:
+`aviato/library/policy.yml` owns policy constants — most importantly the release tag pattern (`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$`) and default required PR approvals. That pattern is **intentionally duplicated** into several places that need a literal at definition time:
 
 - every release workflow in `RELEASE_WORKFLOWS` (embeds the literal in its `TAG_PATTERN` env so validation is pinned to the same ref)
 - rendered ruleset payloads (injected at render time, not stored)

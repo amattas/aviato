@@ -193,7 +193,7 @@ Policy constants should have one canonical source.
 The release tag format is:
 
 ```text
-^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$
+^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$
 ```
 
 Accepted examples:

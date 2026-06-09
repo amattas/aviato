@@ -92,6 +92,17 @@ def _check_release_pattern_drift(root: Path, data_root: Path, policy: dict, erro
         if f"TAG_FORMAT_DESCRIPTION: '{description}'" not in workflow_text:
             errors.append(f"{rel_path} TAG_FORMAT_DESCRIPTION env differs from policy.yml tag_format_description")
 
+    # finding 39: the wf-docs caller bodies post-filter the tag list with a grep over the
+    # SAME policy grammar — those literals were outside every drift check (and outside
+    # template parity, since docs callers have no committed template copy).
+    scaffold_dir = root / "aviato" / "library" / "scaffold" / "files"
+    for body_path in sorted(scaffold_dir.glob("wf-docs-*.yml")):
+        if f"grep -E '{pattern}'" not in body_path.read_text(encoding="utf-8"):
+            errors.append(
+                f"{body_path.relative_to(root)} does not embed the policy release tag pattern "
+                f"in its resolve grep (finding 39)"
+            )
+
     # Drift-check the STATIC ruleset templates, not the rendered output. Rendering injects
     # the policy value (rulesets._patch_*), so comparing the rendered payload to policy is a
     # tautology that can never fail — the literal in the JSON file could drift to anything and
@@ -215,6 +226,104 @@ def _check_baseline_settings_drift(root: Path, policy: dict, errors: list[str]) 
         errors.append(
             f"settings baseline required_reviews ({default_branch.get('required_reviews')}) differs from "
             f"policy.yml required approvals ({expected})"
+        )
+
+
+def _check_docs_caller_name_parity(root: Path, errors: list[str]) -> None:
+    """finding 40: docs callers trigger on their CI caller's workflow DISPLAY NAME.
+
+    ``workflow_run`` matches by name; a Library-side rename of a CI caller body would
+    silently kill every consumer's docs deploys (the trigger simply never fires — no
+    error anywhere). Pin each pair together.
+    """
+    scaffold_dir = root / "aviato" / "library" / "scaffold" / "files"
+    for docs_body in sorted(scaffold_dir.glob("wf-docs-*.yml")):
+        profile = docs_body.name[len("wf-docs-") : -len(".yml")]
+        ci_body = scaffold_dir / f"wf-{profile}.yml"
+        if not ci_body.exists():
+            errors.append(f"{docs_body.name} has no sibling CI caller wf-{profile}.yml (finding 40)")
+            continue
+        ci_name = re.search(r"^name:\s*(.+?)\s*$", ci_body.read_text(encoding="utf-8"), re.MULTILINE)
+        trigger = re.search(r'workflows:\s*\[\s*"([^"]+)"\s*\]', docs_body.read_text(encoding="utf-8"))
+        if ci_name is None or trigger is None:
+            errors.append(
+                f"{docs_body.name}/{ci_body.name}: could not extract workflow_run trigger or name (finding 40)"
+            )
+            continue
+        if trigger.group(1) != ci_name.group(1):
+            errors.append(
+                f"{docs_body.name} workflow_run trigger {trigger.group(1)!r} != {ci_body.name} "
+                f"display name {ci_name.group(1)!r} — a rename silently kills docs deploys (finding 40)"
+            )
+
+
+# finding 41: every site that names the Library's own slug, anchored on LIBRARY_SLUG.
+# A repo rename/transfer must update all of them together or the sites desync pairwise
+# (e.g. scaffolds render the new prefix while the pin-exemption still matches the old).
+_SLUG_COPY_SITES = [
+    ("aviato/cli.py", 'LIBRARY_REMOTE_URL = "https://github.com/{slug}.git"'),
+    ("aviato/plugins/actionpins.py", '_LIBRARY_SLUG = "{slug}"'),
+    ("aviato/core/onboarding.py", '"{slug}/.github/workflows/"'),
+    ("aviato/library/zizmor.yml", "{slug}/*: ref-pin"),
+    (".github/workflows/reusable-consumer-automation.yml", "git+https://github.com/{slug}@"),
+    (".github/workflows/reusable-common-lint.yml", "git+https://github.com/{slug}@"),
+    (".github/workflows/reusable-release.yml", "git+https://github.com/{slug}@"),
+]
+
+
+def _check_library_slug_copies(root: Path, errors: list[str]) -> None:
+    """finding 41: the Library slug literals across code/data/workflows must all match."""
+    for rel_path, template in _SLUG_COPY_SITES:
+        expected = template.format(slug=LIBRARY_SLUG)
+        path = root / rel_path
+        if not path.is_file():
+            errors.append(f"{rel_path} missing; cannot verify its Library-slug copy (finding 41)")
+            continue
+        if expected not in path.read_text(encoding="utf-8", errors="replace"):
+            errors.append(
+                f"{rel_path} no longer carries the Library slug site {expected!r}; "
+                f"every copy must move together on a rename/transfer (finding 41)"
+            )
+
+
+def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
+    """finding 43: shared literals maintained by hand across caller bodies must not desync.
+
+    These have no policy.yml home and no template-parity coverage; editing one profile's
+    caller must not silently leave its siblings behind.
+    """
+    scaffold_dir = root / "aviato" / "library" / "scaffold" / "files"
+
+    def _values(glob: str, regex: str) -> dict[str, list[str]]:
+        found: dict[str, list[str]] = {}
+        for body in sorted(scaffold_dir.glob(glob)):
+            hits = re.findall(regex, body.read_text(encoding="utf-8"))
+            if hits:
+                found[body.name] = hits
+        return found
+
+    versions = _values("wf-python-*.yml", r'python-version:\s*"([^"]+)"')
+    if len({v for vs in versions.values() for v in vs}) > 1:
+        errors.append(f"python-version differs across scaffold callers: {versions} (finding 43)")
+
+    crons = _values("wf-*.yml", r'cron:\s*"([^"]+)"')
+    ci_crons = {n: v for n, v in crons.items() if not n.startswith("wf-docs-") and n != "wf-drift.yml"}
+    if len({v for vs in ci_crons.values() for v in vs}) > 1:
+        errors.append(f"CI caller cron schedules differ: {ci_crons} (finding 43)")
+
+    pins = _values("wf-docs-*.yml", r"pydoc-markdown==([0-9.]+)")
+    if len({v for vs in pins.values() for v in vs}) > 1:
+        errors.append(f"pydoc-markdown pins differ across docs callers: {pins} (finding 43)")
+
+    resolve_blocks: dict[str, str] = {}
+    for body in sorted(scaffold_dir.glob("wf-docs-*.yml")):
+        match = re.search(r"(?ms)^  resolve:\n.*?(?=^  [a-z][a-z-]*:\n|\Z)", body.read_text(encoding="utf-8"))
+        if match:
+            resolve_blocks[body.name] = match.group(0)
+    if len(set(resolve_blocks.values())) > 1:
+        errors.append(
+            "the wf-docs resolve jobs have drifted apart; keep the shared resolve block "
+            "byte-identical across docs callers (finding 43)"
         )
 
 
@@ -563,6 +672,9 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_release_workflow_contract(root, errors)
     _check_baseline_settings_drift(root, policy, errors)
     _check_baseline_settings_keys(root, errors)
+    _check_docs_caller_name_parity(root, errors)
+    _check_library_slug_copies(root, errors)
+    _check_scaffold_constant_parity(root, errors)
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
     _check_action_pins(root, errors)
     _check_template_scaffold_parity(root, errors)

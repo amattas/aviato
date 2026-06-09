@@ -43,7 +43,7 @@ def test_tag_pattern_drift_in_release_workflow_is_detected(repo_copy: Path) -> N
     wf = repo_copy / RELEASE_WORKFLOWS[0]
     text = wf.read_text(encoding="utf-8")
     drifted = text.replace(
-        "TAG_PATTERN: '^[0-9]+\\.[0-9]+\\.[0-9]+(-(alpha|beta)[0-9]+)?$'",
+        "TAG_PATTERN: '^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$'",
         "TAG_PATTERN: '^[0-9]+\\.[0-9]+$'",
     )
     assert drifted != text, "fixture did not contain the expected TAG_PATTERN literal"
@@ -276,3 +276,51 @@ def test_scaffold_reference_to_missing_reusable_workflow_is_detected(repo_copy: 
     body.write_text(drifted, encoding="utf-8")
     errors = validate(repo_copy)
     assert any("references missing reusable workflow reusable-missing-ci.yml" in e for e in errors)
+
+
+def test_docs_caller_grep_pattern_drift_is_detected(repo_copy: Path) -> None:
+    # finding 39 — pattern-agnostic: reads the policy literal from the copy at test
+    # time, so a future policy change does not rewrite this fixture.
+    import yaml
+
+    pattern = yaml.safe_load((repo_copy / "aviato/library/policy.yml").read_text(encoding="utf-8"))["release"][
+        "tag_pattern"
+    ]
+    body = repo_copy / "aviato/library/scaffold/files/wf-docs-python-library.yml"
+    text = body.read_text(encoding="utf-8")
+    drifted = text.replace(f"grep -E '{pattern}'", "grep -E '^.*$'")
+    assert drifted != text, "fixture did not contain the policy grep literal"
+    body.write_text(drifted, encoding="utf-8")
+    assert any("finding 39" in e for e in validate(repo_copy))
+
+
+def test_docs_caller_workflow_run_name_drift_is_detected(repo_copy: Path) -> None:
+    # finding 40: a renamed CI caller display name must be flagged — workflow_run
+    # matches by name, so the docs deploy would otherwise just never fire again.
+    ci = repo_copy / "aviato/library/scaffold/files/wf-python-library.yml"
+    text = ci.read_text(encoding="utf-8")
+    drifted = text.replace("name: Aviato Python Library\n", "name: Renamed Python Library\n")
+    assert drifted != text, "fixture did not contain the expected display name"
+    ci.write_text(drifted, encoding="utf-8")
+    assert any("finding 40" in e for e in validate(repo_copy))
+
+
+def test_library_slug_copy_drift_is_detected(repo_copy: Path) -> None:
+    # finding 41: a desynced Library-slug copy (here: the zizmor ref-pin exemption)
+    # must be flagged so a rename/transfer moves every site together.
+    z = repo_copy / "aviato/library/zizmor.yml"
+    text = z.read_text(encoding="utf-8")
+    drifted = text.replace("amattas/aviato/*: ref-pin", "someone-else/aviato/*: ref-pin")
+    assert drifted != text, "fixture did not contain the zizmor slug exemption"
+    z.write_text(drifted, encoding="utf-8")
+    assert any("finding 41" in e for e in validate(repo_copy))
+
+
+def test_scaffold_cron_drift_is_detected(repo_copy: Path) -> None:
+    # finding 43: hand-duplicated CI schedules must stay in lockstep across callers.
+    body = repo_copy / "aviato/library/scaffold/files/wf-python-service.yml"
+    text = body.read_text(encoding="utf-8")
+    drifted = text.replace('cron: "23 5 * * 1"', 'cron: "0 0 * * 0"')
+    assert drifted != text, "fixture did not contain the shared CI cron"
+    body.write_text(drifted, encoding="utf-8")
+    assert any("finding 43" in e for e in validate(repo_copy))

@@ -16,7 +16,7 @@ inside the package so it ships in the wheel for installed ruleset rendering).
 Release tags must match:
 
 ```text
-^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$
+^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$
 ```
 
 Accepted examples: `1.2.3`, `1.2.3-alpha1`, `1.2.3-beta2`.
