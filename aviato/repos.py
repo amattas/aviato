@@ -16,6 +16,15 @@ _OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9.
 _SSH_REMOTE_RE = re.compile(r"^(?:ssh://)?(?:[^@/]+@)?github\.com[:/](?P<path>.+?)(?:\.git)?/?$")
 
 
+def is_owner_repo_slug(value: str) -> bool:
+    """True iff ``value`` is a clean two-segment ``owner/repo`` slug (R2-8, finding 23).
+
+    The same rule ``normalize_slug`` enforces on remotes — exported so explicit slug
+    ARGUMENTS (proposal paths) are validated identically instead of flowing raw into
+    ``gh repo clone``."""
+    return bool(_OWNER_REPO_RE.match(value))
+
+
 def normalize_slug(remote_url: str) -> str:
     """Extract the ``owner/repo`` slug from a GitHub remote, or ``""`` (R2-8/§2.14).
 

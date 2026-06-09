@@ -38,7 +38,7 @@ from .github_platform import GitHubPlatform, UnmodeledProtectionError
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from .plugins.version_formats import bump_files
 from .policy import load_policy
-from .repos import git_root, normalize_slug, remote_url, working_tree_clean
+from .repos import git_root, is_owner_repo_slug, normalize_slug, remote_url, working_tree_clean
 from .rulesets import apply_rulesets, render_all_rulesets
 from .validation import validate
 
@@ -443,6 +443,18 @@ def _resolve_onboard_pin(args: argparse.Namespace, existing) -> str:
     )
 
 
+def _proposal_slug(target: str) -> str:
+    """OWNER/REPO for a proposal path, or ``""`` (finding 23).
+
+    An explicit slug argument is validated with the same R2-8 rule apply-rulesets
+    enforces (and ``normalize_slug`` applies to remotes) instead of flowing raw —
+    ``a/b/c`` or option-shaped tokens previously reached ``gh repo clone`` verbatim.
+    """
+    if not Path(target).is_dir() and "/" in target:
+        return target if is_owner_repo_slug(target) else ""
+    return normalize_slug(remote_url(Path(target)))
+
+
 def _autodetect_vars(root: Path) -> dict[str, str]:
     """§5.2 auto-detection tier: only values READ from authoritative sources (finding 28).
 
@@ -570,10 +582,13 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved) ->
     managed artifacts onto a branch and open a PR, enumerating untouched seed-once /
     operator-owned files. Non-destructive: works in a fresh temp clone, never the
     operator's checkout."""
-    target = args.target
-    slug = target if ("/" in target and not Path(target).is_dir()) else normalize_slug(remote_url(Path(target)))
-    if not slug or "/" not in slug:
-        print("could not determine OWNER/REPO (pass a slug, or a local repo with a github remote)", file=sys.stderr)
+    slug = _proposal_slug(args.target)
+    if not slug:
+        print(
+            "could not determine a valid OWNER/REPO (pass a clean owner/repo slug, or a local "
+            "repo with a github remote)",
+            file=sys.stderr,
+        )
         return 2
 
     workdir = Path(tempfile.mkdtemp(prefix="aviato-onboard-"))
@@ -993,8 +1008,46 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
     )
 
 
+def _gate_repin_target(root: Path | None, target_version: str, args: argparse.Namespace) -> str | None:
+    """The two repin write-gates (finding 9); an error message, or None when clear.
+
+    repin is the ONLY sanctioned pin move, yet it skipped both gates onboard/provision
+    fail closed on: (a) the target must resolve to a PUBLISHED Library ref — a typo'd
+    target writes ``uses: …@X.Y.Z`` refs GitHub cannot resolve; (b) §2.6 — the running
+    tool must be compatible with the TARGET pin ("must refuse to act on a mismatch,
+    unless explicitly overridden").
+    """
+    try:
+        _require_published_pin(target_version, allow_unresolved=args.allow_unresolved_pin)
+    except AviatoError as exc:
+        return str(exc)
+    if args.override_version_pin or (root is not None and is_library(root)):
+        return None
+    # Major-line check only: a same-major forward re-pin is the normal §5.12 move (the
+    # CONSUMER runs the target's workflows, not this tool's); a CROSS-major target means
+    # this tool's templates are not that major's templates — refuse unless overridden.
+    try:
+        tool_major = int(__version__.split(".", 1)[0])
+        target_major = int(str(target_version).split(".", 1)[0])
+    except ValueError:
+        return f"version-pin check failed: cannot parse tool {__version__!r} / target {target_version!r} (§2.6)"
+    if tool_major != target_major:
+        return (
+            f"version-pin mismatch: tool {__version__} (major {tool_major}) cannot stamp target "
+            f"pin {target_version!r} (major {target_major}); use a matching Aviato release or pass "
+            "--override-version-pin (§2.6)"
+        )
+    return None
+
+
 def cmd_repin(args: argparse.Namespace) -> int:
     """Move a consumer to a different Library version (§5.12) — the only sanctioned pin move."""
+    if args.write and args.open_pr:
+        print("--write and --open-pr are mutually exclusive (local re-pin vs. a PR proposal)", file=sys.stderr)
+        return 2
+    if args.open_pr:
+        return _repin_proposal(args)
+
     root = Path(args.path).resolve()
     declaration_path = root / ".github" / "aviato.yaml"
     if not declaration_path.is_file():
@@ -1033,6 +1086,10 @@ def cmd_repin(args: argparse.Namespace) -> int:
         print("dry run; re-run with --write to record the new pin and re-scaffold.")
         return 0
 
+    if (gate_error := _gate_repin_target(root, plan.target_version, args)) is not None:
+        print(gate_error, file=sys.stderr)
+        return 2
+
     updated = Declaration(
         profile=declaration.profile,
         version=plan.target_version,
@@ -1070,6 +1127,99 @@ def cmd_repin(args: argparse.Namespace) -> int:
             f"`aviato sync --force`): {output}"
         )
     print("next: review the re-pinned artifacts, commit on a branch, and open a PR (§5.2/§5.12).")
+    return 0
+
+
+def _repin_proposal(args: argparse.Namespace) -> int:
+    """Re-pin via a reviewable proposal (§5.12, finding 35): in a fresh temp clone,
+    re-render the managed artifacts at the target pin and open a PR carrying the
+    backward-movement warning. Non-destructive to the operator's checkout — the
+    propose path §5.12 describes, mirroring onboard/offboard --open-pr."""
+    slug = _proposal_slug(args.path)
+    if not slug:
+        print(
+            "could not determine a valid OWNER/REPO (pass a clean owner/repo slug, or a local "
+            "repo with a github remote)",
+            file=sys.stderr,
+        )
+        return 2
+
+    workdir = Path(tempfile.mkdtemp(prefix="aviato-repin-"))
+    atexit.register(shutil.rmtree, workdir, True)  # clean the clone at exit (one command per process)
+    clone = workdir / "repo"
+    try:
+        run(["gh", "repo", "clone", slug, str(clone)])
+    except CommandError as exc:
+        print(f"could not clone {slug}: {exc}", file=sys.stderr)
+        return 1
+
+    declaration_path = clone / ".github" / "aviato.yaml"
+    if not declaration_path.is_file():
+        print(f"no declaration at {declaration_path}; onboard first", file=sys.stderr)
+        return 2
+
+    registry = Registry(MODULE_SOURCE_ROOT)
+    try:
+        declaration = load_declaration(declaration_path)
+        plan = plan_repin(registry, declaration, args.version)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if not plan.ok:
+        for name in plan.newly_required:
+            print(f"newly-required variable (set before re-pinning): {name}", file=sys.stderr)
+        for name in plan.conflicting_overrides:
+            print(f"conflicting pipelines.add override (now bundled at the target): {name}", file=sys.stderr)
+        print("re-pin blocked; resolve the above first (§5.12).", file=sys.stderr)
+        return 1
+    if (gate_error := _gate_repin_target(clone, plan.target_version, args)) is not None:
+        print(gate_error, file=sys.stderr)
+        return 2
+
+    updated = Declaration(
+        profile=declaration.profile,
+        version=plan.target_version,
+        docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
+        variables=declaration.variables,
+        overrides=declaration.overrides,
+    )
+    try:
+        items = materialize_items(
+            registry,
+            updated.profile,
+            updated.variables,
+            pin=updated.version,
+            docs=updated.docs,
+            bootstrap=updated.bootstrap,
+            overrides=updated.overrides,
+        )
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    dump_declaration(updated, declaration_path)
+    result = scaffold(clone, items, profile=updated.profile, version=updated.version)
+
+    body_lines = [
+        f"Aviato re-pin proposal (§5.12): {declaration.version} -> {plan.target_version}.",
+        "",
+        f"- rewrote {len(result.written)} managed file(s) at the target pin",
+    ]
+    if plan.downgrade_warning:
+        body_lines[1:1] = ["", f"WARNING: {plan.downgrade_warning}"]
+    for output in result.skipped_modified:
+        body_lines.append(f"- skipped (hand-edited; still at old pin): {output}")
+    branch = f"aviato/repin-{plan.target_version}"
+    title = f"chore: re-pin Aviato to {plan.target_version} (§5.12)"
+    try:
+        GitHubPlatform(workdir=clone).open_worktree_proposal(slug, branch, title, "\n".join(body_lines))
+    except (GitHubAPIError, CommandError) as exc:
+        print(f"could not open re-pin proposal: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"opened re-pin proposal for {slug} on branch {branch}.")
+    if plan.downgrade_warning:
+        print(f"WARNING: {plan.downgrade_warning}")
     return 0
 
 
@@ -1130,10 +1280,13 @@ def _offboard_proposal(args: argparse.Namespace) -> int:
     """Offboard via a reviewable proposal (§5.13): in a fresh temp clone, strip/remove the
     managed files, remove the consumer automation, delete the declaration, then open a PR
     carrying the §2.13 baseline-removal warning. Non-destructive to the operator's checkout."""
-    target = args.path
-    slug = target if ("/" in target and not Path(target).is_dir()) else normalize_slug(remote_url(Path(target)))
-    if not slug or "/" not in slug:
-        print("could not determine OWNER/REPO (pass a slug, or a local repo with a github remote)", file=sys.stderr)
+    slug = _proposal_slug(args.path)
+    if not slug:
+        print(
+            "could not determine a valid OWNER/REPO (pass a clean owner/repo slug, or a local "
+            "repo with a github remote)",
+            file=sys.stderr,
+        )
         return 2
 
     workdir = Path(tempfile.mkdtemp(prefix="aviato-offboard-"))
@@ -1846,9 +1999,24 @@ def build_parser() -> argparse.ArgumentParser:
     scan.set_defaults(func=cmd_scan)
 
     repin = subparsers.add_parser("repin", help="Move a consumer to a different Library version (§5.12).")
-    repin.add_argument("path", help="Path to the consumer repository.")
+    repin.add_argument("path", help="Path to the consumer repository (or OWNER/REPO with --open-pr).")
     repin.add_argument("version", help="Target Library version pin (X.Y.Z or N).")
     repin.add_argument("--write", action="store_true", help="Write the new pin into the declaration and re-scaffold.")
+    repin.add_argument(
+        "--open-pr",
+        action="store_true",
+        help="Open a reviewable re-pin proposal (PR) instead of mutating locally (§5.12).",
+    )
+    repin.add_argument(
+        "--allow-unresolved-pin",
+        action="store_true",
+        help="Skip the published-ref check (intentional offline/test re-pin only, §6.1).",
+    )
+    repin.add_argument(
+        "--override-version-pin",
+        action="store_true",
+        help="Proceed despite a §2.6 tool/target version-pin mismatch.",
+    )
     repin.set_defaults(func=cmd_repin)
 
     offboard = subparsers.add_parser("offboard", help="Remove a consumer from Aviato management (§5.13).")
