@@ -302,6 +302,21 @@ def test_app_store_connect_secrets_are_step_scoped() -> None:
     assert "APP_STORE_CONNECT_KEY_ID" in upload.get("env", {})
     assert "APP_STORE_CONNECT_API_PRIVATE_KEY" not in upload.get("env", {})
 
+    # C12-W6: only the BOUNDED built-in submit may hold the ASC private key; the custom
+    # eval gets identifiers only and runs AFTER the signing cleanup (no on-disk .p8).
+    builtin = next(s for s in steps if s.get("name") == "Submit for review (built-in)")
+    custom = next(s for s in steps if s.get("name") == "Submit for review (custom command)")
+    cleanup = next(s for s in steps if s.get("name") == "Cleanup signing assets")
+    assert "APP_STORE_CONNECT_API_PRIVATE_KEY" in builtin.get("env", {})
+    assert "eval" not in str(builtin.get("run", "")), "the built-in submit must not eval operator input"
+    assert "APP_STORE_CONNECT_API_PRIVATE_KEY" not in custom.get("env", {})
+    assert steps.index(cleanup) < steps.index(custom), "custom submit must run after signing cleanup"
+
+    # §11.4: the environment reviewer probe must run before any secret materializes.
+    probe = next(s for s in steps if "requires reviewers" in str(s.get("name", "")))
+    assert steps.index(probe) < steps.index(signing)
+    assert "required_reviewers" in str(probe.get("run", ""))
+
 
 def test_security_baseline_jitters_scheduled_scans_at_the_chokepoint() -> None:
     # §5.14/§5.5: SAST/secret/dependency scans run on a JITTERED schedule so a fleet on the
@@ -587,15 +602,17 @@ def test_app_store_secrets_not_exposed_to_operator_eval_steps() -> None:
     assert eval_steps, "no operator eval steps found (workflow shape changed unexpectedly)"
     for step in eval_steps:
         step_env = step.get("env") or {}
-        # The submit-for-review step is allowed the API creds (it calls App Store Connect by design);
-        # NO eval step is allowed the certificate/provisioning material.
-        cert_keys = {
+        # C12-W6: NO eval step may see the certificate/provisioning material OR the ASC
+        # API private key — the only key consumers are the signing install and the
+        # bounded built-in submit (neither is an eval).
+        forbidden = {
             "APPLE_CERTIFICATE_P12_BASE64",
             "APPLE_CERTIFICATE_PASSWORD",
             "APPLE_PROVISIONING_PROFILE_BASE64",
+            "APP_STORE_CONNECT_API_PRIVATE_KEY",
         }
-        cert_leak = cert_keys & set(step_env)
-        assert not cert_leak, f"eval step {step.get('name')!r} sees certificate material: {sorted(cert_leak)}"
+        leak = forbidden & set(step_env)
+        assert not leak, f"eval step {step.get('name')!r} sees secret material: {sorted(leak)}"
         if "VERSION_COMMAND" in _json.dumps(step.get("env") or {}):
             # The version-command step has no legitimate need for ANY of the secrets.
             version_leak = secret_keys & set(step_env)

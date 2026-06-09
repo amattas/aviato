@@ -90,7 +90,12 @@ on:
         type: boolean
         default: false
       submit-for-review-command:
-        description: Optional command that submits the uploaded build for review.
+        description: >-
+          Optional CUSTOM submit command. C12-W6 (breaking): it now runs AFTER the
+          signing cleanup and receives NO App Store Connect private key (neither in
+          env nor as the on-disk .p8), so a compromised helper cannot exfiltrate it.
+          Commands that need ASC auth must migrate to the built-in submit (leave
+          this empty and set submit-for-review + bundle-identifier).
         required: false
         type: string
         default: ""
@@ -148,6 +153,28 @@ jobs:
       # applied per-step here because Apple's archive+upload flow doesn't split cleanly into two
       # jobs without an .ipa artifact handoff.)
     steps:
+      # §11.4: the six Apple secrets may only materialize behind a reviewer-protected
+      # environment. GitHub AUTO-CREATES a referenced-but-undefined environment with NO
+      # protection rules, so the job-level `environment:` line alone proves nothing.
+      # Fail CLOSED: unreadable protection state is treated as unprotected (§5.14).
+      - name: Verify deployment environment requires reviewers (§11.4)
+        working-directory: "."
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENV_NAME: ${{ inputs.environment-name }}
+        run: |
+          set -euo pipefail
+          if ! response="$(gh api "repos/${GITHUB_REPOSITORY}/environments/${ENV_NAME}" 2>err.txt)"; then
+            echo "::error::Could not read environment '${ENV_NAME}' protection rules ($(cat err.txt)); refusing to expose signing secrets (§11.4)."
+            exit 1
+          fi
+          if ! jq -e '[.protection_rules[]? | select(.type == "required_reviewers")] | length > 0' <<<"${response}" >/dev/null; then
+            echo "::error::Environment '${ENV_NAME}' has no required reviewers; configure them (Settings → Environments) before App Store deploys (§11.4)."
+            exit 1
+          fi
+          echo "Environment '${ENV_NAME}' requires reviewers."
+
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:
@@ -350,31 +377,53 @@ jobs:
             --apiIssuer "${APP_STORE_CONNECT_ISSUER_ID}" \
             2>&1 | tee build/app-store-upload.log
 
-      - name: Submit for review
-        if: ${{ inputs.submit-for-review && inputs.submit-for-review-command != '' }}
+      # C12-W6: the built-in DECLARATIVE submit replaces the key-bearing operator eval.
+      # It is a bounded fastlane invocation — no arbitrary code runs with the ASC
+      # private key in scope. fastlane ships preinstalled on GitHub's macOS runners;
+      # fail CLOSED if absent rather than fetching one at run time (§11.3).
+      - name: Submit for review (built-in)
+        if: ${{ inputs.submit-for-review && inputs.submit-for-review-command == '' }}
         shell: bash
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           BUILD_NUMBER: ${{ github.run_number }}
-          SUBMIT_FOR_REVIEW_COMMAND: ${{ inputs.submit-for-review-command }}
-          # R7-4-APPSTORE-OIDC: the submit command DOES legitimately call App Store Connect
-          # (that's its purpose), so it gets the API credentials per-step — but NOT the certificate /
-          # provisioning material (which it has no business with).
+          # C12-W6: besides the signing install, this bounded step is the ONLY consumer
+          # of the ASC private key.
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          eval "$SUBMIT_FOR_REVIEW_COMMAND"
+          if ! command -v fastlane >/dev/null 2>&1; then
+            echo "::error::fastlane is not available on the runner; cannot run the built-in submit (C12-W6)."
+            exit 1
+          fi
+          if [ -z "${BUNDLE_IDENTIFIER}" ]; then
+            echo "::error::The built-in submit requires the bundle-identifier input (deliver targets the app by identifier)."
+            exit 1
+          fi
+          api_key_path="$(mktemp -d)/asc-api-key.json"
+          cleanup() { rm -f "${api_key_path}"; }
+          trap cleanup EXIT
+          jq -n --arg key_id "${APP_STORE_CONNECT_KEY_ID}" \
+                --arg issuer_id "${APP_STORE_CONNECT_ISSUER_ID}" \
+                --arg key "${APP_STORE_CONNECT_API_PRIVATE_KEY}" \
+                '{key_id: $key_id, issuer_id: $issuer_id, key: $key, in_house: false}' > "${api_key_path}"
+          fastlane deliver \
+            --api_key_path "${api_key_path}" \
+            --app_identifier "${BUNDLE_IDENTIFIER}" \
+            --app_version "${RELEASE_TAG}" \
+            --build_number "${BUILD_NUMBER}" \
+            --skip_binary_upload true \
+            --skip_screenshots true \
+            --skip_metadata true \
+            --submit_for_review true \
+            --automatic_release false \
+            --precheck_include_in_app_purchases false \
+            --force true
 
-      - name: Upload App Store Connect receipt
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: app-store-connect-upload
-          path: ${{ inputs.working-directory }}/build/app-store-upload.log
-          if-no-files-found: warn
-
+      # C12-W6: cleanup runs BEFORE any custom submit command, so the on-disk .p8 and
+      # the keychain are gone by the time arbitrary operator code executes.
       - name: Cleanup signing assets
         if: ${{ always() }}
         shell: bash
@@ -387,3 +436,32 @@ jobs:
             security delete-keychain "${KEYCHAIN_PATH}" || true
           fi
           rm -f "${HOME}/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+
+      - name: Submit for review (custom command)
+        if: ${{ inputs.submit-for-review && inputs.submit-for-review-command != '' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          SUBMIT_FOR_REVIEW_COMMAND: ${{ inputs.submit-for-review-command }}
+          # C12-W6 (breaking): identifiers only — the API PRIVATE KEY is deliberately
+          # absent, and the signing cleanup above already deleted the on-disk .p8 and
+          # keychain, so an arbitrary submit helper has nothing to exfiltrate. Commands
+          # that authenticated via the key must migrate to the built-in submit.
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          eval "$SUBMIT_FOR_REVIEW_COMMAND"
+
+      - name: Upload App Store Connect receipt
+        # §13.4.7: the upload receipt is the checkable evidence of the operator-verified
+        # deploy. if-no-files-found is ERROR (a publish that produced no receipt must not
+        # pass silently); on already-failed runs the extra error line is truthful noise.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-store-connect-upload
+          path: ${{ inputs.working-directory }}/build/app-store-upload.log
+          if-no-files-found: error
+          retention-days: 90
