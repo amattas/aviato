@@ -1400,15 +1400,19 @@ package index that exposes no digest (e.g. a `pip`/`npm` package) is pinned to a
 **exact version**, never a floating latest. (Distro packages installed via the
 runner's system package manager inherit the pinned runner-image snapshot.) The
 agnostic checker (`aviato.plugins.actionpins`) and the in-CI gate enforce the
-digest-pinned classes (actions, images, curl-fetched binaries); exact-version tool
-pins are carried as workflow inputs (e.g. `actionlint-version`, `yamllint-version`).
+digest-pinned classes (actions, images, curl-fetched binaries) and unsafe `npx`
+registry fetches; exact-version tool pins are carried as workflow inputs (e.g.
+`actionlint-version`, `yamllint-version`) or explicit exact package specs.
 For npm install paths, Aviato adds an additional supply-chain guard: Node and
 Docusaurus installs must run with npm **11 or newer**, because older npm rejects
 the `min-release-age` option. The reusable Node and docs workflows fail closed on
 npm <11 before any install command runs, set `ignore-scripts=true`, and set
-`min-release-age=7`. Managed Node and docs scaffolds include `.npmrc` with the
-same values plus `engine-strict=true`, and package manifests declare
-`node >=24` / `npm >=11`, so local project installs inherit and enforce the posture.
+`engine-strict=true` and `min-release-age=7`. Managed Node and docs scaffolds
+include `.npmrc` with the same values, and package manifests declare
+`node >=24` / `npm >=11`, so local project installs inherit and enforce the
+posture. Node tool invocations that use `npx` must pass `--no-install` unless
+they are explicitly exact-version tool fetches documented as such; both
+`aviato validate` and the common lint workflow enforce this boundary.
 **Day-zero exception (macOS Homebrew tools, deferred):** the Swift verify install
 (`brew install swift-format swiftlint`, §12.3) is **not** version/checksum-pinned —
 neither tool ships a versioned Homebrew formula, and unlike a Linux distro package a
@@ -1576,7 +1580,8 @@ build/bundle suitable for a containerized service; Conventional Commits enforced
 - **Verify** (Linux): ESLint + Prettier `--check` + `tsc --noEmit` (TS) +
   tests+coverage (lint/format/type blocking), plus the common lint (§12 intro).
   The reusable workflow defaults to Node 24 and refuses npm <11 before install so
-  `min-release-age=7` can be enforced.
+  `min-release-age=7` can be enforced; ESLint/Prettier/TypeScript are invoked
+  through local package binaries (`npx --no-install`).
 - **Docs** (only when `docs: true`, §6.1): emit API reference as **md/mdx** via
   TypeDoc (markdown output) into the docs source tree for the Docusaurus site
   (§13.3). No docs step runs when `docs: false`.

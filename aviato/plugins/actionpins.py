@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from pathlib import Path
 
 # §11.3: third-party actions/tools must be pinned by commit digest (40-hex SHA).
@@ -56,6 +57,8 @@ _PIP_INSTALL_RE = re.compile(r"\bpip[0-9]*\s+install\b(?P<rest>[^\n]*)")
 _PIP_PKG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]*(?:\[[A-Za-z0-9_,.-]+\])?$")
 # Any PEP 440 version operator; used to split a token into its name and to detect a spec.
 _PIP_VERSION_OP_RE = re.compile(r"(===|==|>=|<=|~=|!=|<|>)")
+_NPX_RE = re.compile(r"(?<![\w-])npx(?![\w-])")
+_NPM_EXACT_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
 def _unpinned_pip_packages(rest: str) -> list[str]:
@@ -115,6 +118,79 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
     return flagged
 
 
+def _npm_package_exact_versioned(spec: str) -> bool:
+    """Whether an npm package spec names one exact SemVer package version."""
+    spec = spec.strip("'\"")
+    if "$" in spec or ":" in spec or "/" not in spec and spec.startswith("."):
+        return False
+    at_index = spec.rfind("@")
+    if at_index <= 0:
+        # Scoped packages start with `@`, so their version separator must be a later `@`.
+        return False
+    version = spec[at_index + 1 :]
+    if any(marker in version for marker in ("*", "^", "~", "<", ">", "=")):
+        return False
+    return bool(_NPM_EXACT_VERSION_RE.match(version))
+
+
+def _shlex_split(line: str) -> list[str]:
+    try:
+        return shlex.split(line, posix=True)
+    except ValueError:
+        return line.split()
+
+
+def _npx_invocation_is_pinned(command: str) -> bool:
+    tokens = _shlex_split(command)
+    if not tokens or tokens[0] != "npx":
+        return True
+    args = tokens[1:]
+    if "--no-install" in args:
+        return True
+
+    package_specs: list[str] = []
+    first_command_token: str | None = None
+    skip_next = False
+    for index, arg in enumerate(args):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in ("-p", "--package"):
+            if index + 1 < len(args):
+                package_specs.append(args[index + 1])
+                skip_next = True
+            continue
+        if arg.startswith("--package=") or arg.startswith("-p="):
+            package_specs.append(arg.split("=", 1)[1])
+            continue
+        if arg == "--":
+            continue
+        if arg.startswith("-"):
+            continue
+        first_command_token = arg
+        break
+
+    if package_specs:
+        return all(_npm_package_exact_versioned(spec) for spec in package_specs)
+    return first_command_token is not None and _npm_package_exact_versioned(first_command_token)
+
+
+def _unpinned_npx_invocations(text: str) -> list[str]:
+    violations: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        command_line = raw_line.split("#", 1)[0]
+        match = _NPX_RE.search(command_line)
+        if match is None:
+            continue
+        command = command_line[match.start() :].strip()
+        if not _npx_invocation_is_pinned(command):
+            violations.append(command)
+    return violations
+
+
 def unpinned_tool_invocations(text: str) -> list[str]:
     """Return shell-invoked tools/images not pinned by digest/checksum/version (§11.3)."""
     violations: list[str] = []
@@ -127,6 +203,8 @@ def unpinned_tool_invocations(text: str) -> list[str]:
     for match in _PIP_INSTALL_RE.finditer(text):
         for pkg in _unpinned_pip_packages(match.group("rest")):
             violations.append(f"pip-installed tool not pinned to an exact version: {pkg}")
+    for command in _unpinned_npx_invocations(text):
+        violations.append(f"npx may fetch an unpinned registry tool: {command}")
     return violations
 
 

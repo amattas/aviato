@@ -1379,20 +1379,21 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
 
 
 def cmd_lint_actions(args: argparse.Namespace) -> int:
-    """Flag third-party actions not pinned by commit digest (§11.3); exit 1 on any."""
+    """Flag unpinned actions/tools (§11.3); exit 1 on any."""
     from .plugins.actionpins import action_pin_violations
 
     violations = action_pin_violations(Path(args.path))
     for violation in violations:
-        print(f"unpinned third-party action: {violation}", file=sys.stderr)
+        print(f"unpinned third-party action/tool: {violation}", file=sys.stderr)
     if violations:
         print(
-            f"{len(violations)} third-party action(s) not pinned to a commit digest (§11.3); "
-            f"pin each `uses: owner/repo@<40-hex-sha>` (Dependabot keeps them current).",
+            f"{len(violations)} action/tool invocation(s) violate §11.3 pinning; "
+            "pin GitHub Actions by 40-hex SHA, container images by digest, fetched "
+            "binaries by checksum, and registry tools by exact version or --no-install.",
             file=sys.stderr,
         )
         return 1
-    print("All third-party actions are digest-pinned.")
+    print("All scanned action/tool invocations satisfy §11.3 pinning.")
     return 0
 
 
@@ -1745,7 +1746,7 @@ def build_parser() -> argparse.ArgumentParser:
     highest.set_defaults(func=cmd_is_highest)
 
     lint_actions = subparsers.add_parser(
-        "lint-actions", help="Flag third-party actions not pinned by commit digest (§11.3)."
+        "lint-actions", help="Flag action/tool invocations that violate §11.3 supply-chain pinning."
     )
     lint_actions.add_argument("path", nargs="?", default=".", help="Repository root (default: .).")
     lint_actions.set_defaults(func=cmd_lint_actions)

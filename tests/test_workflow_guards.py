@@ -136,7 +136,9 @@ def test_npm_workflows_harden_installs_before_installing() -> None:
         assert "::error::npm ${npm_version} does not support min-release-age" in run
         assert "exit 1" in run
         assert "npm config set ignore-scripts true --location=user" in run
+        assert "npm config set engine-strict true --location=user" in run
         assert "NPM_CONFIG_IGNORE_SCRIPTS=true" in run
+        assert "NPM_CONFIG_ENGINE_STRICT=true" in run
         assert "NPM_CONFIG_MIN_RELEASE_AGE=7" in run
         assert "npm config set min-release-age 7 --location=user" in run
         assert steps.index(harden) < steps.index(install), f"{name} must harden npm before install"
@@ -146,6 +148,7 @@ def test_node_service_scaffold_uses_npm11_capable_node_default() -> None:
     body = (SCAFFOLD_FILES / "wf-node-service.yml").read_text(encoding="utf-8")
     assert 'node-version: "24"' in body
     assert 'node-version: "22"' not in body
+    assert 'lint-command: "npx --no-install eslint ."' in body
 
 
 def test_docs_publish_lints_docusaurus_site_after_install() -> None:
@@ -158,6 +161,16 @@ def test_docs_publish_lints_docusaurus_site_after_install() -> None:
     lint = next(s for s in steps if s.get("name") == "Lint docs site")
     assert steps.index(install) < steps.index(lint)
     assert "LINT_COMMAND" in lint.get("env", {})
+
+
+def test_common_lint_blocks_unsafe_npx_registry_fetches() -> None:
+    wf = _load("reusable-common-lint.yml")
+    steps = wf["jobs"]["common-lint"]["steps"]
+    npx = next(s for s in steps if s.get("name") == "npx registry fetch pin (blocking)")
+    run = npx["run"]
+    assert "npx may fetch an unpinned registry tool" in run
+    assert "--no-install" in run
+    assert "exact_package" in run
 
 
 def test_app_store_connect_secrets_are_step_scoped() -> None:
@@ -202,9 +215,9 @@ def test_security_baseline_jitters_scheduled_scans_at_the_chokepoint() -> None:
 
     # (a) every scan job funnels through privilege-probe — the chokepoint the jitter relies on.
     for scan_job in ("codeql", "dependency-review", "dependency-scan", "secret-scan"):
-        assert jobs[scan_job].get("needs") == "privilege-probe", (
-            f"{scan_job} must `needs: privilege-probe` so the jitter on that job defers it"
-        )
+        needs = jobs[scan_job].get("needs")
+        message = f"{scan_job} must `needs: privilege-probe` so the jitter on that job defers it"
+        assert needs == "privilege-probe", message
 
     # (b) privilege-probe has a schedule-gated RANDOM sleep before it does any work.
     probe_steps = jobs["privilege-probe"]["steps"]

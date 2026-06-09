@@ -130,10 +130,11 @@ Language CI workflows share the same command contract:
 
 `reusable-node-ci.yml` and the Docusaurus Pages workflow default to Node 24 and
 block npm versions below 11 before any install command. They set
-`ignore-scripts=true` and `min-release-age=7`; Node and docs scaffolds also
-write those values plus `engine-strict=true` into managed `.npmrc` files and
-declare `node >=24` / `npm >=11` in package manifests so local and CI installs
-share the same supply-chain posture.
+`ignore-scripts=true`, `engine-strict=true`, and `min-release-age=7`; Node and
+docs scaffolds also write those values into managed `.npmrc` files and declare
+`node >=24` / `npm >=11` in package manifests so local and CI installs share the
+same supply-chain posture. Node CI uses `npx --no-install` for local tool bins,
+and the common lint gate rejects unsafe plain `npx` registry fetches.
 
 ## Profile Templates
 

@@ -161,6 +161,100 @@ jobs:
           fi
           echo "Container images digest-pinned; no unchecked fetch-and-execute."
 
+      # §11.3: `npx` without `--no-install` can fetch a floating registry package. Allow only
+      # local package-bin execution (`--no-install`) or explicit exact-version package fetches
+      # such as `npx -p typedoc@0.27.9 typedoc`. Mirrors aviato.plugins.actionpins.
+      - name: npx registry fetch pin (blocking)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d .github/workflows ]; then
+            echo "No workflows to check."; exit 0
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import shlex
+          import sys
+
+          npx_re = re.compile(r"(?<![\w-])npx(?![\w-])")
+          exact_version_re = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+
+          def split(line):
+              try:
+                  return shlex.split(line, posix=True)
+              except ValueError:
+                  return line.split()
+
+          def exact_package(spec):
+              spec = spec.strip("'\"")
+              at_index = spec.rfind("@")
+              if "$" in spec or ":" in spec or at_index <= 0:
+                  return False
+              version = spec[at_index + 1 :]
+              if any(marker in version for marker in ("*", "^", "~", "<", ">", "=")):
+                  return False
+              return bool(exact_version_re.match(version))
+
+          def pinned(command):
+              tokens = split(command)
+              if not tokens or tokens[0] != "npx":
+                  return True
+              args = tokens[1:]
+              if "--no-install" in args:
+                  return True
+              package_specs = []
+              first_command_token = None
+              skip_next = False
+              for index, arg in enumerate(args):
+                  if skip_next:
+                      skip_next = False
+                      continue
+                  if arg in ("-p", "--package"):
+                      if index + 1 < len(args):
+                          package_specs.append(args[index + 1])
+                          skip_next = True
+                      continue
+                  if arg.startswith("--package=") or arg.startswith("-p="):
+                      package_specs.append(arg.split("=", 1)[1])
+                      continue
+                  if arg == "--" or arg.startswith("-"):
+                      continue
+                  first_command_token = arg
+                  break
+              if package_specs:
+                  return all(exact_package(spec) for spec in package_specs)
+              return first_command_token is not None and exact_package(first_command_token)
+
+          violations = []
+          workflow_dir = Path(".github/workflows")
+          paths = sorted(workflow_dir.glob("*.yml")) + sorted(workflow_dir.glob("*.yaml"))
+          for path in paths:
+              # This lint definition embeds the detector itself; skip the text scan for it.
+              if path.name == "reusable-common-lint.yml":
+                  continue
+              for lineno, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                  line = raw_line.strip()
+                  if not line or line.startswith("#"):
+                      continue
+                  command_line = raw_line.split("#", 1)[0]
+                  match = npx_re.search(command_line)
+                  if match is None:
+                      continue
+                  command = command_line[match.start() :].strip()
+                  if not pinned(command):
+                      violations.append((path, lineno, command))
+          if violations:
+              for path, lineno, command in violations:
+                  print(
+                      f"::error file={path},line={lineno}::"
+                      f"npx may fetch an unpinned registry tool (§11.3): {command}. "
+                      "Use --no-install for local package bins or exact package versions."
+                  )
+              sys.exit(1)
+          print("No unsafe npx registry fetches.")
+          PY
+
       - name: hadolint (blocking, where a Dockerfile exists)
         shell: bash
         run: |

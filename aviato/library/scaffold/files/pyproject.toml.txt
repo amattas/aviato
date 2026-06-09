@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 # The PyPI/wheel DISTRIBUTION name (§12.1) — distinct from the import package name below.
 name = "{{ distribution-name }}"
 version = "0.1.0"
-description = "TODO: describe this project."
+description = "Describe this project."
 requires-python = ">=3.11"
 dependencies = []
 

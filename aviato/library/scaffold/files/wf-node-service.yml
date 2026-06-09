@@ -33,7 +33,7 @@ jobs:
       # verify pipeline (§12.2). Format-check (Prettier) and TS type-check (tsc,
       # auto-skipped when there is no tsconfig.json, i.e. language-variant=javascript)
       # use the reusable workflow defaults.
-      lint-command: "npx eslint ."
+      lint-command: "npx --no-install eslint ."
       test-command: "npm test"
       build-command: "npm run build"
       run-typecheck: {{ run-typecheck }}

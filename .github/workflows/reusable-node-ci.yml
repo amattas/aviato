@@ -24,12 +24,12 @@ on:
       format-command:
         required: false
         type: string
-        default: "npx prettier --check ."
+        default: "npx --no-install prettier --check ."
       typecheck-command:
         description: TypeScript type-check. Set empty for JavaScript projects (language-variant=javascript).
         required: false
         type: string
-        default: "npx tsc --noEmit"
+        default: "npx --no-install tsc --noEmit"
       test-command:
         required: false
         type: string
@@ -96,8 +96,12 @@ jobs:
             exit 1
           fi
           npm config set ignore-scripts true --location=user
-          echo "NPM_CONFIG_IGNORE_SCRIPTS=true" >> "${GITHUB_ENV}"
-          echo "NPM_CONFIG_MIN_RELEASE_AGE=7" >> "${GITHUB_ENV}"
+          npm config set engine-strict true --location=user
+          {
+            echo "NPM_CONFIG_IGNORE_SCRIPTS=true"
+            echo "NPM_CONFIG_ENGINE_STRICT=true"
+            echo "NPM_CONFIG_MIN_RELEASE_AGE=7"
+          } >> "${GITHUB_ENV}"
           npm config set min-release-age 7 --location=user
 
       - name: Install

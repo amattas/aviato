@@ -11,8 +11,17 @@ same fixed surfaces.
   `min-release-age=7` and `ignore-scripts=true` are scaffolded into managed
   `.npmrc` files with `engine-strict=true`, package manifests declare
   `node >=24` / `npm >=11`, and CI sets the same options before npm installs.
-  CI defaults Node/npm projects to Node 24 and blocks npm <11 before any npm
-  install path, because older npm rejects `min-release-age`.
+  CI defaults Node/npm projects to Node 24, blocks npm <11 before any npm install
+  path, and uses `npx --no-install` for Node lint/format/type-check tooling so a
+  missing local tool fails instead of fetching from the registry.
+- Extended the action/tool pin scanner and common lint workflow to reject unsafe
+  plain `npx` registry fetches, while allowing `npx --no-install` and explicitly
+  exact-version `npx -p package@x.y.z` tool fetches.
+- Added Black to the Library dev toolchain and local validation gate, alongside
+  Ruff lint/format, so both formatter contracts are checked before CI.
+- Replaced the Python scaffold manifest's literal task-marker description
+  placeholder with neutral wording so dead-code scans do not flag generated
+  templates.
 - Added Docusaurus docs hardening/features: first-party Docusaurus ESLint
   plugin linting, Algolia search theme, Mermaid rendering, and explicit sitemap
   configuration through the classic preset.

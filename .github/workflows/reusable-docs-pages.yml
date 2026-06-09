@@ -141,8 +141,12 @@ jobs:
             exit 1
           fi
           npm config set ignore-scripts true --location=user
-          echo "NPM_CONFIG_IGNORE_SCRIPTS=true" >> "${GITHUB_ENV}"
-          echo "NPM_CONFIG_MIN_RELEASE_AGE=7" >> "${GITHUB_ENV}"
+          npm config set engine-strict true --location=user
+          {
+            echo "NPM_CONFIG_IGNORE_SCRIPTS=true"
+            echo "NPM_CONFIG_ENGINE_STRICT=true"
+            echo "NPM_CONFIG_MIN_RELEASE_AGE=7"
+          } >> "${GITHUB_ENV}"
           npm config set min-release-age 7 --location=user
 
       - name: Configure Pages

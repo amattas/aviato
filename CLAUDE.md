@@ -9,14 +9,14 @@ Aviato is a reusable GitHub policy, CI, release, and onboarding conventions libr
 ## Commands
 
 ```bash
-python3 -m pip install -e .[dev]   # install CLI + dev tools (pytest, ruff)
-./scripts/validate.sh              # full local gate: compile, validate, ruff, pytest, shellcheck, actionlint
+python3 -m pip install -e .[dev]   # install CLI + dev tools (black, pytest, ruff)
+./scripts/validate.sh              # full local gate: compile, validate, ruff, black, pytest, shellcheck, actionlint
 python3 -m pytest                  # run tests
 python3 -m pytest tests/test_rulesets.py::test_rendered_tag_ruleset_uses_policy_pattern  # single test
-ruff check . && ruff format --check .
+ruff check . && ruff format --check . && black --check --line-length 120 --target-version py311 aviato tests scripts
 ```
 
-Note: `validate.sh` runs pytest with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`. Tests must not depend on third-party pytest plugins. `ruff`/`pytest`/`shellcheck`/`actionlint` are skipped when not installed locally, but the run ends with a **loud banner** listing every skipped tool (because CI runs them — a green local gate with skips does **not** mean CI is green). Run with `AVIATO_STRICT_TOOLS=1 ./scripts/validate.sh` for CI-parity: a missing tool then fails the gate. CI installs all of them.
+Note: `validate.sh` runs pytest with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`. Tests must not depend on third-party pytest plugins. `ruff`/`black`/`pytest`/`shellcheck`/`actionlint` are skipped when not installed locally, but the run ends with a **loud banner** listing every skipped tool (because CI runs them — a green local gate with skips does **not** mean CI is green). Run with `AVIATO_STRICT_TOOLS=1 ./scripts/validate.sh` for CI-parity: a missing tool then fails the gate. CI installs all of them.
 
 CLI surface (entrypoint `aviato.cli:main`):
 
@@ -59,10 +59,13 @@ those scaffold bodies (run `python3 scripts/regen-templates.py` after editing a 
 
 Node and docs callers now assume npm 11+ for install hardening. The reusable Node
 and Docusaurus workflows default to Node 24, fail closed on npm <11, and set
-`ignore-scripts=true` plus `min-release-age=7`; Node/docs scaffolds also include
-managed `.npmrc` files with `engine-strict=true` and package engines requiring
-Node 24/npm 11. Docs scaffolding includes Docusaurus ESLint, Algolia search,
-Mermaid rendering, and sitemap configuration.
+`ignore-scripts=true`, `engine-strict=true`, and `min-release-age=7`; Node/docs
+scaffolds also include managed `.npmrc` files with `engine-strict=true` and
+package engines requiring Node 24/npm 11. Use `npx --no-install` for Node tool
+bins so missing local dependencies fail instead of fetching; common lint rejects
+unsafe plain `npx` in workflows. Docs scaffolding
+includes Docusaurus ESLint, Algolia search, Mermaid rendering, and sitemap
+configuration.
 
 The Library's own declaration uses the internal `aviato-library` profile with
 `bootstrap: true`. `local-install: true` is valid only on this structural Library

@@ -56,7 +56,10 @@ Reusable workflows live in `.github/workflows` and are consumed through
 - `reusable-python-ci.yml` runs Python install, lint, and test commands.
 - `reusable-node-ci.yml` runs Node install, lint, test, and build commands;
   defaults to Node 24; and blocks npm <11 before install so `min-release-age=7`
-  and `ignore-scripts=true` are enforceable.
+  and `ignore-scripts=true` are enforceable. Its default Node tool invocations use
+  `npx --no-install`.
+- `reusable-common-lint.yml` mirrors the local action/tool pin scanner, including
+  unsafe plain `npx` detection, so consumers fail in CI on supply-chain drift.
 - `reusable-swift-ci.yml` runs Swift/Xcode lint, test, and build commands on
   macOS.
 - `reusable-docker-ghcr.yml` publishes release images to GHCR.
@@ -265,6 +268,7 @@ The validation entrypoint is:
 Validation should cover:
 
 - shell syntax and linting while shell scripts remain;
+- Ruff lint/format plus Black compatibility for the Library source tree;
 - GitHub Actions workflow linting;
 - YAML syntax for `aviato/library/policy.yml` and `aviato/library/rulesets.yml`;
 - JSON syntax for `aviato/library/rulesets/*.json`;
