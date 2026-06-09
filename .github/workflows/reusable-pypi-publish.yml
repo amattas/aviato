@@ -23,6 +23,14 @@ on:
         required: false
         type: string
         default: ""
+      gated-sha:
+        description: >-
+          The commit SHA the release gate validated (reusable-release-gate.yml's
+          gated-sha output). C12-W2: the build/publish jobs check out this immutable
+          commit — never the mutable tag — and re-verify the tag still points at it
+          before publishing, so a tag moved between gate and publish aborts.
+        required: true
+        type: string
       install-command:
         required: false
         type: string
@@ -87,8 +95,8 @@ jobs:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:
-          # Build from the release tag — explicit in-run, or the tag ref otherwise.
-          ref: ${{ inputs.release-tag || github.ref }}
+          # C12-W2: build from the IMMUTABLE gated commit, not the mutable tag.
+          ref: ${{ inputs.gated-sha }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -116,6 +124,19 @@ jobs:
           fi
           # resolved-tag crosses the job boundary to the publish job's "confirm resolvable" step.
           echo "resolved-tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify tag still points at the gated commit (C12-W2)
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.resolved-tag }}
+          GATED_SHA: ${{ inputs.gated-sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
+          if [ -z "${actual}" ] || [ "${actual}" != "${GATED_SHA}" ]; then
+            echo "::error::Tag ${RELEASE_TAG} no longer points at the gated commit ${GATED_SHA} (now: ${actual:-missing}) — the tag moved between gate and build; refusing (C12-W2)."
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -216,8 +237,26 @@ jobs:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:
-          # Needed only to read pyproject.toml in the "confirm resolvable" step; no build runs here.
-          ref: ${{ inputs.release-tag || github.ref }}
+          # Reads pyproject.toml for "confirm resolvable" and re-verifies the tag right
+          # before the upload (C12-W2) — checkout the gated commit, with tags for the check.
+          ref: ${{ inputs.gated-sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify tag still points at the gated commit (C12-W2)
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.build.outputs.resolved-tag }}
+          GATED_SHA: ${{ inputs.gated-sha }}
+        run: |
+          set -euo pipefail
+          # LAST-MOMENT re-verify, in the job that actually uploads: a tag force-moved
+          # after the gate (or after the build job) must abort the publish.
+          actual="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
+          if [ -z "${actual}" ] || [ "${actual}" != "${GATED_SHA}" ]; then
+            echo "::error::Tag ${RELEASE_TAG} no longer points at the gated commit ${GATED_SHA} (now: ${actual:-missing}) — refusing to publish (C12-W2)."
+            exit 1
+          fi
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4

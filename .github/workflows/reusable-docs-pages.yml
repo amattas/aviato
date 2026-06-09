@@ -59,6 +59,13 @@ on:
         required: false
         type: string
         default: github-pages
+      gated-sha:
+        description: >-
+          The commit SHA the release gate validated (reusable-release-gate.yml's
+          gated-sha output). C12-W2: build docs from this immutable commit — never
+          the mutable tag — and re-verify the tag still points at it.
+        required: true
+        type: string
       docs-retention:
         description: Number of most-recent versions to keep (§13.3 retention cap).
         required: false
@@ -94,8 +101,8 @@ jobs:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:
-          # Build from the release tag — explicit in-run, or the tag ref otherwise.
-          ref: ${{ inputs.release-tag || github.ref }}
+          # C12-W2: build from the IMMUTABLE gated commit, not the mutable tag.
+          ref: ${{ inputs.gated-sha }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -122,6 +129,19 @@ jobs:
             exit 1
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify tag still points at the gated commit (C12-W2)
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          GATED_SHA: ${{ inputs.gated-sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
+          if [ -z "${actual}" ] || [ "${actual}" != "${GATED_SHA}" ]; then
+            echo "::error::Tag ${RELEASE_TAG} no longer points at the gated commit ${GATED_SHA} (now: ${actual:-missing}) — the tag moved between gate and deploy; refusing (C12-W2)."
+            exit 1
+          fi
 
       - name: Set up Node
         uses: actions/setup-node@v4

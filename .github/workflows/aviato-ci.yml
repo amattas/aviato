@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=744557668e210f2348f6f1b896a773617fe6c8c1688b83d70001f4d4fde22d56
+# aviato:managed profile=aviato-library version=0 hash=9a1725f320f581ceffec67011cfe8d4980483cdae0ff44a1bbb72ea7d54a4ff6
 name: Aviato Python Library
 
 on:
@@ -77,3 +77,4 @@ jobs:
       working-directory: "."
       packages-dir: "dist"
       release-tag: ${{ needs.release.outputs.tag }}
+      gated-sha: ${{ needs.release-gate.outputs.gated-sha }}

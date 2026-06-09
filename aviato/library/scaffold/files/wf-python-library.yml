@@ -76,3 +76,4 @@ jobs:
       working-directory: "."
       packages-dir: "dist"
       release-tag: ${{ needs.release.outputs.tag }}
+      gated-sha: ${{ needs.release-gate.outputs.gated-sha }}

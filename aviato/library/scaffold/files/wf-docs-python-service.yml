@@ -101,6 +101,7 @@ jobs:
     with:
       working-directory: website
       release-tag: ${{ needs.resolve.outputs.tag }}
+      gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
       # Narrative-only docs (mirrors swift-app): a container service has no installable Python
       # library API to auto-generate a reference from, so there is no pydoc-markdown emit step
       # (and hence no import-name dependency — §13.2). Authors write the docs under website/.

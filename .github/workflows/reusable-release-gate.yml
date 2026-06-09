@@ -31,6 +31,14 @@ on:
         required: false
         type: string
         default: ""
+    outputs:
+      gated-sha:
+        description: >-
+          The commit this gate validated (the tag commit, or the in-run merge commit).
+          C12-W2: deploys must check out THIS immutable SHA and re-verify the release
+          tag still points at it before publishing — a tag force-moved between gate
+          and publish must abort the deploy, never ship.
+        value: ${{ jobs.gate.outputs.gated-sha }}
 
 permissions:
   actions: read
@@ -41,6 +49,8 @@ jobs:
   gate:
     name: Validate release tag
     runs-on: ubuntu-latest
+    outputs:
+      gated-sha: ${{ steps.verify.outputs.gated-sha }}
     steps:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
@@ -74,6 +84,7 @@ jobs:
           echo "RESOLVED_TAG=${tag}" >> "${GITHUB_ENV}"
 
       - name: Verify tag points at default branch
+        id: verify
         shell: bash
         env:
           DEFAULT_BRANCH: ${{ inputs.default-branch }}
@@ -101,6 +112,9 @@ jobs:
               exit 1
             fi
           fi
+          # C12-W2: export the validated commit so deploys consume the immutable SHA,
+          # not the mutable tag name this gate happened to observe.
+          echo "gated-sha=${gated_sha}" >> "${GITHUB_OUTPUT}"
 
       - name: Require merged pull request
         if: ${{ inputs.require-merged-pr }}

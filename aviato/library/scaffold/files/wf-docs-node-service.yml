@@ -101,6 +101,7 @@ jobs:
     with:
       working-directory: website
       release-tag: ${{ needs.resolve.outputs.tag }}
+      gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
       docs-source-directory: "."
       docs-emit-command: |
         # §12.2 Node API reference (TypeDoc -> markdown) into the docs source tree.

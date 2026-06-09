@@ -81,3 +81,4 @@ jobs:
       dockerfile: "Dockerfile"
       platforms: "linux/amd64"
       release-tag: ${{ needs.release.outputs.tag }}
+      gated-sha: ${{ needs.release-gate.outputs.gated-sha }}

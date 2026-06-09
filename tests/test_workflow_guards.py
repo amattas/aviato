@@ -110,6 +110,44 @@ def test_local_install_is_limited_to_structural_library_bootstrap() -> None:
         assert run.index("local-install is only valid") < run.index("python -m pip install -e .")
 
 
+_DEPLOY_WORKFLOWS = (
+    "reusable-pypi-publish.yml",
+    "reusable-docker-ghcr.yml",
+    "reusable-docs-pages.yml",
+    "reusable-app-store-connect.yml",
+)
+
+
+def test_deploys_consume_the_gated_sha() -> None:
+    # C12-W2 (TOCTOU): the gate validates a COMMIT; deploys must consume that commit,
+    # not the mutable tag — checkout by gated-sha plus a pre-publish tag→gated-sha
+    # re-verify, so a tag force-moved between gate and publish aborts the deploy.
+    gate = _load("reusable-release-gate.yml")
+    gate_on = gate.get("on") or gate.get(True)
+    assert "gated-sha" in (gate_on["workflow_call"].get("outputs") or {}), "gate must export gated-sha"
+    for name in _DEPLOY_WORKFLOWS:
+        wf = _load(name)
+        on_block = wf.get("on") or wf.get(True)
+        inputs = on_block["workflow_call"]["inputs"]
+        assert inputs.get("gated-sha", {}).get("required") is True, f"{name} must require gated-sha"
+        body = (WORKFLOWS / name).read_text(encoding="utf-8")
+        assert "ref: ${{ inputs.gated-sha }}" in body, f"{name} must check out the gated SHA"
+        assert "ref: ${{ inputs.release-tag || github.ref }}" not in body, f"{name} still checks out the mutable tag"
+        assert 'git rev-parse "refs/tags/${RELEASE_TAG}^{commit}"' in body, f"{name} missing the tag re-verify"
+
+
+def test_callers_pass_gated_sha_to_deploys() -> None:
+    # Every scaffold caller body that wires a deploy must thread the gate's output —
+    # a missed caller ships a consumer whose deploy cannot start (required input).
+    for caller in sorted(SCAFFOLD_FILES.glob("wf-*.yml")):
+        body = caller.read_text(encoding="utf-8")
+        if not any(d in body for d in _DEPLOY_WORKFLOWS):
+            continue
+        assert "gated-sha: ${{ needs.release-gate.outputs.gated-sha }}" in body, (
+            f"{caller.name} wires a deploy without threading the gated SHA (C12-W2)"
+        )
+
+
 def test_release_workflow_splits_derive_from_write_job() -> None:
     # C12-W1: the heavy derive phase (pip install + aviato over full history) must hold
     # NO write token; only the propose/tag job gets contents/pull-requests write, and
