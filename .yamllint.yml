@@ -6,6 +6,7 @@ ignore: |
   aviato.egg-info/**
   build/**
   dist/**
+  _wheelout/**
 
 rules:
   braces: disable

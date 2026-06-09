@@ -30,6 +30,16 @@ else
   SKIPPED+=("pytest (test suite)")
 fi
 
+# Must run from the repo root: .yamllint.yml's ignore globs are relative, and an
+# absolute-path invocation bypasses them (the scaffold caller bodies carry {{ }}
+# placeholders that are deliberately excluded). Same invocation as
+# reusable-common-lint.yml's blocking step.
+if command -v yamllint >/dev/null 2>&1; then
+  yamllint -s .
+else
+  SKIPPED+=("yamllint (YAML lint)")
+fi
+
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck scripts/*.sh
 else
