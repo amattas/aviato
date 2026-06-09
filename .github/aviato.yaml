@@ -1,0 +1,7 @@
+profile: python-library
+version: '0'
+docs: false
+bootstrap: true
+variables:
+  distribution-name: aviato
+  import-name: aviato

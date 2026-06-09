@@ -228,19 +228,42 @@ def test_swift_caller_consumes_declared_variables() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {
         "product-scheme": "Acme",
+        "workspace": "AcmeApp.xcworkspace",
         "bundle-identifier": "com.acme.app",
         "team-id": "ABCDE12345",
         "export-method": "app-store",
+        "environment-name": "production",
+        "export-options-plist": "Config/ExportOptions.plist",
+        "version-command": "./scripts/set-version.sh",
     }
     ci = next(
         i for i in materialize_items(reg, "swift-app", variables) if i.output == ".github/workflows/aviato-ci.yml"
     )
     assert 'scheme: "Acme"' in ci.body
+    assert 'workspace: "AcmeApp.xcworkspace"' in ci.body
+    assert 'environment-name: "production"' in ci.body
+    assert 'export-options-plist: "Config/ExportOptions.plist"' in ci.body
+    assert 'version-command: "./scripts/set-version.sh"' in ci.body
     assert 'bundle-identifier: "com.acme.app"' in ci.body
     assert 'team-id: "ABCDE12345"' in ci.body
     assert 'export-method: "app-store"' in ci.body
     assert "com.example.app" not in ci.body
     assert "TEAMID1234" not in ci.body
+
+
+def test_swift_caller_requires_workspace_or_project() -> None:
+    from aviato.core.errors import DeclarationError
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    variables = {
+        "product-scheme": "Acme",
+        "bundle-identifier": "com.acme.app",
+        "team-id": "ABCDE12345",
+        "export-method": "app-store",
+    }
+    with pytest.raises(DeclarationError, match="workspace|project"):
+        materialize_items(reg, "swift-app", variables)
 
 
 @pytest.mark.parametrize("name", DAYZERO)
@@ -308,6 +331,7 @@ def test_swift_caller_installs_apple_swift_format() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {
         "product-scheme": "Acme",
+        "workspace": "AcmeApp.xcworkspace",
         "bundle-identifier": "com.acme.app",
         "team-id": "ABCDE12345",
         "export-method": "app-store",

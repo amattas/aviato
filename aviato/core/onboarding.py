@@ -24,6 +24,7 @@ def render_variables(
     *,
     pin: str = "main",
     docs: bool = False,
+    bootstrap: bool = False,
     derived_rules: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Augment the resolved variables with derived render values.
@@ -39,6 +40,14 @@ def render_variables(
     """
     derived = dict(variables)
     derived["aviato-ref"] = pin
+    if bootstrap:
+        derived["aviato-workflow-prefix"] = "./.github/workflows/"
+        derived["aviato-workflow-suffix"] = ""
+        derived["aviato-local-install"] = "true"
+    else:
+        derived["aviato-workflow-prefix"] = "amattas/aviato/.github/workflows/"
+        derived["aviato-workflow-suffix"] = f"@{pin}"
+        derived["aviato-local-install"] = "false"
     derived["docs"] = "true" if docs else "false"
     derived.setdefault("year", str(date.today().year))
     for rule in derived_rules:
@@ -46,6 +55,15 @@ def render_variables(
         if source_value is not None:
             derived[rule["name"]] = rule.get("cases", {}).get(source_value, rule.get("default"))
     return derived
+
+
+def validate_variable_constraints(registry: Registry, profile: str, variables: Mapping[str, Any]) -> None:
+    """Apply profile-declared cross-variable constraints before rendering (§12.3)."""
+    constraints = registry.profile_doc(profile).get("variable_constraints", {})
+    for names in constraints.get("any_of", []):
+        if not any(str(variables.get(name) or "").strip() for name in names):
+            joined = ", ".join(repr(name) for name in names)
+            raise DeclarationError(f"profile {profile!r} requires at least one of {joined} to be set (§12.3)")
 
 
 def applicable_templates(resolved, variables: Mapping[str, Any]) -> list[TemplateModule]:
@@ -86,6 +104,7 @@ def resolved_artifacts(
     *,
     pin: str = "main",
     docs: bool = False,
+    bootstrap: bool = False,
     overrides: Mapping[str, Any] | None = None,
 ) -> list[ResolvedArtifact]:
     """The fully-resolved, rendered artifact set for a profile (§5.2/§5.3).
@@ -97,7 +116,12 @@ def resolved_artifacts(
     """
     resolved = resolve_profile(registry, profile, overrides=dict(overrides or {}), docs=docs)
     derived_rules = registry.profile_doc(profile).get("derived_variables", [])
-    render_vars = render_variables(variables, pin=pin, docs=docs, derived_rules=derived_rules)
+    effective_variables = {spec.name: spec.default for spec in resolved.variables if spec.default is not None}
+    effective_variables.update(variables)
+    validate_variable_constraints(registry, profile, effective_variables)
+    render_vars = render_variables(
+        effective_variables, pin=pin, docs=docs, bootstrap=bootstrap, derived_rules=derived_rules
+    )
     applicable = applicable_templates(resolved, render_vars)
     check_output_collisions(applicable)
     artifacts: list[ResolvedArtifact] = []
@@ -117,6 +141,7 @@ def materialize_items(
     *,
     pin: str = "main",
     docs: bool = False,
+    bootstrap: bool = False,
     overrides: Mapping[str, Any] | None = None,
 ) -> list[ScaffoldItem]:
     """Turn a resolved profile into concrete scaffold items (§5.3).
@@ -126,7 +151,9 @@ def materialize_items(
     """
     return [
         ScaffoldItem(output=a.output, body=a.body, comment=a.comment, seed_once=a.seed_once)
-        for a in resolved_artifacts(registry, profile, variables, pin=pin, docs=docs, overrides=overrides)
+        for a in resolved_artifacts(
+            registry, profile, variables, pin=pin, docs=docs, bootstrap=bootstrap, overrides=overrides
+        )
     ]
 
 

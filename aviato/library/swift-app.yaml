@@ -4,9 +4,21 @@ scaffold: swift-app-sc
 settings: baseline
 variables:
   - {name: product-scheme, type: string}
+  - {name: workspace, type: string, required: false, default: ""}
+  - {name: project, type: string, required: false, default: ""}
   - {name: bundle-identifier, type: string}
   - {name: team-id, type: string}
   - {name: export-method, type: enum, domain: [app-store, ad-hoc, development]}
+  - {name: environment-name, type: string, required: false, default: app-store-connect}
+  - {name: export-options-plist, type: string, required: false, default: ""}
+  - {name: version-command, type: string, required: false, default: ""}
+  - {name: build-number, type: string, required: false, default: ""}
+  - {name: working-directory, type: string, required: false, default: "."}
+  - {name: xcode-version, type: string, required: false, default: ""}
+  - {name: destination, type: string, required: false, default: "platform=iOS Simulator,name=iPhone 16"}
+variable_constraints:
+  any_of:
+    - [workspace, project]
 version_source:
   # DAY-ZERO PLACEHOLDER (§12.3/§13.4.6): a real Xcode app keeps the marketing version +
   # CURRENT_PROJECT_VERSION/CFBundleVersion in <Scheme>.xcodeproj/project.pbxproj (and/or an

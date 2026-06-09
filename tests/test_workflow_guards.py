@@ -85,6 +85,14 @@ def test_consumer_automation_jitters_scheduled_runs() -> None:
     assert any("sleep" in run and "RANDOM" in run for run in runs), "no anti-stampede jitter step found"
 
 
+def test_common_lint_lints_every_dockerfile() -> None:
+    # §14.1: common lint covers Dockerfiles where present; discovering many files
+    # must not silently lint only the first one.
+    body = (WORKFLOWS / "reusable-common-lint.yml").read_text(encoding="utf-8")
+    assert 'for dockerfile in "${dockerfiles[@]}"' in body
+    assert "${dockerfiles[0]}" not in body
+
+
 def test_security_baseline_jitters_scheduled_scans_at_the_chokepoint() -> None:
     # §5.14/§5.5: SAST/secret/dependency scans run on a JITTERED schedule so a fleet on the
     # same weekly cron does not stampede the platform. The jitter must (a) live on the

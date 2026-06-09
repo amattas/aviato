@@ -290,6 +290,7 @@ def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[Ex
             declaration.variables,
             pin=declaration.version,
             docs=declaration.docs,
+            bootstrap=declaration.bootstrap,
             overrides=declaration.overrides,
         )
     ]
@@ -336,7 +337,12 @@ def _resolve_onboard_pin(args: argparse.Namespace, existing) -> str:
             f"already adopted at version {current!r}; onboarding will not move the pin. "
             f"Use `aviato repin <repo> {explicit}` to change it (§5.12)."
         )
-    return explicit if explicit is not None else "0"
+    if explicit is not None:
+        return explicit
+    raise DeclarationError(
+        "fresh onboarding requires an explicit --pin (X.Y.Z or N) that already resolves in the "
+        "published Aviato Library; bootstrap/local self-reference is only valid for the Library (§2.10/§6.1)."
+    )
 
 
 def _resolve_onboard_declaration(args: argparse.Namespace, registry: Registry, resolved, existing):
@@ -414,7 +420,13 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
     # Scaffold with the RESOLVED declaration.docs (the preserved/effective value), so the docs
     # artifacts always match what the declaration records (§5.2/§6.1/§13.3) — never args.docs.
     items = materialize_items(
-        registry, args.profile, variables, pin=args.pin, docs=declaration.docs, overrides=declaration.overrides
+        registry,
+        args.profile,
+        variables,
+        pin=args.pin,
+        docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
+        overrides=declaration.overrides,
     )
     result = scaffold(target, items, profile=args.profile, version=args.pin)
     for output in result.written:
@@ -474,7 +486,13 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved) ->
     # Use the RESOLVED declaration.docs (preserved from the clone's existing declaration), so the
     # proposed docs artifacts match the declaration written above — never the raw args.docs (§13.3).
     for artifact in resolved_artifacts(
-        registry, args.profile, variables, pin=args.pin, docs=declaration.docs, overrides=declaration.overrides
+        registry,
+        args.profile,
+        variables,
+        pin=args.pin,
+        docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
+        overrides=declaration.overrides,
     ):
         present = (clone / artifact.output).exists()
         if artifact.seed_once:
@@ -657,6 +675,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             declaration.variables,
             pin=declaration.version,
             docs=declaration.docs,
+            bootstrap=declaration.bootstrap,
             overrides=declaration.overrides,
         )
     except AviatoError as exc:
@@ -795,6 +814,7 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
         declaration.variables,
         pin=declaration.version,
         docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
         overrides=declaration.overrides,
     ):
         if artifact.seed_once:
@@ -870,6 +890,7 @@ def cmd_repin(args: argparse.Namespace) -> int:
         profile=declaration.profile,
         version=plan.target_version,
         docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
         variables=declaration.variables,
         overrides=declaration.overrides,
     )
@@ -881,6 +902,7 @@ def cmd_repin(args: argparse.Namespace) -> int:
         updated.variables,
         pin=updated.version,
         docs=updated.docs,
+        bootstrap=updated.bootstrap,
         overrides=updated.overrides,
     )
     result = scaffold(root, items, profile=updated.profile, version=updated.version)
@@ -1070,6 +1092,11 @@ def cmd_provision(args: argparse.Namespace) -> int:
     try:
         # Canonicalize the pin to bare SemVer (§6.1) before it lands in the declaration
         # or markers; a legacy ``v`` is stripped and a malformed pin is refused.
+        if args.pin is None:
+            raise DeclarationError(
+                "provision requires --pin (X.Y.Z or N) so generated workflows reference a published "
+                "Aviato Library ref (§6.1)."
+            )
         args.pin = normalize_pin(args.pin)
         resolved = resolve_profile(registry, args.profile, docs=args.docs)
         variables = resolve_variables(
@@ -1245,6 +1272,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
             declaration.variables,
             pin=declaration.version,
             docs=declaration.docs,
+            bootstrap=declaration.bootstrap,
             overrides=declaration.overrides,
         ):
             if artifact.seed_once:
@@ -1545,8 +1573,8 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument(
         "--pin",
         default=None,
-        help="Library version pin (X.Y.Z or N) to record. Defaults to floating major 0 for a "
-        "fresh adopt; for an already-adopted repo the existing pin is preserved (use `aviato "
+        help="Library version pin (X.Y.Z or N) to record. Required for a fresh write/proposal; "
+        "for an already-adopted repo the existing pin is preserved (use `aviato "
         "repin` to move it, §5.12).",
     )
     onboard.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
@@ -1636,7 +1664,7 @@ def build_parser() -> argparse.ArgumentParser:
     provision.add_argument("slug", help="New repository as OWNER/REPO.")
     provision.add_argument("--profile", default="python-service")
     provision.add_argument("--docs", action="store_true", help="Compose the opt-in docs deploy (§13.3).")
-    provision.add_argument("--pin", default="0", help="Library version pin to record in the declaration.")
+    provision.add_argument("--pin", default=None, help="Library version pin to record in the declaration.")
     provision.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     provision.add_argument("--public", action="store_true", help="Create a public repo (default: private).")
     provision.set_defaults(func=cmd_provision)

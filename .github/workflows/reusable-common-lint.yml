@@ -170,7 +170,10 @@ jobs:
             echo "No Dockerfile."; exit 0
           fi
           # §11.3: pin the tool image by digest, not a mutable tag.
-          docker run --rm -i hadolint/hadolint@sha256:30a8fd2e785ab6176eed53f74769e04f125afb2f74a6c52aef7d463583b6d45e hadolint - < "${dockerfiles[0]}"
+          for dockerfile in "${dockerfiles[@]}"; do
+            echo "Linting ${dockerfile}"
+            docker run --rm -i hadolint/hadolint@sha256:30a8fd2e785ab6176eed53f74769e04f125afb2f74a6c52aef7d463583b6d45e hadolint - < "${dockerfile}"
+          done
 
       - name: shellcheck (blocking, where shell scripts exist)
         shell: bash
