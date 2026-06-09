@@ -74,3 +74,21 @@ def test_keep_files_still_deletes_automation_workflows(tmp_path: Path) -> None:
     assert not (tmp_path / ci).exists()
     assert wf in result.removed
     assert ci in result.removed
+
+
+def test_offboard_fails_closed_on_unmarked_automation_workflow(tmp_path: Path) -> None:
+    # N3: an automation workflow that exists but carries no Aviato marker must NOT be silently
+    # skipped and then orphaned — removing the declaration would leave it running unmanaged. Fail
+    # closed before any mutation; the declaration must remain.
+    import pytest
+
+    from aviato.core.errors import AviatoError
+
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "aviato-ci.yml").write_text("name: ci\non: push\n", encoding="utf-8")  # no marker
+    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration.write_text("profile: python-library\n", encoding="utf-8")
+    with pytest.raises(AviatoError):
+        offboard(tmp_path, [".github/workflows/aviato-ci.yml"], keep_files=False)
+    assert declaration.is_file()  # fail-closed: declaration not removed

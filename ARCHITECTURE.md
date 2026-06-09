@@ -135,9 +135,17 @@ scaffold, diagnose, and reconcile — with **no** language- or
 deployment-specific logic. Its falsifiable agnosticism (§9b) is enforced by
 `aviato/core/selfcheck.py` (no import edge into `aviato/plugins/`, no denylisted
 identifier from `aviato/plugins/denylist.txt`) and checked as part of
-`aviato validate`. Day-zero plug-in specifics live as **data** in `profiles/`,
-`bundles/`, and `templates/scaffold/` (the §5.10 module-source tree), loaded by
-`aviato/core/registry.py`. See `CLAUDE.md` for the module map.
+`aviato validate`. Day-zero plug-in specifics live as **data** under `aviato/library/`
+(the §5.10 module-source tree: `aviato/library/<profile>.yaml`, `aviato/library/bundles/`,
+`aviato/library/scaffold/`), loaded by `aviato/core/registry.py`. See `CLAUDE.md` for the module map.
+
+Supply-chain pin enforcement (§11.3) is a plug-in concern. `uses:`/container-image pinning is
+delegated to **zizmor** (a pinned dependency) configured by bundled policy data at
+`aviato/library/zizmor.yml`; `curl|bash` fetch-execute uses a **fail-closed** rule (reject anything
+not provably checksum-verified or piped to an allowlisted data sink — deliberately *not* an
+interpreter enumeration, which fails open). Both run through the one `aviato lint-actions`
+entrypoint, invoked identically by `aviato validate` and by every consumer's `reusable-common-lint`
+CI — a single implementation, no grep mirror.
 
 The Library consumes itself through the internal `aviato-library` profile and a
 declaration that sets `bootstrap: true`. Bootstrap rendering is validated against
@@ -210,8 +218,11 @@ of truth.
 Release publishing is tag-driven only.
 
 Release workflows must run from tags that match the canonical release format.
-Legacy `release/*` branches and `release/latest` are migration artifacts and
-should not be supported by release publishing workflows.
+Branch-based release *publishing* (legacy `release/*` / `release/latest` publish
+branches) is a migration artifact and is rejected by validation. This is distinct
+from the release-PR *source* branch (`reusable-release.yml` opens its proposal on a
+short-lived `release/<version>` branch and tags from the default branch) — that is
+not branch-based publishing and is allowed.
 
 If branch or pull request Docker builds are needed, they should be implemented
 as a separate non-release workflow instead of weakening the release workflow.

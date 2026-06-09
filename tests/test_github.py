@@ -76,6 +76,24 @@ def test_upsert_ruleset_puts_to_existing_id_when_present(monkeypatch: pytest.Mon
     assert "repos/o/r/rulesets/4242" in calls[0]
 
 
+def test_upsert_ruleset_matches_by_name_and_target_not_name_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    # N1 (cycle 11): a live ruleset that shares a NAME but targets a different ref kind must NOT be
+    # updated — that would overwrite the wrong protected resource. The desired payload creates its own.
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+    )
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"name": "Protect", "target": "tag", "id": 99}])
+    result = github.upsert_ruleset("o/r", {"name": "Protect", "target": "branch"}, apply=True)
+    assert "Created" in result
+    assert calls[0][calls[0].index("--method") + 1] == "POST"
+    # Same (name, target) → update the matching one.
+    calls.clear()
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"name": "Protect", "target": "branch", "id": 7}])
+    result2 = github.upsert_ruleset("o/r", {"name": "Protect", "target": "branch"}, apply=True)
+    assert "Updated" in result2 and "repos/o/r/rulesets/7" in calls[0]
+
+
 def test_upsert_ruleset_dry_run_does_not_mutate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: [])
     monkeypatch.setattr(
@@ -124,3 +142,38 @@ def test_settings_read_token_scope_is_noop_without_admin_token(monkeypatch: pyte
     with github.settings_read_token_scope():
         assert os.environ["GH_TOKEN"] == "platform-token"  # unchanged
     assert os.environ["GH_TOKEN"] == "platform-token"
+
+
+def test_pages_source_is_actions_returns_none_on_404_or_missing_schema(monkeypatch) -> None:
+    # R7-3-PAGES-§5.14: a 404 from /pages conflates "off" with "no perms" and "invisible" — the
+    # honest mapping is unknown (None), per §5.14 "absence/unreadable reads as broken, not clean".
+    # R7-3-PAGES-SCHEMA: a present dict lacking build_type (schema drift) is also unknown, not no.
+    from aviato import github as gh
+
+    monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: None)  # the 404 path
+    assert gh.pages_source_is_actions("o/r") is None
+    monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: "weird-non-dict")
+    assert gh.pages_source_is_actions("o/r") is None
+    monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: {"public": True})  # no build_type
+    assert gh.pages_source_is_actions("o/r") is None
+
+
+def test_pages_source_is_actions_resolves_workflow_vs_legacy(monkeypatch) -> None:
+    # The two determinate cases the API DOES distinguish: Actions-sourced (workflow) vs branch.
+    from aviato import github as gh
+
+    monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: {"build_type": "workflow"})
+    assert gh.pages_source_is_actions("o/r") is True
+    monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: {"build_type": "legacy"})
+    assert gh.pages_source_is_actions("o/r") is False
+
+
+def test_upsert_ruleset_matches_when_list_omits_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    # C12-2: GitHub's ruleset LIST summary may omit `target`. A same-name candidate with no target can
+    # only be THIS ruleset, so upsert must UPDATE it (not POST a duplicate / 422).
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"id": 7, "name": "protect"}])
+    msg = github.upsert_ruleset("o/r", {"name": "protect", "target": "branch"}, apply=False)
+    assert "would update" in msg and "7" in msg
+    # A same-name ruleset on a DIFFERENT, explicit target must NOT match (would create the missing one).
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"id": 9, "name": "protect", "target": "tag"}])
+    assert "would create" in github.upsert_ruleset("o/r", {"name": "protect", "target": "branch"}, apply=False)

@@ -25,6 +25,18 @@ on:
         required: false
         type: string
         default: "1.35.1"
+      aviato-ref:
+        description: >-
+          Pinned Aviato Library ref (version X.Y.Z, a prerelease, or floating major N) to install
+          the matching `aviato` CLI from for the §11.3 supply-chain pin gate. Passed by the caller.
+        required: false
+        type: string
+        default: ""
+      local-install:
+        description: Install Aviato from the checked-out repository for Library bootstrap.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -70,197 +82,50 @@ jobs:
           sudo tar -xz -C /usr/local/bin -f "${tarball}" actionlint
           actionlint
 
-      # §11.3 (blocking): third-party actions MUST be pinned by 40-hex commit digest.
-      # Exempt: first-party (actions/*, github/*), local (./...), and the consumer's own
-      # Aviato Library reusable refs (amattas/aviato/.github/workflows/*) — the one sanctioned
-      # mutable ref. A NON-Library reusable workflow is third-party and must be digest-pinned.
-      # Mirrors aviato.plugins.actionpins so the convention is ENFORCED in every consumer's CI.
-      - name: Third-party action digest pin (blocking)
+      # §11.3 (blocking): ONE implementation, shared with `aviato validate`. Installs the pinned
+      # Aviato CLI (which brings the pinned zizmor) and runs the single detector — zizmor
+      # (unpinned-uses/unpinned-images) + fail-closed fetch-execute + pip exact-version. Replaces
+      # the former grep mirror that drifted from the Python detector (cycle-9 R9-5).
+      - name: Supply-chain pins (blocking)
         shell: bash
+        env:
+          AVIATO_REF: ${{ inputs.aviato-ref }}
+          AVIATO_LOCAL_INSTALL: ${{ inputs.local-install }}
         run: |
           set -euo pipefail
           if [ ! -d .github/workflows ]; then
             echo "No workflows to check."; exit 0
           fi
-          violations=0
-          while IFS= read -r line; do
-            ref="$(printf '%s' "${line}" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//; s/[[:space:]#].*$//')"
-            case "${ref}" in
-              ""|./*|actions/*|github/*) continue ;;
-              # The consumer's pinned Aviato Library reference is the one sanctioned mutable
-              # ref (§6.1/§11.3); a NON-Library reusable workflow is third-party and must be
-              # digest-pinned like an action (a blanket */.github/workflows/* exemption would
-              # let other-org/repo/.github/workflows/x.yml@main through).
-              amattas/aviato/.github/workflows/*) continue ;;
-            esac
-            case "${ref}" in *@*) ;; *) continue ;; esac
-            version="${ref#*@}"
-            if ! printf '%s' "${version}" | grep -Eq '^[0-9a-f]{40}$'; then
-              echo "::error::Unpinned third-party action (§11.3): ${ref} — pin to a 40-hex commit SHA (Dependabot keeps it current)."
-              violations=$((violations + 1))
-            fi
-          done < <(grep -rEh '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows || true)
-          if [ "${violations}" -gt 0 ]; then
-            echo "::error::${violations} third-party action(s) not digest-pinned."
-            exit 1
-          fi
-          echo "All third-party actions are digest-pinned."
-
-      # §11.3: the in-CI gate enforces the digest-pinned classes — actions (above), container
-      # IMAGES, and curl-fetched BINARIES. (Exact pip/tool-version pins are carried as workflow
-      # inputs, e.g. yamllint-version/actionlint-version, not greppable here.) Mirrors the
-      # remaining aviato.plugins.actionpins.unpinned_tool_invocations checks so a consumer's own
-      # workflow cannot run an unpinned image or pipe a download straight into a shell.
-      - name: Container image + fetched-binary pin (blocking)
-        shell: bash
-        run: |
-          set -uo pipefail
-          if [ ! -d .github/workflows ]; then
-            echo "No workflows to check."; exit 0
-          fi
-          violations=0
-          # A `docker run`/`docker pull` image MUST be digest-pinned (@sha256:…). review #9: an
-          # earlier version substring-matched `@sha256:` against the WHOLE line, so an `@sha256:`
-          # in an unrelated arg (e.g. `--label x@sha256:…`) masked an unpinned image. We now
-          # extract the actual IMAGE token (skipping flags AND the value after value-taking flags
-          # like `-e VAR=x`/`-v a:b`) exactly like aviato.plugins.actionpins._docker_run_image, and
-          # test the pin on that token alone. A line ending in `\` is a continuation (image on the
-          # next line) — skipped, matching the checker's same-line scope.
-          value_flags=" -e --env -v --volume -p --publish -w --workdir --mount -l --label --name --network --net -u --user --entrypoint --add-host --device --tmpfs --cap-add --cap-drop --platform -h --hostname --env-file --restart --pull "
-          while IFS= read -r line; do
-            cmd="${line%%#*}"                       # drop any trailing comment
-            case "${cmd}" in *\\) continue ;; esac  # line-continuation: image on next line
-            rest="${cmd#*docker }"                   # args after the first `docker `
-            # shellcheck disable=SC2086 # intentional word-splitting of the command tokens
-            set -- ${rest}
-            if [ "${1:-}" = "run" ] || [ "${1:-}" = "pull" ]; then shift; fi
-            image=""
-            skip_next=0
-            for tok in "$@"; do
-              if [ "${skip_next}" -eq 1 ]; then skip_next=0; continue; fi
-              case "${tok}" in
-                -*)
-                  # `--flag=value` carries its own value; a bare value-taking flag eats the next token.
-                  case "${tok}" in
-                    *=*) : ;;
-                    *) case "${value_flags}" in *" ${tok} "*) skip_next=1 ;; esac ;;
-                  esac
-                  continue ;;
-              esac
-              image="${tok}"; break
+          if [ "${AVIATO_LOCAL_INSTALL}" = "true" ]; then
+            # §5.10: the Library's own bootstrap caller runs the gate off the checked-out
+            # source — valid only for a structural Library checkout (mirrors reusable-release).
+            required_anchors=(
+              "aviato/core/__init__.py"
+              "aviato/library/bundles"
+              "aviato/library/scaffold"
+              "aviato/library/policy.yml"
+              ".github/aviato.yaml"
+            )
+            for anchor in "${required_anchors[@]}"; do
+              if [ ! -e "${anchor}" ]; then
+                echo "::error::local-install is only valid for Library bootstrap; missing structural anchor ${anchor} (§5.10)."
+                exit 1
+              fi
             done
-            [ -z "${image}" ] && continue
-            case "${image}" in *@sha256:*) continue ;; esac
-            echo "::error::Container image not digest-pinned (§11.3): ${image} — pin to @sha256:<digest>."
-            violations=$((violations + 1))
-          done < <(grep -rhE '\bdocker[[:space:]]+(run|pull)\b' .github/workflows || true)
-          # A network download piped straight into a shell/extractor has no checksum gate. The
-          # `[^|;]*` (no semicolon) keeps the fetch and the pipe in ONE command, so an unrelated
-          # later `; … | bash` on the same line is not a false positive.
-          if grep -rqE '\b(curl|wget)\b[^|;]*\|[^|]*\b(sh|bash|tar)\b' .github/workflows; then
-            echo "::error::Fetch-and-execute without a checksum (§11.3): download to a file, verify with sha256sum -c, then run."
-            grep -rnE '\b(curl|wget)\b[^|;]*\|[^|]*\b(sh|bash|tar)\b' .github/workflows
-            violations=$((violations + 1))
+            if ! sed 's/#.*$//' .github/aviato.yaml | grep -Eiq '^[[:space:]]*bootstrap:[[:space:]]*true[[:space:]]*$'; then
+              echo "::error::local-install requires .github/aviato.yaml to declare bootstrap: true (§5.10)."
+              exit 1
+            fi
+            python -m pip install -e .
+          else
+            # §11.3: never run the gate off unpinned Library code.
+            if [[ ! "${AVIATO_REF}" =~ ^[0-9]+(\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?)?$ ]]; then
+              echo "::error::aviato-ref '${AVIATO_REF}' is not a pinned version (expected X.Y.Z, X.Y.Z-alphaN/-betaN, or a floating major N)."
+              exit 1
+            fi
+            python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
           fi
-          if [ "${violations}" -gt 0 ]; then
-            echo "::error::${violations} unpinned image/fetch invocation(s) (§11.3)."
-            exit 1
-          fi
-          echo "Container images digest-pinned; no unchecked fetch-and-execute."
-
-      # §11.3: `npx` without `--no-install` can fetch a floating registry package. Allow only
-      # local package-bin execution (`--no-install`) or explicit exact-version package fetches
-      # such as `npx -p typedoc@0.27.9 typedoc`. Mirrors aviato.plugins.actionpins.
-      - name: npx registry fetch pin (blocking)
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ ! -d .github/workflows ]; then
-            echo "No workflows to check."; exit 0
-          fi
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          import shlex
-          import sys
-
-          npx_re = re.compile(r"(?<![\w-])npx(?![\w-])")
-          exact_version_re = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
-
-          def split(line):
-              try:
-                  return shlex.split(line, posix=True)
-              except ValueError:
-                  return line.split()
-
-          def exact_package(spec):
-              spec = spec.strip("'\"")
-              at_index = spec.rfind("@")
-              if "$" in spec or ":" in spec or at_index <= 0:
-                  return False
-              version = spec[at_index + 1 :]
-              if any(marker in version for marker in ("*", "^", "~", "<", ">", "=")):
-                  return False
-              return bool(exact_version_re.match(version))
-
-          def pinned(command):
-              tokens = split(command)
-              if not tokens or tokens[0] != "npx":
-                  return True
-              args = tokens[1:]
-              if "--no-install" in args:
-                  return True
-              package_specs = []
-              first_command_token = None
-              skip_next = False
-              for index, arg in enumerate(args):
-                  if skip_next:
-                      skip_next = False
-                      continue
-                  if arg in ("-p", "--package"):
-                      if index + 1 < len(args):
-                          package_specs.append(args[index + 1])
-                          skip_next = True
-                      continue
-                  if arg.startswith("--package=") or arg.startswith("-p="):
-                      package_specs.append(arg.split("=", 1)[1])
-                      continue
-                  if arg == "--" or arg.startswith("-"):
-                      continue
-                  first_command_token = arg
-                  break
-              if package_specs:
-                  return all(exact_package(spec) for spec in package_specs)
-              return first_command_token is not None and exact_package(first_command_token)
-
-          violations = []
-          workflow_dir = Path(".github/workflows")
-          paths = sorted(workflow_dir.glob("*.yml")) + sorted(workflow_dir.glob("*.yaml"))
-          for path in paths:
-              # This lint definition embeds the detector itself; skip the text scan for it.
-              if path.name == "reusable-common-lint.yml":
-                  continue
-              for lineno, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                  line = raw_line.strip()
-                  if not line or line.startswith("#"):
-                      continue
-                  command_line = raw_line.split("#", 1)[0]
-                  match = npx_re.search(command_line)
-                  if match is None:
-                      continue
-                  command = command_line[match.start() :].strip()
-                  if not pinned(command):
-                      violations.append((path, lineno, command))
-          if violations:
-              for path, lineno, command in violations:
-                  print(
-                      f"::error file={path},line={lineno}::"
-                      f"npx may fetch an unpinned registry tool (§11.3): {command}. "
-                      "Use --no-install for local package bins or exact package versions."
-                  )
-              sys.exit(1)
-          print("No unsafe npx registry fetches.")
-          PY
+          aviato lint-actions .
 
       - name: hadolint (blocking, where a Dockerfile exists)
         shell: bash

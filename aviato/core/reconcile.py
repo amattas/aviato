@@ -46,6 +46,8 @@ class ReconcileState:
     # Operator escape hatch for the §2.6 version-pin gate (the "override required"
     # path). Default False keeps the gate fail-closed.
     override_version_pin: bool = False
+    # R2-5: more than one OPEN tracking issue shares this key — consent is ambiguous, so refuse.
+    issue_ambiguous: bool = False
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,15 @@ def reconcile_decision(state: ReconcileState) -> ReconcileOutcome:
     """
     if not state.issue_open:
         return ReconcileOutcome("refuse", "issue is closed; reopen to act")
+
+    # R2-5/§5.7/§5.8: more than one OPEN tracking issue for this key makes consent ambiguous — a
+    # grant could live on one duplicate while a revoke lives on another. Refuse (fail-closed) until
+    # the operator closes the duplicates, rather than authorize from whichever issue we happened to
+    # select.
+    if state.issue_ambiguous:
+        return ReconcileOutcome(
+            "refuse", "multiple open tracking issues share this label; close the duplicates so consent is unambiguous"
+        )
 
     # Apply-time recompute first (§2.8): if the change already converged externally
     # the recomputed diff is empty, so no-op regardless of consent state — there is

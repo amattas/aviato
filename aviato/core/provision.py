@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .ports import Platform
@@ -36,6 +36,10 @@ class ProvisionOutcome:
     full_applied: bool = False
     partial: bool = False  # full protection failed → repo is in the partially-provisioned state
     reason: str = ""
+    # R2-1-PROV: §17 security toggles `apply_settings` surfaced-and-skipped because the feature is
+    # unavailable on the repo. Full protection still landed, but the caller must report this rather
+    # than claim a clean apply (mirrors the reconcile audit's "SKIPPED unavailable").
+    skipped_security: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -75,7 +79,10 @@ def provision_repo(
         outcome.minimal_applied = True
         scaffold_push()
         outcome.scaffolded = True
-        platform.apply_settings(repo, desired)
+        # R2-1-PROV: the full-protection apply can surface-and-skip an unavailable §17 toggle;
+        # capture it so the caller reports a partial apply instead of overstating clean success.
+        # (The minimal apply carries no security keys, so its skipped set is always empty.)
+        outcome.skipped_security = platform.apply_settings(repo, desired)
     except Exception as exc:  # noqa: BLE001 - §8.7 boundary: a post-create failure must surface
         # the exposed/partial state + recovery op, never crash or half-apply. The outcome flags
         # record exactly how far provisioning got (minimal_applied / scaffolded).

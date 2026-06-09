@@ -65,14 +65,11 @@ on:
         type: number
         default: 10
 
-# §13.3/§1530 least privilege: Pages publish needs pages+id-token write and only
-# READ of contents. Prior doc-version SOURCES persist as a workflow ARTIFACT across
-# runs (read via actions:read) — never a source-branch push — so contents stays read.
-permissions:
-  contents: read
-  id-token: write
-  pages: write
-  actions: read
+# C12-W4 (§13.3/§1530 least privilege): permissions are PER-JOB, not workflow-wide. The build job runs
+# the consumer's install/emit/build `eval`s and holds ONLY `contents: read` (+ `actions: read` to read
+# the persisted-versions artifact) — so a compromised npm/docs generator CANNOT mint OIDC. Only the
+# separate deploy job, which runs no consumer code, holds `id-token: write` + `pages: write`.
+permissions: {}
 
 # Per-alias deploy concurrency group so a slower, older-release docs deploy cannot
 # regress the published site / `latest` alias (§8.14). Queue rather than cancel.
@@ -81,12 +78,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish-docs:
-    name: Publish docs
+  build:
+    name: Build docs
     runs-on: ubuntu-latest
-    environment:
-      name: ${{ inputs.environment-name }}
-      url: ${{ steps.deployment.outputs.page_url }}
+    # C12-W4: the job that runs the consumer's install/emit/build evals holds NO write/OIDC scope.
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      highest: ${{ steps.guard.outputs.highest }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -183,12 +183,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -uo pipefail
-          aid="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=aviato-docs-versions&per_page=1" \
-            --jq '.artifacts[0].id' 2>/dev/null || true)"
-          if [ -n "${aid}" ] && [ "${aid}" != "null" ]; then
-            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${aid}/zip" > /tmp/versions.zip || true
-            unzip -o /tmp/versions.zip -d . >/dev/null 2>&1 || true
+          set -euo pipefail
+          # C12-W5 (§5.14): a present-but-UNRESTORABLE persisted-versions artifact must FAIL, not
+          # silently deploy a truncated version set. Only genuine ABSENCE (first release) is tolerated;
+          # a query/download/unzip error fails closed.
+          if ! aid="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=aviato-docs-versions&per_page=1" \
+              --jq '.artifacts[0].id? // empty')"; then
+            echo "::error::could not query the persisted-versions artifact; failing closed (§5.14)." >&2
+            exit 1
+          fi
+          if [ -n "${aid}" ]; then
+            if ! gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${aid}/zip" > /tmp/versions.zip; then
+              echo "::error::persisted-versions artifact ${aid} present but could not be downloaded; refusing to deploy a truncated version set (§5.14)." >&2
+              exit 1
+            fi
+            if ! unzip -o /tmp/versions.zip -d . >/dev/null 2>&1; then
+              echo "::error::persisted-versions artifact ${aid} present but could not be unzipped; refusing to deploy a truncated version set (§5.14)." >&2
+              exit 1
+            fi
             echo "Restored prior doc versions from artifact ${aid}."
           else
             echo "No persisted versions artifact yet (first release)."
@@ -268,7 +280,7 @@ jobs:
       # (read back above) — keeps the source branch untouched and contents read-only.
       - name: Persist doc versions
         if: ${{ steps.guard.outputs.highest == 'true' && hashFiles(format('{0}/versions.json', inputs.working-directory)) != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aviato-docs-versions
           path: |
@@ -283,7 +295,21 @@ jobs:
         with:
           path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
 
+  # C12-W4: a SEPARATE deploy job runs NO consumer code; it only deploys the artifact the build job
+  # uploaded. ONLY this job holds id-token:write + pages:write, so a compromised docs build cannot mint
+  # OIDC. Gated on the monotonic guard so an older release never regresses the published site (§8.14).
+  deploy:
+    name: Deploy docs
+    needs: build
+    if: ${{ needs.build.outputs.highest == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      pages: write
+    environment:
+      name: ${{ inputs.environment-name }}
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy Pages
         id: deployment
-        if: ${{ steps.guard.outputs.highest == 'true' }}
         uses: actions/deploy-pages@v4

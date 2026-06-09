@@ -36,7 +36,10 @@ def test_apply_settings_fails_closed_on_unresolved_default_branch(monkeypatch: p
 def test_open_or_update_issue_tolerates_missing_number(monkeypatch: pytest.MonkeyPatch) -> None:
     # A 200 response carrying a malformed issue object (no "number") must not crash the
     # scheduled drift-report with a KeyError; fall back to creating a fresh issue.
-    monkeypatch.setattr(github, "gh_json_optional", lambda *a, **k: [{"title": "stale"}])
+    # C12-R3-2: the issue-channel reads paginate; patch the paginated read or the lookup
+    # escapes to a real `gh` call (fails tokenless in CI, silently passes on a logged-in
+    # operator machine).
+    monkeypatch.setattr(github, "gh_json_paginated_optional", lambda *a, **k: [{"title": "stale"}])
     posted: list[list[str]] = []
     monkeypatch.setattr(GitHubPlatform, "_gh_input", lambda self, args, payload: posted.append(args))
     GitHubPlatform().open_or_update_issue("o/r", "k", "t", "b")
@@ -44,7 +47,7 @@ def test_open_or_update_issue_tolerates_missing_number(monkeypatch: pytest.Monke
 
 
 def test_comment_issue_tolerates_missing_number(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(github, "gh_json_optional", lambda *a, **k: [{"title": "stale"}])
+    monkeypatch.setattr(github, "gh_json_paginated_optional", lambda *a, **k: [{"title": "stale"}])
     monkeypatch.setattr(
         GitHubPlatform, "_gh_input", lambda self, args, payload: (_ for _ in ()).throw(AssertionError("no number"))
     )
@@ -58,7 +61,11 @@ def test_issue_reads_fail_closed_on_transient_error(monkeypatch: pytest.MonkeyPa
     def boom(endpoint: str, **__: object) -> object:
         raise github.GitHubAPIError(endpoint, 1, "HTTP 503: server error")
 
+    # C12-R3-2: the issue-channel reads now paginate (`gh_json_paginated` /
+    # `gh_json_paginated_optional`); a transient (non-404) error must still RAISE through them.
     monkeypatch.setattr(github, "gh_json_optional", boom)
+    monkeypatch.setattr(github, "gh_json_paginated", boom)
+    monkeypatch.setattr(github, "gh_json_paginated_optional", boom)
     with pytest.raises(github.GitHubAPIError):
         GitHubPlatform().get_issue("o/r", "k")
     with pytest.raises(github.GitHubAPIError):
@@ -85,12 +92,9 @@ def test_get_issue_warns_when_multiple_issues_share_label(monkeypatch: pytest.Mo
     # Two open issues carrying the consent/drift label is an anomaly: the three issue reads
     # (list/open/all) could otherwise each take a different issues[0]. Pick deterministically
     # (oldest = lowest number) and warn, so consent is read/updated/audited on ONE issue.
-    monkeypatch.setattr(
-        github,
-        "gh_json_optional",
-        lambda endpoint, **__: [{"number": 9, "state": "open"}, {"number": 4, "state": "open"}],
-    )
-    monkeypatch.setattr(github, "gh_json_paginated", lambda endpoint, **__: [])
+    issues = [{"number": 9, "state": "open"}, {"number": 4, "state": "open"}]
+    # The issue list AND the timeline both go through gh_json_paginated now (R2-7); route by endpoint.
+    monkeypatch.setattr(github, "gh_json_paginated", lambda endpoint, **__: issues if "issues?" in endpoint else [])
     GitHubPlatform().get_issue("o/r", "aviato-settings-drift")
     assert "multiple" in capsys.readouterr().err.lower()
 
@@ -103,13 +107,10 @@ def test_get_issue_prefers_open_over_older_closed(monkeypatch: pytest.MonkeyPatc
 
     def _paginated(endpoint: str, **__):
         seen.append(endpoint)
+        if "issues?" in endpoint:
+            return [{"number": 4, "state": "closed"}, {"number": 9, "state": "open"}]
         return []
 
-    monkeypatch.setattr(
-        github,
-        "gh_json_optional",
-        lambda endpoint, **__: [{"number": 4, "state": "closed"}, {"number": 9, "state": "open"}],
-    )
     monkeypatch.setattr(github, "gh_json_paginated", _paginated)
     issue = GitHubPlatform().get_issue("o/r", "aviato-settings-drift")
     assert issue is not None
@@ -276,8 +277,10 @@ def test_apply_settings_tolerates_unavailable_security_feature(monkeypatch: pyte
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(github, "run", fake_run)
-    # Must NOT raise despite the security PATCH failing as unavailable.
-    GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "secret_scanning": True})
+    # Must NOT raise despite the security PATCH failing as unavailable, but must REPORT the skipped
+    # toggle (R5-4) so the §5.7 audit doesn't overstate a clean apply.
+    skipped = GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "secret_scanning": True})
+    assert skipped == ["secret_scanning"]
 
 
 def test_apply_settings_reraises_non_feature_security_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -375,7 +378,44 @@ def test_label_events_normalizes_timeline() -> None:
         {"event": "commented", "body": "hi"},
     ]
     events = _label_events(timeline)
-    assert events == [{"action": "labeled", "label": "aviato-consent:x", "actor_type": "User", "actor_login": "al"}]
+    # R2-1: events now carry created_at for chronological reduction (None when the entry lacks it).
+    assert events == [
+        {
+            "action": "labeled",
+            "label": "aviato-consent:x",
+            "actor_type": "User",
+            "actor_login": "al",
+            "created_at": None,
+        }
+    ]
+
+
+def test_consent_reduction_uses_created_at_not_array_order() -> None:
+    # R2-1: a revoke RETURNED BEFORE its stale grant in the array (but earlier by created_at) must
+    # NOT re-authorize. current_consent reduces by created_at, not array position.
+    from aviato.github_platform import current_consent
+
+    events = [
+        # array order puts the grant last, but its timestamp is EARLIER than the revoke
+        {"action": "unlabeled", "label": "aviato-consent:x", "created_at": "2026-05-02T00:00:00Z"},
+        {"action": "labeled", "label": "aviato-consent:x", "actor_type": "User", "created_at": "2026-05-01T00:00:00Z"},
+    ]
+    assert current_consent(events) is None  # revoke is chronologically later → consent gone
+
+
+def test_apply_settings_fails_closed_on_nonstrict_status_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-4: a live strict=false status-check policy would be silently flipped to true by the
+    # wholesale PUT — fail closed instead of clobbering.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(
+        github,
+        "classic_branch_protection",
+        lambda repo, branch: {"required_status_checks": {"strict": False, "contexts": ["ci"]}},
+    )
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT")))
+    with pytest.raises(UnmodeledProtectionError, match="strict"):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
 
 
 def test_adapter_satisfies_platform_protocol() -> None:
@@ -439,6 +479,39 @@ def test_map_branch_settings_unions_classic_and_ruleset_checks() -> None:
     protection = {"required_status_checks": {"contexts": ["common-lint / Common lint"]}}
     mapped = map_branch_settings(rules, protection)
     assert mapped["required_status_checks"] == ["ci / Python CI", "common-lint / Common lint"]
+
+
+def test_map_branch_settings_tolerates_present_but_null_payload() -> None:
+    # R2-4-1/R2-5-F3: GitHub serializes a PRESENT-but-null `checks`/`parameters`/
+    # `required_status_checks`. The read is contracted to fail CLOSED, never crash — a `.get(k, [])`
+    # default only applies when ABSENT, so a present null must be normalized, not iterated as None.
+    protection = {
+        "required_status_checks": {"contexts": None, "checks": None},
+        "required_pull_request_reviews": None,
+        "allow_force_pushes": None,
+        "allow_deletions": None,
+    }
+    rules = [
+        {"type": "pull_request", "parameters": None},
+        {"type": "required_status_checks", "parameters": {"required_status_checks": None}},
+    ]
+    mapped = map_branch_settings(rules, protection)  # must not raise
+    assert mapped["required_status_checks"] == []
+
+
+def test_apply_settings_tolerates_present_but_null_status_check_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-4-2: the apply fail-closed guards read live `checks` (present-but-null); that must not crash
+    # them with TypeError before the PUT. No modeled ruleset rule here, so the classic-PUT path runs.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(
+        github,
+        "classic_branch_protection",
+        lambda repo, branch: {"required_status_checks": {"strict": True, "checks": None}},
+    )
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(github, "run", lambda cmd, **__: subprocess.CompletedProcess(cmd, 0, "", ""))
+    # Must not raise on the null payload; returns the (empty) skipped-toggle list.
+    assert GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True}) == []
 
 
 def test_to_branch_protection_payload_sets_required_checks() -> None:
@@ -593,7 +666,7 @@ def test_probe_health_heartbeat_true_only_for_current_head(monkeypatch: pytest.M
             has_issues=True, head_sha="abc", artifacts=[{"expired": False, "workflow_run": {"head_sha": "abc"}}]
         ),
     )
-    issue_channel, heartbeat = GitHubPlatform().probe_health("o/r")
+    issue_channel, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
     assert issue_channel is True
     assert heartbeat is True
 
@@ -608,13 +681,13 @@ def test_probe_health_heartbeat_false_when_stale_for_old_head(monkeypatch: pytes
             has_issues=True, head_sha="newsha", artifacts=[{"expired": False, "workflow_run": {"head_sha": "oldsha"}}]
         ),
     )
-    _, heartbeat = GitHubPlatform().probe_health("o/r")
+    _, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
     assert heartbeat is False
 
 
 def test_probe_health_heartbeat_false_when_no_artifact_or_expired(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "gh_json_optional", _probe_optional(has_issues=False, head_sha="abc", artifacts=[]))
-    issue_channel, heartbeat = GitHubPlatform().probe_health("o/r")
+    issue_channel, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
     assert issue_channel is False
     assert heartbeat is False
     monkeypatch.setattr(
@@ -624,7 +697,7 @@ def test_probe_health_heartbeat_false_when_no_artifact_or_expired(monkeypatch: p
             has_issues=True, head_sha="abc", artifacts=[{"expired": True, "workflow_run": {"head_sha": "abc"}}]
         ),
     )
-    _, heartbeat = GitHubPlatform().probe_health("o/r")
+    _, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
     assert heartbeat is False  # expired heartbeat for HEAD → broken
 
 
@@ -656,21 +729,22 @@ def test_read_settings_composes_gh_responses(monkeypatch: pytest.MonkeyPatch) ->
     assert "default_branch" not in settings
 
 
-def test_read_settings_empty_when_no_default_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_settings_fails_closed_when_no_default_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-3: an unresolvable default branch is fail-closed (raise → caller SKIPS), not {} (which
+    # would over-report every desired key as additive drift). Mirrors apply_settings.
     monkeypatch.setattr(github, "default_branch", lambda repo: "")
-    assert GitHubPlatform().read_settings("o/r") == {}
+    with pytest.raises(github.SettingsReadError):
+        GitHubPlatform().read_settings("o/r")
 
 
 def test_get_issue_populates_consent_from_paginated_timeline(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The issues-list read is fail-closed (gh_json_optional); the permission lookup is gh_json.
-    monkeypatch.setattr(github, "gh_json_optional", lambda endpoint, **__: _route_gh_json(endpoint))
+    # The permission lookup is gh_json; the issue list AND timeline go through gh_json_paginated.
     monkeypatch.setattr(github, "gh_json", lambda endpoint, **__: _route_gh_json(endpoint))
+    timeline = [{"event": "labeled", "label": {"name": "aviato-consent:abc"}, "actor": {"login": "al", "type": "User"}}]
     monkeypatch.setattr(
         github,
         "gh_json_paginated",
-        lambda endpoint, **__: [
-            {"event": "labeled", "label": {"name": "aviato-consent:abc"}, "actor": {"login": "al", "type": "User"}}
-        ],
+        lambda endpoint, **__: _route_gh_json(endpoint) if "issues?" in endpoint else timeline,
     )
     issue = GitHubPlatform().get_issue("o/r", "aviato-settings-drift")
     assert issue is not None
@@ -859,7 +933,7 @@ def test_apply_settings_reraises_security_patch_error_without_security_context(m
 def test_get_issue_malformed_issue_returns_consentless(monkeypatch: pytest.MonkeyPatch) -> None:
     # review #15: a 200 issue object lacking a `number` must yield a consent-LESS Issue (so
     # reconcile fails closed), never crash and never fabricate consent.
-    monkeypatch.setattr(github, "gh_json_optional", lambda endpoint, **__: [{"title": "no number"}])
+    monkeypatch.setattr(github, "gh_json_paginated", lambda endpoint, **__: [{"title": "no number"}])
     issue = GitHubPlatform().get_issue("o/r", "k")
     assert issue is not None
     assert issue.consent_diff_id is None  # no consent → reconcile refuses
@@ -871,3 +945,41 @@ def test_select_issue_handles_non_list_and_numberless(monkeypatch: pytest.Monkey
     assert _select_issue([], "o/r", "k") is None
     # No usable int number → fall back to the first dict (so callers can still open afresh).
     assert _select_issue([{"title": "x"}], "o/r", "k") == {"title": "x"}
+
+
+def test_classic_pr_bypass_allowance_surfaces_as_unenforced_pr() -> None:
+    # N3 (§2.13/§5.6): a classic protection that requires review BUT lets a user bypass it must NOT read
+    # as a fully-enforced PR requirement — otherwise an otherwise-clean repo never drifts and the bypass
+    # persists undetected. Model the bypass as requires_pull_request=False so it drifts from the desired.
+    from aviato.github_platform import map_branch_settings
+
+    protection = {
+        "required_pull_request_reviews": {
+            "required_approving_review_count": 1,
+            "bypass_pull_request_allowances": {"users": [{"login": "alice"}], "teams": [], "apps": []},
+        }
+    }
+    mapped = map_branch_settings([], protection)
+    assert mapped["requires_pull_request"] is False
+    assert mapped["required_reviews"] == 0
+    # without a bypass allowance, the same protection reads as a real PR requirement
+    no_bypass = {"required_pull_request_reviews": {"required_approving_review_count": 1}}
+    assert map_branch_settings([], no_bypass)["requires_pull_request"] is True
+
+
+def test_ruleset_does_not_satisfy_enforce_admins_when_classic_is_unenforced() -> None:
+    # cycle-15: a ruleset enforces its OWN rules on admins, but it must not READ as enforce_admins=True
+    # when a CLASSIC protection is present with enforce_admins disabled (admins can still bypass the
+    # classic protections). That must drift, not hide the bypass.
+    from aviato.github_platform import map_branch_settings
+
+    ruleset = [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "ci"}]}}]
+    classic_unenforced = {
+        "enforce_admins": {"enabled": False},
+        "required_pull_request_reviews": {"required_approving_review_count": 1},
+    }
+    assert map_branch_settings(ruleset, classic_unenforced)["enforce_admins"] is False
+    # ruleset-only (no classic) still reads enforce_admins=True (the ruleset enforces on admins)
+    assert map_branch_settings(ruleset, {})["enforce_admins"] is True
+    # classic enforce_admins=true is honoured
+    assert map_branch_settings(ruleset, {"enforce_admins": {"enabled": True}})["enforce_admins"] is True

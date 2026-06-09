@@ -3,6 +3,9 @@ workflows: swift-app-wf
 scaffold: swift-app-sc
 settings: baseline
 variables:
+  # R4-3: optional; the consumer's default branch (default `main`), templated into the
+  # generated callers' trigger filters and release-gate input for non-`main` repos.
+  - {name: default-branch, type: string, required: false, default: main}
   - {name: product-scheme, type: string}
   - {name: workspace, type: string, required: false, default: ""}
   - {name: project, type: string, required: false, default: ""}

@@ -84,6 +84,17 @@ def _classify_value_change(desired: Any, live: Any) -> str:
         live_set = {_hashable(v) for v in live}
         desired_set = {_hashable(v) for v in desired}
         return ADDITIVE if live_set.issubset(desired_set) else DESTRUCTIVE
+    # R4-3-WEAKDICT: a nested settings map (e.g. a future structured security toggle) is additive
+    # only if it drops NO key the live map carries AND no shared child value weakens — otherwise
+    # destructive. Without this branch a dict value fell through to DESTRUCTIVE, so a legitimate
+    # STRENGTHENING of a nested floor value would be wrongly rejected by the §2.13 weakens() guard.
+    if isinstance(desired, dict) and isinstance(live, dict):
+        if any(key not in desired for key in live):
+            return DESTRUCTIVE
+        for key, live_value in live.items():
+            if desired[key] != live_value and _classify_value_change(desired[key], live_value) == DESTRUCTIVE:
+                return DESTRUCTIVE
+        return ADDITIVE
     # Ambiguous / unrecognized change → destructive (fail-safe).
     return DESTRUCTIVE
 

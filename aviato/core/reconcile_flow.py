@@ -41,25 +41,36 @@ def run_reconcile(
     diff = classify_settings(desired=desired_settings, live=live)
     current_diff_id = diff_identity(diff)
 
-    state = ReconcileState(
-        issue_open=issue.open,
-        consent_present=issue.consent_diff_id is not None,
-        consent_diff_id=issue.consent_diff_id,
-        current_diff_id=current_diff_id,
-        actor_type=issue.consent_actor_type,
-        role=issue.consent_role,
-        role_lookup_ok=issue.consent_role_lookup_ok,
-        issue_edited_by_nonhuman_since_grant=issue.edited_by_nonhuman_since_grant,
-        confirmed_diff_id=confirmed_diff_id,
-        desired_settings=desired_settings,
-        live_settings=live,
-        tool_version=tool_version,
-        pin=pin,
-        recorded_version=recorded_version,
-        override_version_pin=override_version_pin,
-    )
+    def _state(issue_obj: Any, diff_id: str, live_settings: dict[str, Any]) -> ReconcileState:
+        # Build the decision input from a (possibly re-read) issue + diff. Version-pin / confirmed-id
+        # inputs are constant across reads; only the consent channel and the live diff can change.
+        return ReconcileState(
+            issue_open=issue_obj.open,
+            consent_present=issue_obj.consent_diff_id is not None,
+            consent_diff_id=issue_obj.consent_diff_id,
+            current_diff_id=diff_id,
+            actor_type=issue_obj.consent_actor_type,
+            role=issue_obj.consent_role,
+            role_lookup_ok=issue_obj.consent_role_lookup_ok,
+            issue_edited_by_nonhuman_since_grant=issue_obj.edited_by_nonhuman_since_grant,
+            confirmed_diff_id=confirmed_diff_id,
+            desired_settings=desired_settings,
+            live_settings=live_settings,
+            tool_version=tool_version,
+            pin=pin,
+            recorded_version=recorded_version,
+            override_version_pin=override_version_pin,
+            issue_ambiguous=issue_obj.ambiguous,
+        )
 
+    state = _state(issue, current_diff_id, live)
     outcome = reconcile_decision(state)
+    # R2-6/§5.7: a non-human edit since the grant VOIDS consent — actually revoke the grant label
+    # (not just comment), so a subsequent run doesn't re-evaluate a stale grant. The decision
+    # reports this as an abort with "consent voided"; effect it here on the platform.
+    if state.issue_edited_by_nonhuman_since_grant and issue.consent_diff_id is not None:
+        with contextlib.suppress(Exception):
+            platform.revoke_consent(repo, issue_key, issue.consent_diff_id)
     # Surface the apply-time recomputed diff on every outcome (§2.8): the caller renders
     # it so the operator confirms/sees the SAME read that was applied, not the preview.
     outcome = dataclasses.replace(
@@ -67,6 +78,35 @@ def run_reconcile(
     )
 
     if outcome.action == "apply":
+        # C12-R3-1 (§5.7/§2.8): RE-READ the consent channel + live settings IMMEDIATELY before the
+        # privileged write and re-authorize against the RECOMPUTED diff. The entry-time decision can be
+        # stale — a consent label revoked, the issue closed, or the live settings/diff changed between
+        # the entry read and here must ABORT, never apply on stale authorization. (The docstring's
+        # apply-time re-read promise was previously unfulfilled.)
+        fresh_issue = platform.get_issue(repo, issue_key)
+        if fresh_issue is None or not fresh_issue.open:
+            return dataclasses.replace(
+                ReconcileOutcome("refuse", "tracking issue became missing/closed before apply; re-run"),
+                diff_id=current_diff_id,
+                changes=dict(diff.changes),
+                values=dict(diff.values),
+            )
+        live = platform.read_settings(repo)
+        diff = classify_settings(desired=desired_settings, live=live)
+        current_diff_id = diff_identity(diff)
+        recheck = reconcile_decision(_state(fresh_issue, current_diff_id, live))
+        if recheck.action != "apply":
+            with contextlib.suppress(Exception):
+                platform.comment_issue(
+                    repo, issue_key, f"Apply ABORTED — consent/state changed before apply: {recheck.reason}"
+                )
+            return dataclasses.replace(
+                recheck, diff_id=current_diff_id, changes=dict(diff.changes), values=dict(diff.values)
+            )
+        # Re-authorized on the fresh read: carry the recomputed diff into the apply + audit below.
+        outcome = dataclasses.replace(
+            recheck, diff_id=current_diff_id, changes=dict(diff.changes), values=dict(diff.values)
+        )
         # Apply the full DESIRED state, not the diff. The platform binding constructs
         # the purpose-built write payload(s) from this (§2.9): branch protection is a
         # wholesale PUT whose accepted payload is the complete protection object, so a
@@ -77,7 +117,7 @@ def run_reconcile(
         try:
             # Pass the decision-time live snapshot so the binding can fail closed if the modeled
             # branch state drifted since the diff/consent were computed (§2.8/§5.7, review #14).
-            platform.apply_settings(repo, desired_settings, expected_live=live)
+            skipped = platform.apply_settings(repo, desired_settings, expected_live=live)
         except Exception as exc:
             # §5.7 audit: an apply that throws mid-flight may have PARTIALLY landed, so it
             # must leave a record on the issue, then propagate (fail-closed) — never vanish
@@ -89,6 +129,11 @@ def run_reconcile(
         # removals), not the additive-only write subset (outcome.payload) — a removed key is
         # the most sensitive change and must appear in the audit trail (§5.7).
         audit = f"Applied diff {current_diff_id} (changes: {outcome.changes})"
+        # R5-4: if the binding surfaced-and-skipped a §17 toggle (feature unavailable), the audit
+        # must say so rather than overstate a clean apply — the operator needs to know a requested
+        # security setting did NOT land (enable it per §17, then re-reconcile).
+        if skipped:
+            audit += f"; SKIPPED unavailable: {sorted(skipped)}"
     else:
         audit = f"{outcome.action}: {outcome.reason}"
 

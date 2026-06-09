@@ -1193,6 +1193,11 @@ A capability is "done" only when **all** hold:
    **operator-performed** real run on the operator's own account (§13.4.7) — this
    substitutes for criteria 2–3 for that capability only.
 
+### 9b. Core-level Definition of Done (falsifiable agnosticism)
+
+<a id="9b"></a>
+_(Referenced throughout as "§9b" — the core-level, falsifiable agnosticism DoD.)_
+
 **Core-level Definition of Done (falsifiable agnosticism):** beyond per-capability
 DoD, the **core itself** is done only when: (a) the core loads and all core tests
 pass with **zero plug-ins present**; (b) a static check confirms the core has **no
@@ -1399,10 +1404,34 @@ the network is **checksum-verified** before execution; and a tool installed from
 package index that exposes no digest (e.g. a `pip`/`npm` package) is pinned to an
 **exact version**, never a floating latest. (Distro packages installed via the
 runner's system package manager inherit the pinned runner-image snapshot.) The
-agnostic checker (`aviato.plugins.actionpins`) and the in-CI gate enforce the
-digest-pinned classes (actions, images, curl-fetched binaries) and unsafe `npx`
-registry fetches; exact-version tool pins are carried as workflow inputs (e.g.
-`actionlint-version`, `yamllint-version`) or explicit exact package specs.
+checker (`aviato.plugins.actionpins`, surfaced as `aviato lint-actions`) and the in-CI
+gate enforce the digest-pinned classes and unsafe `npx` registry fetches; exact-version
+tool pins are carried as workflow inputs (e.g. `actionlint-version`, `yamllint-version`)
+or explicit exact package specs.
+**Enforcement is delegated + fail-closed (and runs as ONE implementation).** Action and
+container-image pinning (`uses:` clauses, `container:`/`services:` images) are enforced by
+**zizmor** (`unpinned-uses`/`unpinned-images`) via a bundled policy config
+(`aviato/library/zizmor.yml`: `actions/*`, `github/*`, and the `amattas/aviato/*` self-ref are
+ref-pinnable, everything else SHA-required). zizmor is invoked
+`--offline --persona=auditor --no-ignores`: offline because the gated audits are syntactic and must
+not be coupled to GitHub-API availability (R10-3); auditor persona because `unpinned-images` is
+silent at the default persona (R10-4); and `--no-ignores` so a consumer's inline
+`# zizmor: ignore[…]` cannot waive the Library-mandated gate (R10-8).
+Fetch-and-execute (`curl … | bash`) is enforced by a **fail-closed taint** rule (NOT a checksum-word
+or sink allowlist — those fail open, cycle-10 R10-1/R10-2): over each command sequence (split on
+`;`/`&&`/`||`/`&`), a `curl`/`wget` is a violation if its output streams into an executing
+substitution or a non-pure-sink pipe target; a download to a file is **tainted**, and any later use
+of a tainted file is a violation **unless a real verify *command*** (`sha256sum -c`, `cosign verify`,
+`gpg --verify`, …) has cleared it. Only two shapes are clean: a pure data pipeline (`curl … | jq`)
+and **download → verify → use**. **Do NOT re-introduce interpreter enumeration — it fails open and
+flapped for eight commits (cycle-9 R9-1…R9-5);** the taint rule enumerates only obviously-safe data
+sinks, so new executors are caught by default. The in-CI gate runs the *same* `aviato lint-actions`
+(no grep mirror — the two-implementation drift was R9-5), installing the pinned Aviato Library
+(which carries the pinned zizmor) at the caller's `aviato-ref`.
+**Scope note:** `docker run`/`docker pull`/`docker image pull`/`docker container run` of a mutable
+`img:tag` inside a shell `run:` block is intentionally **not** gated (use a `container:`/`services:`
+image, which zizmor pins, or pin the tag in the Dockerfile); the old shell-`docker` token checks were
+dropped with the enumeration machinery (R9-4 / R10-N2).
 For npm install paths, Aviato adds an additional supply-chain guard: Node and
 Docusaurus installs must run with npm **11 or newer**, because older npm rejects
 the `min-release-age` option. The reusable Node and docs workflows fail closed on
@@ -1411,8 +1440,9 @@ npm <11 before any install command runs, set `ignore-scripts=true`, and set
 include `.npmrc` with the same values, and package manifests declare
 `node >=24` / `npm >=11`, so local project installs inherit and enforce the
 posture. Node tool invocations that use `npx` must pass `--no-install` unless
-they are explicitly exact-version tool fetches documented as such; both
-`aviato validate` and the common lint workflow enforce this boundary.
+they are explicitly exact-version tool fetches documented as such; the npx gate
+runs inside `aviato lint-actions` (and therefore in both `aviato validate` and
+the common lint workflow).
 **Day-zero exception (macOS Homebrew tools, deferred):** the Swift verify install
 (`brew install swift-format swiftlint`, §12.3) is **not** version/checksum-pinned —
 neither tool ships a versioned Homebrew formula, and unlike a Linux distro package a
@@ -1488,6 +1518,17 @@ published-artifact security set (§2.13): a **container image vulnerability scan
 artifact. Runs on the platform token / OIDC — no stored secret. (App Store
 Connect, §13.4, is exempt from image scan; its signing is platform-side.)
 
+**Severity-filtered vs strict gates (scanner capability note).** The "high/critical
+blocks, medium/low reports" policy assumes the scanner exposes per-vuln severity
+inline. The GHCR pipeline uses Trivy, which supports `--severity HIGH,CRITICAL`,
+so it filters as specified. The PyPI pipeline uses `pip-audit` against the OSV/PyPA
+service, which does NOT emit severity in its `--format json` output (each vuln carries
+only `id`/`fix_versions`/`aliases`/`description`). For the PyPI gate the pessimistic
+fail-closed posture is therefore `pip-audit --strict` — any reported finding blocks
+the publish (medium/low are still reported in the run log, just not separately gated).
+A future severity-aware PyPI gate would require switching scanners (osv-scanner) or
+doing a separate OSV/NVD lookup per vuln id.
+
 ---
 
 ## 12. Language Plug-ins
@@ -1551,8 +1592,24 @@ without the core knowing the location.
   + push protection (platform-native); SARIF to the Security tab; high/critical
   gates verify.
 
-**Required variables:** distribution name, import/package name, shared metadata
-variables (typed, non-secret).
+**Required variables:** for the **library** model (`python-library`/`python-component`),
+the distribution name and import/package name (typed, non-secret). For the **container
+service** model (`python-service`, below), only the GHCR image name.
+
+**Container-service model (`python-service`).** A Python *service* whose build artifact
+is its **Dockerfile image** (§13.2), not a wheel — so it follows the same packaging-free
+shape as `node-service`, **not** the library model above:
+- declares **no** distribution/import name (only the GHCR `image-name`);
+- versions via a plain **`VERSION`** file (the release flow bumps the bare SemVer), not a
+  `pyproject.toml` — there is no wheel/package metadata;
+- CI installs from **`requirements.txt`** (the same file the Dockerfile uses) plus a seeded
+  **`requirements-dev.txt`** for tools — it never installs the project as an editable package
+  and **builds no wheel** (`run-build: false`); type-checking is **non-strict** `mypy` (lower
+  adoption friction than the library default's `mypy --strict`);
+- docs (when `docs: true`) are **narrative-only** (no docstring API reference — a service has
+  no importable library API), mirroring `swift-app`.
+The Dockerfile remains a §17 seed-once prerequisite the developer owns; the GHCR deploy
+(§13.2) builds it. This keeps "service = container" symmetric across Python and Node.
 
 **Runner:** Linux. **Definition of done:** verify + release green in real CI (plus
 the docs build when `docs: true`); the attached deploy plug-in meets its DoD.
@@ -1829,9 +1886,14 @@ and the **monotonic build number** (distinct from the marketing version, §12.3)
 App Store Connect rejects duplicate/non-increasing build numbers.
 **Where the build number is set and enforced.** The build number is written into the
 version-source (`CURRENT_PROJECT_VERSION`/`CFBundleVersion`) at the **release-proposal**
-step (§5.9): the bump **fails loud** if a build number is supplied but the version-source
-exposes no field to receive it (so a Swift release can never tag with an un-bumped build
-number). The agnostic release process derives the marketing version from SemVer and
+step (§5.9). For a build-number-bearing version-source format (Swift `.pbxproj`/`.plist`),
+the bump **fails loud** if a build number is supplied but no concrete field is found (so a
+Swift release can never tag with an un-bumped build number). For non-app version-source
+formats that have no build-number field by construction (`pyproject.toml`, `package.json`,
+plain `VERSION`), the supplied build number is best-effort: it is **silently ignored** —
+the agnostic release workflow passes `--build-number` uniformly without knowing which
+version-source the profile uses, so the no-op is intentional and not an error.
+The agnostic release process derives the marketing version from SemVer and
 re-proves *that* at the tag step; the build number's value is supplied per-run (the run
 number, strictly increasing) and its **strict-increase invariant is enforced
 authoritatively by App Store Connect at upload** (it rejects duplicate/non-increasing

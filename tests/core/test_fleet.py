@@ -64,6 +64,19 @@ def test_scan_reports_repo_without_declaration(tmp_path: Path) -> None:
     assert scans[0].statuses == {}
 
 
+def test_scan_reports_malformed_declaration_as_error_not_crash(tmp_path: Path) -> None:
+    # R1-1/§5.11: a repo with corrupt YAML must be reported as that repo's error, never crash the
+    # whole fleet scan. The good repo alongside it must still be scanned.
+    bad = tmp_path / "bad"
+    (bad / ".github").mkdir(parents=True)
+    (bad / ".github" / "aviato.yaml").write_text("profile: p\nversion: '1'\nvariables: {a: [x\n", encoding="utf-8")
+    good = tmp_path / "good"
+    good.mkdir()  # no declaration → its own benign error row
+    scans = scan_fleet([bad, good], Registry(MODULE_SOURCE_ROOT))
+    assert len(scans) == 2
+    assert scans[0].error is not None  # malformed YAML reported, not raised
+
+
 def test_scan_is_read_only(tmp_path: Path) -> None:
     consumer = tmp_path / "c"
     _make_consumer(consumer, scaffold_all=False)
@@ -96,3 +109,33 @@ def test_scan_unknown_archived_state_is_not_skipped(tmp_path: Path) -> None:
     scans = scan_fleet([consumer], Registry(MODULE_SOURCE_ROOT), archived_probe=lambda root: None)
     assert scans[0].skipped_archived is False
     assert scans[0].statuses
+
+
+def test_scan_degrades_on_non_utf8_declaration_and_dir_at_managed_path(tmp_path: Path) -> None:
+    # R5-5-FLEETDEGRADE/§5.11: a consumer with a non-UTF-8 `aviato.yaml`, or a DIRECTORY at a
+    # managed output path, must each be reported as that repo's error/drift — never abort the whole
+    # sweep. (These bypass the AviatoError-only guard unless load_declaration catches UnicodeDecode
+    # and diagnose catches OSError — R5-4-DECL / R5-3-DIAG-OS.)
+    bad_enc = tmp_path / "badenc"
+    (bad_enc / ".github").mkdir(parents=True)
+    (bad_enc / ".github" / "aviato.yaml").write_bytes(b"profile: python-library\nversion: \xff\xfe v1\n")
+
+    dir_at_path = tmp_path / "dirpath"
+    _make_consumer(dir_at_path, scaffold_all=True)
+    # Replace a managed file with a directory at its path.
+    managed = dir_at_path / "ruff.toml"
+    if managed.exists():
+        managed.unlink()
+    managed.mkdir()
+
+    good = tmp_path / "good2"
+    _make_consumer(good, scaffold_all=True)
+
+    scans = scan_fleet([bad_enc, dir_at_path, good], Registry(MODULE_SOURCE_ROOT))
+    assert len(scans) == 3  # nothing aborted the sweep
+    assert scans[0].error is not None  # non-UTF-8 declaration → that repo's error row
+    # dir-at-managed-path: diagnosed (no crash); the directory path reads as dirty-drift.
+    assert scans[1].error is None
+    assert scans[1].statuses.get("ruff.toml") == "dirty-drift"
+    # the good repo is still fully diagnosed.
+    assert scans[2].error is None

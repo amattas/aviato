@@ -3,20 +3,32 @@ workflows: python-service-wf
 scaffold: python-service-sc
 settings: baseline
 variables:
-  # §12.1 Python plug-in vars: the wheel/distribution name (the pyproject [project] name) and
-  # the import package name. image-name (§13.2) is the GHCR target. All are non-secret.
-  - {name: distribution-name, type: string}
-  - {name: image-name, type: string}
-  - {name: import-name, type: string}
+  # R4-3: optional; the consumer's default branch (default `main`), templated into the
+  # generated callers' trigger filters and release-gate input for non-`main` repos.
+  - {name: default-branch, type: string, required: false, default: main}
+  # A Python container SERVICE: the build artifact is its image (§13.2), NOT a wheel, so it
+  # declares NO distribution/import name (unlike the python-library packaging model, §12.1).
+  # R4-2: it also declares NO image-name var — the GHCR caller defaults the image to the repo slug
+  # (the common case, image == repo), exactly mirroring the sibling node-service profile. A consumer
+  # wanting a different image name edits the generated caller, same as node-service.
 version_source:
-  locations: [pyproject.toml]
+  # Packaging-free version-source: a plain VERSION file holding the bare SemVer (§13.2). The
+  # release flow bumps it; the Dockerfile owns the build. (A library uses pyproject.toml instead.)
+  locations: [VERSION]
 toolchain:
   linter: ruff
   formatter: ruff
   type_checker: mypy
   test_runner: pytest
 notes:
-  - "Requires a seed-once container build definition before GHCR publishing (§13.2)."
+  - "A container service: builds via its Dockerfile, ships a GHCR image — no wheel/library publish."
+  # R5-6: the Dockerfile is an OPERATOR-OWNED, OUT-OF-BAND prerequisite (§13.2) — Aviato never
+  # seeds one (a runtime image is too app-specific to template), it only PROBES for it via the
+  # `prerequisites` block below; `aviato doctor` reports it absent until you add it. A freshly
+  # scaffolded service therefore cannot GHCR-publish until you commit a Dockerfile. This mirrors
+  # node-service, whose Dockerfile is likewise operator-owned.
+  - "Requires an operator-provided Dockerfile (probed, never seeded) before GHCR publishing (§13.2)."
+  - "CI installs from requirements.txt (+ the seeded requirements-dev.txt); it does NOT `pip install -e .`."
 docs_pipeline: docs-pages
 prerequisites:
   container_build_definition: [Dockerfile]

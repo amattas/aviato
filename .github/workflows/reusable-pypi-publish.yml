@@ -60,6 +60,12 @@ concurrency:
   group: aviato-pypi-${{ github.repository }}
   cancel-in-progress: false
 
+# Top-level permissions are the UNION the caller must grant the reusable workflow (§8.9 — the
+# pipeline module's declared privileges mirror this). R3-2-PYPIJOB: the build job DOWNGRADES to
+# contents:read (see its job-level `permissions:`) so the operator-supplied install/build commands —
+# which execute arbitrary build-TIME dependencies — never run with the OIDC/attestation token; only
+# the separate PUBLISH job (which runs no build code) keeps id-token/attestations. Artifacts cross
+# the job boundary via upload/download (PyPI trusted-publishing isolation guidance).
 permissions:
   contents: read
   id-token: write
@@ -67,12 +73,16 @@ permissions:
   attestations: write
 
 jobs:
-  publish:
-    name: Publish Python package
+  build:
+    name: Build Python package
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
+    outputs:
+      resolved-tag: ${{ steps.tag.outputs.resolved-tag }}
     steps:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
@@ -83,6 +93,7 @@ jobs:
           fetch-tags: true
 
       - name: Validate release tag
+        id: tag
         shell: bash
         env:
           TAG_PATTERN: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
@@ -103,13 +114,16 @@ jobs:
             echo "::error::Tag must match ${TAG_FORMAT_DESCRIPTION}. Got: ${tag}"
             exit 1
           fi
-          echo "RESOLVED_TAG=${tag}" >> "${GITHUB_ENV}"
+          # resolved-tag crosses the job boundary to the publish job's "confirm resolvable" step.
+          echo "resolved-tag=${tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python-version }}
 
+      # The operator-supplied install/build commands run HERE, in the unprivileged build job —
+      # arbitrary build-time dependencies execute with contents:read only, never near the OIDC token.
       - name: Install build tools
         if: ${{ inputs.install-command != '' }}
         shell: bash
@@ -123,8 +137,9 @@ jobs:
           BUILD_COMMAND: ${{ inputs.build-command }}
         run: eval "$BUILD_COMMAND"
 
-      # §13.1: verify metadata, scan dependencies (gate on high/critical), generate
-      # SBOM + build provenance — before publishing.
+      # §13.1: verify metadata + scan dependencies (gate on high/critical) + generate the SBOM
+      # before the artifacts ever leave this job. The attestation/publish (which need the OIDC
+      # token) happen in the separate publish job below, against these built artifacts.
       - name: Verify distribution metadata
         shell: bash
         env:
@@ -149,8 +164,18 @@ jobs:
           /tmp/audit-venv/bin/python -m pip install --quiet "pip-audit==${PIP_AUDIT_VERSION}"
           # Install the built wheel so pip-audit sees the project's resolved deps.
           /tmp/audit-venv/bin/python -m pip install --quiet "${PACKAGES_DIR}"/*.whl
+          # R7-1-PIPAUDIT-NOOP: REVERT to `--strict` (the prior fail-closed posture). The R6-2-PIPAUDIT
+          # attempt at a "HIGH/CRITICAL only" gate (mirroring the GHCR `trivy --severity ...` pattern)
+          # was structurally a NO-OP — pip-audit's OSV/PyPA service does NOT emit per-vuln severity in
+          # its --format json output (each vuln carries only id/fix_versions/aliases/description),
+          # verified empirically against jinja2==2.10 (10 known HIGH-severity CVEs, all gating-checked
+          # to "no severity"). So substring-matching "critical"/"high" against aliases (which are
+          # GHSA/CVE/PYSEC identifiers) never fires regardless of actual severity, and a previously
+          # fail-closed control silently became fail-open. The pessimistic-but-correct posture is
+          # `--strict` — any reported finding blocks the publish — until/unless we switch to a scanner
+          # that does expose severity (e.g. osv-scanner, or a separate OSV/NVD lookup). See §11.7/§2.13.
           /tmp/audit-venv/bin/python -m pip_audit --strict --progress-spinner off || {
-            echo "::error::pip-audit found vulnerabilities in the project's dependencies (gating publish, §11.7).";
+            echo "::error::pip-audit found vulnerabilities in the project's dependencies (gating publish, §11.7/§2.13).";
             exit 1;
           }
 
@@ -161,10 +186,54 @@ jobs:
           format: cyclonedx-json
           output-file: "${{ inputs.working-directory }}/sbom.cyclonedx.json"
 
+      # Hand the built distributions + SBOM to the publish job. if-no-files-found:error so a broken
+      # build can never silently produce an empty publish.
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: aviato-pypi-dist
+          path: |
+            ${{ inputs.working-directory }}/${{ inputs.packages-dir }}/
+            ${{ inputs.working-directory }}/sbom.cyclonedx.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish Python package
+    needs: build
+    runs-on: ubuntu-latest
+    # R3-2-PYPIJOB: ONLY this job holds the OIDC/attestation token, and it runs NO operator build
+    # code — just download the vetted artifacts, attest them, and publish. No `eval` here.
+    permissions:
+      contents: read
+      id-token: write
+      # attestations: write lets the publish attach keyless build provenance (§11.7).
+      attestations: write
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout consumer repository
+        uses: actions/checkout@v4
+        with:
+          # Needed only to read pyproject.toml in the "confirm resolvable" step; no build runs here.
+          ref: ${{ inputs.release-tag || github.ref }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: aviato-pypi-dist
+          path: ${{ inputs.working-directory }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+
       # §11.7: build provenance AND the SBOM are attested to the published artifacts
       # (keyless OIDC), not just generated as loose files.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: "${{ inputs.working-directory }}/${{ inputs.packages-dir }}/*"
 
@@ -192,6 +261,7 @@ jobs:
         shell: bash
         env:
           INDEX_URL: ${{ inputs.repository-url }}
+          RESOLVED_TAG: ${{ needs.build.outputs.resolved-tag }}
         run: |
           set -euo pipefail
           # Package version is the bare SemVer (strip the leading v from the tag).
@@ -199,10 +269,14 @@ jobs:
           name="$(python -c 'import tomllib,glob; print(tomllib.load(open("pyproject.toml","rb"))["project"]["name"])')"
           extra=()
           if [ -n "${INDEX_URL}" ]; then extra=(--index-url "${INDEX_URL%/}/simple/"); fi
-          for attempt in 1 2 3 4 5; do
+          # C12-W7 (§13.1): a published version that never becomes resolvable is a FAILED release, not a
+          # warning — a green run that left an uninstallable upload is worse than a loud failure. Retry
+          # generously for real index-propagation delay (≈8 min total), then FAIL CLOSED.
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
             if python -m pip download --no-deps --no-binary :all: "${extra[@]}" "${name}==${version}" -d /tmp/confirm 2>/dev/null; then
               echo "Confirmed ${name}==${version} resolvable."; exit 0
             fi
-            echo "Not yet resolvable (attempt ${attempt}); waiting..."; sleep 15
+            echo "Not yet resolvable (attempt ${attempt}/10); waiting..."; sleep 30
           done
-          echo "::warning::Could not confirm ${name}==${version} resolvable (index propagation delay)."
+          echo "::error::Published ${name}==${version} did not become resolvable on the index after retries; failing the release (§13.1)." >&2
+          exit 1

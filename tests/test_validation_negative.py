@@ -8,8 +8,22 @@ import pytest
 from aviato.paths import REPO_ROOT
 from aviato.validation import RELEASE_WORKFLOWS, validate
 
+# pytest-of-* / aviato-* / .tmpdir*: temp litter that lands in the repo root when the
+# system temp dir is unwritable (Python's tempfile falls back to cwd). Copying it would
+# recurse into prior runs' nested repo copies — see also the basetemp guard in conftest.py.
 _IGNORE = shutil.ignore_patterns(
-    ".git", "_wheelout", "__pycache__", "*.egg-info", ".ruff_cache", ".pytest_cache", ".DS_Store"
+    ".git",
+    "_wheelout",
+    "__pycache__",
+    "*.egg-info",
+    ".ruff_cache",
+    ".pytest_cache",
+    ".DS_Store",
+    "pytest-of-*",
+    ".tmpdir*",
+    "aviato-onboard-*",
+    "aviato-offboard-*",
+    "aviato-scanfix-*",
 )
 
 
@@ -153,6 +167,19 @@ def test_static_ruleset_pattern_drift_is_detected(repo_copy: Path) -> None:
     f.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     errors = validate(repo_copy)
     assert any("tag_name_pattern" in e and "policy.yml" in e for e in errors)
+
+
+def test_baseline_required_reviews_deletion_is_detected(repo_copy: Path) -> None:
+    # R3-11: removing the baseline approval setting entirely must FAIL validation (it previously
+    # returned clean when the key was absent).
+    import yaml as _yaml
+
+    f = repo_copy / "aviato" / "library" / "bundles" / "settings" / "baseline.yaml"
+    doc = _yaml.safe_load(f.read_text())
+    doc["settings"]["default_branch"].pop("required_reviews", None)
+    f.write_text(_yaml.safe_dump(doc), encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("required_reviews" in e and "missing" in e for e in errors)
 
 
 def test_branch_ruleset_approval_literal_drift_is_detected(repo_copy: Path) -> None:

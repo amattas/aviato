@@ -63,8 +63,16 @@ def _non_negative_int(value: str) -> int:
 
 
 def _read_repos_file(path: Path) -> list[str]:
+    # R3-13: a missing/unreadable --repos-file must be a clean operator error (exit 2 via main()'s
+    # AviatoError handler), not a raw OSError traceback.
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        # N8: UnicodeDecodeError is a ValueError, NOT an OSError, so a non-UTF-8 repos file would
+        # otherwise escape this net as a raw traceback. Map both to a clean operator error.
+        raise AviatoError(f"could not read --repos-file {path}: {exc}") from exc
     repos: list[str] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         value = line.strip()
         if value and not value.startswith("#"):
             repos.append(value)
@@ -89,12 +97,14 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
-def _profile_status_checks(profile: str | None) -> list[str]:
+def _profile_status_checks(profile: str | None, overrides: dict[str, object] | None = None) -> list[str]:
     """The resolved profile's required status-check contexts (§10.3 composition; §5.6 gate), or [] if none.
 
     Lets `apply-rulesets`/`render-rulesets` inject the language verify job (e.g.
     `ci / Python CI`) into the otherwise-static branch ruleset so it matches the
-    profile composed for the repo.
+    profile composed for the repo. C12-3: pass the consumer's ``overrides`` so a ruleset
+    apply resolves the SAME status checks drift detection uses — never re-adding a check
+    the consumer removed via `pipelines.remove`.
     """
     if not profile:
         return []
@@ -102,7 +112,7 @@ def _profile_status_checks(profile: str | None) -> list[str]:
     from .core.registry import Registry
     from .paths import MODULE_SOURCE_ROOT
 
-    resolved = resolve_profile(Registry(MODULE_SOURCE_ROOT), profile)
+    resolved = resolve_profile(Registry(MODULE_SOURCE_ROOT), profile, overrides=overrides or {})
     return list(resolved.settings.get("default_branch", {}).get("required_status_checks", []))
 
 
@@ -116,8 +126,32 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
         print("at least one repository slug is required", file=sys.stderr)
         return 2
 
+    # R3-5: validate each slug is a clean OWNER/REPO locally (like cmd_provision / the proposals),
+    # so a malformed token fails loud here instead of as a confusing 404 after an API round-trip.
+    bad = [s for s in slugs if s.count("/") != 1 or not all(part for part in s.split("/"))]
+    if bad:
+        print(f"invalid repository slug(s) {bad}; expected OWNER/REPO", file=sys.stderr)
+        return 2
+
+    # C12-3: if a consumer declaration is given, resolve the profile WITH its overrides so the applied
+    # rulesets carry the SAME status checks + approvals drift detection used — never re-adding a check
+    # the consumer removed. Otherwise fall back to the base profile (operator-direct provisioning).
+    required_approvals = args.required_approvals
     try:
-        extra_checks = _profile_status_checks(getattr(args, "profile", None))
+        if getattr(args, "declaration", None):
+            declaration = load_declaration(Path(args.declaration))
+            extra_checks = _profile_status_checks(declaration.profile, declaration.overrides)
+            if required_approvals is None:
+                from .core.composition import resolve_profile
+                from .core.registry import Registry
+                from .paths import MODULE_SOURCE_ROOT
+
+                _db = resolve_profile(
+                    Registry(MODULE_SOURCE_ROOT), declaration.profile, overrides=declaration.overrides
+                ).settings.get("default_branch", {})
+                required_approvals = _db.get("required_reviews")
+        else:
+            extra_checks = _profile_status_checks(getattr(args, "profile", None))
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -137,13 +171,21 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
         for message in apply_rulesets(
             slugs,
             apply=args.apply,
-            required_approvals=args.required_approvals,
+            required_approvals=required_approvals,
             extra_status_checks=extra_checks,
         ):
             print(message)
         return 0
-    except GitHubAPIError as exc:
+    except (GitHubAPIError, CommandError) as exc:
+        # R3-2: the apply WRITE (upsert_ruleset PUT/POST) raises CommandError, not GitHubAPIError;
+        # map both to the documented exit 1 instead of letting CommandError fall to main()'s exit 2.
         print(f"GitHub API error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        # R2-4-5: a malformed ruleset manifest/template (missing rule, unknown patch key, empty name)
+        # raises ValueError from render — a library-data error `aviato validate` is meant to catch.
+        # Surface it cleanly here rather than leaking a raw traceback past main() (§2.4).
+        print(f"ruleset render error (run `aviato validate`): {exc}", file=sys.stderr)
         return 1
 
 
@@ -155,7 +197,12 @@ def cmd_render_rulesets(args: argparse.Namespace) -> int:
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    payloads = render_all_rulesets(required_approvals=args.required_approvals, extra_status_checks=extra_checks)
+    try:
+        payloads = render_all_rulesets(required_approvals=args.required_approvals, extra_status_checks=extra_checks)
+    except ValueError as exc:
+        # R2-4-5: malformed ruleset library data → clean error, never a raw traceback (§2.4).
+        print(f"ruleset render error (run `aviato validate`): {exc}", file=sys.stderr)
+        return 1
     print(json.dumps(payloads, indent=2))
     return 0
 
@@ -194,7 +241,15 @@ def _recorded_versions(root: Path, expected: list[ExpectedArtifact]) -> list[str
             continue
         path = root / artifact.output_path
         if path.is_file():
-            info = parse_marker_from_text(path.read_text(encoding="utf-8"))
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                # R3-4-1: a non-UTF-8 file at a managed output path carries no valid marker → no
+                # version constraint. Skip it (matches diagnosis/scaffold, which treat it as
+                # dirty-drift) rather than leak a raw UnicodeDecodeError (a ValueError, outside
+                # main()'s except net) that would abort a sync/drift/fleet-scan with a traceback.
+                continue
+            info = parse_marker_from_text(text)
             if info is not None:
                 versions.append(info.version)
     return versions
@@ -256,24 +311,30 @@ def _desired_settings(resolved) -> dict:
     return {key: value for key, value in flat.items() if key in RECONCILABLE_SETTING_KEYS}
 
 
-def _drifted_rulesets(slug: str, platform, profile: str, *, required_approvals: int | None = None) -> tuple[str, ...]:
+def _drifted_rulesets(
+    slug: str,
+    platform,
+    *,
+    required_approvals: int | None = None,
+    extra_status_checks: list[str] | None = None,
+) -> tuple[str, ...]:
     """Names of desired rulesets MISSING from, or content-DRIFTED on, the live platform (§5.6).
 
-    The GitHub-specific work (render the desired payloads with the profile's verify checks, read
+    The GitHub-specific work (render the desired payloads with the resolved verify checks, read
     the live payloads, compare presence + content) lives here in the binding layer, NOT the
     agnostic flow. Reads are admin-scoped and fail closed (SettingsReadError) like other settings
     reads, so the caller's existing fail-closed/fail-loud handling covers them.
 
-    CX#1: ``required_approvals`` is the consumer's resolved ``required_reviews`` override (§4.2). It
-    must flow into the rendered ruleset so the RULESET surface and the classic branch-protection
-    reconcile (which already honors the override) agree on the approval count — otherwise a
-    consumer that overrides required_reviews sees phantom ruleset drift / an apply that resets it.
+    R9-21 (cycle 9, fixed cycle 11): ``extra_status_checks`` is the consumer's **override-resolved**
+    required status checks (from ``resolved.settings``), NOT the base profile's. Using the base
+    profile here reported phantom drift for a consumer that removed a pipeline via overrides, and the
+    suggested `apply-rulesets --profile` remediation would re-add a required check whose workflow no
+    longer runs (unmergeable PRs). CX#1: ``required_approvals`` is the resolved ``required_reviews``
+    override, flowed in for the same reason (ruleset + classic-protection agree on the count).
     """
     from .rulesets import drifted_ruleset_names, render_all_rulesets
 
-    desired = render_all_rulesets(
-        required_approvals=required_approvals, extra_status_checks=_profile_status_checks(profile)
-    )
+    desired = render_all_rulesets(required_approvals=required_approvals, extra_status_checks=extra_status_checks or [])
     live = platform.read_rulesets(slug)
     return tuple(drifted_ruleset_names(desired, live))
 
@@ -304,7 +365,14 @@ def _parse_var_flags(pairs: list[str] | None) -> dict[str, str]:
         key, sep, value = pair.partition("=")
         if not sep:
             raise AviatoError(f"--var expects KEY=VALUE, got {pair!r}")
-        resolved[key.strip()] = value
+        key = key.strip()
+        # R3-6: an empty key (`--var =v`) or a silently-last-wins duplicate are input footguns;
+        # reject both rather than accept silently.
+        if not key:
+            raise AviatoError(f"--var has an empty key: {pair!r}")
+        if key in resolved:
+            raise AviatoError(f"--var {key!r} given more than once")
+        resolved[key] = value
     return resolved
 
 
@@ -467,9 +535,12 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
         # review #30: a marker-less file at a managed output path (e.g. a formerly-managed file left
         # by `offboard --keep-files`, or a hand-edited one) is never silently clobbered; surface it
         # and tell the operator how to (re-)adopt it as managed, so the orphaned state isn't hidden.
-        print(f"SKIPPED (operator-owned; --force to (re-)adopt as managed) {output}")
+        print(f"SKIPPED (operator-owned; run `aviato sync --force` to (re-)adopt as managed) {output}")
     for output in result.skipped_foreign:
-        print(f"SKIPPED (marker from a different profile or unknown version — use --force to overwrite) {output}")
+        print(
+            "SKIPPED (marker from a different profile or unknown version — run `aviato sync --force` "
+            f"to overwrite) {output}"
+        )
     print(
         "next: review the changes, then apply protections with "
         f"`aviato apply-rulesets OWNER/REPO --apply --profile {args.profile}` "
@@ -587,13 +658,26 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     if args.write:
         return _onboard_write(args, registry, resolved)
 
+    # R3-4/R3-15: validate --var and --pin and run the same existing-declaration guard the
+    # write/proposal paths use BEFORE emitting any plan, so the dry-run never prints a partial plan
+    # for an invalid --var/--pin, nor a plan for an action --write would refuse (a profile change
+    # without --migrate-profile).
+    known_vars = _parse_var_flags(args.var)
+    canonical_pin = normalize_pin(args.pin) if args.pin is not None else None
+    decl_path = Path(args.target) / ".github" / "aviato.yaml"
+    if decl_path.is_file():
+        existing = load_declaration(decl_path)
+        if existing.profile != args.profile and not getattr(args, "migrate_profile", False):
+            raise AviatoError(
+                f"repository already declares profile {existing.profile!r}; pass --migrate-profile "
+                f"to change it to {args.profile!r} (the plan mirrors what --write would refuse)"
+            )
+
     print(f"Onboarding plan for {args.target}")
     print(f"profile: {resolved.profile}")
-    if args.pin is not None:
-        # review #29: validate + echo the pin in dry-run so the plan previews exactly what --write
-        # would record (§6.1), and a malformed --pin is rejected here too (normalize_pin raises an
-        # AviatoError → clean exit 2 via the top-level handler), not silently ignored.
-        print(f"version pin: {normalize_pin(args.pin)}")
+    if canonical_pin is not None:
+        # review #29: preview the canonical pin the write would record (§6.1).
+        print(f"version pin: {canonical_pin}")
 
     print("pipelines:")
     for pipeline in resolved.pipelines:
@@ -605,7 +689,7 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     # defaults plus any supplied --var (the same set --write resolves from), so a template
     # gated on an unsupplied/unmatched variant is excluded, not shown alongside its sibling.
     known: dict[str, Any] = {spec.name: spec.default for spec in resolved.variables if spec.default is not None}
-    known.update(_parse_var_flags(args.var))
+    known.update(known_vars)
     known["docs"] = "true" if args.docs else "false"
     for template in applicable_templates(resolved, known):
         kind = "seed-once" if template.seed_once else "managed"
@@ -669,7 +753,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     # per-run scan heartbeat. Best-effort — populated only if a repo slug resolves.
     slug = normalize_slug(remote_url(root))
     if slug and not args.no_remote_probe:
-        report.issue_channel_available, report.scan_heartbeat_present = GitHubPlatform().probe_health(slug)
+        # R7-3-APPSTORE-ENV: derive the list of environments to probe from the resolved profile's
+        # pipelines (plug-in DATA, §9b — the binding/core stay agnostic to which capability requires
+        # which env name). Today only app-store-connect declares one; future deploy pipelines that
+        # require a protected environment can add the field without code changes here.
+        environments = tuple(sorted({p.environment for p in resolved.pipeline_modules if p.environment}))
+        (
+            report.issue_channel_available,
+            report.scan_heartbeat_present,
+            report.prerequisites_remote,
+        ) = GitHubPlatform().probe_health(slug, environments=environments, probe_pages=declaration.docs)
 
     print(f"doctor: {declaration.profile} @ {declaration.version} ({root})")
     for output_path, status in sorted(report.statuses.items()):
@@ -686,6 +779,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print(f"- {name}: {'ok' if ok else 'missing'}")
     print(f"issue channel available: {_tri(report.issue_channel_available)}")
     print(f"scan heartbeat present: {_tri(report.scan_heartbeat_present)} (absence reads as broken, §5.14)")
+    if report.prerequisites_remote:
+        # R6-2-§17-PROBE: §17 items the binding probed remotely (security toggles + Pages source).
+        # Absence/unknown reads as broken (§5.14) — operator should enable per §17, then re-run.
+        print("remote prerequisites (§17):")
+        for name, value in sorted(report.prerequisites_remote.items()):
+            print(f"- {name}: {_tri(value)}")
     return 0
 
 
@@ -795,7 +894,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
             try:
                 outcome = _propose_file_drift(registry, Path(scan.path), override_version_pin=args.override_version_pin)
                 print(f"  fix: proposed={outcome.proposed} dirty={outcome.dirty}")
-            except (AviatoError, GitHubAPIError) as exc:
+            except (AviatoError, GitHubAPIError, CommandError) as exc:
+                # R3-1: open_or_update_proposal's git/gh writes raise CommandError; without it in
+                # the tuple a push failure escapes to main() and aborts the whole fleet sweep.
                 print(f"  fix ERROR: {exc}", file=sys.stderr)
                 rc = 1
     return rc
@@ -924,8 +1025,9 @@ def cmd_repin(args: argparse.Namespace) -> int:
         variables=declaration.variables,
         overrides=declaration.overrides,
     )
-    dump_declaration(updated, declaration_path)
-    print(f"wrote pin {plan.target_version} to {declaration_path.relative_to(root)}")
+    # R3-4-3: render the new-pin artifacts BEFORE persisting the pin, so a render-time failure aborts
+    # the re-pin without leaving the declaration moved to the new pin but the managed files still at
+    # the old one (a non-transactional state that a re-run would report as `X -> X` and re-fail).
     items = materialize_items(
         registry,
         updated.profile,
@@ -935,6 +1037,8 @@ def cmd_repin(args: argparse.Namespace) -> int:
         bootstrap=updated.bootstrap,
         overrides=updated.overrides,
     )
+    dump_declaration(updated, declaration_path)
+    print(f"wrote pin {plan.target_version} to {declaration_path.relative_to(root)}")
     result = scaffold(root, items, profile=updated.profile, version=updated.version)
     for output in result.written:
         print(f"rewrote {output}")
@@ -945,7 +1049,10 @@ def cmd_repin(args: argparse.Namespace) -> int:
     for output in result.skipped_unmanaged:
         print(f"skipped (unmanaged file at this path — not re-pinned): {output}")
     for output in result.skipped_foreign:
-        print(f"skipped (marker from a different profile or unknown version; still at old pin — use --force): {output}")
+        print(
+            "skipped (marker from a different profile or unknown version; still at old pin — run "
+            f"`aviato sync --force`): {output}"
+        )
     print("next: review the re-pinned artifacts, commit on a branch, and open a PR (§5.2/§5.12).")
     return 0
 
@@ -1085,13 +1192,22 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
+        expected = _expected_artifacts(registry, declaration)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
+    # R3-7/§2.6: complete-protection applies the resolved profile's protected settings to a PINNED
+    # consumer, so an incompatible local tool must not silently mutate them — gate on version-pin
+    # compatibility exactly like sync/drift-report/scan-fix (with the same --override escape hatch).
+    pin_error = _version_pin_error(root, declaration, expected, getattr(args, "override_version_pin", False))
+    if pin_error:
+        print(pin_error, file=sys.stderr)
+        return 2
+
     desired = _desired_settings(resolved)
     try:
-        GitHubPlatform().apply_settings(slug, desired)
+        skipped = GitHubPlatform().apply_settings(slug, desired)
     except UnmodeledProtectionError as exc:
         # The live protection surface carries something this reconcile cannot safely write
         # (unmodeled classic protection, or ruleset-owned branch protection). Fail closed with
@@ -1102,6 +1218,14 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
         print(f"error applying protection: {exc}", file=sys.stderr)
         return 1
     print(f"applied full protection to {slug} (idempotent, §5.2 complete-protection).")
+    if skipped:
+        # R2-4-3: a requested §17 toggle was surfaced-and-skipped (feature unavailable). Branch
+        # protection landed; do not let the success line imply the security toggle did too.
+        print(
+            f"NOTE: security toggle(s) SKIPPED (unavailable on the repo — enable per §17, then "
+            f"re-run): {sorted(skipped)}",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -1223,6 +1347,14 @@ def cmd_provision(args: argparse.Namespace) -> int:
         )
         return 1
     print(f"applied full protection to {slug}. Provisioned (§5.2).")
+    if outcome.skipped_security:
+        # R2-1-PROV: a requested §17 toggle was surfaced-and-skipped (feature unavailable). Full
+        # branch protection landed, but do not let the success line imply the security toggle did.
+        print(
+            f"NOTE: security toggle(s) SKIPPED (unavailable on the repo — enable per §17, then "
+            f"`aviato complete-protection <local-clone-of-{slug}>`): {sorted(outcome.skipped_security)}",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -1276,6 +1408,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
     do_file = not args.settings_only
     do_settings = not args.file_only
     platform = GitHubPlatform(workdir=root)
+    rc = 0  # R3-3: a file-drift channel failure sets rc=1 but must NOT abort the settings phase
 
     if do_file:
         secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
@@ -1313,18 +1446,25 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
                 item, profile=declaration.profile, version=declaration.version
             )
 
-        file_outcome = run_file_drift(
-            platform,
-            repo=slug,
-            profile=declaration.profile,
-            statuses=report.statuses,
-            expected_bodies=managed_bodies,
-            # Bootstrap (§2.10/§5.10): when the Library diagnoses itself it does not raise
-            # file-drift proposals against the remote-ref scaffold — its automation is
-            # self-applied/operator-maintained locally. Consistent with the pin-gate skip.
-            is_bootstrap=is_library(root),
-        )
-        print(f"file drift: proposed={file_outcome.proposed} dirty={file_outcome.dirty}")
+        # R3-3/§5.6: a file-drift proposal push failure (CommandError/GitHubAPIError) must FAIL
+        # LOUD with a non-zero exit but NOT abort before the independent settings-drift phase —
+        # the two are deliberately separate steps under separate tokens.
+        try:
+            file_outcome = run_file_drift(
+                platform,
+                repo=slug,
+                profile=declaration.profile,
+                statuses=report.statuses,
+                expected_bodies=managed_bodies,
+                # Bootstrap (§2.10/§5.10): when the Library diagnoses itself it does not raise
+                # file-drift proposals against the remote-ref scaffold — its automation is
+                # self-applied/operator-maintained locally. Consistent with the pin-gate skip.
+                is_bootstrap=is_library(root),
+            )
+            print(f"file drift: proposed={file_outcome.proposed} dirty={file_outcome.dirty}")
+        except (GitHubAPIError, CommandError) as exc:
+            print(f"file drift: FAILED — could not open/update the proposal ({exc})", file=sys.stderr)
+            rc = 1
 
     # Settings drift READS branch protection / rulesets, which the platform GITHUB_TOKEN
     # cannot do (it has no administration scope). §5.6 splits two failure modes that must
@@ -1338,11 +1478,12 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         try:
             # CX#1: pass the consumer's resolved required_reviews override so the ruleset render
             # matches the classic-protection desired state (both express the same approval count).
+            _db = resolved.settings.get("default_branch", {})
             drifted_rulesets = _drifted_rulesets(
                 slug,
                 platform,
-                declaration.profile,
-                required_approvals=resolved.settings.get("default_branch", {}).get("required_reviews"),
+                required_approvals=_db.get("required_reviews"),
+                extra_status_checks=list(_db.get("required_status_checks", [])),
             )
             settings_outcome = run_settings_drift(
                 platform,
@@ -1351,12 +1492,15 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
                 issue_key=SETTINGS_DRIFT_ISSUE_KEY,
                 drifted_rulesets=drifted_rulesets,
                 profile=declaration.profile,
+                # C12-3: the issue-body remediation points at apply-rulesets --declaration so the
+                # restored ruleset honours this consumer's overrides (the standard consumer path).
+                declaration_path=".github/aviato.yaml",
             )
             print(f"settings drift: {settings_outcome.status} (destructive={settings_outcome.destructive})")
             if settings_outcome.drifted_rulesets:
                 print(
                     f"  missing/drifted rulesets (apply with `aviato apply-rulesets {slug} "
-                    f"--apply --profile {declaration.profile}`): {list(settings_outcome.drifted_rulesets)}"
+                    f"--apply --declaration {declaration_path}`): {list(settings_outcome.drifted_rulesets)}"
                 )
         except SettingsReadError as exc:
             print(
@@ -1366,34 +1510,39 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
             )
             if args.require_settings:
                 return 1
-        except GitHubAPIError as exc:
-            # The issue channel (not the settings read) failed. §5.6 requires this to fail
-            # loud — never a silent skip — so §5.4 diagnosis can flag the broken channel.
+        except (GitHubAPIError, CommandError) as exc:
+            # The issue channel (not the settings read) failed. §5.6 requires this to fail loud —
+            # never a silent skip — so §5.4 diagnosis can flag the broken channel. N5: the issue
+            # WRITE (open_or_update_issue → gh) raises CommandError, not GitHubAPIError, so without
+            # catching it the failure fell through to main()'s exit 2 instead of this fail-loud exit 1.
             print(
                 f"settings drift: FAILED — the tracking-issue channel is unavailable ({exc}); "
                 "the drift report was not delivered (§5.6). This is not a settings-read skip.",
                 file=sys.stderr,
             )
             return 1
-    return 0
+    return rc
 
 
 def cmd_lint_actions(args: argparse.Namespace) -> int:
-    """Flag unpinned actions/tools (§11.3); exit 1 on any."""
+    """Report §11.3 supply-chain pin violations (unpinned uses/images, unchecked fetch-execute,
+    non-exact pip pins, unpinned npx registry fetches); exit 1 on any. (R10-7: the rows span several
+    check classes, so the message is generic — not just 'unpinned action'.)"""
     from .plugins.actionpins import action_pin_violations
 
     violations = action_pin_violations(Path(args.path))
     for violation in violations:
-        print(f"unpinned third-party action/tool: {violation}", file=sys.stderr)
+        print(f"§11.3 supply-chain violation: {violation}", file=sys.stderr)
     if violations:
         print(
-            f"{len(violations)} action/tool invocation(s) violate §11.3 pinning; "
-            "pin GitHub Actions by 40-hex SHA, container images by digest, fetched "
-            "binaries by checksum, and registry tools by exact version or --no-install.",
+            f"{len(violations)} §11.3 supply-chain violation(s): pin third-party `uses:`/images by "
+            f"digest, checksum-verify any fetched-and-executed download, pin pip tools to an exact "
+            f"version, and pin npx registry tools to an exact version or --no-install (Dependabot "
+            f"keeps digests current).",
             file=sys.stderr,
         )
         return 1
-    print("All scanned action/tool invocations satisfy §11.3 pinning.")
+    print("Supply-chain pins OK: actions/images digest-pinned, no unchecked fetch-execute.")
     return 0
 
 
@@ -1450,7 +1599,13 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
         print("profile declares no version-source locations", file=sys.stderr)
         return 2
     present = [loc for loc in locations if (root / loc).is_file()]
-    changed = bump_files(root, locations, args.version, args.build_number)
+    try:
+        changed = bump_files(root, locations, args.version, args.build_number)
+    except AviatoError as exc:
+        # R4-2-BUMP: a non-UTF-8 version-source fails closed (clean error + exit 1), never a
+        # misleading "nothing to bump" success nor a raw traceback.
+        print(str(exc), file=sys.stderr)
+        return 1
     for location in changed:
         print(f"bumped {location} -> {args.version}")
     if not present:
@@ -1572,9 +1727,17 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument(
         "--required-approvals", type=_non_negative_int, help="Override required PR approval count (>= 0)."
     )
-    apply.add_argument(
+    # C12-3: --profile (base) and --declaration (override-aware) are mutually exclusive — passing both
+    # silently let the declaration win, which is a confusing footgun. argparse now rejects both.
+    apply_source = apply.add_mutually_exclusive_group()
+    apply_source.add_argument(
         "--profile",
         help="Inject the profile's language verify status checks (e.g. ci / Python CI) into the branch ruleset.",
+    )
+    apply_source.add_argument(
+        "--declaration",
+        help="Path to a consumer .github/aviato.yaml: resolve status checks + approvals WITH its "
+        "overrides (C12-3), so a ruleset apply does not re-add a check the consumer removed.",
     )
     apply.set_defaults(func=cmd_apply_rulesets)
 
@@ -1693,6 +1856,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Idempotently (re-)apply full branch protection after onboarding (§5.2 recovery).",
     )
     complete.add_argument("path", help="Path to the consumer repository.")
+    complete.add_argument(
+        "--override-version-pin",
+        action="store_true",
+        help="Proceed despite a version-pin mismatch (§2.6).",
+    )
     complete.set_defaults(func=cmd_complete_protection)
 
     provision = subparsers.add_parser(

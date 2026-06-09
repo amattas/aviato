@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -19,11 +19,52 @@ from .model import (
 def _load_doc(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise CompositionError(f"missing module definition: {path}")
-    with path.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
+    # R1-1: a malformed/unreadable module definition must raise CompositionError (an AviatoError),
+    # not a raw yaml.YAMLError/OSError that escapes callers guarding only AviatoError.
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except yaml.YAMLError as exc:
+        raise CompositionError(f"module definition is not valid YAML: {path}: {exc}") from exc
+    except OSError as exc:
+        raise CompositionError(f"could not read module definition: {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise CompositionError(f"module definition is not a mapping: {path}")
     return data
+
+
+def _load_optional_manifest(path: Path) -> dict[str, Any]:
+    """Read a manifest that may legitimately be absent, guarded like :func:`_load_doc` (R2-3-2).
+
+    Absent → ``{}``. A malformed/unreadable manifest raises ``CompositionError`` (an AviatoError),
+    never a raw ``yaml.YAMLError``/``OSError`` that would escape callers (e.g. ``scan_fleet``) which
+    guard only AviatoError — the documented R1-1 invariant, previously not applied to the pipeline
+    manifest loaders.
+    """
+    if not path.is_file():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+    except yaml.YAMLError as exc:
+        raise CompositionError(f"manifest is not valid YAML: {path}: {exc}") from exc
+    except OSError as exc:
+        raise CompositionError(f"could not read manifest: {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise CompositionError(f"manifest is not a mapping: {path}")
+    return data
+
+
+def _confined_relpath(value: object, field: str) -> str:
+    """A template module's repo-relative path, confined (N6). Reject absolute paths and `..`
+    components so a malformed/hostile module manifest cannot make scaffold/proposal reads or writes
+    escape the module-source tree or the consumer repo (defense-in-depth for library data)."""
+    if not isinstance(value, str) or not value.strip():
+        raise CompositionError(f"template module {field!r} must be a non-empty path string")
+    pure = PurePosixPath(value)
+    if pure.is_absolute() or value.startswith("\\") or ".." in pure.parts:
+        raise CompositionError(f"template module {field!r} must be a repo-relative path without '..': {value!r}")
+    return value
 
 
 class Registry:
@@ -82,6 +123,17 @@ class Registry:
             settings=dict(doc.get("settings", {})),
         )
 
+    def security_floor(self) -> dict[str, Any]:
+        """The canonical always-on security baseline (§2.13, R1-4): the ``baseline`` settings
+        bundle's ``security`` block. Composition enforces that NO profile/bundle/override composes
+        a repo without it. Returns ``{}`` when there is no ``baseline`` bundle (a bare test
+        registry), so the floor is enforced only where the Library actually declares one. The
+        canonical floor lives in DATA (baseline.yaml), so core names no specific scanner (§9b)."""
+        path = self.root / "bundles" / "settings" / "baseline.yaml"
+        if not path.is_file():
+            return {}
+        return dict(self.settings_bundle("baseline").settings.get("security", {}))
+
     def pipeline_module(self, name: str) -> PipelineModule | None:
         """Load a typed pipeline module (§3.2/§11.3) from ``pipelines.yaml``.
 
@@ -89,11 +141,7 @@ class Registry:
         declared — composition tolerates this so test/empty registries still work;
         day-zero pipelines are all declared.
         """
-        path = self.root / "pipelines.yaml"
-        if not path.is_file():
-            return None
-        with path.open("r", encoding="utf-8") as handle:
-            manifest = yaml.safe_load(handle) or {}
+        manifest = _load_optional_manifest(self.root / "pipelines.yaml")
         doc = manifest.get(name)
         if not isinstance(doc, dict):
             return None
@@ -105,15 +153,12 @@ class Registry:
             runner=doc.get("runner"),
             status_check=doc.get("status_check"),
             always_on=bool(doc.get("always_on", False)),
+            environment=doc.get("environment"),
         )
 
     def always_on_pipelines(self) -> tuple[str, ...]:
         """Pipelines the data flags ``always_on`` — they must survive every composition (§2.13)."""
-        path = self.root / "pipelines.yaml"
-        if not path.is_file():
-            return ()
-        with path.open("r", encoding="utf-8") as handle:
-            manifest = yaml.safe_load(handle) or {}
+        manifest = _load_optional_manifest(self.root / "pipelines.yaml")
         return tuple(name for name, doc in manifest.items() if isinstance(doc, dict) and doc.get("always_on"))
 
     def declared_pipelines(self) -> set[str] | None:
@@ -126,16 +171,14 @@ class Registry:
         """
         path = self.root / "pipelines.yaml"
         if not path.is_file():
-            return None
-        with path.open("r", encoding="utf-8") as handle:
-            manifest = yaml.safe_load(handle) or {}
-        return {name for name, doc in manifest.items() if isinstance(doc, dict)}
+            return None  # absent → None (distinct from an empty manifest); see docstring
+        return {name for name, doc in _load_optional_manifest(path).items() if isinstance(doc, dict)}
 
     def template_module(self, name: str) -> TemplateModule:
         doc = _load_doc(self.root / "scaffold" / f"{name}.yaml")
         return TemplateModule(
-            output_path=doc["output_path"],
-            source=doc["source"],
+            output_path=_confined_relpath(doc.get("output_path"), "output_path"),
+            source=_confined_relpath(doc.get("source"), "source"),
             seed_once=bool(doc.get("seed_once", False)),
             comment=doc.get("comment"),
             required_variables=tuple(doc.get("required_variables", ())),

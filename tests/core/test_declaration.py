@@ -77,6 +77,25 @@ def test_unquoted_float_version_is_rejected_not_silently_corrupted(tmp_path: Pat
         assert load_declaration(path).profile == "p"
 
 
+def test_malformed_yaml_raises_declaration_error_not_raw_yamlerror(tmp_path: Path) -> None:
+    # R1-1: a corrupt declaration must raise DeclarationError (an AviatoError) so scan_fleet's
+    # per-repo guard catches it, never a raw yaml.YAMLError that aborts the whole fleet scan (§5.11).
+    path = tmp_path / "aviato.yaml"
+    path.write_text("profile: p\nversion: '1'\nvariables: {a: [unclosed\n", encoding="utf-8")
+    with pytest.raises(DeclarationError):
+        load_declaration(path)
+
+
+def test_unknown_top_level_key_is_rejected(tmp_path: Path) -> None:
+    # R1-9/§6.1: a typo'd top-level key (e.g. `doc:` for `docs:`) must fail loud, not be silently
+    # ignored (which would silently disable the intended feature).
+    path = tmp_path / "aviato.yaml"
+    path.write_text("profile: p\nversion: '1'\ndoc: true\n", encoding="utf-8")
+    with pytest.raises(DeclarationError) as exc:
+        load_declaration(path)
+    assert "unknown field" in str(exc.value) and "doc" in str(exc.value)
+
+
 def test_boolean_fields_are_parsed_by_value_not_truthiness(tmp_path: Path) -> None:
     # CX#3: a QUOTED `docs: "false"` / `bootstrap: "false"` must load as False (bool("false") is
     # truthy — the bug), and a non-boolean must fail loud per §6.1's typed contract.
@@ -134,3 +153,17 @@ def test_legacy_v_prefix_is_tolerated_on_read_but_never_emitted(tmp_path: Path) 
     assert yaml.safe_load(declaration_to_yaml(Declaration(profile="p", version="v1.2.3")))["version"] == "1.2.3"
     # A non-pin string (no digit after v) is left untouched — only the legacy pin form is stripped.
     assert yaml.safe_load(declaration_to_yaml(Declaration(profile="p", version="vegetable")))["version"] == "vegetable"
+
+
+def test_non_utf8_declaration_raises_declaration_error_not_raw_unicode(tmp_path) -> None:
+    # R5-4-DECL: a non-UTF-8 aviato.yaml must map to DeclarationError (an AviatoError), not leak a
+    # raw UnicodeDecodeError past main()'s net / abort a fleet scan.
+    import pytest
+
+    from aviato.core.declaration import load_declaration
+    from aviato.core.errors import DeclarationError
+
+    f = tmp_path / "aviato.yaml"
+    f.write_bytes(b"profile: python-library\nversion: \xff\xfe v1\n")
+    with pytest.raises(DeclarationError, match="not valid UTF-8"):
+        load_declaration(f)
