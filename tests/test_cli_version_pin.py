@@ -33,3 +33,13 @@ def test_sync_compatible_pin_proceeds(tmp_path: Path) -> None:
     rc = main(["sync", str(_consumer(tmp_path, "v0"))])
     assert rc == 0
     assert (tmp_path / "ruff.toml").exists()
+
+
+def test_sync_tolerates_non_utf8_managed_file(tmp_path: Path) -> None:
+    # R3-4-1/R3-5-B: a non-UTF-8 file at a managed output path must not crash the version-pin
+    # gate with a raw UnicodeDecodeError (which would abort sync/drift/fleet-scan with a traceback).
+    # _recorded_versions skips it (it carries no valid marker), so sync proceeds cleanly.
+    root = _consumer(tmp_path, "v0")
+    (root / "ruff.toml").write_bytes(b"\xff\xfe# not valid utf-8 \x00\x80")
+    rc = main(["sync", str(root)])  # must NOT raise UnicodeDecodeError
+    assert rc in (0, 2)

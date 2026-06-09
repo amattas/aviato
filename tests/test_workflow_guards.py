@@ -94,7 +94,7 @@ def test_local_install_is_limited_to_structural_library_bootstrap() -> None:
         ("reusable-consumer-automation.yml", "drift-report"),
     ):
         wf = _load(name)
-        install = next(s for s in wf["jobs"][job_name]["steps"] if s.get("name") == "Install Aviato")
+        install = next(s for s in wf["jobs"][job_name]["steps"] if s.get("name") == "Install Aviato (pinned)")
         run = install["run"]
         for anchor in (
             "aviato/core/__init__.py",
@@ -121,7 +121,9 @@ def test_npm_workflows_harden_installs_before_installing() -> None:
     # risk. npm 11+ is required because older npm rejects min-release-age.
     for name, job_name in (
         ("reusable-node-ci.yml", "node-ci"),
-        ("reusable-docs-pages.yml", "publish-docs"),
+        # C12-W4: docs publish is split into build (untrusted, npm-installing) and
+        # deploy (privileged) jobs; the npm hardening lives in build.
+        ("reusable-docs-pages.yml", "build"),
     ):
         wf = _load(name)
         on_block = wf.get("on") or wf.get(True)
@@ -156,7 +158,7 @@ def test_docs_publish_lints_docusaurus_site_after_install() -> None:
     on_block = wf.get("on") or wf.get(True)
     lint_input = on_block["workflow_call"]["inputs"]["lint-command"]
     assert lint_input["default"] == "npm run lint --if-present"
-    steps = wf["jobs"]["publish-docs"]["steps"]
+    steps = wf["jobs"]["build"]["steps"]
     install = next(s for s in steps if s.get("name") == "Install")
     lint = next(s for s in steps if s.get("name") == "Lint docs site")
     assert steps.index(install) < steps.index(lint)
@@ -164,13 +166,18 @@ def test_docs_publish_lints_docusaurus_site_after_install() -> None:
 
 
 def test_common_lint_blocks_unsafe_npx_registry_fetches() -> None:
+    # The npx gate runs as ONE implementation inside `aviato lint-actions` (no in-workflow
+    # grep mirror to drift — R9-5); common lint must invoke it via the supply-chain step.
     wf = _load("reusable-common-lint.yml")
     steps = wf["jobs"]["common-lint"]["steps"]
-    npx = next(s for s in steps if s.get("name") == "npx registry fetch pin (blocking)")
-    run = npx["run"]
-    assert "npx may fetch an unpinned registry tool" in run
-    assert "--no-install" in run
-    assert "exact_package" in run
+    pins = next(s for s in steps if s.get("name") == "Supply-chain pins (blocking)")
+    assert "aviato lint-actions ." in pins["run"]
+    from aviato.plugins.actionpins import unpinned_tool_invocations
+
+    assert unpinned_tool_invocations("          npx eslint .\n") == [
+        "npx may fetch an unpinned registry tool: npx eslint ."
+    ]
+    assert unpinned_tool_invocations("          npx --no-install eslint .\n") == []
 
 
 def test_app_store_connect_secrets_are_step_scoped() -> None:
@@ -221,7 +228,10 @@ def test_security_baseline_jitters_scheduled_scans_at_the_chokepoint() -> None:
 
     # (b) privilege-probe has a schedule-gated RANDOM sleep before it does any work.
     probe_steps = jobs["privilege-probe"]["steps"]
-    jitter = next((s for s in probe_steps if "sleep" in s.get("run", "") and "RANDOM" in s.get("run", "")), None)
+    jitter = next(
+        (s for s in probe_steps if "sleep" in s.get("run", "") and "RANDOM" in s.get("run", "")),
+        None,
+    )
     assert jitter is not None, "privilege-probe has no anti-stampede jitter step"
     assert "schedule" in jitter.get("if", ""), "jitter must be gated to schedule events (no PR/release-ref latency)"
     # jitter must run BEFORE the privilege check, or downstream scans aren't actually deferred.
@@ -241,7 +251,11 @@ def test_consumer_automation_settings_drift_token_is_optional_and_read_only() ->
 
     # The bogus scope must never reappear; permissions stay the low-privilege report set.
     assert "administration" not in wf["permissions"]
-    assert wf["permissions"] == {"contents": "write", "pull-requests": "write", "issues": "write"}
+    assert wf["permissions"] == {
+        "contents": "write",
+        "pull-requests": "write",
+        "issues": "write",
+    }
 
     # The optional admin token is declared (not required).
     # (YAML 1.1 parses the `on:` key as boolean True, hence wf.get(True).)
@@ -312,3 +326,192 @@ def test_security_baseline_retains_fail_closed_structure() -> None:
 
     gate_steps = [step.get("name", "") for step in jobs["heartbeat"].get("steps", []) if isinstance(step, dict)]
     assert any("Gate" in name for name in gate_steps), "missing 'Gate on required scans' step"
+
+
+def test_aviato_ref_pin_guard_present_and_regex_correct() -> None:
+    # R2-5-F2 / R4-6: a fail-closed supply-chain control — the release/automation workflows must
+    # refuse to install the Library off an unpinned/branch ref. Assert (a) the guard step exists in
+    # both workflows BEFORE the `pip install …@${AVIATO_REF}` step, and (b) extract the embedded ERE
+    # and exercise it over a battery, so a refactor dropping the guard or loosening the regex (e.g.
+    # accidentally accepting `@main`) goes red. (Mirrors the monotonic-alias parity approach.)
+    import re
+
+    guard_re = re.compile(r"AVIATO_REF.*?=~\s+(\S+)\s+\]\]")
+    for name in (
+        "reusable-release.yml",
+        "reusable-consumer-automation.yml",
+        "reusable-common-lint.yml",
+    ):
+        body = (WORKFLOWS / name).read_text()
+        m = guard_re.search(body)
+        assert m, f"{name} missing the AVIATO_REF pin guard"
+        # The guard must run BEFORE the pinned install.
+        assert body.index("AVIATO_REF") < body.index(
+            'pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"'
+        )
+        pattern = re.compile(m.group(1))
+        for good in ("1.2.3", "1.2.3-alpha1", "1.2.3-beta2", "7", "1.10.0"):
+            assert pattern.fullmatch(good), f"{name}: should accept {good}"
+        for bad in (
+            "",
+            "main",
+            "v1.2.3",
+            "release/x",
+            "1.2",
+            "1.2.3-rc1",
+            "1.2.3-beta.1",
+        ):
+            assert not pattern.fullmatch(bad), f"{name}: should reject {bad!r}"
+
+
+def test_ghcr_image_name_is_lowercased() -> None:
+    # R3-2-GHCRCASE/R3-5-E: GHCR/OCI repo paths must be lowercase; github.repository preserves case,
+    # so the "Determine image name" step must lowercase before building the ghcr.io/<image> ref.
+    body = (WORKFLOWS / "reusable-docker-ghcr.yml").read_text()
+    assert "tr '[:upper:]' '[:lower:]'" in body or "${image,,}" in body, "GHCR image name not lowercased"
+
+
+def test_pypi_publish_isolates_build_from_oidc_token() -> None:
+    # R3-2-PYPIJOB: the operator build/install commands (eval) must run in an UNPRIVILEGED job; only a
+    # separate publish job (which runs no eval) may hold id-token/attestations. This keeps a
+    # compromised build dependency away from the OIDC token (trusted-publishing isolation).
+    # R4-5-B: compute EFFECTIVE permissions — a job inherits the TOP-LEVEL block when it omits its
+    # own, so checking only the job-level key would pass even if the build job dropped its downgrade
+    # and inherited the token. The eval-bearing job must EXPLICITLY exclude the publish token.
+    import json as _json
+
+    wf = _load("reusable-pypi-publish.yml")
+    top_perms = wf.get("permissions", {}) or {}
+    jobs = wf["jobs"]
+
+    def holds_token(perms: dict) -> bool:
+        return perms.get("id-token") == "write" or perms.get("attestations") == "write"
+
+    for job_name, job in jobs.items():
+        job_perms = job.get("permissions")
+        # Effective perms: a job WITHOUT its own `permissions:` inherits the top-level block.
+        effective = job_perms if job_perms is not None else top_perms
+        runs_eval = "eval " in _json.dumps(job.get("steps", []))
+        message = f"job {job_name!r} runs build code with effective access to the OIDC/attestation token"
+        assert not (holds_token(effective) and runs_eval), message
+
+    # The build (eval) job must declare its OWN permissions that exclude the token (not merely rely
+    # on the absence of a job-level key, which would inherit the top-level token).
+    build_perms = jobs["build"].get("permissions")
+    message = "build job must explicitly downgrade permissions to exclude id-token/attestations"
+    assert build_perms is not None and not holds_token(build_perms), message
+    # The privileged publish job must depend on build (artifacts cross the boundary) and run NO eval.
+    assert jobs["publish"].get("needs") == "build" or "build" in (jobs["publish"].get("needs") or [])
+    assert "eval " not in _json.dumps(jobs["publish"].get("steps", [])), "publish job must run no build code"
+
+
+def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
+    # R4-5-D: the build job uploads the dist+sbom and the publish job downloads them; the paths must
+    # reconstruct symmetrically so the attest subject-path / pypi packages-dir (which read
+    # `<working-directory>/<packages-dir>`) resolve to the actual files. upload-artifact roots the
+    # artifact at the least-common-ancestor of its `path:` entries; downloading to `path: <wd>`
+    # re-roots there. The round-trip is exact IFF every uploaded path is under `<wd>` and download
+    # extracts to exactly `<wd>` (a wrong download path would yield `<wd>/<wd>/...` or a missing dir).
+    wf = _load("reusable-pypi-publish.yml")
+    steps = {
+        "build": wf["jobs"]["build"]["steps"],
+        "publish": wf["jobs"]["publish"]["steps"],
+    }
+
+    def _step(job: str, action_substr: str) -> dict:
+        return next(s for s in steps[job] if action_substr in (s.get("uses") or ""))
+
+    up = _step("build", "upload-artifact")["with"]
+    down = _step("publish", "download-artifact")["with"]
+    wd = "${{ inputs.working-directory }}"
+
+    assert up["name"] == down["name"], "upload/download artifact names must match"
+    # Every uploaded path is under <wd> (so the least-common-ancestor is <wd>).
+    upload_paths = [p for p in str(up["path"]).splitlines() if p.strip()]
+    assert upload_paths, "upload step lists no paths"
+    for p in upload_paths:
+        assert p.strip().startswith(f"{wd}/"), f"upload path not under working-directory: {p!r}"
+    # Download must extract to exactly <wd> so the tree reconstructs at <wd>/<packages-dir>/... .
+    assert down["path"] == wd, f"download path {down['path']!r} must be exactly {wd!r}"
+
+
+def test_release_phase_detector_accepts_squash_merge_subject() -> None:
+    # R6-4-SQUASH: GitHub's DEFAULT squash-merge title format appends ' (#N)' (the PR number) to
+    # the PR title, so the merged subject is `chore(release): NEXT (#42)`. The phase-detector regex
+    # MUST accept that form — a bare end-anchor would miss it and the workflow would silently fall
+    # through to the propose phase, refusing to tag any release on a repo using the default merge
+    # mode. Extract the regex literal and exercise both subject formats.
+    import re
+
+    # R7-4-SQUASH-TAUT: exercise the regex actually present in the workflow, not a hand-written
+    # copy. Extract the literal from `grep -Eq "<regex>"`, substitute the bash ${NEXT} interpolation
+    # with a concrete version, and translate the bash end-anchor `\$` into a Python `$`. A future
+    # workflow regex regression must make this test fail.
+    body = (WORKFLOWS / "reusable-release.yml").read_text()
+    match = re.search(r'grep -Eq "(\^chore[^"]+)"', body)
+    assert match, "is_release_commit grep -Eq regex not found in reusable-release.yml"
+    workflow_regex = match.group(1).replace("${NEXT}", re.escape("1.2.3")).replace(r"\$", "$")
+    pattern = re.compile(workflow_regex)
+    for accepted in (
+        "chore(release): 1.2.3",
+        "chore(release): 1.2.3 (#42)",
+        "chore(release): 1.2.3 (#1234)",
+    ):
+        assert pattern.match(accepted), f"phase detector must accept: {accepted!r}"
+    for rejected in (
+        "chore(release): 1.2.4 (#42)",
+        "chore: 1.2.3",
+        "chore(release): 1.2.3-extra",
+    ):
+        assert not pattern.match(rejected), f"phase detector must NOT accept: {rejected!r}"
+
+
+def test_app_store_secrets_not_exposed_to_operator_eval_steps() -> None:
+    # R7-4-APPSTORE-OIDC: the 6 Apple/App-Store-Connect secrets must NOT live at JOB level (where
+    # every step inherits them, including the operator-controlled `eval "$VERSION_COMMAND"` and
+    # `eval "$SUBMIT_FOR_REVIEW_COMMAND"`). Each secret is scoped per-step to ONLY the step that
+    # legitimately consumes it. The version-command step (which has no business with signing keys)
+    # must NOT receive any of them; the submit-for-review-command step (which calls App Store
+    # Connect) gets the API credentials only, NOT the certificate material.
+    import json as _json
+
+    wf = _load("reusable-app-store-connect.yml")
+    job = wf["jobs"]["deploy"] if "deploy" in wf["jobs"] else next(iter(wf["jobs"].values()))
+    secret_keys = {
+        "APP_STORE_CONNECT_ISSUER_ID",
+        "APP_STORE_CONNECT_KEY_ID",
+        "APP_STORE_CONNECT_API_PRIVATE_KEY",
+        "APPLE_CERTIFICATE_P12_BASE64",
+        "APPLE_CERTIFICATE_PASSWORD",
+        "APPLE_PROVISIONING_PROFILE_BASE64",
+    }
+    # Job-level env must NOT carry any Apple/ASC secret.
+    job_env = job.get("env") or {}
+    leaked = secret_keys & set(job_env)
+    assert not leaked, f"job-level env still carries secrets that every step inherits: {sorted(leaked)}"
+
+    # The operator `eval` steps must NOT have any of these secrets in their per-step env.
+    eval_steps = [s for s in job["steps"] if "eval " in _json.dumps(s.get("run", ""))]
+    assert eval_steps, "no operator eval steps found (workflow shape changed unexpectedly)"
+    for step in eval_steps:
+        step_env = step.get("env") or {}
+        # The submit-for-review step is allowed the API creds (it calls App Store Connect by design);
+        # NO eval step is allowed the certificate/provisioning material.
+        cert_keys = {
+            "APPLE_CERTIFICATE_P12_BASE64",
+            "APPLE_CERTIFICATE_PASSWORD",
+            "APPLE_PROVISIONING_PROFILE_BASE64",
+        }
+        cert_leak = cert_keys & set(step_env)
+        assert not cert_leak, f"eval step {step.get('name')!r} sees certificate material: {sorted(cert_leak)}"
+        if "VERSION_COMMAND" in _json.dumps(step.get("env") or {}):
+            # The version-command step has no legitimate need for ANY of the secrets.
+            version_leak = secret_keys & set(step_env)
+            assert not version_leak, f"version-command step sees secrets: {sorted(version_leak)}"
+
+
+def test_common_lint_runs_aviato_lint_actions_not_grep() -> None:
+    wf = (WORKFLOWS / "reusable-common-lint.yml").read_text(encoding="utf-8")
+    assert "aviato lint-actions" in wf, "common-lint must run the single aviato lint-actions impl"
+    assert "interps=" not in wf, "the grep mirror must be gone (parity flap removed)"
+    assert "docker[[:space:]]+(run|pull)" not in wf, "the docker grep extractor must be gone"

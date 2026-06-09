@@ -6,9 +6,9 @@ name: Aviato Python Component
 
 on:
   pull_request:
-    branches: [main]
+    branches: ["{{ default-branch }}"]
   push:
-    branches: [main]
+    branches: ["{{ default-branch }}"]
     tags:
       - "*.*.*"
   schedule:
@@ -43,6 +43,9 @@ jobs:
   common-lint:
     if: ${{ github.ref_type != 'tag' }}
     uses: {{ aviato-workflow-prefix }}reusable-common-lint.yml{{ aviato-workflow-suffix }}
+    with:
+      aviato-ref: {{ aviato-ref }}
+      local-install: {{ aviato-local-install }}
 
   release:
     if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
@@ -59,6 +62,6 @@ jobs:
     if: ${{ always() && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
     uses: {{ aviato-workflow-prefix }}reusable-release-gate.yml{{ aviato-workflow-suffix }}
     with:
-      default-branch: main
+      default-branch: {{ default-branch }}
       require-merged-pr: true
       release-tag: ${{ needs.release.outputs.tag }}

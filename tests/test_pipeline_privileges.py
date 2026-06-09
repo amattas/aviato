@@ -22,16 +22,31 @@ PIPELINE_WORKFLOWS = {
 }
 
 
+def _workflow_privileges(wf: dict) -> set[str]:
+    """The UNION of a workflow's top-level + per-job ``permissions`` (§8.9). A workflow may scope
+    permissions PER JOB — e.g. docs-pages runs the consumer build under contents:read and deploys under
+    id-token/pages:write in a separate job (C12-W4) — so the module's declared privileges must equal the
+    union across the workflow, not just the workflow-level block."""
+    privs: set[str] = set()
+    top = wf.get("permissions")
+    if isinstance(top, dict):
+        privs |= {f"{key}: {value}" for key, value in top.items()}
+    for job in (wf.get("jobs") or {}).values():
+        job_perms = job.get("permissions") if isinstance(job, dict) else None
+        if isinstance(job_perms, dict):
+            privs |= {f"{key}: {value}" for key, value in job_perms.items()}
+    return privs
+
+
 @pytest.mark.parametrize("pipeline,workflow", PIPELINE_WORKFLOWS.items())
 def test_pipeline_privileges_match_workflow_permissions(pipeline: str, workflow: str) -> None:
     module = Registry(MODULE_SOURCE_ROOT).pipeline_module(pipeline)
     assert module is not None
 
-    perms = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / workflow).read_text())["permissions"]
-    workflow_privs = {f"{key}: {value}" for key, value in perms.items()}
-    module_privileges = set(module.privileges)
-    message = f"{pipeline} module privileges {module_privileges} != {workflow} permissions {workflow_privs}"
-    assert module_privileges == workflow_privs, message
+    wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / workflow).read_text())
+    workflow_privs = _workflow_privileges(wf)
+    message = f"{pipeline} module privileges {set(module.privileges)} != {workflow} permissions {workflow_privs}"
+    assert set(module.privileges) == workflow_privs, message
 
 
 @pytest.mark.parametrize("pipeline,workflow", PIPELINE_WORKFLOWS.items())

@@ -2,9 +2,9 @@ name: Aviato Swift App
 
 on:
   pull_request:
-    branches: [main]
+    branches: ["main"]
   push:
-    branches: [main]
+    branches: ["main"]
     tags:
       - "*.*.*"
   schedule:
@@ -47,6 +47,9 @@ jobs:
   common-lint:
     if: ${{ github.ref_type != 'tag' }}
     uses: amattas/aviato/.github/workflows/reusable-common-lint.yml@EXAMPLE_PIN
+    with:
+      aviato-ref: EXAMPLE_PIN
+      local-install: false
 
   release:
     if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}

@@ -24,6 +24,8 @@ on:
       format-command:
         required: false
         type: string
+        # R4-8: --no-install so npx uses the locally-installed (npm ci) tool and FAILS rather than
+        # silently fetching a floating-latest from the registry (§11.3).
         default: "npx --no-install prettier --check ."
       typecheck-command:
         description: TypeScript type-check. Set empty for JavaScript projects (language-variant=javascript).

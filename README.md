@@ -109,12 +109,15 @@ The legacy script names still work:
 - `reusable-python-ci.yml`
 - `reusable-node-ci.yml`
 - `reusable-swift-ci.yml`
+- `reusable-release.yml`
 - `reusable-release-gate.yml`
 - `reusable-docker-ghcr.yml`
 - `reusable-pypi-publish.yml`
 - `reusable-docs-pages.yml`
 - `reusable-app-store-connect.yml`
 - `reusable-security-baseline.yml`
+- `reusable-common-lint.yml`
+- `reusable-consumer-automation.yml`
 
 Language CI workflows share the same command contract:
 
@@ -143,6 +146,7 @@ and deployment jobs for common repo shapes:
 
 - `profile-python-service.yml`
 - `profile-python-library.yml`
+- `profile-python-component.yml`
 - `profile-node-service.yml`
 - `profile-swift-app.yml`
 

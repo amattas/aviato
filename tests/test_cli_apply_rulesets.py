@@ -91,3 +91,102 @@ def test_negative_required_approvals_is_rejected_at_parse_time(
         assert exc.value.code == 2
     # 0 (the documented solo-repo override) is still accepted by the type.
     assert cli._non_negative_int("0") == 0
+
+
+def test_apply_rulesets_rejects_malformed_slug(capsys: pytest.CaptureFixture[str]) -> None:
+    # R3-5: a non-OWNER/REPO slug must fail loud locally (exit 2), not as an API 404.
+    assert cli.main(["apply-rulesets", "justaword", "--apply"]) == 2
+    assert "OWNER/REPO" in capsys.readouterr().err
+
+
+def test_apply_rulesets_missing_repos_file_is_clean_error(tmp_path, capsys: pytest.CaptureFixture[str]) -> None:
+    # R3-13: a missing --repos-file is a clean operator error (exit 2 via main()), not a traceback.
+    rc = cli.main(["apply-rulesets", "--repos-file", str(tmp_path / "nope.txt"), "--apply"])
+    assert rc == 2
+    assert "repos-file" in capsys.readouterr().err
+
+
+def test_parse_var_flags_rejects_empty_key_and_duplicates() -> None:
+    # R3-6: empty key and duplicate key are input footguns → fail loud, not silent.
+    import pytest as _pytest
+
+    from aviato.cli import _parse_var_flags
+    from aviato.core.errors import AviatoError
+
+    assert _parse_var_flags(["k=v"]) == {"k": "v"}
+    with _pytest.raises(AviatoError):
+        _parse_var_flags(["=v"])
+    with _pytest.raises(AviatoError):
+        _parse_var_flags(["k=1", "k=2"])
+
+
+def test_apply_rulesets_streams_messages_before_a_later_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-4-6: apply_rulesets is a generator — a confirmation for each successful upsert is yielded
+    # BEFORE a later upsert fails, so the operator sees what was already mutated on the platform.
+    from aviato import github, rulesets
+
+    monkeypatch.setattr(rulesets, "render_all_rulesets", lambda **__: [{"name": "r"}])
+    seen: list[str] = []
+
+    def fake_upsert(slug, payload, *, apply):
+        if slug == "o/b":
+            raise github.GitHubAPIError("rules", 500, "boom")
+        return f"upserted on {slug}"
+
+    monkeypatch.setattr(github, "upsert_ruleset", fake_upsert)
+    gen = rulesets.apply_rulesets(["o/a", "o/b"], apply=True)
+    with pytest.raises(github.GitHubAPIError):
+        for msg in gen:
+            seen.append(msg)
+    assert seen == ["upserted on o/a"]  # o/a's confirmation streamed before o/b failed
+
+
+def test_apply_rulesets_value_error_is_clean_exit_not_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-4-5: a malformed ruleset (ValueError from render) exits 1 with a clean message, not a traceback.
+    def boom(slugs, **__):
+        raise ValueError("unknown patch key")
+
+    monkeypatch.setattr(cli, "apply_rulesets", boom)
+    assert cli.main(["apply-rulesets", "o/r"]) == 1
+
+
+def test_command_run_missing_binary_raises_commanderror(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-4-4: a missing binary (FileNotFoundError) is surfaced as CommandError so main() catches it
+    # (exit 2 + clean message), never a raw traceback.
+    import subprocess
+
+    from aviato import command
+
+    def boom(*a, **k):
+        raise FileNotFoundError("gh")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    with pytest.raises(command.CommandError):
+        command.run(["gh", "api", "x"])
+
+
+def test_apply_rulesets_deferred_render_value_error_caught_through_real_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R3-5-A/R3-1-GENLAZY: exercise the REAL apply_rulesets (not a call-time monkeypatch) with a
+    # render that raises ValueError. Eager render means the error surfaces when the CLI calls
+    # apply_rulesets (inside its try), so it's caught → clean exit 1, no traceback.
+    from aviato import rulesets
+
+    def boom(**__):
+        raise ValueError("malformed ruleset manifest")
+
+    monkeypatch.setattr(rulesets, "render_all_rulesets", boom)
+    # github.upsert_ruleset must never be reached (render fails first).
+    assert cli.main(["apply-rulesets", "o/r"]) == 1
+
+
+def test_apply_rulesets_renders_eagerly_at_call_not_on_iteration(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R3-1-GENLAZY: render runs at call time (old eager-list semantics), so a validation error can't
+    # hide behind a caller that forgets to iterate.
+    from aviato import rulesets
+
+    def boom(**__):
+        raise ValueError("malformed")
+
+    monkeypatch.setattr(rulesets, "render_all_rulesets", boom)
+    with pytest.raises(ValueError):
+        rulesets.apply_rulesets(["o/r"], apply=False)  # raises at call, before any iteration

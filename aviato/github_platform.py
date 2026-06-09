@@ -116,8 +116,24 @@ class ConsentGrant:
     actor_login: str | None
 
 
+def _chronological(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stable-sort timeline entries by ``created_at`` (R2-1/§2.8/§6.4).
+
+    The issue-timeline API + ``--slurp`` page concatenation do NOT guarantee the array is in
+    strict chronological order, so a revoke returned BEFORE its stale grant (or a post-grant
+    non-human edit returned before the grant) would be mis-reduced and a revoked consent could
+    re-authorize an apply. Sorting by the event timestamp makes the grant/revoke reduction reflect
+    true history, not array position. ISO-8601 timestamps sort lexically; the original index is the
+    tiebreak (stable). Entries lacking ``created_at`` (e.g. synthetic test events) keep their
+    relative order via the index tiebreak.
+    """
+    return [e for _, e in sorted(enumerate(timeline), key=lambda pair: (str(pair[1].get("created_at") or ""), pair[0]))]
+
+
 def _label_events(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Normalize GitHub timeline entries into label-event dicts for :func:`current_consent`."""
+    """Normalize GitHub timeline entries into label-event dicts for :func:`current_consent`.
+
+    Carries ``created_at`` so :func:`current_consent` can reduce by true chronology (R2-1)."""
     events: list[dict[str, Any]] = []
     for entry in timeline:
         action = entry.get("event")
@@ -131,6 +147,7 @@ def _label_events(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "label": label.get("name", ""),
                 "actor_type": actor.get("type"),
                 "actor_login": actor.get("login"),
+                "created_at": entry.get("created_at"),
             }
         )
     return events
@@ -142,7 +159,9 @@ def nonhuman_edit_after_grant(timeline: list[dict[str, Any]], diff_id: str) -> b
     Finds the latest grant of ``aviato-consent:<diff_id>`` and reports whether any
     later timeline entry was performed by an actor whose type is not ``User`` (a
     Bot/App/unknown actor). Entries with no actor are system events and ignored.
+    "Later" is by ``created_at`` chronology, not array position (R2-1).
     """
+    timeline = _chronological(timeline)
     grant_label = f"{CONSENT_LABEL_PREFIX}{diff_id}"
     grant_index = -1
     for i, entry in enumerate(timeline):
@@ -161,16 +180,16 @@ def nonhuman_edit_after_grant(timeline: list[dict[str, Any]], diff_id: str) -> b
 
 
 def current_consent(events: list[dict[str, Any]]) -> ConsentGrant | None:
-    """Reduce a chronological list of label events to the active consent grant (§6.4).
+    """Reduce label events to the active consent grant (§6.4), in TRUE chronological order.
 
-    Each event is ``{"action": "labeled"|"unlabeled", "label": str,
-    "actor_type": str|None, "actor_login": str|None}``. A ``labeled`` event with
-    the consent prefix is a grant; a matching ``unlabeled`` is a revoke. The
-    current consent is the most recent grant not later revoked. Reading the full
-    (paginated) history is what prevents a later revoke from being missed.
+    Each event is ``{"action": "labeled"|"unlabeled", "label": str, "actor_type": str|None,
+    "actor_login": str|None, "created_at": str|None}``. A ``labeled`` event with the consent
+    prefix is a grant; a matching ``unlabeled`` is a revoke. The current consent is the most
+    recent (by ``created_at``, R2-1) grant not later revoked. Reading the full (paginated) history
+    is what prevents a later revoke from being missed; sorting prevents array-order mis-reduction.
     """
     active: dict[str, tuple[int, str | None, str | None]] = {}
-    for seq, event in enumerate(events):
+    for seq, event in enumerate(_chronological(events)):
         label = event.get("label", "")
         if not isinstance(label, str) or not label.startswith(CONSENT_LABEL_PREFIX):
             continue
@@ -231,6 +250,14 @@ def _norm_setting(key: str, value: Any) -> Any:
     return value
 
 
+def _has_bypass_allowance(allowances: Any) -> bool:
+    """True if a classic ``bypass_pull_request_allowances`` block names any user/team/app — i.e. some
+    actor may merge WITHOUT review, so the PR requirement is not reliably enforced (N3)."""
+    if not isinstance(allowances, dict):
+        return False
+    return any(allowances.get(kind) for kind in ("users", "teams", "apps"))
+
+
 def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any]) -> dict[str, Any]:
     """Map live default-branch rules/protection into the flat comparable settings map (§5.6, §2.9).
 
@@ -239,9 +266,18 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     write. Returns the same flat shape the resolved ``default_branch`` map carries.
     """
     pr_rule = next((r for r in rules if r.get("type") == "pull_request"), None)
-    pr_params = pr_rule.get("parameters", {}) if pr_rule else {}
+    # R2-4-2: `… or {}`/`… or []` (not the `.get(k, default)` form) because GitHub serializes a
+    # PRESENT-but-null `parameters`/`checks`/`required_status_checks` — the default only applies when
+    # the key is ABSENT, so a present null would otherwise raise TypeError/AttributeError on a valid
+    # payload and crash this read (which is contracted to fail CLOSED, not crash — §2.7).
+    pr_params = (pr_rule.get("parameters") or {}) if pr_rule else {}
     classic_reviews = protection.get("required_pull_request_reviews") or {}
     requires_pr = pr_rule is not None or protection.get("required_pull_request_reviews") is not None
+    # N3 (§2.13/§5.6): a classic PR-review BYPASS allowance lets named actors merge without review, so
+    # the requirement is not reliably enforced. Model it as PR-not-required so it DRIFTS from the desired
+    # "review required, no bypass" (a wholesale apply then clobbers the bypass). The RULESET pull_request
+    # bypass is a separate path, covered by rulesets.ruleset_content_drift (bypass_actors).
+    pr_bypassed = _has_bypass_allowance(classic_reviews.get("bypass_pull_request_allowances"))
 
     if pr_rule is not None:
         required_reviews = int(pr_params.get("required_approving_review_count", 0))
@@ -268,10 +304,10 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     # set and shows false drift / a duplicate classic-protection write (§5.6).
     rsc = protection.get("required_status_checks") or {}
     contexts = list(rsc.get("contexts") or [])
-    contexts += [c.get("context") for c in rsc.get("checks", []) if isinstance(c, dict) and c.get("context")]
+    contexts += [c.get("context") for c in (rsc.get("checks") or []) if isinstance(c, dict) and c.get("context")]
     rsc_rule = next((r for r in rules if r.get("type") == "required_status_checks"), None)
     if rsc_rule is not None:
-        rule_checks = rsc_rule.get("parameters", {}).get("required_status_checks", [])
+        rule_checks = (rsc_rule.get("parameters") or {}).get("required_status_checks") or []
         contexts += [c.get("context") for c in rule_checks if isinstance(c, dict) and c.get("context")]
 
     # enforce_admins = "are admins subject to branch protection?". It's satisfied EITHER by the
@@ -285,7 +321,16 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     # so treating a ruleset-owned branch as enforce_admins-satisfied here does not hide a bypass.
     classic_enforce_admins = bool((protection.get("enforce_admins") or {}).get("enabled", False))
     ruleset_owns_branch = any(rule.get("type") in _MODELED_RULE_TYPES for rule in rules)
-    enforce_admins = classic_enforce_admins or ruleset_owns_branch
+    # cycle-15: a ruleset enforces ITS rules on admins, but it does NOT make admins subject to a CLASSIC
+    # protection that is present with enforce_admins DISABLED — those classic protections (e.g. a classic
+    # PR-review requirement) remain admin-bypassable. So the ruleset only satisfies enforce_admins when
+    # there is no present-but-unenforced classic protection (else read False → drift, not a hidden bypass).
+    classic_present_unenforced = bool(protection) and not classic_enforce_admins
+    enforce_admins = classic_enforce_admins or (ruleset_owns_branch and not classic_present_unenforced)
+
+    if pr_bypassed:  # N3: surface the bypass as a weakened PR requirement (review not enforced)
+        requires_pr = False
+        required_reviews = 0
 
     return {
         "requires_pull_request": requires_pr,
@@ -404,7 +449,10 @@ class GitHubPlatform:
             with github.settings_read_token_scope():
                 branch = github.default_branch(repo)
                 if not branch:
-                    return {}
+                    # R2-3: an unresolvable default branch is ambiguous, not "unprotected" — raise
+                    # (fail-closed SKIP) instead of returning {} (which would diff every desired key
+                    # as additive drift, over-reporting). Mirrors apply_settings' refusal (§2.7).
+                    raise github.SettingsReadError(f"repos/{repo}", 0, "could not resolve default branch")
                 rules = github.active_branch_rules(repo, branch)
                 protection = github.classic_branch_protection(repo, branch)
                 security = map_security_settings(github.repo_security_settings(repo))
@@ -442,16 +490,23 @@ class GitHubPlatform:
         # "no tracking issue" (default []). An auth/5xx/rate-limit error must RAISE, not
         # masquerade as "no issue": reading it as absent would let run_settings_drift open
         # a duplicate tracking issue (and silently violates its "fails loud" contract).
-        issues = github.gh_json_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
+        # R2-7: paginate the issue list — a label shared by many issues could otherwise hide the
+        # active/consent-bearing one on a later page.
+        issues = github.gh_json_paginated(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
         head = _select_issue(issues, repo, key)
         if head is None:
             return None
+        # R2-5: more than one OPEN tracking issue for this key is an authorization-ambiguity — consent
+        # could be granted on one duplicate while a revoke lives on another. Flag it so reconcile
+        # refuses (fail-closed) until the duplicates are closed (§5.7/§5.8).
+        open_count = sum(1 for i in issues if isinstance(i, dict) and i.get("state") == "open")
+        ambiguous = open_count > 1
         number = head.get("number")
         is_open = head.get("state") == "open"
         if number is None:
             # A 200 with a malformed issue (no number) → can't read the consent timeline;
             # report the issue with no consent so reconcile refuses (fail-safe), never crash.
-            return Issue(key=key, open=is_open)
+            return Issue(key=key, open=is_open, ambiguous=ambiguous)
 
         # Read the FULL (paginated) label-event history so a later revoke cannot be missed
         # (§2.8/§6.4). FAIL CLOSED on a transient error (no allow_error): silently reading
@@ -475,18 +530,27 @@ class GitHubPlatform:
             consent_role=ROLE_PRIVILEGED if role == "admin" else role,
             consent_role_lookup_ok=role_ok,
             edited_by_nonhuman_since_grant=nonhuman_edit_after_grant(raw_timeline, grant.diff_id),
+            ambiguous=ambiguous,
         )
 
-    def probe_health(self, repo: str) -> tuple[bool | None, bool | None]:
-        """Probe issue-channel availability and scan-heartbeat presence (§5.4/§5.14).
+    def probe_health(
+        self, repo: str, *, environments: tuple[str, ...] = (), probe_pages: bool = False
+    ) -> tuple[bool | None, bool | None, dict[str, bool | None]]:
+        """Probe issue-channel availability, scan-heartbeat presence, and §17 remote prereqs.
 
-        Returns ``(issue_channel_available, scan_heartbeat_present)``. A value is
-        None when it cannot be determined (e.g. the API call failed) — and a None
-        heartbeat reads as broken, never clean (§5.14). Best-effort: a failed probe
-        does not raise (doctor is a read-only health report).
+        Returns ``(issue_channel_available, scan_heartbeat_present, prerequisites_remote)``. A
+        value is None when it cannot be determined (e.g. the API call failed) — and a None
+        heartbeat reads as broken, never clean (§5.14). R6-2-§17-PROBE: the third element is the
+        live state of §17's remote-probeable items — the ``security_and_analysis`` toggles (secret
+        scanning, push protection, Dependabot, code scanning), the Pages source, and (R7-3-
+        APPSTORE-ENV) the existence + required-reviewer count of each `environments` entry the
+        caller supplies. The list of environment names comes from plug-in DATA (the resolved
+        profile's pipelines, see `PipelineModule.environment`), so the binding stays agnostic to
+        which capability requires which env. Best-effort: a failed probe does not raise.
         """
         issue_channel: bool | None = None
         heartbeat: bool | None = None
+        remote: dict[str, bool | None] = {}
         try:
             repo_data = github.gh_json_optional(f"repos/{repo}", default=None)
             if isinstance(repo_data, dict) and "has_issues" in repo_data:
@@ -504,7 +568,7 @@ class GitHubPlatform:
                 artifacts = github.gh_json_optional(
                     f"repos/{repo}/actions/artifacts?name=aviato-security-heartbeat&per_page=30", default=None
                 )
-                items = artifacts.get("artifacts", []) if isinstance(artifacts, dict) else []
+                items = (artifacts.get("artifacts") or []) if isinstance(artifacts, dict) else []
                 heartbeat = any(
                     not item.get("expired") and (item.get("workflow_run") or {}).get("head_sha") == head_sha
                     for item in items
@@ -512,7 +576,35 @@ class GitHubPlatform:
                 )
         except github.GitHubAPIError:
             pass  # ambiguous read → leave unknown (None)
-        return issue_channel, heartbeat
+        # R6-2-§17-PROBE: read the §17 remote-probeable items separately so a failure on one
+        # (e.g. Pages not configured) does not zero out the security toggle reads.
+        try:
+            sa = github.repo_security_settings(repo)
+            for key in ("secret_scanning", "secret_scanning_push_protection", "dependabot_security_updates"):
+                value = sa.get(key) if isinstance(sa, dict) else None
+                # The GitHub schema exposes each as `{"status": "enabled"|"disabled"}`.
+                remote[key] = value.get("status") == "enabled" if isinstance(value, dict) else None
+        except github.GitHubAPIError:
+            for key in ("secret_scanning", "secret_scanning_push_protection", "dependabot_security_updates"):
+                remote.setdefault(key, None)
+        # R7-3-DOCTOR-NOISE: probe Pages only when the caller indicates a docs-bearing profile —
+        # otherwise the doctor surfaces a noisy "pages_source_actions: unknown / no" for repos that
+        # have no docs at all. The caller (cmd_doctor) sets `probe_pages` from `declaration.docs`.
+        if probe_pages:
+            try:
+                remote["pages_source_actions"] = github.pages_source_is_actions(repo)
+            except github.GitHubAPIError:
+                remote["pages_source_actions"] = None
+        # R7-3-APPSTORE-ENV: each environment name is plug-in DATA from the resolved profile (the
+        # binding doesn't know WHICH capability needs it); probe each and surface under a `env:<name>`
+        # key in `prerequisites_remote`.
+        for env_name in environments:
+            key = f"env:{env_name}"
+            try:
+                remote[key] = github.protected_environment_has_reviewers(repo, env_name)
+            except github.GitHubAPIError:
+                remote[key] = None
+        return issue_channel, heartbeat, remote
 
     def _actor_role(self, repo: str, login: str | None) -> tuple[str | None, bool]:
         # §2.7/§6.4 — DELIBERATE: the granter's role is read at apply/get_issue time, not
@@ -536,7 +628,7 @@ class GitHubPlatform:
         # Fail-closed read (§2.7): a transient auth/5xx must RAISE rather than read as "no
         # existing issue", which would POST a DUPLICATE tracking issue every flaky run and
         # fragment the consent/audit trail. A genuine ``200 []`` (no match) still creates one.
-        existing = github.gh_json_optional(f"repos/{repo}/issues?state=open&labels={_seg(key)}", default=[])
+        existing = github.gh_json_paginated_optional(f"repos/{repo}/issues?state=open&labels={_seg(key)}", default=[])
         # A malformed 200 (issue object without "number") must not crash the scheduled
         # drift-report; fall through to creating a fresh issue rather than KeyError. When
         # several issues share the label, act on ONE deterministically (oldest), with a warn.
@@ -552,7 +644,7 @@ class GitHubPlatform:
         # Fail-closed read (§2.7): a transient auth/5xx must RAISE rather than silently drop
         # the audit comment (the §5.7 record of a privileged change). A genuine ``200 []``
         # (no issue to comment on) stays a no-op.
-        existing = github.gh_json_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
+        existing = github.gh_json_paginated_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
         chosen = _select_issue(existing, repo, key)
         number = chosen.get("number") if chosen else None
         if number is not None:
@@ -567,7 +659,7 @@ class GitHubPlatform:
         raises (the scheduled run then fails loud, §5.6), while a genuine 404 — the label is
         already absent — is the desired end state and tolerated.
         """
-        existing = github.gh_json_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
+        existing = github.gh_json_paginated_optional(f"repos/{repo}/issues?state=all&labels={_seg(key)}", default=[])
         chosen = _select_issue(existing, repo, key)
         number = chosen.get("number") if chosen else None
         if number is None:
@@ -661,7 +753,7 @@ class GitHubPlatform:
 
     def apply_settings(
         self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
-    ) -> None:
+    ) -> list[str]:
         # ``payload`` is the flat desired default-branch state; translate it to the
         # branch-protection API shape before the PUT (§2.9). The PUT replaces
         # protection wholesale, so FAIL CLOSED if the live branch carries protections
@@ -702,6 +794,28 @@ class GitHubPlatform:
         # lands — fail closed there too (§2.4/§5.7), matching what read_settings reads.
         rules = github.active_branch_rules(repo, branch)
         unmodeled += sorted({str(rule.get("type")) for rule in rules if rule.get("type") not in _MODELED_RULE_TYPES})
+        # R2-4: the flat model collapses live required-status-checks to bare context NAMES and the
+        # PUT hardcodes strict=true with no app binding. So a live `strict_required_status_checks_
+        # policy: false` (which the PUT would flip to true) or an app-BOUND check (carrying an
+        # `app_id`, which the PUT would drop the binding of) is unmodeled state the wholesale PUT
+        # would silently alter — fail closed rather than clobber (§2.4/§2.9).
+        classic_rsc = live.get("required_status_checks") or {}
+        if classic_rsc.get("strict") is False:
+            unmodeled.append("required_status_checks.strict=false")
+        # R2-4-2: `… or []`/`… or {}` — a present-but-null `checks`/`parameters`/`required_status_checks`
+        # would otherwise crash these fail-closed guard reads with TypeError BEFORE the wholesale PUT.
+        if any(isinstance(c, dict) and c.get("app_id") is not None for c in (classic_rsc.get("checks") or [])):
+            unmodeled.append("required_status_checks.app_bound_checks")
+        for rule in rules:
+            if rule.get("type") == "required_status_checks":
+                params = rule.get("parameters") or {}
+                if params.get("strict_required_status_checks_policy") is False:
+                    unmodeled.append("ruleset.required_status_checks.strict=false")
+                if any(
+                    isinstance(c, dict) and c.get("integration_id") is not None
+                    for c in (params.get("required_status_checks") or [])
+                ):
+                    unmodeled.append("ruleset.required_status_checks.app_bound_checks")
         if unmodeled:
             raise UnmodeledProtectionError(
                 f"refusing to PUT branch protection on {repo}@{branch}: it carries unmodeled "
@@ -771,8 +885,12 @@ class GitHubPlatform:
                         f"(enable per §17, e.g. Advanced Security): {exc.stderr.strip()}",
                         file=sys.stderr,
                     )
-                else:
-                    raise
+                    # R5-4: the whole security PATCH is skipped (one request for all toggles), so the
+                    # desired security keys were NOT applied. Return them so the §5.7 audit reports a
+                    # PARTIAL apply rather than overstating a clean one — branch protection still landed.
+                    return sorted(security_payload)
+                raise
+        return []
 
     def create_repo(self, repo: str, *, private: bool) -> None:
         # §5.2 provision-new: create the repository initialized with a README so the

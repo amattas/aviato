@@ -1,0 +1,9 @@
+# Dev tools the Aviato container-service CI invokes (ruff lint, mypy type-check, pytest).
+# R4-4: EXACTLY pinned (==), not floor-pinned — this file is installed by CI (`pip install -r`),
+# so a floating `>=` floor would let a run silently pull an untested newer tool, breaking
+# reproducibility (§11.3). Bump these deliberately; your runtime deps live in requirements.txt
+# (consumer-owned, used by the Dockerfile). `aviato validate` enforces the exact pins here.
+pytest==8.3.3
+pytest-cov==5.0.0
+mypy==1.13.0
+ruff==0.8.0

@@ -55,6 +55,13 @@ def test_closed_issue_refused() -> None:
     assert reconcile_decision(_state(issue_open=False)).action == "refuse"
 
 
+def test_ambiguous_issue_refused() -> None:
+    # R2-5/§5.7: more than one open tracking issue makes consent ambiguous → refuse (fail-closed).
+    outcome = reconcile_decision(_state(issue_ambiguous=True))
+    assert outcome.action == "refuse"
+    assert "duplicate" in outcome.reason.lower() or "multiple" in outcome.reason.lower()
+
+
 def test_absent_consent_refused() -> None:
     assert reconcile_decision(_state(consent_present=False)).action == "refuse"
 

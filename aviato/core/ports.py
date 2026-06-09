@@ -15,6 +15,9 @@ class Issue:
     consent_role: str | None = None
     consent_role_lookup_ok: bool = False
     edited_by_nonhuman_since_grant: bool = False
+    # R2-5: more than one OPEN tracking issue shares this key — consent is ambiguous (a grant on
+    # one duplicate, a revoke on another), so reconcile must refuse until they're de-duplicated.
+    ambiguous: bool = False
 
 
 @runtime_checkable
@@ -43,6 +46,14 @@ class Platform(Protocol):
 
     def apply_settings(
         self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
-    ) -> None: ...
+    ) -> list[str]:
+        """Apply the desired settings; return the names of any desired toggles that were SKIPPED.
+
+        R5-4: a §17 security toggle (e.g. secret scanning) can be unavailable on the repo, in which
+        case it is surfaced-and-skipped rather than failing the whole apply (the safety-critical
+        branch protection still lands). The skipped keys are returned so the §5.7 audit does not
+        overstate a clean apply. An empty list means everything in the desired set was applied.
+        """
+        ...
 
     def create_repo(self, repo: str, *, private: bool) -> None: ...

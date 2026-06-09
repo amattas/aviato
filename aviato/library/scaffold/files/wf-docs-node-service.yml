@@ -12,15 +12,15 @@ on:
   workflow_run:
     workflows: ["Aviato Node Service"]
     types: [completed]
-    branches: [main]
+    branches: ["{{ default-branch }}"]
 
+# R4-7: least privilege. The top-level token is the FLOOR for jobs that don't set
+# their own; only the privileged `resolve` checkout runs under it, so it grants just
+# read. Each reusable-workflow call below sets job-level permissions matching exactly
+# what that workflow needs (a caller cannot elevate a called workflow's token, so the
+# grant must be >= its needs and no more).
 permissions:
   contents: read
-  pull-requests: read
-  security-events: write
-  actions: read
-  pages: write
-  id-token: write
 
 jobs:
   # Resolve the release tag at the completed run's head commit; skip if none.
@@ -32,6 +32,8 @@ jobs:
       ${{ github.event.workflow_run.conclusion == 'success'
       && github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       release: ${{ steps.tag.outputs.release }}
@@ -47,7 +49,11 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          tag="$(git tag --points-at "${HEAD_SHA}" --list '[0-9]*.[0-9]*.[0-9]*' | head -n1)"
+          # R7-4-DOCSTAGFILTER: the `--list '[0-9]*.[0-9]*.[0-9]*'` is a shell GLOB, broader than the
+          # policy tag pattern (`1foo.2bar.3baz` matches). Post-filter with grep -E so docs deploy
+          # only triggers on a real policy-conformant release tag.
+          tag="$(git tag --points-at "${HEAD_SHA}" --list '[0-9]*.[0-9]*.[0-9]*' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$' | head -n1)"
           if [ -n "${tag}" ]; then
             echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
             echo "release=true" >> "${GITHUB_OUTPUT}"
@@ -60,15 +66,24 @@ jobs:
   release-gate:
     needs: [resolve]
     if: ${{ needs.resolve.outputs.release == 'true' }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
     uses: {{ aviato-workflow-prefix }}reusable-release-gate.yml{{ aviato-workflow-suffix }}
     with:
-      default-branch: main
+      default-branch: {{ default-branch }}
       require-merged-pr: true
       release-tag: ${{ needs.resolve.outputs.tag }}
 
   security:
     needs: [resolve]
     if: ${{ needs.resolve.outputs.release == 'true' }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      security-events: write
     uses: {{ aviato-workflow-prefix }}reusable-security-baseline.yml{{ aviato-workflow-suffix }}
     with:
       ref: ${{ needs.resolve.outputs.tag }}
@@ -77,6 +92,11 @@ jobs:
   docs:
     needs: [resolve, release-gate, security]
     if: ${{ needs.resolve.outputs.release == 'true' }}
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      pages: write
     uses: {{ aviato-workflow-prefix }}reusable-docs-pages.yml{{ aviato-workflow-suffix }}
     with:
       working-directory: website

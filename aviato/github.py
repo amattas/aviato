@@ -7,8 +7,19 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from .command import run
+
+
+def _branch_seg(branch: str) -> str:
+    """Percent-encode a branch name for an API path (R2-2/§2.7).
+
+    GitHub's branch endpoints accept ``/`` in a branch name (e.g. ``release/main``) as part of the
+    route, so ``/`` is left safe; every OTHER special char (``?``, ``#``, space, …) is encoded so a
+    branch name cannot alter the endpoint path it's interpolated into."""
+    return quote(branch, safe="/")
+
 
 # The settings-drift automation (§5.6) supplies an operator's admin-scoped READ token here
 # so branch-protection/ruleset reads — which the platform's ephemeral workflow token cannot
@@ -123,6 +134,29 @@ def gh_json_optional(endpoint: str, *, default: Any = None) -> Any:
         raise GitHubAPIError(endpoint, result.returncode, f"invalid JSON response: {exc}") from exc
 
 
+def gh_json_paginated_optional(endpoint: str, *, default: Any = None) -> Any:
+    """Paginated read (C12-R3-2/N2) of a LIST endpoint that may legitimately 404, fail-closed (§2.7).
+
+    Combines ``gh_json_paginated``'s ``--paginate --slurp`` (so a later-page entry — a stale
+    consent-bearing issue, an active branch rule, a tag ruleset — can never hide behind page 1) with
+    ``gh_json_optional``'s posture: a genuine 404 returns ``default``; any other error raises.
+    """
+    result = run(["gh", "api", "--paginate", "--slurp", endpoint], check=False)
+    if result.returncode != 0:
+        if "http 404" in result.stderr.lower():
+            return default
+        raise GitHubAPIError(endpoint, result.returncode, result.stderr)
+    if not result.stdout.strip():
+        return default
+    try:
+        pages = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise GitHubAPIError(endpoint, result.returncode, f"invalid JSON response: {exc}") from exc
+    if isinstance(pages, list) and pages and all(isinstance(page, list) for page in pages):
+        return [item for page in pages for item in page]
+    return pages
+
+
 def default_branch(slug: str) -> str:
     response = gh_json(f"repos/{slug}")
     if not isinstance(response, dict):
@@ -152,21 +186,70 @@ def repo_security_settings(slug: str) -> dict[str, Any]:
     return sa if isinstance(sa, dict) else {}
 
 
+def protected_environment_has_reviewers(slug: str, environment: str) -> bool | None:
+    """True iff a GitHub Environment exists for ``slug`` with at least one required reviewer (§17).
+
+    R7-3-APPSTORE-ENV: §17 mandates the App Store deploy (and any similarly-privileged release) run
+    in a PROTECTED environment with a required reviewer. Returns None on an ambiguous read (404,
+    non-dict, missing fields) so the doctor surfaces "unknown" rather than mis-reporting (§5.14).
+    A clean determinate True/False is only emitted when the API returns a parseable environment with
+    a countable reviewers list.
+    """
+    env = gh_json_optional(f"repos/{slug}/environments/{environment}", default=None)
+    if not isinstance(env, dict):
+        return None  # 404 (ambiguous: env absent vs no-perms) or non-dict — unknown per §5.14
+    rules = env.get("protection_rules")
+    if not isinstance(rules, list):
+        return None  # schema drift — unknown, not a determinate "no reviewers"
+    for rule in rules:
+        if not isinstance(rule, dict) or rule.get("type") != "required_reviewers":
+            continue
+        reviewers = rule.get("reviewers")
+        if isinstance(reviewers, list) and len(reviewers) > 0:
+            return True
+    return False  # environment exists + parseable rules but no required-reviewer rule (real "no")
+
+
+def pages_source_is_actions(slug: str) -> bool | None:
+    """True iff the repo has Pages enabled with the GitHub Actions source (§13.3).
+
+    R6-2-§17-PROBE: §17 lists this as remote-probeable. Returns None on an ambiguous read so
+    `doctor` can surface "unable to determine" rather than mis-report "absent" (§5.14).
+
+    R7-3-PAGES-§5.14: a 404 from ``repos/{slug}/pages`` is NOT a determinate "Pages off" — the
+    GitHub API conflates "Pages not configured" with "token lacks Pages-read permission" and "repo
+    not visible to the token", so the only honest mapping is "unknown" (None). Returning False
+    would violate §5.14's "absence/unreadable reads as broken, not clean" — a private repo whose
+    operator forgot to grant Pages-read would read clean-disabled despite actually being enabled.
+    R7-3-PAGES-SCHEMA: same posture for a present dict that lacks the ``build_type`` field (schema
+    drift / older API version) — unknown, not no.
+    """
+    pages = gh_json_optional(f"repos/{slug}/pages", default=None)
+    if not isinstance(pages, dict):
+        return None  # 404 (ambiguous: off vs no-perms vs invisible) or non-dict response
+    build_type = pages.get("build_type")
+    if build_type is None:
+        return None  # field absent — unknown, never a determinate "no"
+    return build_type == "workflow"
+
+
 def active_branch_rules(slug: str, branch: str) -> list[dict[str, Any]]:
-    # Fail closed on an ambiguous read (§2.7): only a genuine 404 is empty.
-    response = gh_json_optional(f"repos/{slug}/rules/branches/{branch}", default=[])
+    # Fail closed on an ambiguous read (§2.7): only a genuine 404 is empty. N2: paginate — a repo with
+    # >30 active branch rules must not hide a later-page rule from the read/apply guards.
+    response = gh_json_paginated_optional(f"repos/{slug}/rules/branches/{_branch_seg(branch)}", default=[])
     return response if isinstance(response, list) else []
 
 
 def classic_branch_protection(slug: str, branch: str) -> dict[str, Any]:
-    response = gh_json_optional(f"repos/{slug}/branches/{branch}/protection", default={})
+    response = gh_json_optional(f"repos/{slug}/branches/{_branch_seg(branch)}/protection", default={})
     return response if isinstance(response, dict) else {}
 
 
 def tag_ruleset_names(slug: str) -> list[str]:
     # Fail closed on an ambiguous read (§2.7): only a genuine 404 is empty, so an
-    # auth/5xx/rate-limit error raises rather than masquerading as "no tag ruleset".
-    response = gh_json_optional(f"repos/{slug}/rulesets?targets=tag", default=[])
+    # auth/5xx/rate-limit error raises rather than masquerading as "no tag ruleset". N2: paginate so a
+    # later-page tag ruleset is not invisible.
+    response = gh_json_paginated_optional(f"repos/{slug}/rulesets?targets=tag", default=[])
     if not isinstance(response, list):
         return []
     names = [item.get("name") for item in response if isinstance(item, dict) and item.get("target") == "tag"]
@@ -194,12 +277,27 @@ def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> str:
     name = payload.get("name")
     if not isinstance(name, str) or not name:
         raise ValueError("ruleset payload must include a non-empty name")
-
+    # N1 (cycle 11): match the live ruleset by (name, target), not name alone. Drift detection keys
+    # by (name, target) (rulesets.drifted_ruleset_names), so a name-only match here could UPDATE a
+    # same-named ruleset on the WRONG target (e.g. overwrite the branch ruleset with a tag payload)
+    # instead of creating the missing one. The rendered payload always carries `target`.
+    target = payload.get("target")
+    same_name = [r for r in repository_rulesets(slug) if isinstance(r, dict) and r.get("name") == name]
     existing_id = None
-    for ruleset in repository_rulesets(slug):
-        if ruleset.get("name") == name:
+    for ruleset in same_name:  # prefer an exact (name, target) match
+        if ruleset.get("target") == target:
             existing_id = ruleset.get("id")
             break
+    else:
+        # C12-2: GitHub's ruleset LIST summary may OMIT `target`. A same-name candidate whose target is
+        # absent/None can only be THIS ruleset (it cannot be on a different target if the field is not
+        # returned), so fall back to it rather than POSTing a duplicate (and risking a 422). When the
+        # list DOES carry target, this fallback is never reached. Avoids a name-only match that would
+        # overwrite a genuinely different-target ruleset.
+        for ruleset in same_name:
+            if ruleset.get("target") is None:
+                existing_id = ruleset.get("id")
+                break
 
     if not apply:
         if existing_id:

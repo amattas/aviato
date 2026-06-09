@@ -1,11 +1,11 @@
-# aviato:managed profile=aviato-library version=0 hash=21594d130b8d002fdc233f7a0c95a05faf9b690fdabc0ea5c0541c83612ad90c
+# aviato:managed profile=aviato-library version=0 hash=744557668e210f2348f6f1b896a773617fe6c8c1688b83d70001f4d4fde22d56
 name: Aviato Python Library
 
 on:
   pull_request:
-    branches: [main]
+    branches: ["main"]
   push:
-    branches: [main]
+    branches: ["main"]
     tags:
       - "*.*.*"
   schedule:
@@ -45,6 +45,9 @@ jobs:
   common-lint:
     if: ${{ github.ref_type != 'tag' }}
     uses: ./.github/workflows/reusable-common-lint.yml
+    with:
+      aviato-ref: 0
+      local-install: true
 
   release:
     if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}

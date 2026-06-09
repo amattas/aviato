@@ -80,6 +80,19 @@ def test_multiword_denylist_token_matches_any_whitespace(tmp_path: Path) -> None
     assert denylist_violations(other, {"app store"}) == []
 
 
+def test_multiword_denylist_token_matches_hyphen_and_concatenated(tmp_path: Path) -> None:
+    # R9-20: a two-word token must also catch the hyphenated, underscored, and concatenated forms of
+    # the same identifier — the exact day-zero deployment-environment spellings that a `\s+`-only
+    # join missed and that let a concrete env name slip into the agnostic core.
+    core = tmp_path / "core"
+    core.mkdir()
+    (core / "hyphen.py").write_text("env = 'app-store-connect'\n")
+    (core / "concat.py").write_text("ENV = 'APPSTORE'\n")
+    assert denylist_violations(core, {"app store"}) != []
+    for name in ("hyphen.py", "concat.py"):
+        assert any(name in v for v in denylist_violations(core, {"app store"})), name
+
+
 def test_dynamic_import_edge_detected_in_synthetic_core(tmp_path: Path) -> None:
     # §9b: the check flags ANY dynamic import in core, not just one whose argument literally
     # spells the plug-in tree. That breadth is the point — core has no legitimate dynamic-import
@@ -139,3 +152,17 @@ def test_substring_does_not_falsely_trip(tmp_path: Path) -> None:
     # "nodes" contains "node" but is a different word; boundaries must not trip it
     (fake_core / "ok.py").write_text("graph_nodes = []\n")
     assert denylist_violations(fake_core, {"node"}) == []
+
+
+def test_denylist_violations_are_reported_per_file(tmp_path: Path) -> None:
+    # R5-9: the suite must lock PER-FILE granularity, not just "some violation exists" — a regression
+    # that scanned files in one merged blob would still report a violation but lose which shape
+    # carries it. Two synthetic core files (one offending, one clean): the offender's name appears,
+    # the clean file's never does.
+    fake_core = tmp_path / "core"
+    fake_core.mkdir()
+    (fake_core / "offends.py").write_text("X = 'docusaurus'\n")
+    (fake_core / "clean.py").write_text("X = 'unrelated'\n")
+    violations = denylist_violations(fake_core, {"docusaurus"})
+    assert any(v.startswith("offends.py:") for v in violations)
+    assert not any("clean.py" in v for v in violations)

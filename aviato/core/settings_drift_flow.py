@@ -33,7 +33,12 @@ def _render_change(diff: SettingsDiff, key: str) -> str:
 
 
 def _render_issue_body(
-    diff: SettingsDiff, drifted_rulesets: list[str], repo: str, issue_key: str, profile: str | None
+    diff: SettingsDiff,
+    drifted_rulesets: list[str],
+    repo: str,
+    issue_key: str,
+    profile: str | None,
+    declaration_path: str | None = None,
 ) -> str:
     lines = ["Aviato detected settings drift."]
     if diff.changes:
@@ -58,9 +63,16 @@ def _render_issue_body(
         # Rulesets are remediated by the operator-direct, idempotent `apply-rulesets` (which
         # re-asserts the rendered desired content), NOT the §5.7 reconcile (branch/security only).
         # Reported here so a missing OR content-weakened (disabled / permissive pattern / lowered
-        # approvals) required ruleset is not invisible (§5.6). `--profile` is REQUIRED so the
-        # restored ruleset includes the profile's language verify status checks (§10.3).
-        profile_flag = f" --profile {profile}" if profile else ""
+        # approvals) required ruleset is not invisible (§5.6). C12-3: prefer `--declaration <path>`
+        # so the restored ruleset resolves the consumer's OVERRIDES (the SAME status checks drift
+        # used) and never re-adds a check the consumer removed; fall back to `--profile` (base) only
+        # when no declaration path is known.
+        if declaration_path:
+            apply_flag = f" --declaration {declaration_path}"
+        elif profile:
+            apply_flag = f" --profile {profile}"
+        else:
+            apply_flag = ""
         lines += [
             "",
             "Missing or drifted required rulesets (apply separately — NOT via reconcile):",
@@ -68,7 +80,7 @@ def _render_issue_body(
         lines += [f"- {name}" for name in sorted(drifted_rulesets)]
         lines += [
             "",
-            f"To restore them, an operator runs:    aviato apply-rulesets {repo} --apply{profile_flag}",
+            f"To restore them, an operator runs:    aviato apply-rulesets {repo} --apply{apply_flag}",
         ]
     lines += ["", "No settings mutation has been performed (report-only, §5.6)."]
     return "\n".join(lines)
@@ -82,6 +94,7 @@ def run_settings_drift(
     issue_key: str,
     drifted_rulesets: tuple[str, ...] = (),
     profile: str | None = None,
+    declaration_path: str | None = None,
 ) -> SettingsDriftOutcome:
     """Report (never apply) settings drift (§5.6).
 
@@ -141,7 +154,7 @@ def run_settings_drift(
         repo,
         issue_key,
         "Aviato: settings drift",
-        _render_issue_body(diff, list(drifted_rulesets), repo, issue_key, profile),
+        _render_issue_body(diff, list(drifted_rulesets), repo, issue_key, profile, declaration_path),
     )
     return SettingsDriftOutcome(
         status="reported",

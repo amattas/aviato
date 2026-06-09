@@ -1,0 +1,6 @@
+name: python-version-file
+# Seed-once packaging-free version-source for a container service (§13.2): a plain VERSION file
+# holding the bare SemVer that the release flow bumps. The developer owns it after seeding.
+output_path: VERSION
+source: files/VERSION.txt
+seed_once: true

@@ -208,3 +208,14 @@ def test_bootstrap_declaration_rejected_outside_library(tmp_path: Path) -> None:
 def test_bootstrap_declaration_allowed_in_library(tmp_path: Path) -> None:
     report = diagnose(tmp_path, [], bootstrap_declared=True, is_library=True)
     assert report.statuses == {}
+
+
+def test_directory_at_managed_path_classifies_dirty_drift_without_crashing(tmp_path) -> None:
+    # R5-3-DIAG-OS: a DIRECTORY (or other unreadable path) at a managed output path raises
+    # IsADirectoryError (an OSError, not UnicodeDecodeError); diagnosis must catch it and classify
+    # dirty-drift, never leak a raw OSError that would abort a fleet scan.
+    from aviato.core.diagnosis import ExpectedArtifact, diagnose
+
+    (tmp_path / "cfg.py").mkdir()
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])
+    assert report.statuses["cfg.py"] == "dirty-drift"

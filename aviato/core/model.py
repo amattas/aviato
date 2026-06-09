@@ -50,6 +50,11 @@ class PipelineModule:
     # survive every composition — resolution refuses to remove it. Data-driven so the
     # agnostic core never names which capability is mandatory.
     always_on: bool = False
+    # §17 (R9-20): the protected GitHub-Environments name this pipeline requires. DATA, not core
+    # knowledge — the agnostic core never names a concrete day-zero environment; the value comes from
+    # plug-in data and the binding probes the environment's existence + required-reviewer settings.
+    # The core just relays the per-pipeline string (None = no environment prerequisite).
+    environment: str | None = None
 
 
 @dataclass(frozen=True)

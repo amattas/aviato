@@ -115,3 +115,13 @@ def test_next_version_none_keeps_prerelease_for_no_release_detection() -> None:
     # pre-release — otherwise a beta with no new releasable commits would loop.
     assert next_version("1.2.3-beta1", BumpKind.NONE) == "1.2.3-beta1"
     assert next_version("v1.2.3-alpha1", BumpKind.NONE) == "1.2.3-alpha1"
+
+
+def test_is_highest_orders_multi_digit_numerically_not_lexically() -> None:
+    # R5-7: the parity battery only proves the inline snippet AGREES with core; if core itself
+    # ordered lexically, both would agree and pass. Lock numeric ordering directly: "1.10.0" is
+    # newer than "1.2.0" (10 > 2), and beta10 outranks beta2 — a string compare would invert both.
+    assert is_highest("1.10.0", ["1.9.0", "1.2.0", "1.10.0"]) is True
+    assert is_highest("1.2.0", ["1.10.0", "1.2.0"]) is False
+    assert is_highest("1.0.0-beta10", ["1.0.0-beta2", "1.0.0-beta10"]) is True
+    assert is_highest("1.0.0-beta2", ["1.0.0-beta10", "1.0.0-beta2"]) is False

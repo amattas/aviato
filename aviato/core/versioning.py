@@ -24,8 +24,8 @@ def _release_key(tag: str) -> tuple[int, int, int, int, int] | None:
 def is_highest(candidate: str, existing: Iterable[str]) -> bool:
     """True iff ``candidate`` is the highest released version among ``existing`` (§8.14/§13.2).
 
-    Used to gate a mutable published alias (e.g. an image ``latest`` tag or docs
-    alias) so a slower, older-release deploy cannot move the alias backward.
+    Used to gate a mutable published alias (e.g. a floating ``latest``/docs alias)
+    so a slower, older-release deploy cannot move the alias backward.
     Unparseable tags are ignored; a final release outranks its own pre-releases.
     """
     candidate_key = _release_key(candidate)

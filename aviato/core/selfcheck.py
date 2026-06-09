@@ -132,10 +132,14 @@ def denylist_violations(core_dir: Path | None = None, denylist: Iterable[str] | 
         denylist = load_denylist(DENYLIST_FILE)
 
     def _token_pattern(token: str) -> re.Pattern[str]:
-        # Split on whitespace and rejoin with ``\s+`` so a multi-word token matches across any
-        # whitespace run (a literal-space pattern would only match one ASCII space). Built
+        # Split on whitespace and rejoin with ``[\s_-]*`` so a multi-word denylist token matches the
+        # SAME identifier however its words are joined: whitespace, hyphen, underscore, OR
+        # concatenated. R9-20: the old ``\s+`` join matched only the whitespace-separated form, so a
+        # two-word token missed the hyphenated/concatenated spellings — exactly the forms real
+        # deployment-environment identifiers use. (Offending spellings are DESCRIBED, not written:
+        # this module's own source must name no denylisted token or it trips its own scan.) Built
         # outside an f-string: a backslash in an f-string expression is a syntax error < 3.12.
-        body = r"\s+".join(re.escape(part) for part in token.split())
+        body = r"[\s_-]*".join(re.escape(part) for part in token.split())
         return re.compile(rf"\b{body}\b", re.IGNORECASE)
 
     patterns = [(token, _token_pattern(token)) for token in denylist]

@@ -39,6 +39,9 @@ class FakePlatform:
         # mid-flight (§5.7 audit-trail test).
         self.fail_apply = fail_apply
         self._apply_count = 0
+        # R5-4: desired security toggles apply_settings should report as SKIPPED (feature
+        # unavailable). Empty by default → a clean, full apply.
+        self.skipped_on_apply: list[str] = []
         self.calls: list[tuple[str, tuple]] = []
 
     def read_settings(self, repo: str) -> dict[str, Any]:
@@ -83,7 +86,7 @@ class FakePlatform:
 
     def apply_settings(
         self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
-    ) -> None:
+    ) -> list[str]:
         self._apply_count += 1
         if self.fail_apply:
             raise RuntimeError("settings apply rejected by platform")
@@ -91,6 +94,9 @@ class FakePlatform:
             raise RuntimeError("full protection rejected by platform")
         self.calls.append(("apply_settings", (repo, payload, expected_live)))
         self.settings.update(payload)
+        # R5-4: simulate a §17 toggle that was surfaced-and-skipped (e.g. feature unavailable),
+        # so flow tests can assert the audit reports a partial apply. Default: full apply ([]).
+        return list(self.skipped_on_apply)
 
     def create_repo(self, repo: str, *, private: bool) -> None:
         self.calls.append(("create_repo", (repo, private)))

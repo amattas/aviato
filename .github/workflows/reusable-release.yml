@@ -24,10 +24,11 @@ on:
   workflow_call:
     inputs:
       aviato-ref:
-        description: The Aviato version pin to install.
-        required: false
+        description: The Aviato version pin to install (X.Y.Z, X.Y.Z-alphaN/-betaN, or floating major N).
+        # R4-6: required, no `main` default. A privileged release run must install a PINNED
+        # Aviato, never a moving branch (§11.3); a caller omitting it fails closed at config time.
+        required: true
         type: string
-        default: main
       local-install:
         description: Install Aviato from the checked-out repository for Library bootstrap.
         required: false
@@ -67,7 +68,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       released: ${{ steps.tag.outputs.released }}
-      tag: ${{ steps.derive.outputs.next }}
+      # R2-1-REL-TAG: sourced from the TAG-phase step (set only when a tag was cut), so it is empty
+      # on a propose/no-release run — matching the `tag` output's documented "set only when released".
+      tag: ${{ steps.tag.outputs.tag }}
     env:
       GH_TOKEN: ${{ github.token }}
       AVIATO_REF: ${{ inputs.aviato-ref }}
@@ -80,11 +83,24 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python-version }}
 
-      - name: Install Aviato
+      - name: Verify Aviato ref is pinned (§11.3 fail-closed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # R4-6: a privileged release run must install a PINNED Aviato, never a moving branch.
+          # Accept an exact version (X.Y.Z[-alphaN|-betaN]) or a floating-major alias (N); reject
+          # empty or any branch-like ref (e.g. main) so a mis-wired caller cannot silently run
+          # release logic off unpinned Library code (§11.3). AVIATO_REF is the workflow env var.
+          if [[ ! "${AVIATO_REF}" =~ ^[0-9]+(\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?)?$ ]]; then
+            echo "::error::aviato-ref '${AVIATO_REF}' is not a pinned version (expected X.Y.Z, X.Y.Z-alphaN/-betaN, or a floating major N)."
+            exit 1
+          fi
+
+      - name: Install Aviato (pinned)
         shell: bash
         run: |
           set -euo pipefail
@@ -142,11 +158,15 @@ jobs:
           NEXT: ${{ steps.derive.outputs.next }}
         run: |
           set -euo pipefail
-          # TAG phase iff the merged HEAD carries the release bump for NEXT. Robust to
-          # the merge strategy: a squash merge puts "chore(release): <NEXT>" on HEAD;
-          # a merge commit puts it on the second parent (HEAD^2).
+          # TAG phase iff the merged HEAD carries the release bump for NEXT. Robust to the merge
+          # strategy: a squash merge puts "chore(release): <NEXT>" on HEAD; a merge commit puts it
+          # on the second parent (HEAD^2). R6-4-SQUASH: GitHub's DEFAULT squash-merge title format
+          # appends " (#N)" (the PR number) to the PR title, so the merged subject is
+          # `chore(release): NEXT (#42)` — a bare end-anchor would MISS it, silently fall through to
+          # the propose phase, and the workflow would refuse to tag any release on a repo using the
+          # default merge mode. Accept an optional `(#N)` suffix.
           is_release_commit() {
-            git log -1 --format=%s "$1" 2>/dev/null | grep -q "^chore(release): ${NEXT}\$"
+            git log -1 --format=%s "$1" 2>/dev/null | grep -Eq "^chore\(release\): ${NEXT}( \(#[0-9]+\))?\$"
           }
           if is_release_commit HEAD || is_release_commit "HEAD^2"; then
             echo "phase=tag" >> "${GITHUB_OUTPUT}"
@@ -234,6 +254,10 @@ jobs:
           if ! gh release view "${NEXT}" >/dev/null 2>&1; then
             gh release create "${NEXT}" --title "${NEXT}" --notes-file /tmp/changelog.md
           fi
-          # Signal the caller to run deploy as in-run downstream jobs for this tag.
+          # Signal the caller to run deploy as in-run downstream jobs for this tag. R2-1-REL-TAG:
+          # emit `tag` HERE (the tag phase) — not from `derive.next` — so the job's `tag` output is
+          # set ONLY when a release was actually cut, matching its documented contract (empty on a
+          # propose/no-release run, so a caller can't read a phantom tag).
           echo "released=true" >> "${GITHUB_OUTPUT}"
+          echo "tag=${NEXT}" >> "${GITHUB_OUTPUT}"
           echo "Tagged and published ${NEXT}; deploy runs in-run from caller."

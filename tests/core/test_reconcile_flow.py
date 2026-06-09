@@ -241,3 +241,75 @@ def test_non_human_consent_refused_no_mutation() -> None:
     )
     assert outcome.action == "refuse"
     assert "apply_settings" not in platform.call_names()
+
+
+def test_apply_audit_reports_skipped_unavailable_security_toggle() -> None:
+    # R5-4: when the binding surfaces-and-skips a §17 toggle (feature unavailable on the repo),
+    # the §5.7 audit comment must say so — not overstate a clean apply. The operator needs to know
+    # the requested security setting did NOT land.
+    desired = {"required_reviews": 2, "secret_scanning": True}
+    live = {"required_reviews": 1}
+    diff_id = _current_diff_id(desired, live)
+    issue = Issue(
+        key="k",
+        open=True,
+        consent_diff_id=diff_id,
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
+        consent_role_lookup_ok=True,
+    )
+    platform = FakePlatform(settings=dict(live), issues={"k": issue})
+    platform.skipped_on_apply = ["secret_scanning"]
+    run_reconcile(
+        platform,
+        repo="o/r",
+        issue_key="k",
+        desired_settings=desired,
+        pin="v1",
+        tool_version="1.0.0",
+        recorded_version="1.0.0",
+        confirmed_diff_id=diff_id,
+    )
+    audit = next(args[2] for name, args in platform.calls if name == "comment_issue")
+    assert "Applied diff" in audit
+    assert "SKIPPED unavailable" in audit and "secret_scanning" in audit
+
+
+def test_apply_reads_consent_again_and_aborts_if_revoked_before_apply() -> None:
+    # C12-R3-1 (§5.7/§2.8): a consent label revoked BETWEEN the entry read and the apply must abort,
+    # never apply on stale authorization. The flow re-reads the issue immediately before the write.
+    desired = {"required_reviews": 2}
+    live = {"required_reviews": 1}
+    diff_id = _current_diff_id(desired, live)
+    granted = Issue(
+        key="k",
+        open=True,
+        consent_diff_id=diff_id,
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
+        consent_role_lookup_ok=True,
+    )
+    revoked = Issue(key="k", open=True, consent_diff_id=None)
+
+    class RevokingPlatform(FakePlatform):
+        def __init__(self) -> None:
+            super().__init__(settings=dict(live), issues={"k": granted})
+            self._issue_reads = 0
+
+        def get_issue(self, repo: str, key: str):
+            self._issue_reads += 1
+            return granted if self._issue_reads == 1 else revoked  # consent revoked before apply
+
+    platform = RevokingPlatform()
+    outcome = run_reconcile(
+        platform,
+        repo="o/r",
+        issue_key="k",
+        desired_settings=desired,
+        pin="v1",
+        tool_version="1.0.0",
+        recorded_version="1.0.0",
+        confirmed_diff_id=diff_id,
+    )
+    assert outcome.action != "apply"  # re-read saw the revoke → refused
+    assert "apply_settings" not in platform.call_names()  # nothing was written

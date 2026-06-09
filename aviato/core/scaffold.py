@@ -131,8 +131,8 @@ def scaffold(
                     try:
                         sidecar[output] = content_hash(target.read_text(encoding="utf-8"))
                         sidecar_changed = True
-                    except UnicodeDecodeError:
-                        pass  # binary seed-once file (§6.3) — no text hash to record
+                    except (UnicodeDecodeError, OSError):
+                        pass  # binary seed-once file (§6.3), or a directory/unreadable path (N4) — no text hash
                 continue
             atomic_write(target, item.body)
             sidecar[output] = content_hash(item.body)
@@ -145,10 +145,11 @@ def scaffold(
         if target.exists():
             try:
                 existing = target.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                # A non-UTF-8 file cannot carry a valid Aviato marker, so it is operator-owned:
-                # never silently regenerate over it (mirrors diagnosis dirty-drift), and never
-                # crash a fleet sync. Treated exactly like a no-marker unmanaged file.
+            except (UnicodeDecodeError, OSError):
+                # A non-UTF-8 file (or a DIRECTORY / otherwise-unreadable path at the managed output,
+                # N4: IsADirectoryError &c. are OSError, not UnicodeDecodeError) cannot carry a valid
+                # Aviato marker, so it is operator-owned: never silently regenerate over it (mirrors
+                # diagnosis dirty-drift), and never crash a fleet sync. Treated as no-marker unmanaged.
                 if not force:
                     result.skipped_unmanaged.append(output)
                     continue

@@ -85,3 +85,13 @@ def test_provision_reports_partial_when_scaffold_push_fails() -> None:
     assert outcome.scaffolded is False
     assert outcome.partial is True
     assert "push rejected" in outcome.reason
+
+
+def test_provision_captures_skipped_security_from_full_apply() -> None:
+    # R3-5-F: the engine must CAPTURE apply_settings's skipped-toggle return onto the outcome — a
+    # CLI-level test that hand-builds the outcome wouldn't catch provision.py dropping the assignment.
+    platform = FakePlatform()
+    platform.skipped_on_apply = ["secret_scanning"]
+    outcome = provision_repo(platform, repo="o/new", desired=DESIRED, private=True, scaffold_push=lambda: None)
+    assert outcome.ok
+    assert outcome.skipped_security == ["secret_scanning"]
