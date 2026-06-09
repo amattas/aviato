@@ -92,9 +92,17 @@ def test_python_service_is_a_container_service_not_a_library(registry: Registry)
     # defaults to the repo slug.
     rs = resolve_profile(registry, "python-service")
     var_names = {v.name for v in rs.variables}
-    # `default-branch` (R4-3) is the only var — an optional, every-profile branch override templated
-    # into caller triggers; there is no required container-service-specific variable.
-    assert var_names == {"default-branch"}, var_names
+    # Only the every-profile vars — `default-branch` (R4-3), `owner` (finding 28), and
+    # the algolia opt-in set (finding 20); there is no required container-service-
+    # specific variable (no wheel/import packaging, no image-name).
+    assert var_names == {
+        "default-branch",
+        "owner",
+        "algolia",
+        "algolia-app-id",
+        "algolia-search-api-key",
+        "algolia-index-name",
+    }, var_names
     assert "distribution-name" not in var_names and "import-name" not in var_names
     assert "image-name" not in var_names
     assert rs.version_source.locations == ("VERSION",)
@@ -165,6 +173,54 @@ def test_required_status_checks_include_language_verify(registry: Registry, name
     assert "security / Security baseline heartbeat" in checks
 
 
+def test_algolia_opt_in_renders_templated_search_config() -> None:
+    # finding 20: algolia=true selects the templated variant — exactly one config
+    # renders (the same-output_path variants are mutually exclusive by `when`), the
+    # credentials are {{ }} placeholders the lenient seed-once render PRESERVES when
+    # unset, and the duplicate explicit theme entry stays gone.
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    variables = {"distribution-name": "acme", "import-name": "acme", "algolia": "true"}
+    items = materialize_items(reg, "python-library", variables, docs=True, pin="0")
+    configs = [i for i in items if i.output == "website/docusaurus.config.js"]
+    assert len(configs) == 1
+    body = configs[0].body
+    assert "algolia:" in body
+    assert "{{ algolia-app-id }}" in body, "unset optional vars must keep their placeholders"
+    assert "'@docusaurus/theme-search-algolia'" not in body
+    # ...and providing the values substitutes them.
+    variables_set = dict(variables, **{"algolia-app-id": "ABC123"})
+    items_set = materialize_items(reg, "python-library", variables_set, docs=True, pin="0")
+    body_set = next(i.body for i in items_set if i.output == "website/docusaurus.config.js")
+    assert "appId: 'ABC123'" in body_set
+
+
+def test_unset_optional_variables_never_render_as_none() -> None:
+    # finding 28: resolve_variables emits None for unset optionals; the render layer
+    # must omit them (placeholder preserved), never bake the literal "None".
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    variables = {"distribution-name": "acme", "import-name": "acme", "owner": None}
+    items = materialize_items(reg, "python-library", variables, pin="0")
+    license_body = next(i.body for i in items if i.output == "LICENSE")
+    assert "None" not in license_body
+    assert "{{ owner }}" in license_body
+
+
+def test_owner_variable_seeds_license() -> None:
+    # finding 28: a detected owner (CLI autodetect tier) lands in the seed-once LICENSE.
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    variables = {"distribution-name": "acme", "import-name": "acme", "owner": "octocat"}
+    items = materialize_items(reg, "python-library", variables, pin="0")
+    license_body = next(i.body for i in items if i.output == "LICENSE")
+    assert "octocat" in license_body
+    assert "{{ owner }}" not in license_body
+
+
 def test_docs_opt_in_scaffolds_runnable_docusaurus_site() -> None:
     # §13.3/#4: docs:true must scaffold a *runnable* site (config + sidebars + a docs
     # package with docusaurus deps + at least one source page), not just a config.
@@ -198,8 +254,11 @@ def test_docs_opt_in_scaffolds_runnable_docusaurus_site() -> None:
     config = next(i for i in items_on if i.output == "website/docusaurus.config.js")
     assert "markdown: { mermaid: true }" in config.body
     assert "'@docusaurus/theme-mermaid'" in config.body
-    assert "'@docusaurus/theme-search-algolia'" in config.body
-    assert "algolia:" in config.body
+    # finding 20: search is OPT-IN (default algolia=false) and the explicit theme entry
+    # is gone — preset-classic auto-loads it from themeConfig.algolia, and listing it
+    # too registered the plugin twice, failing every docs build at first deploy.
+    assert "'@docusaurus/theme-search-algolia'" not in config.body
+    assert "algolia:" not in config.body
     assert "sitemap:" in config.body
 
     npmrc = next(i for i in items_on if i.output == "website/.npmrc")

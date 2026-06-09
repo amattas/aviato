@@ -11,6 +11,11 @@ const config = {
   themeConfig: {
     colorMode: { defaultMode: 'light', respectPrefersColorScheme: true },
     navbar: { items: [{ type: 'docsVersionDropdown', position: 'right' }] },
+    algolia: {
+      appId: '{{ algolia-app-id }}',
+      apiKey: '{{ algolia-search-api-key }}',
+      indexName: '{{ algolia-index-name }}',
+    },
     mermaid: {
       theme: { light: 'neutral', dark: 'forest' },
     },

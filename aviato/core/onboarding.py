@@ -148,6 +148,20 @@ def resolved_artifacts(
     effective_variables = {spec.name: spec.default for spec in resolved.variables if spec.default is not None}
     effective_variables.update(variables)
     validate_variable_constraints(registry, profile, effective_variables)
+    # finding 28: resolve_variables emits None for unset OPTIONAL variables; render()
+    # substitutes str(value) for any present key, so a None entry would bake the
+    # literal "None" into bodies (the derived-rules path below documents the same
+    # hazard). Omit None entries: lenient seed-once renders then PRESERVE the
+    # {{ placeholder }} for the operator, and strict renders fail loud.
+    # finding 11 (§8.15 render-side analogue of writeback_variables): secret-typed
+    # values must never reach a rendered body — managed bodies are committed and
+    # seed-once bodies persist in the consumer tree. With the name dropped, a
+    # template referencing it fails strict render (managed) or keeps the
+    # placeholder (seed-once) instead of leaking the value.
+    secret_names = {spec.name for spec in resolved.variables if spec.secret}
+    effective_variables = {
+        name: value for name, value in effective_variables.items() if value is not None and name not in secret_names
+    }
     render_vars = render_variables(
         effective_variables, pin=pin, docs=docs, bootstrap=bootstrap, derived_rules=derived_rules
     )

@@ -1,0 +1,10 @@
+name: docusaurus-config-algolia
+output_path: website/docusaurus.config.js
+source: files/docusaurus.config.algolia.js.txt
+seed_once: true
+# finding 20: mutually exclusive with docusaurus-config (same output_path, opposite
+# `algolia` condition) — the collision check runs post-when-filtering, so exactly one
+# variant is ever applicable.
+when:
+  docs: "true"
+  algolia: "true"

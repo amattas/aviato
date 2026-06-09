@@ -1787,10 +1787,12 @@ valid narrative-only site.
   snapshots are pruned on each release. Versioned snapshots live on the published
   **`gh-pages` artifact**, not the source branch. (Replaces the previous mkdocs +
   `mike` setup; append-only and reviewable.)
-- **Search:** Algolia DocSearch via `@docusaurus/theme-search-algolia`, configured
-  with the public application ID, public search API key, and index name. These are
-  not stored secrets, but the operator must provision the Algolia index or override
-  search before publishing (§17).
+- **Search:** Algolia DocSearch via `@docusaurus/theme-search-algolia`, **opt-in**
+  through the `algolia` profile variable (default off — a fresh docs scaffold builds
+  with no search config rather than dead placeholder credentials). When enabled, the
+  public application ID, public search API key, and index name thread from the
+  `algolia-*` variables (not stored secrets); the operator must provision the
+  Algolia index before publishing (§17).
 - **Theme/features:** `@docusaurus/preset-classic`, **docs-first** (no blog), with
   the version dropdown and a light/dark toggle; `@docusaurus/theme-mermaid` with
   `markdown.mermaid: true`; sitemap configuration through the classic preset; and

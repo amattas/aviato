@@ -4,3 +4,4 @@ source: files/docusaurus.config.js.txt
 seed_once: true
 when:
   docs: "true"
+  algolia: "false"

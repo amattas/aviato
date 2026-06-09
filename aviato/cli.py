@@ -443,6 +443,21 @@ def _resolve_onboard_pin(args: argparse.Namespace, existing) -> str:
     )
 
 
+def _autodetect_vars(root: Path) -> dict[str, str]:
+    """§5.2 auto-detection tier: only values READ from authoritative sources (finding 28).
+
+    ``owner`` comes from the repository's own git remote (the slug's owner half) — the
+    authoritative identity, not a heuristic guess, so the day-zero "no identity-bearing
+    auto-mapping" rule's rationale (wrong guesses get persisted) does not apply to it.
+    Absent/foreign remote → empty mapping: the variable stays unset and seed-once
+    templates keep their ``{{ owner }}`` placeholder for the operator.
+    """
+    slug = normalize_slug(remote_url(root))
+    if slug:
+        return {"owner": slug.split("/", 1)[0]}
+    return {}
+
+
 def _resolve_onboard_declaration(args: argparse.Namespace, registry: Registry, resolved, existing):
     """Resolve variables (§5.2 precedence), enforce the migrate guard, resolve the
     version pin (§5.12 re-pin exclusivity), and build the declaration. Raises
@@ -456,11 +471,12 @@ def _resolve_onboard_declaration(args: argparse.Namespace, registry: Registry, r
         flags=flags,
         declaration=(existing.variables if existing else {}),
         env=_env_vars(resolved.variables),
-        # §5.2 day-zero: the auto-detection tier is honored by resolve_variables but
-        # intentionally empty — day-zero profiles auto-map no identity-bearing variable,
-        # since a resolved value is PERSISTED into the declaration and a wrong guess (a
-        # directory name is not a PyPI distribution name) is worse than failing closed.
-        autodetect={},
+        # §5.2 day-zero: the auto-detection tier maps no identity-bearing variable that
+        # would be a GUESS — a resolved value is PERSISTED into the declaration and a
+        # wrong guess (a directory name is not a PyPI distribution name) is worse than
+        # failing closed. The one exception (finding 28, decision recorded in
+        # _autodetect_vars): `owner` is read from the repo's own git remote.
+        autodetect=_autodetect_vars(Path(args.target)),
     )
     plan_onboarding(
         registry,
@@ -1259,8 +1275,9 @@ def cmd_provision(args: argparse.Namespace) -> int:
             flags=_parse_var_flags(args.var),
             declaration={},
             env=_env_vars(resolved.variables),
-            # §5.2 day-zero: auto-detection tier intentionally empty — see _resolve_onboard_declaration.
-            autodetect={},
+            # §5.2 day-zero: see _autodetect_vars — provision KNOWS the owner (the slug
+            # argument's owner half), so it is read, not guessed (finding 28).
+            autodetect={"owner": slug.split("/", 1)[0]},
         )
         persisted = writeback_variables(resolved.variables, variables)
     except AviatoError as exc:
