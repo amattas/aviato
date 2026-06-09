@@ -102,6 +102,12 @@ def _is_feature_unavailable(exc: CommandError) -> bool:
     "not enabled" is NOT misclassified as a benign adoption warning and is allowed to raise.
     """
     msg = exc.stderr.lower()
+    # finding 25: require an explicit CLIENT-error HTTP status alongside the wording — a
+    # 5xx/transient/network failure whose body merely contains these phrases must NOT be
+    # misread as a benign §17 prerequisite gap (that would silently skip a security
+    # toggle a retry would have applied). gh appends "(HTTP NNN)" to API errors.
+    if not any(f"http {code}" in msg for code in (403, 404, 422)):
+        return False
     if "advanced security" in msg:
         return True
     availability = "not available" in msg or "not enabled" in msg or "must be enabled" in msg

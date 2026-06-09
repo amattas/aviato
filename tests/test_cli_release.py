@@ -88,3 +88,17 @@ def test_version_pin_error_checks_all_markers_not_just_first(tmp_path: Path) -> 
     decl = Declaration(profile="python-library", version="0", docs=False, variables={}, overrides={})
     err = _version_pin_error(tmp_path, decl, expected, override=False)
     assert err is not None and "999.0.0" in err
+
+
+def test_bump_version_refuses_malformed_and_bare_major(tmp_path, capsys) -> None:
+    # finding 21: a garbage version was previously spliced into manifests and reported
+    # as success; a bare-major pin (a Library ref, not a release version) is refused too.
+    from aviato.cli import main
+
+    rc = main(["bump-version", "not-a-version", str(tmp_path)])
+    assert rc == 2
+    assert "not a release version" in capsys.readouterr().err
+
+    rc = main(["bump-version", "1", str(tmp_path)])
+    assert rc == 2
+    assert "not a release version" in capsys.readouterr().err

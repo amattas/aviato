@@ -965,9 +965,12 @@ def test_is_feature_unavailable_requires_security_context() -> None:
     # misclassified as a benign adoption warning and apply_settings would report success (fail-OPEN).
     assert _is_feature_unavailable(CommandError(["gh"], 1, "Branch protection is not enabled")) is False
     assert _is_feature_unavailable(CommandError(["gh"], 1, "Webhooks are not enabled (HTTP 422)")) is False
-    # A real security-feature-unavailable message IS recognized (benign adoption warning).
-    assert _is_feature_unavailable(CommandError(["gh"], 1, "Secret scanning is not available")) is True
-    assert _is_feature_unavailable(CommandError(["gh"], 1, "GitHub Advanced Security must be enabled")) is True
+    # A real security-feature-unavailable message IS recognized (benign adoption warning) —
+    # finding 25: but only with an explicit client-error status (gh appends "(HTTP NNN)").
+    assert _is_feature_unavailable(CommandError(["gh"], 1, "Secret scanning is not available (HTTP 422)")) is True
+    assert (
+        _is_feature_unavailable(CommandError(["gh"], 1, "GitHub Advanced Security must be enabled (HTTP 403)")) is True
+    )
 
 
 def test_apply_settings_reraises_security_patch_error_without_security_context(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1041,3 +1044,18 @@ def test_ruleset_does_not_satisfy_enforce_admins_when_classic_is_unenforced() ->
     assert map_branch_settings(ruleset, {})["enforce_admins"] is True
     # classic enforce_admins=true is honoured
     assert map_branch_settings(ruleset, {"enforce_admins": {"enabled": True}})["enforce_admins"] is True
+
+
+def test_feature_unavailable_requires_client_error_status() -> None:
+    # finding 25: the classifier must demand an explicit 4xx status — a 5xx/transient
+    # whose body merely contains the phrases must raise (retry would have applied it),
+    # not be silently reported as a benign §17 prerequisite gap.
+    from aviato.command import CommandError
+    from aviato.github_platform import _is_feature_unavailable
+
+    transient = CommandError(["gh"], 1, "secret scanning is not available right now (HTTP 502)")
+    assert _is_feature_unavailable(transient) is False
+    wordless = CommandError(["gh"], 1, "connection reset by peer")
+    assert _is_feature_unavailable(wordless) is False
+    genuine = CommandError(["gh"], 1, "Secret scanning is not enabled for this repository (HTTP 422)")
+    assert _is_feature_unavailable(genuine) is True

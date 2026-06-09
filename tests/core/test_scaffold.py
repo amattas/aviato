@@ -187,3 +187,30 @@ def test_non_utf8_managed_file_is_skipped_not_crashed(tmp_path: Path) -> None:
     result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="v1")
     assert result.skipped_unmanaged == ["cfg.py"]
     assert (tmp_path / "cfg.py").read_bytes() == b"\xff\xfe\x00 binary"  # untouched
+
+
+def test_atomic_write_preserves_existing_mode(tmp_path: Path) -> None:
+    # finding 22: the mkstemp temp file is 0600; os.replace previously demoted an
+    # existing file's permissions (e.g. dropping +x from a seeded helper script).
+    from aviato.core.scaffold import atomic_write
+
+    target = tmp_path / "script.sh"
+    target.write_text("old", encoding="utf-8")
+    target.chmod(0o755)
+    atomic_write(target, "new")
+    assert target.read_text(encoding="utf-8") == "new"
+    assert target.stat().st_mode & 0o777 == 0o755
+
+
+def test_atomic_write_new_files_honor_umask(tmp_path: Path) -> None:
+    import os
+
+    from aviato.core.scaffold import atomic_write
+
+    previous = os.umask(0o022)
+    try:
+        target = tmp_path / "fresh.txt"
+        atomic_write(target, "x")
+        assert target.stat().st_mode & 0o777 == 0o644
+    finally:
+        os.umask(previous)

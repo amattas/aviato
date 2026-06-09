@@ -609,7 +609,13 @@ def _scan_block(block: str, depth: int = 0) -> list[str]:
     `-c`/`-e` string operand IS more shell, so it is scanned at ``depth+1`` (cycle-15: `bash -c 'curl |
     bash'` is a literal code string, not a substitution). A block that mentions curl/wget but bashlex
     cannot parse fails CLOSED."""
-    import bashlex
+    try:
+        import bashlex
+    except ImportError as exc:
+        # finding 24 (§5.14): bashlex is a pinned dependency; if it is somehow missing the
+        # gate must fail CLOSED with a clean reported violation — mirroring the
+        # zizmor-unavailable posture — never escape as a raw ImportError traceback.
+        return [f"bashlex unavailable (cannot verify fetch-execute, §5.14): {exc}"]
 
     if not _FETCH_RE.search(block):
         return []

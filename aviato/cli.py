@@ -1670,7 +1670,10 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
             if settings_outcome.drifted_rulesets:
                 print(
                     f"  missing/drifted rulesets (apply with `aviato apply-rulesets {slug} "
-                    f"--apply --declaration {declaration_path}`): {list(settings_outcome.drifted_rulesets)}"
+                    # finding 26: the REPO-RELATIVE declaration path (the runner-local
+                    # absolute path printed here before does not exist on the operator's
+                    # machine; the issue body already used the relative form).
+                    f"--apply --declaration .github/aviato.yaml`): {list(settings_outcome.drifted_rulesets)}"
                 )
         except SettingsReadError as exc:
             print(
@@ -1752,6 +1755,16 @@ def cmd_next_version(args: argparse.Namespace) -> int:
 
 def cmd_bump_version(args: argparse.Namespace) -> int:
     """Write a new version into the profile's version-source locations (§3.3/§5.9)."""
+    # finding 21: refuse a malformed version BEFORE writing — a garbage value would be
+    # spliced into manifests and reported as success. A bare-major pin (N) is a Library
+    # ref, not a release version, and is equally refused.
+    if not is_known_version_pin(args.version) or "." not in args.version.lstrip("v"):
+        print(
+            f"not a release version: {args.version!r} (expected X.Y.Z or X.Y.Z-alphaN/-betaN)",
+            file=sys.stderr,
+        )
+        return 2
+    args.version = normalize_pin(args.version)
     root = Path(args.path).resolve()
     declaration_path = root / ".github" / "aviato.yaml"
     if not declaration_path.is_file():

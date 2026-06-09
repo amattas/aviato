@@ -37,12 +37,23 @@ class ScaffoldResult:
 
 def atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # finding 22: mkstemp creates the temp file 0600 and os.replace carries that mode to
+    # the destination — silently DEMOTING an existing file's permissions (group-read,
+    # +x) and creating new files stricter than the umask. Preserve an existing file's
+    # mode; otherwise honor the process umask like a normal create would.
+    try:
+        mode = path.stat().st_mode & 0o777
+    except OSError:
+        umask = os.umask(0)
+        os.umask(umask)
+        mode = 0o666 & ~umask
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".aviato-", suffix=".tmp")
     try:
         # newline="" disables platform newline translation so the bytes on disk are exactly
         # the rendered string — byte-identical output across platforms (§5.3 determinism).
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
+        os.chmod(tmp_name, mode)
         os.replace(tmp_name, path)
     except BaseException:
         Path(tmp_name).unlink(missing_ok=True)
