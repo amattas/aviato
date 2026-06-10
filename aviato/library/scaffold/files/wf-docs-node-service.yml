@@ -40,6 +40,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # finding 6: resolve only reads local tags after checkout — never persist
+          # the job token into .git/config.
+          persist-credentials: false
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           fetch-tags: true
