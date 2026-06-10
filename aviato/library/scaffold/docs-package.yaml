@@ -1,6 +1,11 @@
 name: docs-package
 # Docusaurus site manifest (§13.3). Seed-once; the developer runs `npm install`
 # once to produce the lockfile the docs workflow's `npm ci` consumes.
+# The `overrides` entry forces serialize-javascript to the patched line for
+# GHSA-5c6j-r48x-rmvq (HIGH, RCE; every release <= 7.0.2 is vulnerable) because
+# Docusaurus's copy-webpack-plugin/css-minimizer-webpack-plugin still pin ^6 —
+# without it a fresh docs scaffold fails its own §2.13 HIGH/CRITICAL gate on
+# day one. Drop the override once those plugins require serialize-javascript ^7.
 output_path: website/package.json
 source: files/docs-package.json.txt
 seed_once: true
