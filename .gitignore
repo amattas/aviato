@@ -7,6 +7,10 @@ dist/
 .venv/
 .aviato/
 _wheelout/
+# Self-docs site dependencies/output (the docs SOURCES under website/ are committed).
+node_modules/
+website/build/
+website/.docusaurus/
 catalog.md
 repos-*.txt
 

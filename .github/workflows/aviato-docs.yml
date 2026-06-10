@@ -1,3 +1,4 @@
+# aviato:managed profile=aviato-library version=0 hash=70ce0ef172faf9d88e3fa7ee5e82fbeb78b5c3a77a1ac1a663ad5b431842c46a
 name: Aviato Docs
 
 # Multi-version Docusaurus docs publish (§13.3), opt-in via docs: true.
@@ -12,7 +13,7 @@ on:
   workflow_run:
     workflows: ["Aviato Python Library"]
     types: [completed]
-    branches: ["{{ default-branch }}"]
+    branches: ["main"]
 
 # R4-7: least privilege. The top-level token is the FLOOR for jobs that don't set
 # their own; only the privileged `resolve` checkout runs under it, so it grants just
@@ -73,9 +74,9 @@ jobs:
       actions: read
       contents: read
       pull-requests: read
-    uses: {{ aviato-workflow-prefix }}reusable-release-gate.yml{{ aviato-workflow-suffix }}
+    uses: ./.github/workflows/reusable-release-gate.yml
     with:
-      default-branch: {{ default-branch }}
+      default-branch: main
       require-merged-pr: true
       release-tag: ${{ needs.resolve.outputs.tag }}
 
@@ -87,7 +88,7 @@ jobs:
       contents: read
       pull-requests: read
       security-events: write
-    uses: {{ aviato-workflow-prefix }}reusable-security-baseline.yml{{ aviato-workflow-suffix }}
+    uses: ./.github/workflows/reusable-security-baseline.yml
     with:
       ref: ${{ needs.resolve.outputs.tag }}
       codeql-languages: "python"
@@ -100,7 +101,7 @@ jobs:
       contents: read
       id-token: write
       pages: write
-    uses: {{ aviato-workflow-prefix }}reusable-docs-pages.yml{{ aviato-workflow-suffix }}
+    uses: ./.github/workflows/reusable-docs-pages.yml
     with:
       working-directory: website
       release-tag: ${{ needs.resolve.outputs.tag }}
@@ -111,4 +112,4 @@ jobs:
         # §11.3: pin the pip-installed doc tool to an exact version (no floating latest).
         python3 -m pip install --quiet -e . "pydoc-markdown==4.8.2"
         mkdir -p website/docs/api
-        pydoc-markdown -I . -p "{{ import-name }}" > website/docs/api/reference.md
+        pydoc-markdown -I . -p "aviato" > website/docs/api/reference.md

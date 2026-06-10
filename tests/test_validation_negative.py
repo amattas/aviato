@@ -24,6 +24,10 @@ _IGNORE = shutil.ignore_patterns(
     "aviato-onboard-*",
     "aviato-offboard-*",
     "aviato-scanfix-*",
+    # The Library's own docs site (self-docs): node_modules is huge and contains a
+    # file the sandboxed test env cannot read (*Secret* deny rule) — and validate()
+    # never looks inside it.
+    "node_modules",
 )
 
 

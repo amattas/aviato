@@ -1,6 +1,17 @@
 name: docs-package
 # Docusaurus site manifest (§13.3). Seed-once; the developer runs `npm install`
 # once to produce the lockfile the docs workflow's `npm ci` consumes.
+# The `overrides` entries force patched transitive deps so a fresh docs scaffold
+# doesn't fail security gates on day one:
+# - serialize-javascript ^7.0.3: GHSA-5c6j-r48x-rmvq (HIGH RCE; every release
+#   <= 7.0.2 vulnerable) — copy-webpack-plugin/css-minimizer-webpack-plugin
+#   still pin ^6, which trips the §2.13 HIGH/CRITICAL Trivy gate. Drop once
+#   those plugins require serialize-javascript ^7.
+# - sockjs -> uuid ^11.1.1 (scoped: mermaid already resolves uuid 14):
+#   CVE-2026-41907 — Trivy rates it MEDIUM (the §2.13 gate passes) but GitHub
+#   security-severity maps it HIGH, failing the code-scanning PR check on any
+#   PR that adds the lockfile. No patched uuid 8.x exists; sockjs pins ^8.3.2.
+#   Drop once sockjs (via webpack-dev-server) moves past uuid 8.
 output_path: website/package.json
 source: files/docs-package.json.txt
 seed_once: true
