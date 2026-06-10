@@ -239,8 +239,9 @@ def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
 
 def test_release_workflow_splits_derive_from_write_job() -> None:
     # C12-W1: the heavy derive phase (pip install + aviato over full history) must hold
-    # NO write token; only the propose/tag job gets contents/pull-requests write, and
-    # nothing is granted at workflow level.
+    # NO write token; only the propose/tag job gets the writes (contents/pull-requests,
+    # plus actions:write for the §5.9 release-branch check dispatch), and nothing is
+    # granted at workflow level.
     wf = _load("reusable-release.yml")
     assert wf["permissions"] == {}, "reusable-release must grant nothing at workflow level"
     derive = wf["jobs"]["derive"]
@@ -249,7 +250,7 @@ def test_release_workflow_splits_derive_from_write_job() -> None:
     checkout = next(s for s in derive["steps"] if str(s.get("uses", "")).startswith("actions/checkout"))
     assert checkout["with"].get("persist-credentials") is False
     release = wf["jobs"]["release"]
-    assert release["permissions"] == {"contents": "write", "pull-requests": "write"}
+    assert release["permissions"] == {"contents": "write", "pull-requests": "write", "actions": "write"}
     assert release["needs"] == "derive"
     assert "release == 'true'" in str(release.get("if", ""))
 
@@ -597,6 +598,37 @@ def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
         assert p.strip().startswith(f"{wd}/"), f"upload path not under working-directory: {p!r}"
     # Download must extract to exactly <wd> so the tree reconstructs at <wd>/<packages-dir>/... .
     assert down["path"] == wd, f"download path {down['path']!r} must be exactly {wd!r}"
+
+
+def test_release_propose_dispatches_ci_on_release_branch() -> None:
+    # §5.9: a GITHUB_TOKEN-pushed release branch never triggers workflows (event
+    # suppression), so required status checks could never report on the release PR —
+    # and under a required_status_checks ruleset (no bypass actors, §settings) that
+    # makes release PRs permanently unmergeable by ANYONE, wedging the release flow.
+    # workflow_dispatch is exempt from the suppression: the propose phase must
+    # dispatch the caller workflow at the release branch so the release PR reports
+    # the same check contexts a human branch would.
+    body = (WORKFLOWS / "reusable-release.yml").read_text()
+    dispatch_cmd = 'gh workflow run "${workflow_path##*/}" --ref "${branch}"'
+    assert dispatch_cmd in body, "propose phase must dispatch the caller workflow on the release branch"
+    wf = _load("reusable-release.yml")
+    perms = wf["jobs"]["release"]["permissions"]
+    assert perms.get("actions") == "write", "release job needs actions: write to dispatch the caller"
+
+
+def test_ci_callers_enable_release_pr_check_dispatch() -> None:
+    # Companion to the propose-phase dispatch: `gh workflow run` fails unless the
+    # caller declares the workflow_dispatch trigger, and a caller cannot grant a
+    # called workflow more than its own ceiling — so every CI caller that composes
+    # the release pipeline must carry both the trigger and `actions: write`.
+    ci_callers = [
+        p for p in sorted(SCAFFOLD_FILES.glob("wf-*.yml")) if "reusable-release.yml" in p.read_text(encoding="utf-8")
+    ]
+    assert ci_callers, "no CI caller bodies compose reusable-release.yml?"
+    for caller in ci_callers:
+        body = caller.read_text(encoding="utf-8")
+        assert "workflow_dispatch:" in body, f"{caller.name}: release-branch check dispatch needs the trigger"
+        assert "actions: write" in body, f"{caller.name}: caller ceiling must cover the release job's actions: write"
 
 
 def test_release_propose_tolerates_preseeded_version_source() -> None:

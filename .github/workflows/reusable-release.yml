@@ -193,6 +193,10 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # §5.9 release-PR checks: lets the propose phase `gh workflow run` the caller at
+      # the release branch (workflow_dispatch is exempt from GITHUB_TOKEN event
+      # suppression), so required status checks can report on the release PR.
+      actions: write
     outputs:
       released: ${{ steps.tag.outputs.released }}
       # R2-1-REL-TAG: sourced from the TAG-phase step (set only when a tag was cut), so it is empty
@@ -290,6 +294,20 @@ jobs:
           else
             gh pr create --base "${GITHUB_REF_NAME}" --head "${branch}" --title "chore(release): ${NEXT}" --body "${body}"
             echo "Opened release PR for ${NEXT}."
+          fi
+          # §5.9 release-PR checks: every event from this job's GITHUB_TOKEN push is
+          # suppressed EXCEPT workflow_dispatch/repository_dispatch, so the release
+          # branch never triggers CI on its own and required status checks could never
+          # report on the release PR — under a required_status_checks ruleset (which
+          # has no admin override unless bypass actors are configured) that would make
+          # release PRs permanently unmergeable. Dispatch this run's own caller at the
+          # release branch so the PR carries the same check contexts a human branch
+          # would. WARN (not fail) on dispatch errors: a caller not yet re-synced to
+          # declare workflow_dispatch keeps its previous behavior — visibly pending
+          # checks on the PR, never a silent wrong state.
+          workflow_path="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.path')"
+          if ! gh workflow run "${workflow_path##*/}" --ref "${branch}"; then
+            echo "::warning::Could not dispatch ${workflow_path##*/} at ${branch}; release-PR status checks will be missing until the caller declares workflow_dispatch (re-run aviato sync)."
           fi
 
       - name: Tag release, advance floating major, publish

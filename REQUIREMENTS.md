@@ -796,6 +796,17 @@ gates the move within the major line). The release process must not depend on a 
 in bootstrap, the release pipeline resolves its own module/action references
 locally.
 
+The release proposal must be mergeable under the policy's own branch
+protection: a branch pushed with the platform's automation token never triggers
+CI on its own (the platform suppresses events from that token), so the propose
+phase **dispatches the caller workflow at the release branch** — manual
+dispatch is exempt from that suppression — making the release PR report the
+same required status checks as any human branch. Required-status-check rulesets
+therefore stay enforceable with **no bypass actors**. A caller that has not yet
+adopted the dispatch trigger fails soft: the dispatch step warns, the PR's
+checks stay visibly pending, and the operator remediates by re-syncing the
+caller (§5.3).
+
 ```mermaid
 flowchart TD
     A["Changes merged to mainline"] --> B["Read Conventional Commit history"]
