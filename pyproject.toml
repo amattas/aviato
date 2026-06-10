@@ -28,6 +28,14 @@ dev = [
   "pytest==9.0.3",
   "pytest-cov==7.1.0",
   "ruff==0.15.16",
+  # CI-failure fix: mypy --strict needs the PyYAML stubs in the SAME env (they were
+  # only ever installed locally); without them the type gate fails on import-untyped.
+  "types-PyYAML==6.0.12.20260518",
+  # CI-failure fix: validate.sh builds the wheel with --no-isolation (the local gate
+  # must work offline), so the build BACKEND must exist in the ambient env — Python
+  # 3.12 runners don't ship setuptools by default. Mirrors [build-system]'s floor
+  # (same constraint, not a gate tool whose drift changes lint outcomes).
+  "setuptools>=69",
   "yamllint==1.35.1",
 ]
 
