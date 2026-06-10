@@ -67,6 +67,17 @@ def test_fix_only_bumps_patch() -> None:
     assert classify_commits(["fix: a", "docs: b"]) == BumpKind.PATCH
 
 
+def test_git_log_record_separator_noise_still_classifies() -> None:
+    # `git log --format=%B%x00` terminates every record with a newline AFTER the NUL,
+    # so each NUL-split message except the first reaches the classifier with a leading
+    # "\n". The header is the first contentful line — leading blank lines are transport
+    # noise, never a reason to drop the commit from the bump derivation (§5.9).
+    assert classify_commits(["\nfeat: b"]) == BumpKind.MINOR
+    assert classify_commits(["\n\nfix: a\n\nbody text"]) == BumpKind.PATCH
+    # The footer rule is unaffected: a column-0 BREAKING CHANGE footer still majors.
+    assert classify_commits(["\nfeat: x\n\nBREAKING CHANGE: gone"]) == BumpKind.MAJOR
+
+
 def test_non_releasable_commits_are_none() -> None:
     # non-conventional, chore-only, and empty all imply NO release (§5.9) — so the
     # chore(release) commit and empty history never loop into endless patch cuts.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,23 @@ def test_next_version_bad_current_exits_nonzero(capsys: pytest.CaptureFixture[st
     # A malformed --current is a clean operator error (exit 2), not an uncaught traceback.
     rc = main(["next-version", "--current", "nope", "--commit", "fix: x"])
     assert rc == 2
+
+
+def test_next_version_stdin_parses_git_log_nul_records(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression (release derive, §5.9): the workflow pipes `git log --format=%B%x00`,
+    # which emits "<body>\0\n" per record — every record after the first starts with a
+    # newline. The derive previously classified ONLY the first record (HEAD): a merge
+    # commit or fix at HEAD masked every feat behind it, so the release pipeline
+    # silently no-opped (or under-bumped) on merge-commit repos.
+    payload = (
+        "Merge pull request #18 from x/y\n\x00\nfix(scope): tip-adjacent fix\n\n\x00\nfeat: earlier feature\n\x00\n"
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(payload))
+    rc = main(["next-version", "--current", "0.0.0"])
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "0.1.0"
 
 
 def test_bump_version_rewrites_pyproject(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

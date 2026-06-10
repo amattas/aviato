@@ -1798,7 +1798,11 @@ def cmd_next_version(args: argparse.Namespace) -> int:
     commits = list(args.commit or [])
     if not commits:
         raw = sys.stdin.read()
-        commits = [c for c in (raw.split("\0") if "\0" in raw else raw.split("\n\n")) if c.strip()]
+        # `git log --format=%B%x00` terminates each record with "\0\n", so every
+        # NUL-split message after the first arrives with a leading newline. Strip the
+        # record-separator noise so each message's header sits at line 0 — otherwise
+        # only HEAD classifies and the derive under-bumps or no-ops (§5.9).
+        commits = [c.strip() for c in (raw.split("\0") if "\0" in raw else raw.split("\n\n")) if c.strip()]
     try:
         result = next_version(args.current, classify_commits(commits))
     except AviatoError as exc:

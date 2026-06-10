@@ -599,6 +599,19 @@ def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
     assert down["path"] == wd, f"download path {down['path']!r} must be exactly {wd!r}"
 
 
+def test_release_propose_tolerates_preseeded_version_source() -> None:
+    # §5.9 bootstrap: on a repo whose version-source already equals NEXT (seeded at
+    # onboard time, before the first release existed), the propose-phase bump is a
+    # no-op — the release PR must still materialize via an empty marker commit instead
+    # of dying on `git commit -am` with nothing staged. The TAG phase keys on the
+    # commit subject and independently re-proves the manifest equals NEXT, so an empty
+    # marker commit cannot tag a version the manifest doesn't carry.
+    body = (WORKFLOWS / "reusable-release.yml").read_text()
+    assert "if git diff --quiet; then" in body, "propose phase must detect the no-op bump"
+    marker_commit = 'git commit --allow-empty -m "chore(release): ${NEXT}"'
+    assert marker_commit in body, "propose must fall back to an empty marker commit on a pre-seeded version-source"
+
+
 def test_release_phase_detector_accepts_squash_merge_subject() -> None:
     # R6-4-SQUASH: GitHub's DEFAULT squash-merge title format appends ' (#N)' (the PR number) to
     # the PR title, so the merged subject is `chore(release): NEXT (#42)`. The phase-detector regex
