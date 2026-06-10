@@ -54,7 +54,10 @@ on:
         description: Exact twine version to install (§11.3 — package index has no digest).
         required: false
         type: string
-        default: "5.1.1"
+        # twine < 6 hardcodes supported Metadata-Version <= 2.3 and rejects the 2.4
+        # metadata current setuptools emits (PEP 639 license fields) as "missing
+        # Name/Version" — observed live on the 0.1.0 publish. 6.x parses 2.4.
+        default: "6.2.0"
       pip-audit-version:
         description: Exact pip-audit version to install (§11.3 — package index has no digest).
         required: false
