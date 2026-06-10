@@ -197,6 +197,17 @@ jobs:
           /tmp/audit-venv/bin/python -m pip install --quiet "pip-audit==${PIP_AUDIT_VERSION}"
           # Install the built wheel so pip-audit sees the project's resolved deps.
           /tmp/audit-venv/bin/python -m pip install --quiet "${PACKAGES_DIR}"/*.whl
+          # FIRST-PUBLISH-BOOTSTRAP: remove the project's OWN distribution from the audit venv
+          # before scanning. Its resolved dependencies stay installed (materialized by the wheel
+          # install above) and are fully audited — but the project itself is not a PyPI dependency,
+          # and on a FIRST release it does not exist on the index yet, so pip-audit reports
+          # "Dependency not found on PyPI and could not be audited" and `--strict` escalates that
+          # skip into a hard failure: the first publish could never pass its own gate (observed
+          # live on aviato 0.2.0). Wheel filename fields are hyphen-separated with the name part
+          # underscore-normalized, so the first `-` field is exactly the distribution name.
+          for wheel in "${PACKAGES_DIR}"/*.whl; do
+            /tmp/audit-venv/bin/python -m pip uninstall --quiet -y "$(basename "${wheel}" | cut -d- -f1)"
+          done
           # R7-1-PIPAUDIT-NOOP: REVERT to `--strict` (the prior fail-closed posture). The R6-2-PIPAUDIT
           # attempt at a "HIGH/CRITICAL only" gate (mirroring the GHCR `trivy --severity ...` pattern)
           # was structurally a NO-OP — pip-audit's OSV/PyPA service does NOT emit per-vuln severity in

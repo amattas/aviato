@@ -612,6 +612,22 @@ def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
     assert down["path"] == wd, f"download path {down['path']!r} must be exactly {wd!r}"
 
 
+def test_pypi_audit_excludes_project_under_release() -> None:
+    # Observed live (first 0.2.0 publish): the audit venv installs the built wheel, then
+    # `pip-audit --strict` audits the WHOLE environment — including the project itself, which on
+    # a FIRST publish does not exist on PyPI yet. pip-audit reports "Dependency not found on PyPI
+    # and could not be audited", and --strict escalates that skip into a hard failure, so a first
+    # publish can never pass its own gate. The step must uninstall the project's own distribution
+    # before invoking pip_audit; the wheel's resolved dependencies stay installed and audited.
+    wf = _load("reusable-pypi-publish.yml")
+    steps = wf["jobs"]["build"]["steps"]
+    scan = next(s for s in steps if s.get("name") == "Dependency vulnerability scan (gate)")
+    run = scan["run"]
+    assert "pip uninstall" in run, "audit step must remove the project under release from the venv"
+    assert run.index("pip uninstall") < run.index("-m pip_audit"), "uninstall must precede the audit"
+    assert "--strict" in run, "the fail-closed posture for real dependencies must stay (R7-1)"
+
+
 def test_release_propose_dispatches_ci_on_release_branch() -> None:
     # §5.9: a GITHUB_TOKEN-pushed release branch never triggers workflows (event
     # suppression), so required status checks could never report on the release PR —
