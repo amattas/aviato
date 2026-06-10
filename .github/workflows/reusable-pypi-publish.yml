@@ -192,22 +192,30 @@ jobs:
           PIP_AUDIT_VERSION: ${{ inputs.pip-audit-version }}
         run: |
           set -euo pipefail
+          # AUDIT-SCOPE: scan EXACTLY the project's resolved dependency closure — nothing more.
+          # Two live publish failures proved environment-mode auditing gates the publish on
+          # things that never ship: on 0.2.0 the project ITSELF (absent from the index on a
+          # first publish, its "could not be audited" skip is fatal under --strict, so a first
+          # publish could never pass its own gate); on 0.2.1 the venv's runner-seeded pip
+          # 25.0.1 (PYSEC-2026-196 et al.) — venv tooling, not a project dependency. So:
+          #  - /tmp/project-venv holds the built wheel + its resolved deps (what ships);
+          #  - /tmp/audit-venv holds the pip-audit scanner, so the scanner's own dependencies
+          #    are never co-audited (or co-resolved) with the project's;
+          #  - the audited set is `pip freeze` of the project venv (freeze omits venv tooling —
+          #    pip/setuptools/wheel — by design) minus the project's own distribution(s),
+          #    excluded by name: wheel filename fields are hyphen-separated with the name part
+          #    underscore-normalized, so the first `-` field is exactly the distribution name.
           python -m venv /tmp/audit-venv
+          python -m venv /tmp/project-venv
           # §11.3: pin the pip-installed scanner to an exact version (not a floating latest).
           /tmp/audit-venv/bin/python -m pip install --quiet "pip-audit==${PIP_AUDIT_VERSION}"
-          # Install the built wheel so pip-audit sees the project's resolved deps.
-          /tmp/audit-venv/bin/python -m pip install --quiet "${PACKAGES_DIR}"/*.whl
-          # FIRST-PUBLISH-BOOTSTRAP: remove the project's OWN distribution from the audit venv
-          # before scanning. Its resolved dependencies stay installed (materialized by the wheel
-          # install above) and are fully audited — but the project itself is not a PyPI dependency,
-          # and on a FIRST release it does not exist on the index yet, so pip-audit reports
-          # "Dependency not found on PyPI and could not be audited" and `--strict` escalates that
-          # skip into a hard failure: the first publish could never pass its own gate (observed
-          # live on aviato 0.2.0). Wheel filename fields are hyphen-separated with the name part
-          # underscore-normalized, so the first `-` field is exactly the distribution name.
+          # Install the built wheel so the project's dependency closure resolves exactly as shipped.
+          /tmp/project-venv/bin/python -m pip install --quiet "${PACKAGES_DIR}"/*.whl
+          exclude_args=()
           for wheel in "${PACKAGES_DIR}"/*.whl; do
-            /tmp/audit-venv/bin/python -m pip uninstall --quiet -y "$(basename "${wheel}" | cut -d- -f1)"
+            exclude_args+=(--exclude "$(basename "${wheel}" | cut -d- -f1)")
           done
+          /tmp/project-venv/bin/python -m pip freeze "${exclude_args[@]}" > /tmp/project-reqs.txt
           # R7-1-PIPAUDIT-NOOP: REVERT to `--strict` (the prior fail-closed posture). The R6-2-PIPAUDIT
           # attempt at a "HIGH/CRITICAL only" gate (mirroring the GHCR `trivy --severity ...` pattern)
           # was structurally a NO-OP — pip-audit's OSV/PyPA service does NOT emit per-vuln severity in
@@ -218,7 +226,10 @@ jobs:
           # fail-closed control silently became fail-open. The pessimistic-but-correct posture is
           # `--strict` — any reported finding blocks the publish — until/unless we switch to a scanner
           # that does expose severity (e.g. osv-scanner, or a separate OSV/NVD lookup). See §11.7/§2.13.
-          /tmp/audit-venv/bin/python -m pip_audit --strict --progress-spinner off || {
+          # `--no-deps` because the freeze output already IS the fully-pinned closure — no
+          # resolution wanted; pip-audit warns about unhashed pins, which is acceptable here
+          # (the set is generated in-job from the wheel install, not operator-supplied).
+          /tmp/audit-venv/bin/python -m pip_audit --strict --no-deps --progress-spinner off -r /tmp/project-reqs.txt || {
             echo "::error::pip-audit found vulnerabilities in the project's dependencies (gating publish, §11.7/§2.13).";
             exit 1;
           }

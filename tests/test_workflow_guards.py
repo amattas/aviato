@@ -612,20 +612,29 @@ def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
     assert down["path"] == wd, f"download path {down['path']!r} must be exactly {wd!r}"
 
 
-def test_pypi_audit_excludes_project_under_release() -> None:
-    # Observed live (first 0.2.0 publish): the audit venv installs the built wheel, then
-    # `pip-audit --strict` audits the WHOLE environment — including the project itself, which on
-    # a FIRST publish does not exist on PyPI yet. pip-audit reports "Dependency not found on PyPI
-    # and could not be audited", and --strict escalates that skip into a hard failure, so a first
-    # publish can never pass its own gate. The step must uninstall the project's own distribution
-    # before invoking pip_audit; the wheel's resolved dependencies stay installed and audited.
+def test_pypi_audit_scope_is_exactly_the_wheel_dependency_closure() -> None:
+    # Two live publish failures proved environment-mode auditing gates the publish on things
+    # that never ship: (0.2.0) the project ITSELF — absent from PyPI on a first publish, its
+    # "could not be audited" skip is fatal under --strict, so a first publish could never pass
+    # its own gate; (0.2.1) the venv's runner-seeded pip 25.0.1 (PYSEC-2026-196 et al.) — venv
+    # tooling, not a project dependency. The audit must scan a frozen requirements set from a
+    # DEDICATED project venv (freeze omits pip/setuptools/wheel tooling; the project's own
+    # distribution is --exclude'd by name), audited by a scanner living in a SEPARATE venv so
+    # pip-audit's own dependencies are never co-audited or co-resolved with the project's.
     wf = _load("reusable-pypi-publish.yml")
     steps = wf["jobs"]["build"]["steps"]
     scan = next(s for s in steps if s.get("name") == "Dependency vulnerability scan (gate)")
     run = scan["run"]
-    assert "pip uninstall" in run, "audit step must remove the project under release from the venv"
-    assert run.index("pip uninstall") < run.index("-m pip_audit"), "uninstall must precede the audit"
-    assert "--strict" in run, "the fail-closed posture for real dependencies must stay (R7-1)"
+    assert "python -m venv /tmp/audit-venv" in run, "scanner venv missing"
+    assert "python -m venv /tmp/project-venv" in run, "dedicated project venv missing"
+    assert '/tmp/project-venv/bin/python -m pip install --quiet "${PACKAGES_DIR}"/*.whl' in run
+    assert '/tmp/audit-venv/bin/python -m pip install --quiet "pip-audit==' in run
+    assert "pip freeze" in run and "--exclude" in run, "audited set must be the frozen closure minus the project"
+    audit_line = next(line for line in run.splitlines() if "-m pip_audit" in line)
+    assert "/tmp/audit-venv/bin/python -m pip_audit" in audit_line, "audit must run from the scanner venv"
+    for flag in ("--strict", "--no-deps", "-r "):
+        assert flag in audit_line, f"pip_audit must run with {flag.strip()}"
+    assert run.index("pip freeze") < run.index("-m pip_audit"), "freeze must precede the audit"
 
 
 def test_release_propose_dispatches_ci_on_release_branch() -> None:
