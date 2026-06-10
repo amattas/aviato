@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=70ce0ef172faf9d88e3fa7ee5e82fbeb78b5c3a77a1ac1a663ad5b431842c46a
+# aviato:managed profile=aviato-library version=0 hash=e8a8669d6f82656a6f0931fc68ed9bcba491499b4148f72fa1fcd1f728834789
 name: Aviato Docs
 
 # Multi-version Docusaurus docs publish (§13.3), opt-in via docs: true.
@@ -55,9 +55,12 @@ jobs:
           set -euo pipefail
           # R7-4-DOCSTAGFILTER: the `--list '[0-9]*.[0-9]*.[0-9]*'` is a shell GLOB, broader than the
           # policy tag pattern (`1foo.2bar.3baz` matches). Post-filter with grep -E so docs deploy
-          # only triggers on a real policy-conformant release tag.
+          # only triggers on a real policy-conformant release tag. The trailing `|| true` is
+          # load-bearing: grep exits 1 when NO tag matches (every ordinary merge), and under
+          # `set -euo pipefail` a failing command substitution fails the assignment and the whole
+          # resolve job — the no-release case must be a clean release=false skip, not a red run.
           tag="$(git tag --points-at "${HEAD_SHA}" --list '[0-9]*.[0-9]*.[0-9]*' \
-            | grep -E '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$' | head -n1)"
+            | grep -E '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$' | head -n1 || true)"
           if [ -n "${tag}" ]; then
             echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
             echo "release=true" >> "${GITHUB_OUTPUT}"

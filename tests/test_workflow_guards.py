@@ -51,6 +51,18 @@ def test_docs_callers_gate_workflow_run_to_origin_repo() -> None:
         assert "head_repository.full_name == github.repository" in body, caller.name
 
 
+def test_docs_callers_resolve_tolerates_no_tag() -> None:
+    # Observed live: `grep -E` exits 1 when the completed run's head carries NO release
+    # tag (every ordinary merge), and under `set -euo pipefail` a failing command
+    # substitution fails the assignment — the resolve job went red on every non-release
+    # run instead of cleanly emitting release=false. The pipeline must end `|| true`.
+    docs_callers = sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml"))
+    assert docs_callers
+    for caller in docs_callers:
+        body = caller.read_text(encoding="utf-8")
+        assert '| head -n1 || true)"' in body, f"{caller.name}: resolve must tolerate the no-tag case"
+
+
 def test_docs_callers_resolve_bare_aviato_release_tags() -> None:
     # G2/§13.3: Aviato tags releases as BARE SemVer (`1.2.3`); policy.yml rejects a
     # v-prefix. The docs deploy callers gate on `git tag --list <glob>` to detect a
