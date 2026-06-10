@@ -56,7 +56,10 @@ def _has_breaking_footer(message: str) -> bool:
 
 
 def _commit_bump(message: str) -> BumpKind:
-    header = message.splitlines()[0] if message else ""
+    # The header is the first CONTENTFUL line, never literally line zero: messages
+    # arriving from `git log --format=%B%x00` carry leading record-separator newlines,
+    # which must not silently declassify the commit (§5.9).
+    header = message.lstrip().splitlines()[0] if message.strip() else ""
     match = _HEADER_RE.match(header.strip())
     if match is None:
         # Not a Conventional Commit header → not a releasable change.

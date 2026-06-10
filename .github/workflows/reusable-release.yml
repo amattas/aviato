@@ -272,7 +272,16 @@ jobs:
           range="${LAST}..HEAD"
           if ! git rev-parse "${LAST}" >/dev/null 2>&1; then range="HEAD"; fi
           git log "${range}" --pretty=format:'- %s' > /tmp/changelog.md || true
-          git commit -am "chore(release): ${NEXT}"
+          # §5.9 bootstrap: a version-source ALREADY at NEXT (seeded before the first
+          # release existed — a fresh onboard, or the Library's own first cut) makes the
+          # bump a no-op; the release PR then carries an empty marker commit instead of
+          # dying on `git commit` with nothing staged. Safe: the TAG phase keys on the
+          # commit SUBJECT and independently re-proves the manifest equals NEXT.
+          if git diff --quiet; then
+            git commit --allow-empty -m "chore(release): ${NEXT}"
+          else
+            git commit -am "chore(release): ${NEXT}"
+          fi
           git push -f origin "${branch}"
           body="$(printf 'Automated release PR (§5.9). Merging this bumps the version-source to %s; the merge to the default branch then tags %s and runs deploy in the same run.\n\n## Changes\n' "${NEXT}" "${NEXT}"; cat /tmp/changelog.md)"
           if existing="$(gh pr list --head "${branch}" --base "${GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null)" && [ -n "${existing}" ]; then
