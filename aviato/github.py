@@ -2,14 +2,37 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .command import run
+# Explicit re-export (`as run`): github_platform (and test monkeypatches) access this
+# helper as a real `aviato.github.run` module attribute.
+from .command import run as run
+
+# §5.5 (finding 30): rate-limit responses are tolerated and RETRIED (bounded), so a
+# scheduled fleet run doesn't fail outright on the first 403/429 throttle; a
+# persistent throttle then surfaces as the normal loud failure. Only OBVIOUS
+# throttle shapes retry — auth/4xx semantics must stay immediate.
+_RATE_LIMIT_MARKERS = ("rate limit", "ratelimit", "secondary rate", "abuse detection", "http 429")
+_RATE_LIMIT_ATTEMPTS = 3
+_RATE_LIMIT_BASE_SLEEP_SECONDS = 2.0
+
+
+def _run_gh_read(args: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run a gh READ with bounded rate-limit retry (§5.5, finding 30)."""
+    result = run(args, check=False)
+    for attempt in range(1, _RATE_LIMIT_ATTEMPTS):
+        if result.returncode == 0 or not any(m in result.stderr.lower() for m in _RATE_LIMIT_MARKERS):
+            return result
+        time.sleep(_RATE_LIMIT_BASE_SLEEP_SECONDS * (2 ** (attempt - 1)))
+        result = run(args, check=False)
+    return result
 
 
 def _branch_seg(branch: str) -> str:
@@ -74,7 +97,7 @@ class SettingsReadError(GitHubAPIError):
 
 
 def gh_json(endpoint: str, *, default: Any = None, allow_error: bool = False) -> Any:
-    result = run(["gh", "api", endpoint], check=False)
+    result = _run_gh_read(["gh", "api", endpoint])
     if result.returncode != 0:
         if allow_error:
             return default
@@ -94,7 +117,7 @@ def gh_json_paginated(endpoint: str, *, default: Any = None, allow_error: bool =
     full event timeline) is read in full — a later page cannot hide a revoke
     (§2.8/§6.4). Falls back to ``default`` on error when ``allow_error``.
     """
-    result = run(["gh", "api", "--paginate", "--slurp", endpoint], check=False)
+    result = _run_gh_read(["gh", "api", "--paginate", "--slurp", endpoint])
     if result.returncode != 0:
         if allow_error:
             return default
@@ -118,7 +141,7 @@ def gh_json_optional(endpoint: str, *, default: Any = None) -> Any:
     returns ``default``. Any OTHER error (auth, rate limit, 5xx, network) raises,
     so drift/reconcile never computes from a falsely-"unprotected" live state.
     """
-    result = run(["gh", "api", endpoint], check=False)
+    result = _run_gh_read(["gh", "api", endpoint])
     if result.returncode != 0:
         # Distinguish a genuine 404 ONLY by the HTTP status `gh` appends (``(HTTP 404)``).
         # Keying off free-text like "not found"/"no such" would misread a 403/5xx whose
@@ -141,7 +164,7 @@ def gh_json_paginated_optional(endpoint: str, *, default: Any = None) -> Any:
     consent-bearing issue, an active branch rule, a tag ruleset — can never hide behind page 1) with
     ``gh_json_optional``'s posture: a genuine 404 returns ``default``; any other error raises.
     """
-    result = run(["gh", "api", "--paginate", "--slurp", endpoint], check=False)
+    result = _run_gh_read(["gh", "api", "--paginate", "--slurp", endpoint])
     if result.returncode != 0:
         if "http 404" in result.stderr.lower():
             return default
@@ -230,7 +253,7 @@ def pages_source_is_actions(slug: str) -> bool | None:
     build_type = pages.get("build_type")
     if build_type is None:
         return None  # field absent — unknown, never a determinate "no"
-    return build_type == "workflow"
+    return bool(build_type == "workflow")
 
 
 def active_branch_rules(slug: str, branch: str) -> list[dict[str, Any]]:

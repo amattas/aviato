@@ -9,6 +9,7 @@ add:
   - docs-npmrc
   - docs-eslint-config
   - docusaurus-config
+  - docusaurus-config-algolia
   - docs-package
   - docs-sidebars
   - docs-intro

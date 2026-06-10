@@ -788,9 +788,11 @@ binding, §2.14).
 (patch / minor / major) → write the version via each affected language plug-in's
 **version-source module** (§3.3) — the core never hardcodes a version location →
 produce release artifacts (version bump, changelog, tagged release) → **advance
-the floating major reference to the new release unconditionally** (it is a
-published pointer; the Library cannot and does not query who consumes it, per
-§2.2). The release process must not depend on a not-yet-existing release (§2.10):
+the floating major reference to the new release without consulting consumers**
+(it is a published pointer; the Library cannot and does not query who consumes
+it, per §2.2), **guarded monotonically per §8.14** — an out-of-order or re-run
+release of an OLDER version never regresses the pointer (`aviato is-highest`
+gates the move within the major line). The release process must not depend on a not-yet-existing release (§2.10):
 in bootstrap, the release pipeline resolves its own module/action references
 locally.
 
@@ -1410,7 +1412,9 @@ tool pins are carried as workflow inputs (e.g. `actionlint-version`, `yamllint-v
 or explicit exact package specs.
 **Enforcement is delegated + fail-closed (and runs as ONE implementation).** Action and
 container-image pinning (`uses:` clauses, `container:`/`services:` images) are enforced by
-**zizmor** (`unpinned-uses`/`unpinned-images`) via a bundled policy config
+**zizmor** (`unpinned-uses`/`unpinned-images`, plus `template-injection` — gated since the
+2026-06 scope expansion: the audit is upstream-maintained, so gating it carries no
+hand-rolled-detector flap risk) via a bundled policy config
 (`aviato/library/zizmor.yml`: `actions/*`, `github/*`, and the `amattas/aviato/*` self-ref are
 ref-pinnable, everything else SHA-required). zizmor is invoked
 `--offline --persona=auditor --no-ignores`: offline because the gated audits are syntactic and must
@@ -1658,8 +1662,10 @@ the docs build when `docs: true`); GHCR deploy meets its DoD.
 ### 12.3 Swift
 
 **Scaffold bundle (managed files):** format config, lint config, language ignore
-rules, editor config, package/project-manifest fragment. The Xcode project and app
-entrypoints are seed-once operator-owned (§6.3).
+rules, editor config. (No package/project-manifest fragment is seeded — finding 48:
+the Xcode project IS the manifest and it is seed-once operator-owned per the next
+sentence, so a fragment would have nothing meaningful to manage.) The Xcode project
+and app entrypoints are seed-once operator-owned (§6.3).
 
 **Required tooling/standards (named, all gates blocking):** **swift-format**
 (Apple) for formatting; **SwiftLint `--strict`** for linting (blocking);
@@ -1712,12 +1718,12 @@ only where unavoidable — secrets), triggered on a release tag (§11.1).
 provenance/attestation, scan dependencies (gate on high/critical, §11.7)** →
 publish via **OIDC Trusted Publishing** with SBOM/provenance attached → confirm
 the version is resolvable.
-**Resolvability confirmation is best-effort, not a gate (deliberate):** the publish itself is
-the authoritative success; the post-publish "version resolvable on the index" check retries and
-then **warns rather than fails**, because PyPI index propagation has a real, unbounded delay and
-failing the run on propagation latency would falsely mark a *successful* publish as failed (and a
-re-run cannot re-upload an immutable version, §11.6). The DoD (§11.6) is operator-verified, which
-is where resolvability is actually confirmed; the in-run check is an advisory signal.
+**Resolvability confirmation is a GATE (C12-W7, deliberate):** a published version that never
+becomes resolvable is a FAILED release, not a warning — a green run that left an uninstallable
+upload is worse than a loud failure. The check retries generously (≈8 minutes) for real index
+propagation delay, then **fails closed**. (An earlier draft of this section said "warns rather
+than fails"; that wording predated the C12-W7 hardening and must not be restored — the workflow,
+not this paragraph, was always the operative artifact.) The DoD (§11.6) remains operator-verified.
 **Auth:** OIDC; `id-token: write` + `contents: read`; **no stored secret**.
 **Prerequisite (out-of-band):** register the repo + workflow as a trusted
 publisher on PyPI (and TestPyPI for verification).
@@ -1748,7 +1754,7 @@ concurrency group** so a slower older-release deploy cannot regress `latest`
 (§8.14).
 **Auth:** platform token, `packages: write` + `contents: read`; **no stored
 secret**.
-**Prerequisites:** a container build definition present (seed-once, §6.3, so the
+**Prerequisites:** a container build definition present (operator-provided and PROBED — R5-6: Aviato never seeds one; so the
 operator owns it after seeding); package visibility/permissions set so the package
 links to the repository.
 **DoD:** a real push of a test image (dedicated test namespace, §11.6) and a real
@@ -1761,7 +1767,7 @@ flowchart TD
     S --> C["Login to registry with platform token (packages: write)"]
     C --> D["Push immutable semver tag + attach SBOM/provenance"]
     D --> D2["Move latest ONLY if highest released version<br/>(per-alias concurrency group; §8.14)"]
-    P["Prerequisite: seed-once container build definition; package linked to repo"] -.-> B
+    P["Prerequisite: operator-provided container build definition (probed, never seeded); package linked to repo"] -.-> B
 ```
 
 ### 13.3 Documentation site (Docusaurus → GitHub Pages, multi-version)
@@ -1781,16 +1787,18 @@ valid narrative-only site.
 **Configuration (day-zero, fixed baseline):**
 - **Versioning & retention:** Docusaurus native versioning — a **version dropdown**
   and a **`latest` alias** at the newest release. Each cut copies the full docs tree
-  into `versioned_docs/version-X/`, so growth is bounded by a **retention policy:
-  keep the latest N versions (day-zero N = the current major's releases, hard cap
-  10) plus any explicitly pinned majors; older snapshots are pruned** on each
-  release. Versioned snapshots live on the published **`gh-pages` artifact**, not
-  the source branch. (Replaces the previous mkdocs + `mike` setup; unlike `mike` it
-  is append-only/reviewable — but the **cap** is what keeps it bounded.)
-- **Search:** Algolia DocSearch via `@docusaurus/theme-search-algolia`, configured
-  with the public application ID, public search API key, and index name. These are
-  not stored secrets, but the operator must provision the Algolia index or override
-  search before publishing (§17).
+  into `versioned_docs/version-X/`. **Retention (operator decision, 2026-06): every
+  released version's docs are KEPT** — `docs-retention` defaults to 0 (unlimited);
+  an operator may set N>0 to cap to the newest N versions, in which case older
+  snapshots are pruned on each release. Versioned snapshots live on the published
+  **`gh-pages` artifact**, not the source branch. (Replaces the previous mkdocs +
+  `mike` setup; append-only and reviewable.)
+- **Search:** Algolia DocSearch via `@docusaurus/theme-search-algolia`, **opt-in**
+  through the `algolia` profile variable (default off — a fresh docs scaffold builds
+  with no search config rather than dead placeholder credentials). When enabled, the
+  public application ID, public search API key, and index name thread from the
+  `algolia-*` variables (not stored secrets); the operator must provision the
+  Algolia index before publishing (§17).
 - **Theme/features:** `@docusaurus/preset-classic`, **docs-first** (no blog), with
   the version dropdown and a light/dark toggle; `@docusaurus/theme-mermaid` with
   `markdown.mermaid: true`; sitemap configuration through the classic preset; and
@@ -1802,7 +1810,7 @@ valid narrative-only site.
 
 **Stages:** gather authored + emitted md/mdx → install hardened npm dependencies →
 lint the docs site → `docusaurus docs:version` for the release tag (cut a new
-version) → **prune to the retention cap** → build the static site (versioning,
+version) → **prune only if a retention cap is set (default: keep all)** → build the static site (versioning,
 Algolia search UI, Mermaid diagrams, sitemap) → publish to Pages via the platform token →
 **move the `latest` alias only if this release is the highest released version**
 (monotonic guard), under a **per-alias deploy concurrency group** so a slower
@@ -2019,7 +2027,7 @@ adoption-time warnings.
 - **PyPI:** register the repo + publishing workflow as a Trusted Publisher on PyPI
   and TestPyPI. **(probeable** that the workflow is configured; the PyPI-side
   registration is an adoption warning.**)**
-- **GHCR:** ensure the seed-once container build definition exists **(probeable)**;
+- **GHCR:** provide the container build definition (operator-owned, probed — never seeded, R5-6) **(probeable)**;
   set package visibility/permissions to link the package to the repository.
 - **Docusaurus docs (only when `docs: true`):** enable GitHub Pages for the
   repository with the **GitHub Actions** source **(probeable)**. Configure the

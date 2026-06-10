@@ -2,9 +2,10 @@
 # zizmor via `--config` by `aviato lint-actions` (so every consumer gets the Library policy
 # without authoring their own config). Most-specific pattern wins.
 #
-# Only `unpinned-uses` and `unpinned-images` are GATED by aviato today (see
-# aviato/plugins/zizmor_scan.py:_GATED_AUDITS). zizmor still runs its other audits; their
-# findings are intentionally ignored here until explicitly adopted.
+# GATED audits (aviato/plugins/zizmor_scan.py:_GATED_AUDITS): `unpinned-uses`,
+# `unpinned-images`, and — operator decision 2026-06 (finding 18) — `template-injection`.
+# zizmor still runs its other audits; those findings are intentionally ignored here
+# until explicitly adopted (a deliberate scope, not an oversight).
 rules:
   unpinned-uses:
     config:

@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=744557668e210f2348f6f1b896a773617fe6c8c1688b83d70001f4d4fde22d56
+# aviato:managed profile=aviato-library version=0 hash=2df802dfb07a20c3fb8ca79e2334c479df84701a9589c0af3754c36e988054c1
 name: Aviato Python Library
 
 on:
@@ -32,7 +32,8 @@ jobs:
       lint-command: "python -m ruff check ."
       test-command: "python -m pytest --cov --cov-report=term-missing"
       build-command: "python -m build"
-      run-typecheck: false
+      typecheck-command: "python -m mypy --strict aviato"
+      run-typecheck: true
       run-build: true
 
   security:
@@ -77,3 +78,4 @@ jobs:
       working-directory: "."
       packages-dir: "dist"
       release-tag: ${{ needs.release.outputs.tag }}
+      gated-sha: ${{ needs.release-gate.outputs.gated-sha }}

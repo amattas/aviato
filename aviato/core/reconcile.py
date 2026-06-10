@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -62,7 +63,7 @@ class ReconcileOutcome:
     values: dict[str, dict[str, Any]] | None = None
 
 
-def _purpose_built_payload(desired: dict[str, Any], diff_keys) -> dict[str, Any]:
+def _purpose_built_payload(desired: dict[str, Any], diff_keys: Iterable[str]) -> dict[str, Any]:
     """Construct a write payload of only the changed fields (§2.9): no read-shaped replay."""
     return {key: desired[key] for key in diff_keys if key in desired}
 

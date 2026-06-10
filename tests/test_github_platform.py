@@ -418,6 +418,64 @@ def test_apply_settings_fails_closed_on_nonstrict_status_checks(monkeypatch: pyt
         GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
 
 
+def test_apply_settings_fails_closed_on_app_bound_classic_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-4: a live app-BOUND classic check (app_id) would lose its binding in the wholesale
+    # PUT (bare context names only) — fail closed instead of clobbering.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(
+        github,
+        "classic_branch_protection",
+        lambda repo, branch: {"required_status_checks": {"strict": True, "checks": [{"context": "ci", "app_id": 123}]}},
+    )
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT")))
+    with pytest.raises(UnmodeledProtectionError, match="app_bound_checks"):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
+
+
+def test_apply_settings_fails_closed_on_nonstrict_ruleset_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-4: a live ruleset with strict_required_status_checks_policy=false is state the
+    # strict-true PUT path would shadow — fail closed.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(
+        github,
+        "active_branch_rules",
+        lambda repo, branch: [
+            {
+                "type": "required_status_checks",
+                "parameters": {"strict_required_status_checks_policy": False, "required_status_checks": []},
+            }
+        ],
+    )
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT")))
+    with pytest.raises(UnmodeledProtectionError, match=r"ruleset\.required_status_checks\.strict=false"):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
+
+
+def test_apply_settings_fails_closed_on_app_bound_ruleset_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R2-4: an integration-bound ruleset check (integration_id) is a binding the flat model
+    # cannot represent; the PUT would shadow it — fail closed.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(
+        github,
+        "active_branch_rules",
+        lambda repo, branch: [
+            {
+                "type": "required_status_checks",
+                "parameters": {
+                    "strict_required_status_checks_policy": True,
+                    "required_status_checks": [{"context": "ci", "integration_id": 99}],
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    monkeypatch.setattr(github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not PUT")))
+    with pytest.raises(UnmodeledProtectionError, match=r"ruleset\.required_status_checks\.app_bound_checks"):
+        GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
+
+
 def test_adapter_satisfies_platform_protocol() -> None:
     assert isinstance(GitHubPlatform(), Platform)
 
@@ -907,9 +965,12 @@ def test_is_feature_unavailable_requires_security_context() -> None:
     # misclassified as a benign adoption warning and apply_settings would report success (fail-OPEN).
     assert _is_feature_unavailable(CommandError(["gh"], 1, "Branch protection is not enabled")) is False
     assert _is_feature_unavailable(CommandError(["gh"], 1, "Webhooks are not enabled (HTTP 422)")) is False
-    # A real security-feature-unavailable message IS recognized (benign adoption warning).
-    assert _is_feature_unavailable(CommandError(["gh"], 1, "Secret scanning is not available")) is True
-    assert _is_feature_unavailable(CommandError(["gh"], 1, "GitHub Advanced Security must be enabled")) is True
+    # A real security-feature-unavailable message IS recognized (benign adoption warning) —
+    # finding 25: but only with an explicit client-error status (gh appends "(HTTP NNN)").
+    assert _is_feature_unavailable(CommandError(["gh"], 1, "Secret scanning is not available (HTTP 422)")) is True
+    assert (
+        _is_feature_unavailable(CommandError(["gh"], 1, "GitHub Advanced Security must be enabled (HTTP 403)")) is True
+    )
 
 
 def test_apply_settings_reraises_security_patch_error_without_security_context(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -983,3 +1044,70 @@ def test_ruleset_does_not_satisfy_enforce_admins_when_classic_is_unenforced() ->
     assert map_branch_settings(ruleset, {})["enforce_admins"] is True
     # classic enforce_admins=true is honoured
     assert map_branch_settings(ruleset, {"enforce_admins": {"enabled": True}})["enforce_admins"] is True
+
+
+def test_feature_unavailable_requires_client_error_status() -> None:
+    # finding 25: the classifier must demand an explicit 4xx status — a 5xx/transient
+    # whose body merely contains the phrases must raise (retry would have applied it),
+    # not be silently reported as a benign §17 prerequisite gap.
+    from aviato.command import CommandError
+    from aviato.github_platform import _is_feature_unavailable
+
+    transient = CommandError(["gh"], 1, "secret scanning is not available right now (HTTP 502)")
+    assert _is_feature_unavailable(transient) is False
+    wordless = CommandError(["gh"], 1, "connection reset by peer")
+    assert _is_feature_unavailable(wordless) is False
+    genuine = CommandError(["gh"], 1, "Secret scanning is not enabled for this repository (HTTP 422)")
+    assert _is_feature_unavailable(genuine) is True
+
+
+def test_probe_health_reports_code_scanning_and_drift_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    # findings 30/31/32: doctor's remote probes must surface code-scanning enablement
+    # and the drift caller's API state (enabled + last scheduled-run conclusion) —
+    # local file presence alone read a UI-disabled or persistently-failing workflow
+    # as healthy.
+    def fake_optional(endpoint: str, *, default=None):
+        if "code-scanning/analyses" in endpoint:
+            return []  # 200 with no analyses yet ⇒ enabled
+        if "actions/workflows/5/runs" in endpoint:
+            return {"workflow_runs": [{"conclusion": "failure"}]}
+        if endpoint.startswith("repos/o/r"):
+            return {"has_issues": True, "default_branch": "main"}
+        return default
+
+    def fake_paginated_optional(endpoint: str, *, default=None):
+        # the workflow listing is PAGINATED (--slurp → one page-object per page)
+        if endpoint.endswith("actions/workflows?per_page=100"):
+            wf = {"id": 5, "path": ".github/workflows/aviato-drift.yml", "state": "disabled_manually"}
+            return [{"workflows": [wf]}]
+        return default
+
+    monkeypatch.setattr(github, "gh_json_optional", fake_optional)
+    monkeypatch.setattr(github, "gh_json_paginated_optional", fake_paginated_optional)
+    monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
+    _, _, remote = GitHubPlatform().probe_health("o/r", drift_workflow_path=".github/workflows/aviato-drift.yml")
+    assert remote["code_scanning"] is True
+    assert remote["drift_automation_enabled"] is False  # disabled in the UI ⇒ flagged
+    assert remote["drift_automation_last_run_ok"] is False  # last run failed ⇒ flagged
+
+
+def test_probe_health_drift_workflow_absent_reads_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_optional(endpoint: str, *, default=None):
+        if "code-scanning/analyses" in endpoint:
+            return default  # genuine 404 ⇒ not enabled
+        if endpoint.startswith("repos/o/r"):
+            return {"has_issues": True, "default_branch": "main"}
+        return default
+
+    def fake_paginated_optional(endpoint: str, *, default=None):
+        if endpoint.endswith("actions/workflows?per_page=100"):
+            return [{"workflows": []}]
+        return default
+
+    monkeypatch.setattr(github, "gh_json_optional", fake_optional)
+    monkeypatch.setattr(github, "gh_json_paginated_optional", fake_paginated_optional)
+    monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
+    _, _, remote = GitHubPlatform().probe_health("o/r", drift_workflow_path=".github/workflows/aviato-drift.yml")
+    assert remote["code_scanning"] is False
+    assert remote["drift_automation_enabled"] is False
+    assert remote["drift_automation_last_run_ok"] is None

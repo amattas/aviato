@@ -6,7 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "aviato"
 version = "0.1.0"
 description = "Reusable GitHub policy, CI, release, and onboarding conventions."
-requires-python = ">=3.11"
+license = {text = "MIT"}
+requires-python = ">=3.12"
 dependencies = [
   "PyYAML>=6.0",
   # §11.3: zizmor performs uses:/image pin enforcement; pinned EXACTLY (Dependabot bumps it).
@@ -17,12 +18,25 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Exact pins, same §11.3 rationale as the runtime gate deps above: a floating gate
+# toolchain lets a new lint/test release red (or silently green) CI with no repo
+# change. Dependabot's pip ecosystem bumps these deliberately.
 dev = [
-  "black>=24.0",
-  "build>=1.2",
-  "pytest>=8.0",
-  "pytest-cov>=5.0",
-  "ruff>=0.8.0",
+  "black==26.5.1",
+  "build==1.5.0",
+  "mypy==2.1.0",
+  "pytest==9.0.3",
+  "pytest-cov==7.1.0",
+  "ruff==0.15.16",
+  # CI-failure fix: mypy --strict needs the PyYAML stubs in the SAME env (they were
+  # only ever installed locally); without them the type gate fails on import-untyped.
+  "types-PyYAML==6.0.12.20260518",
+  # CI-failure fix: validate.sh builds the wheel with --no-isolation (the local gate
+  # must work offline), so the build BACKEND must exist in the ambient env — Python
+  # 3.12 runners don't ship setuptools by default. Mirrors [build-system]'s floor
+  # (same constraint, not a gate tool whose drift changes lint outcomes).
+  "setuptools>=69",
+  "yamllint==1.35.1",
 ]
 
 [project.scripts]
@@ -40,9 +54,19 @@ aviato = ["library/**/*", "plugins/*.txt"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.mypy]
+files = ["aviato"]
+strict = true
+# Local build litter must not alias the package (duplicate-module errors).
+exclude = ["^build/", "^_wheelout/", "^dist/"]
+
+[[tool.mypy.overrides]]
+module = "bashlex.*"
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]

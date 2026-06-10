@@ -31,6 +31,7 @@ jobs:
       lint-command: "python -m ruff check ."
       test-command: "python -m pytest --cov --cov-report=term-missing"
       build-command: "python -m build"
+      typecheck-command: "python -m mypy --strict ."
       run-typecheck: true
       run-build: true
 
@@ -76,3 +77,4 @@ jobs:
       working-directory: "."
       packages-dir: "dist"
       release-tag: ${{ needs.release.outputs.tag }}
+      gated-sha: ${{ needs.release-gate.outputs.gated-sha }}

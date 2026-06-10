@@ -18,9 +18,9 @@ settings:
     # derived at composition time from the status_check each composed pipeline
     # declares (common-lint, security-baseline heartbeat, and the per-language verify
     # job). Single source of truth — a profile cannot require a check it never runs.
-  rulesets:
-    - "Common: protect default branch"
-    - "Common: release tag format"
+  # finding 42 (R4-10 rationale): the ruleset NAMES are deliberately NOT listed here —
+  # they were a third unchecked copy that could silently desync from the rendered
+  # manifest. The ruleset manifest (aviato/library/rulesets.yml) is the single source.
   # Always-on security baseline (§2.13). These are repo-level GitHub features the
   # operator enables out-of-band (§17, probeable by diagnosis §5.4); modeled here as
   # desired state so a profile cannot silently omit them.

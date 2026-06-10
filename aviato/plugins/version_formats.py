@@ -129,7 +129,9 @@ def bump_text(filename: str, text: str, new_version: str, build_number: str | No
             # review #23: surface a malformed manifest as an AviatoError (the caller-consistent
             # contract every other version-source path uses), never a raw JSONDecodeError.
             raise AviatoError(f"{filename} is not valid JSON: {exc}") from exc
-        if not isinstance(data.get("version"), str):
+        # finding 21: valid JSON need not be an OBJECT — a top-level array/string/number
+        # would AttributeError on .get and escape as a raw traceback.
+        if not isinstance(data, dict) or not isinstance(data.get("version"), str):
             raise AviatoError(f"no top-level version string found in {filename}")
         span = _top_level_json_string_span(text, "version")
         if span is None:
@@ -178,7 +180,12 @@ def bump_files(root: Path, locations: list[str], new_version: str, build_number:
     # R6-3-DUP: dedupe locations (preserving first occurrence) so a profile that lists the same
     # version-source path twice doesn't double-write or double-report it in `changed`.
     seen: set[str] = set()
-    locations = [loc for loc in locations if not (loc in seen or seen.add(loc))]
+    deduped: list[str] = []
+    for loc in locations:
+        if loc not in seen:
+            seen.add(loc)
+            deduped.append(loc)
+    locations = deduped
     pending: list[tuple[Path, str, str]] = []
     for location in locations:
         path = Path(root) / location

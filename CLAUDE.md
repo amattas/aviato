@@ -9,11 +9,11 @@ Aviato is a reusable GitHub policy, CI, release, and onboarding conventions libr
 ## Commands
 
 ```bash
-python3 -m pip install -e .[dev]   # install CLI + dev tools (black, pytest, ruff)
-./scripts/validate.sh              # full local gate: compile, validate, ruff, black, pytest, shellcheck, actionlint
+python3 -m pip install -e .[dev]   # install CLI + dev tools (black, mypy, pytest, ruff, yamllint)
+./scripts/validate.sh              # full local gate: compile, validate, ruff, black, mypy --strict, pytest, build, yamllint, shellcheck, actionlint
 python3 -m pytest                  # run tests
 python3 -m pytest tests/test_rulesets.py::test_rendered_tag_ruleset_uses_policy_pattern  # single test
-ruff check . && ruff format --check . && black --check --line-length 120 --target-version py311 aviato tests scripts
+ruff check . && ruff format --check . && black --check --line-length 120 --target-version py312 aviato tests scripts
 ```
 
 Note: `validate.sh` runs pytest with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`. Tests must not depend on third-party pytest plugins. `ruff`/`black`/`pytest`/`shellcheck`/`actionlint` are skipped when not installed locally, but the run ends with a **loud banner** listing every skipped tool (because CI runs them — a green local gate with skips does **not** mean CI is green). Run with `AVIATO_STRICT_TOOLS=1 ./scripts/validate.sh` for CI-parity: a missing tool then fails the gate. CI installs all of them.
@@ -26,19 +26,21 @@ aviato audit --repo /path/to/repo           # audit one explicit local repo
 aviato apply-rulesets OWNER/REPO            # dry-run rulesets
 aviato apply-rulesets OWNER/REPO --apply    # apply rulesets
 aviato apply-rulesets OWNER/REPO --required-approvals 0 --apply  # solo-repo override
+aviato apply-rulesets OWNER/REPO --declaration /path/.github/aviato.yaml --apply  # override-aware apply (C12-3): resolves checks/approvals through the consumer's declared overrides — what settings-drift remediation recommends
 aviato render-rulesets                       # print rendered ruleset JSON
-aviato onboard PATH --profile python-library --pin 1.2.3 [--write --allow-dirty --var k=v]  # plan, or adopt a local repo (§5.2)
+aviato onboard PATH --profile python-library --pin 1.2.3 [--write --allow-dirty --var k=v --docs]  # plan, or adopt a local repo (§5.2); --docs composes the opt-in docs deploy (§13.3)
+aviato onboard OWNER/REPO --profile python-library --pin 1.2.3 --open-pr  # adopt an existing repo via a reviewable scaffold PR (§5.2)
 aviato doctor /path/to/consumer              # classify managed artifacts + probe health (§5.4)
 aviato sync /path/to/consumer                # materialize managed artifacts incl. caller workflows (§5.3/§15)
-aviato scan /path/a /path/b [--fix]          # fleet diagnosis; --fix opens managed-file proposals (§5.11/§5.5)
+aviato scan /path/a /path/b [--fix --audit]  # fleet diagnosis; --fix opens managed-file proposals, --audit surfaces open settings-drift tracking issues (§5.11/§5.5)
 aviato drift-report /path/to/consumer [--file-only|--settings-only] [--require-settings]  # file + settings drift (§5.5/§5.6); --require-settings exits non-zero if settings can't be read
 aviato reconcile /path/to/consumer <issue> --confirm <diff-id>  # operator-gated settings apply, diff-bound (§5.7)
 aviato complete-protection /path/to/consumer # idempotently (re-)apply full branch protection (§5.2 recovery)
-aviato repin /path/to/consumer X.Y.Z [--write]  # move the Library version pin (§5.12)
+aviato repin /path/to/consumer X.Y.Z [--write | --open-pr]  # move the Library version pin; --open-pr opens a reviewable re-pin proposal (§5.12)
 aviato offboard /path/to/consumer [--write --delete-files | --open-pr]  # remove from Aviato mgmt; --open-pr opens a reviewable removal proposal (§5.13)
 aviato next-version --current 1.2.3 --commit "feat: x"  # SemVer from Conventional Commits (§5.9)
 aviato bump-version 1.3.0 /path/to/consumer  # write version into version-source locations (§3.3)
-aviato provision OWNER/REPO --profile python-library [--var k=v --public]  # create + stage-protect + scaffold a NEW repo (§5.2/§2.11)
+aviato provision OWNER/REPO --profile python-library --pin 1.2.3 [--var k=v --public --docs]  # create + stage-protect + scaffold a NEW repo (§5.2/§2.11)
 aviato is-highest 1.2.3 1.0.0 1.2.3          # exit 0 iff arg1 is the highest release among the rest (§8.14 alias gate)
 aviato lint-actions [PATH]                    # §11.3 supply-chain gate: zizmor (unpinned uses:/images) + fail-closed curl|bash + non-exact pip pins
 aviato validate                              # validate policy infra + agnosticism + digest pins + template parity + inline monotonic-alias parity
@@ -53,21 +55,24 @@ existing pin; use `aviato repin` to move it.
 **Onboarding materializes the caller workflows.** A profile's scaffold bundle includes
 the `.github/workflows/aviato-ci.yml` (verify/release/deploy/security) and
 `aviato-drift.yml` (scheduled drift/report) callers, so `sync`/`onboard --write` give a
-consumer the actual workflows required by §15 — not just composed pipeline names. Caller
+consumer the actual workflows required by §15 — not just composed pipeline names. The
+common scaffold also seeds `CONTRIBUTING.md`, `.github/CODEOWNERS`, and issue/PR
+templates (seed-once, §12.1). Caller
 workflows live as packaged bodies under `aviato/library/scaffold/files/wf-*.yml` — these
 are the **authoritative source**. The top-level `templates/profile-*.yml` and
 `templates/consumer-automation.yml` are documented copyable EXAMPLES **rendered from**
 those scaffold bodies (run `python3 scripts/regen-templates.py` after editing a caller);
 `aviato validate` fails if they drift (`_check_template_scaffold_parity`).
 
-Node and docs callers now assume npm 11+ for install hardening. The reusable Node
-and Docusaurus workflows default to Node 24, fail closed on npm <11, and set
-`ignore-scripts=true`, `engine-strict=true`, and `min-release-age=7`; Node/docs
-scaffolds also include managed `.npmrc` files with `engine-strict=true` and
-package engines requiring Node 24/npm 11. Use `npx --no-install` for Node tool
-bins so missing local dependencies fail instead of fetching; common lint rejects
-unsafe plain `npx` in workflows. Docs scaffolding
-includes Docusaurus ESLint, Algolia search, Mermaid rendering, and sitemap
+Node and docs callers now assume npm 11.10+ for install hardening. The reusable Node
+and Docusaurus workflows default to Node 24, fail closed on npm <11.10 (the
+`min-release-age` support floor), and set `ignore-scripts=true`,
+`engine-strict=true`, and `min-release-age=7`; Node/docs scaffolds also include
+managed `.npmrc` files with `engine-strict=true` and package engines requiring
+Node 24/npm >=11.10. Use `npx --no-install` for Node tool bins so missing local
+dependencies fail instead of fetching; common lint rejects unsafe plain `npx` in
+workflows. Docs scaffolding includes Docusaurus ESLint, opt-in Algolia search
+(the `algolia` profile variable; default off), Mermaid rendering, and sitemap
 configuration.
 
 The Library's own declaration uses the internal `aviato-library` profile with
@@ -129,7 +134,7 @@ wheel and a pip-installed `aviato` can render rulesets — §5.6/§11.3). Loader
 `paths.POLICY_DATA_ROOT` (= `aviato/library`); `is_library`/§5.10 keys off
 `aviato/library/policy.yml`. (`aviato validate` runs from a source checkout only.)
 
-`aviato/library/policy.yml` owns policy constants — most importantly the release tag pattern (`^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$`) and default required PR approvals. That pattern is **intentionally duplicated** into several places that need a literal at definition time:
+`aviato/library/policy.yml` owns policy constants — most importantly the release tag pattern (`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$`) and default required PR approvals. That pattern is **intentionally duplicated** into several places that need a literal at definition time:
 
 - every release workflow in `RELEASE_WORKFLOWS` (embeds the literal in its `TAG_PATTERN` env so validation is pinned to the same ref)
 - rendered ruleset payloads (injected at render time, not stored)

@@ -1,0 +1,4 @@
+name: codeowners
+output_path: .github/CODEOWNERS
+source: files/codeowners.txt
+seed_once: true

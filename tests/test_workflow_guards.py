@@ -90,6 +90,8 @@ def test_local_install_is_limited_to_structural_library_bootstrap() -> None:
     # released ref exists. A consumer hand-editing local-install:true must fail before
     # `pip install -e .` unless the checkout has the Library anchors and bootstrap:true.
     for name, job_name in (
+        # C12-W1: BOTH release jobs install Aviato; each must carry the full guard.
+        ("reusable-release.yml", "derive"),
         ("reusable-release.yml", "release"),
         ("reusable-consumer-automation.yml", "drift-report"),
     ):
@@ -106,6 +108,150 @@ def test_local_install_is_limited_to_structural_library_bootstrap() -> None:
             assert anchor in run, f"{name} local install guard missing {anchor}"
         assert "bootstrap: true" in run, f"{name} local install guard must require bootstrap:true"
         assert run.index("local-install is only valid") < run.index("python -m pip install -e .")
+
+
+_DEPLOY_WORKFLOWS = (
+    "reusable-pypi-publish.yml",
+    "reusable-docker-ghcr.yml",
+    "reusable-docs-pages.yml",
+    "reusable-app-store-connect.yml",
+)
+
+
+def test_deploys_consume_the_gated_sha() -> None:
+    # C12-W2 (TOCTOU): the gate validates a COMMIT; deploys must consume that commit,
+    # not the mutable tag — checkout by gated-sha plus a pre-publish tag→gated-sha
+    # re-verify, so a tag force-moved between gate and publish aborts the deploy.
+    gate = _load("reusable-release-gate.yml")
+    gate_on = gate.get("on") or gate.get(True)
+    assert "gated-sha" in (gate_on["workflow_call"].get("outputs") or {}), "gate must export gated-sha"
+    for name in _DEPLOY_WORKFLOWS:
+        wf = _load(name)
+        on_block = wf.get("on") or wf.get(True)
+        inputs = on_block["workflow_call"]["inputs"]
+        assert inputs.get("gated-sha", {}).get("required") is True, f"{name} must require gated-sha"
+        body = (WORKFLOWS / name).read_text(encoding="utf-8")
+        assert "ref: ${{ inputs.gated-sha }}" in body, f"{name} must check out the gated SHA"
+        assert "ref: ${{ inputs.release-tag || github.ref }}" not in body, f"{name} still checks out the mutable tag"
+        assert 'git rev-parse "refs/tags/${RELEASE_TAG}^{commit}"' in body, f"{name} missing the tag re-verify"
+
+
+def test_callers_pass_gated_sha_to_deploys() -> None:
+    # Every scaffold caller body that wires a deploy must thread the gate's output —
+    # a missed caller ships a consumer whose deploy cannot start (required input).
+    for caller in sorted(SCAFFOLD_FILES.glob("wf-*.yml")):
+        body = caller.read_text(encoding="utf-8")
+        if not any(d in body for d in _DEPLOY_WORKFLOWS):
+            continue
+        threaded = "gated-sha: ${{ needs.release-gate.outputs.gated-sha }}" in body
+        assert threaded, f"{caller.name} wires a deploy without threading the gated SHA (C12-W2)"
+
+
+def test_language_ci_contract_parity() -> None:
+    # §2.14 (finding 27): every language CI exposes the SAME command contract —
+    # unsupported steps carry an empty command + disabled default, never a missing input.
+    expected = {
+        "working-directory",
+        "install-command",
+        "lint-command",
+        "format-command",
+        "typecheck-command",
+        "test-command",
+        "build-command",
+        "run-install",
+        "run-lint",
+        "run-format",
+        "run-typecheck",
+        "run-tests",
+        "run-build",
+    }
+    for name in ("reusable-python-ci.yml", "reusable-node-ci.yml", "reusable-swift-ci.yml"):
+        wf = _load(name)
+        on_block = wf.get("on") or wf.get(True)
+        inputs = set(on_block["workflow_call"]["inputs"])
+        missing = expected - inputs
+        assert not missing, f"{name} missing shared-contract inputs: {sorted(missing)}"
+
+
+def test_node_ci_gates_fail_loud_without_if_present() -> None:
+    # finding 29: a consumer deleting the lint/test script from the operator-owned
+    # manifest must FAIL the verify gate, not silently skip it.
+    wf = _load("reusable-node-ci.yml")
+    on_block = wf.get("on") or wf.get(True)
+    inputs = on_block["workflow_call"]["inputs"]
+    assert inputs["lint-command"]["default"] == "npm run lint"
+    assert inputs["test-command"]["default"] == "npm test"
+
+
+def test_docs_retention_defaults_to_keep_all() -> None:
+    # finding 37 (operator decision): every released version's docs are kept; the
+    # pruner must special-case cap<=0 — versions[:0] would otherwise prune EVERYTHING.
+    wf = _load("reusable-docs-pages.yml")
+    on_block = wf.get("on") or wf.get(True)
+    assert on_block["workflow_call"]["inputs"]["docs-retention"]["default"] == 0
+    body = (WORKFLOWS / "reusable-docs-pages.yml").read_text(encoding="utf-8")
+    assert "keeping all versions" in body, "pruner missing the cap<=0 keep-all branch"
+    assert body.index("cap <= 0") < body.index("versions[:cap]"), "keep-all guard must precede the slice"
+
+
+def test_registry_publishes_run_in_deployment_environments() -> None:
+    # finding 7: PyPI/GHCR publishes get the same platform-level environment gate the
+    # Pages/App Store deploys already have.
+    pypi = _load("reusable-pypi-publish.yml")
+    assert pypi["jobs"]["publish"]["environment"]["name"] == "${{ inputs.environment-name }}"
+    ghcr = _load("reusable-docker-ghcr.yml")
+    assert ghcr["jobs"]["docker"]["environment"]["name"] == "${{ inputs.environment-name }}"
+
+
+def test_ghcr_publishes_only_scanned_digests() -> None:
+    # C12-W3: no rebuild between scan and publish — the workflow must scan local OCI
+    # archives and promote those exact bytes by digest, asserting pushed == scanned.
+    body = (WORKFLOWS / "reusable-docker-ghcr.yml").read_text(encoding="utf-8")
+    assert "docker/build-push-action" not in body, "scan-then-rebuild reintroduced (C12-W3)"
+    assert '--output "type=oci,dest=oci/${slug}.tar"' in body, "build must emit a local OCI archive"
+    assert '--input "oci/${slug}.tar"' in body, "trivy must scan the archive, not a rebuilt image"
+    assert "skopeo copy --digestfile" in body, "push must promote the archive bytes"
+    assert '"${pushed_digest}" != "${local_digest}"' in body, "pushed==scanned digest assert missing"
+    assert body.index("trivy image") < body.index("skopeo copy"), "scan must precede push"
+
+
+def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
+    # finding 6: the job token must not sit in .git/config while consumer/build code
+    # runs. Only workflows that legitimately push (or fetch) from the checkout keep
+    # credentials: the release write job (pushes tags/branches; its derive job is
+    # pinned to false by the split test), the gate (post-checkout `git fetch origin`),
+    # and the drift automation (open_or_update_proposal pushes the proposal branch
+    # from the working tree).
+    exempt = {"reusable-release.yml", "reusable-release-gate.yml", "reusable-consumer-automation.yml"}
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        if path.name in exempt:
+            continue
+        wf = _load(path.name)
+        for job_name, job in (wf.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps", []) or []:
+                if not str(step.get("uses", "")).startswith("actions/checkout"):
+                    continue
+                persist = (step.get("with") or {}).get("persist-credentials")
+                assert persist is False, f"{path.name}:{job_name}: checkout must set persist-credentials: false"
+
+
+def test_release_workflow_splits_derive_from_write_job() -> None:
+    # C12-W1: the heavy derive phase (pip install + aviato over full history) must hold
+    # NO write token; only the propose/tag job gets contents/pull-requests write, and
+    # nothing is granted at workflow level.
+    wf = _load("reusable-release.yml")
+    assert wf["permissions"] == {}, "reusable-release must grant nothing at workflow level"
+    derive = wf["jobs"]["derive"]
+    assert derive["permissions"] == {"contents": "read"}
+    assert "GH_TOKEN" not in (derive.get("env") or {}), "derive must not receive the job token"
+    checkout = next(s for s in derive["steps"] if str(s.get("uses", "")).startswith("actions/checkout"))
+    assert checkout["with"].get("persist-credentials") is False
+    release = wf["jobs"]["release"]
+    assert release["permissions"] == {"contents": "write", "pull-requests": "write"}
+    assert release["needs"] == "derive"
+    assert "release == 'true'" in str(release.get("if", ""))
 
 
 def test_common_lint_lints_every_dockerfile() -> None:
@@ -133,8 +279,11 @@ def test_npm_workflows_harden_installs_before_installing() -> None:
         install = next(s for s in steps if s.get("name") == "Install")
         run = harden["run"]
         assert 'npm_version="$(npm --version)"' in run
-        assert '[[ "${npm_major}" =~ ^[0-9]+$ ]]' in run
+        # finding 13: min-release-age is DEFINED from npm 11.10.0 (verified
+        # empirically); the gate must check the minor, not just the major.
+        assert '[[ "${npm_major}" =~ ^[0-9]+$ && "${npm_minor}" =~ ^[0-9]+$ ]]' in run
         assert '[ "${npm_major}" -lt 11 ]' in run
+        assert '[ "${npm_minor}" -lt 10 ]' in run
         assert "::error::npm ${npm_version} does not support min-release-age" in run
         assert "exit 1" in run
         assert "npm config set ignore-scripts true --location=user" in run
@@ -209,6 +358,21 @@ def test_app_store_connect_secrets_are_step_scoped() -> None:
     assert "APP_STORE_CONNECT_ISSUER_ID" in upload.get("env", {})
     assert "APP_STORE_CONNECT_KEY_ID" in upload.get("env", {})
     assert "APP_STORE_CONNECT_API_PRIVATE_KEY" not in upload.get("env", {})
+
+    # C12-W6: only the BOUNDED built-in submit may hold the ASC private key; the custom
+    # eval gets identifiers only and runs AFTER the signing cleanup (no on-disk .p8).
+    builtin = next(s for s in steps if s.get("name") == "Submit for review (built-in)")
+    custom = next(s for s in steps if s.get("name") == "Submit for review (custom command)")
+    cleanup = next(s for s in steps if s.get("name") == "Cleanup signing assets")
+    assert "APP_STORE_CONNECT_API_PRIVATE_KEY" in builtin.get("env", {})
+    assert "eval" not in str(builtin.get("run", "")), "the built-in submit must not eval operator input"
+    assert "APP_STORE_CONNECT_API_PRIVATE_KEY" not in custom.get("env", {})
+    assert steps.index(cleanup) < steps.index(custom), "custom submit must run after signing cleanup"
+
+    # §11.4: the environment reviewer probe must run before any secret materializes.
+    probe = next(s for s in steps if "requires reviewers" in str(s.get("name", "")))
+    assert steps.index(probe) < steps.index(signing)
+    assert "required_reviewers" in str(probe.get("run", ""))
 
 
 def test_security_baseline_jitters_scheduled_scans_at_the_chokepoint() -> None:
@@ -495,15 +659,17 @@ def test_app_store_secrets_not_exposed_to_operator_eval_steps() -> None:
     assert eval_steps, "no operator eval steps found (workflow shape changed unexpectedly)"
     for step in eval_steps:
         step_env = step.get("env") or {}
-        # The submit-for-review step is allowed the API creds (it calls App Store Connect by design);
-        # NO eval step is allowed the certificate/provisioning material.
-        cert_keys = {
+        # C12-W6: NO eval step may see the certificate/provisioning material OR the ASC
+        # API private key — the only key consumers are the signing install and the
+        # bounded built-in submit (neither is an eval).
+        forbidden = {
             "APPLE_CERTIFICATE_P12_BASE64",
             "APPLE_CERTIFICATE_PASSWORD",
             "APPLE_PROVISIONING_PROFILE_BASE64",
+            "APP_STORE_CONNECT_API_PRIVATE_KEY",
         }
-        cert_leak = cert_keys & set(step_env)
-        assert not cert_leak, f"eval step {step.get('name')!r} sees certificate material: {sorted(cert_leak)}"
+        leak = forbidden & set(step_env)
+        assert not leak, f"eval step {step.get('name')!r} sees secret material: {sorted(leak)}"
         if "VERSION_COMMAND" in _json.dumps(step.get("env") or {}):
             # The version-command step has no legitimate need for ANY of the secrets.
             version_leak = secret_keys & set(step_env)

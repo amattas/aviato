@@ -11,11 +11,6 @@ const config = {
   themeConfig: {
     colorMode: { defaultMode: 'light', respectPrefersColorScheme: true },
     navbar: { items: [{ type: 'docsVersionDropdown', position: 'right' }] },
-    algolia: {
-      appId: 'YOUR_ALGOLIA_APP_ID',
-      apiKey: 'YOUR_ALGOLIA_SEARCH_API_KEY',
-      indexName: 'YOUR_ALGOLIA_INDEX_NAME',
-    },
     mermaid: {
       theme: { light: 'neutral', dark: 'forest' },
     },
@@ -31,8 +26,10 @@ const config = {
     ],
   ],
   themes: [
+    // finding 20: theme-search-algolia is NOT listed here — preset-classic loads it
+    // automatically when themeConfig.algolia is set; listing it too registers the
+    // plugin twice and Docusaurus refuses to build (duplicate plugin id).
     '@docusaurus/theme-mermaid',
-    '@docusaurus/theme-search-algolia',
   ],
 };
 module.exports = config;

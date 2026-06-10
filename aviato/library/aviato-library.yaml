@@ -3,11 +3,14 @@ workflows: python-library-wf
 scaffold: aviato-library-sc
 settings: baseline
 variables:
-  - {name: distribution-name, type: string}
-  - {name: import-name, type: string}
-  # The Library's own source predates a typing migration; consumers keep the
-  # strict-mypy default from python-library.
-  - {name: run-typecheck, type: string, required: false, default: "false"}
+  # finding 38: the typing migration is COMPLETE for the package (mypy --strict
+  # aviato is clean); the Library now runs the gate it mandates for consumers,
+  # scoped to the package via typecheck-command (tests are a follow-up).
+  - {name: run-typecheck, type: string, required: false, default: "true"}
+  # finding 38: the type-check COMMAND is a variable so the Library can scope strict
+  # mypy to its package (tests pending) while consumers keep the strict-everything
+  # default from reusable-python-ci.
+  - {name: typecheck-command, type: string, required: false, default: "python -m mypy --strict ."}
 version_source:
   locations: [pyproject.toml]
 toolchain:

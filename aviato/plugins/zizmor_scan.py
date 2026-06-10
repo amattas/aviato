@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 from ..command import run
 from ..paths import POLICY_DATA_ROOT
@@ -17,7 +18,12 @@ ZIZMOR_CONFIG = POLICY_DATA_ROOT / "zizmor.yml"
 
 # Audits aviato gates on today. zizmor runs all audits; we surface only these. Forward-compatible:
 # adopting another audit is a one-line addition here (plus a doc note), not a new detector.
-_GATED_AUDITS = frozenset({"unpinned-uses", "unpinned-images"})
+# finding 18 (operator decision, 2026-06): template-injection joins the gated set —
+# the worst workflow-vuln class, enforced by the upstream-maintained zizmor audit
+# (no hand-rolled detector, so no anti-flap concern). All Library workflows pass it
+# (env-indirection throughout). Other audits (dangerous-triggers, artipacked,
+# excessive-permissions, ...) remain surfaced-but-non-gating until adopted.
+_GATED_AUDITS = frozenset({"unpinned-uses", "unpinned-images", "template-injection"})
 
 
 class ZizmorUnavailable(RuntimeError):
@@ -28,7 +34,7 @@ def _zizmor_available() -> bool:
     return shutil.which("zizmor") is not None
 
 
-def _finding_location(finding: dict) -> str:
+def _finding_location(finding: dict[str, Any]) -> str:
     """Best-effort 'file' string from a zizmor JSON finding (schema-tolerant).
 
     Real shape verified against zizmor 1.25.2:
@@ -44,7 +50,7 @@ def _finding_location(finding: dict) -> str:
             name = local.get("given_path") or local.get("prefix")
             if name:
                 return str(name)
-    return finding.get("ident", "?")
+    return str(finding.get("ident", "?"))
 
 
 def zizmor_uses_image_violations(workflow_dir: Path) -> list[str]:

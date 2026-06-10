@@ -1,3 +1,6 @@
+> **STATUS: IMPLEMENTED** (2026-05/06 — `aviato/core/` shipped in full; the unchecked
+> boxes below are the historical plan, not pending work).
+
 # Aviato Agnostic Core Engine Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

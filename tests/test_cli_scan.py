@@ -126,3 +126,37 @@ def test_scan_fix_blocks_incompatible_version_pin(tmp_path: Path, capsys: pytest
     err = capsys.readouterr().err
     assert rc == 1
     assert "version-pin mismatch" in err
+
+
+def test_scan_surfaces_missing_drift_automation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # finding 33: the fleet sweep runs the FULL §5.4 diagnosis — a consumer with no
+    # scheduled drift caller must be flagged, not read as healthy at scale.
+    consumer = tmp_path / "c"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github" / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+
+    rc = main(["scan", str(consumer)])
+    err = capsys.readouterr().err
+    assert rc == 0
+    assert "drift automation: MISSING" in err
+
+
+def test_scan_audit_lists_open_drift_issues(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # finding 36 (§5.11): read-only audit aggregation over the per-repo tracking
+    # issues — ephemeral output, no stored inventory (§2.2).
+    consumer = tmp_path / "c"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github" / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:o/r.git")
+    monkeypatch.setattr(
+        cli,
+        "gh_json_paginated_optional",
+        lambda endpoint, **kw: [{"number": 12, "title": "Settings drift", "updated_at": "2026-06-01T00:00:00Z"}],
+    )
+
+    rc = main(["scan", str(consumer), "--audit"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "audit: #12" in out

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -191,13 +192,13 @@ def _validate_settings_leaf_types(baseline: dict[str, Any], resolved: dict[str, 
             )
 
 
-def _chain(load, name: str) -> list:
+def _chain(load: Callable[[str], Any], name: str) -> list[Any]:
     """Walk an ``extends`` chain from ``name`` to its root, root-first.
 
     ``load`` maps a bundle name to its dataclass. Ancestors resolve before
     descendants (§4.2 deterministic ordering).
     """
-    layers: list = []
+    layers: list[Any] = []
     seen: set[str] = set()
     current: str | None = name
     while current is not None:
@@ -211,7 +212,7 @@ def _chain(load, name: str) -> list:
     return layers
 
 
-def _resolve_list(layers: list, base_attr: str) -> tuple[str, ...]:
+def _resolve_list(layers: list[Any], base_attr: str) -> tuple[str, ...]:
     root = layers[0]
     if root.extends is not None:  # defensive; root by construction has no extends
         raise CompositionError(f"resolution root {root.name!r} unexpectedly extends another")
@@ -407,10 +408,10 @@ def resolve_profile(
     # declares no pipelines and stays lenient, exactly as before.
     declared = registry.declared_pipelines()
     if declared is not None:
-        unknown = sorted(ref for ref in pipelines if ref not in declared)
-        if unknown:
+        undeclared = sorted(ref for ref in pipelines if ref not in declared)
+        if undeclared:
             raise CompositionError(
-                f"profile {name!r} references undeclared pipeline(s) {unknown}; every pipeline must be "
+                f"profile {name!r} references undeclared pipeline(s) {undeclared}; every pipeline must be "
                 f"declared in the pipelines manifest (§5.1) — check for a typo or a missing declaration"
             )
 

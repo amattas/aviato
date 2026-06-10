@@ -31,9 +31,14 @@ def _adopt(tmp_path: Path) -> None:
     assert rc == 0
 
 
-def test_repin_dry_run_then_write(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_repin_dry_run_then_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     _adopt(tmp_path)
     capsys.readouterr()
+    # finding 9: the write path now gates on the target resolving as a PUBLISHED ref;
+    # fake the resolution here (the refusal paths get their own tests below).
+    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
 
     # _adopt() passed a legacy ``v0``; it must have been canonicalized to bare on write
     # (§6.1 — a leading ``v`` is tolerated on input but never emitted).
@@ -48,7 +53,8 @@ def test_repin_dry_run_then_write(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "0"
 
     # Write: records the new pin (bare) and re-scaffolds the pin-bearing workflows with it.
-    rc = main(["repin", str(tmp_path), "v1.0.0", "--write"])
+    # The tool is 0.x and the target is major 1 — §2.6 requires the explicit override.
+    rc = main(["repin", str(tmp_path), "v1.0.0", "--write", "--override-version-pin"])
     assert rc == 0
     assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "1.0.0"
     ci = (tmp_path / ".github" / "workflows" / "aviato-ci.yml").read_text()
@@ -62,19 +68,55 @@ def test_repin_dry_run_then_write(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "version=0" not in (tmp_path / "ruff.toml").read_text()
 
 
-def test_repin_reports_skipped_hand_edited_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_repin_reports_skipped_hand_edited_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     # §5.12: a re-pin must not silently leave hand-edited managed files at the old
     # pin — the no-clobber skip has to be surfaced so the operator knows.
     _adopt(tmp_path)
+    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
     ci_path = tmp_path / ".github" / "workflows" / "aviato-ci.yml"
     ci_path.write_text(ci_path.read_text() + "\n# operator hand-edit\n", encoding="utf-8")
     capsys.readouterr()
 
-    rc = main(["repin", str(tmp_path), "1.0.0", "--write"])
+    rc = main(["repin", str(tmp_path), "1.0.0", "--write", "--override-version-pin"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "aviato-ci.yml" in out
     assert "skipped" in out.lower()
+
+
+def test_repin_write_refuses_unpublished_target(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # finding 9: a typo'd/unpublished target must fail CLOSED before any file is
+    # rewritten — onboard/provision already had this gate; repin (the only sanctioned
+    # pin move) did not.
+    _adopt(tmp_path)
+    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: False)
+    capsys.readouterr()
+
+    rc = main(["repin", str(tmp_path), "0.9.9", "--write"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "does not resolve to a published" in err
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "0"
+
+
+def test_repin_write_refuses_cross_major_without_override(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # finding 9 (§2.6): the running tool must refuse to stamp a cross-major target
+    # unless explicitly overridden — its templates are not that major's templates.
+    _adopt(tmp_path)
+    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
+    capsys.readouterr()
+
+    rc = main(["repin", str(tmp_path), "9.0.0", "--write"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "version-pin mismatch" in err
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "0"
 
 
 def test_offboard_dry_run_then_write(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

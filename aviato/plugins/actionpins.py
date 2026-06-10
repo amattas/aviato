@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 # §11.3: third-party actions/tools must be pinned by commit digest (40-hex SHA).
@@ -255,7 +256,7 @@ def _resolved_program(node: object) -> str | None:
         base = _basename(words[i])
         if base not in _WRAPPERS:
             return base
-        arg_flags = _WRAPPER_ARG_FLAGS.get(base, frozenset())
+        arg_flags: AbstractSet[str] = _WRAPPER_ARG_FLAGS.get(base, frozenset())
         i += 1
         while i < len(words) and words[i].startswith("-"):  # skip the wrapper's own flags …
             flag = words[i]
@@ -531,7 +532,7 @@ class _FetchWalk:
             self.walk(child)
 
     def _pipeline(self, node: object) -> None:
-        elements = [p for p in node.parts if getattr(p, "kind", None) != "pipe"]
+        elements = [p for p in getattr(node, "parts", []) if getattr(p, "kind", None) != "pipe"]
         for idx, element in enumerate(elements):
             # (A) a fetch's bytes flow into a downstream element. Safe only if EVERY downstream element
             # is a pure-sink command — a stream cannot be checksum-verified mid-flight, so a verifier
@@ -609,7 +610,13 @@ def _scan_block(block: str, depth: int = 0) -> list[str]:
     `-c`/`-e` string operand IS more shell, so it is scanned at ``depth+1`` (cycle-15: `bash -c 'curl |
     bash'` is a literal code string, not a substitution). A block that mentions curl/wget but bashlex
     cannot parse fails CLOSED."""
-    import bashlex
+    try:
+        import bashlex
+    except ImportError as exc:
+        # finding 24 (§5.14): bashlex is a pinned dependency; if it is somehow missing the
+        # gate must fail CLOSED with a clean reported violation — mirroring the
+        # zizmor-unavailable posture — never escape as a raw ImportError traceback.
+        return [f"bashlex unavailable (cannot verify fetch-execute, §5.14): {exc}"]
 
     if not _FETCH_RE.search(block):
         return []
@@ -813,6 +820,38 @@ def unpinned_requirements_lines(text: str) -> list[str]:
     return flagged
 
 
+def unpinned_pyproject_extra_lines(text: str) -> list[str]:
+    """Optional-dependency entries in a SEEDED pyproject that are not ``==``-pinned.
+
+    finding 12: python-library/component CI installs ``pip install -e .[dev]``, which the
+    pip-install scanner correctly exempts (an editable path is not a package token) — so
+    floor pins inside the seeded manifest's extras floated invisibly while the sibling
+    requirements-dev file was exact-pinned for the same §11.3 reason. Line-wise scan, NOT
+    tomllib: the template body carries ``{{ }}`` placeholders. Only quoted requirement
+    strings between ``[project.optional-dependencies]`` and the next section are checked;
+    placeholder-bearing entries are resolved at scaffold time and skipped.
+    """
+    flagged: list[str] = []
+    in_extras = False
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line.startswith("["):
+            # second-review fix: prefix match so nested extras tables
+            # ([project.optional-dependencies.docs]) stay in scope.
+            in_extras = line.rstrip("]").startswith("[project.optional-dependencies")
+            continue
+        if not in_extras:
+            continue
+        # second-review fix: scan EVERY quoted string on the line (inline arrays,
+        # single OR double quotes) — a valid-TOML reformat must not disable the gate.
+        for req in re.findall(r"[\"']([^\"']+)[\"']", line):
+            if "{{" in req:
+                continue
+            if "==" not in req:
+                flagged.append(req)
+    return flagged
+
+
 def unpinned_tool_invocations(text: str) -> list[str]:
     """Shell-invoked tools not pinned (§11.3): fail-closed fetch-execute + non-exact pip installs.
 
@@ -878,4 +917,10 @@ def action_pin_violations(root: Path) -> list[str]:
     for req in sorted(scaffold_dir.glob("requirements*.txt.txt")):
         for pkg in unpinned_requirements_lines(req.read_text(encoding="utf-8", errors="replace")):
             violations.append(f"{req.name}: requirement not pinned to an exact version: {pkg}")
+
+    # 5. Seeded pyproject dev extras (finding 12: installed via `pip install -e .[dev]`,
+    # which the pip-install scan exempts — the floor pins floated invisibly).
+    for manifest in sorted(scaffold_dir.glob("pyproject*.toml.txt")):
+        for pkg in unpinned_pyproject_extra_lines(manifest.read_text(encoding="utf-8", errors="replace")):
+            violations.append(f"{manifest.name}: dev-extra requirement not pinned to an exact version: {pkg}")
     return violations

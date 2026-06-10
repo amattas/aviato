@@ -28,6 +28,13 @@ on:
         required: false
         type: string
         default: ""
+      gated-sha:
+        description: >-
+          The commit SHA the release gate validated (reusable-release-gate.yml's
+          gated-sha output). C12-W2: build from this immutable commit — never the
+          mutable tag — and re-verify the tag still points at it before publishing.
+        required: true
+        type: string
       platforms:
         required: false
         type: string
@@ -36,6 +43,14 @@ on:
         required: false
         type: boolean
         default: true
+      environment-name:
+        description: >-
+          GitHub deployment environment for the publish job (finding 7). Non-breaking
+          default: GitHub auto-creates it unprotected; the operator adds reviewer/
+          branch protection rules to gate image publishes at the platform level.
+        required: false
+        type: string
+        default: ghcr
       # §11.7: the published-artifact vulnerability scan is MANDATORY and always gates
       # the publish — there is intentionally no opt-out input to disable it.
 
@@ -73,12 +88,17 @@ jobs:
   docker:
     name: Build and publish image
     runs-on: ubuntu-latest
+    # finding 7: platform-level gate on the registry publish (single-job design per
+    # R7-4, so the environment wraps build+scan+push — reviewers approve the run).
+    environment:
+      name: ${{ inputs.environment-name }}
     steps:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:
-          # Build from the release tag — explicit in-run, or the tag ref otherwise.
-          ref: ${{ inputs.release-tag || github.ref }}
+          persist-credentials: false
+          # C12-W2: build from the IMMUTABLE gated commit, not the mutable tag.
+          ref: ${{ inputs.gated-sha }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -86,7 +106,7 @@ jobs:
         id: release
         shell: bash
         env:
-          TAG_PATTERN: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+          TAG_PATTERN: '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$'
           TAG_FORMAT_DESCRIPTION: 'N.N.N, N.N.N-alphaN, or N.N.N-betaN'
           RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
         run: |
@@ -105,6 +125,19 @@ jobs:
             exit 1
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify tag still points at the gated commit (C12-W2)
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          GATED_SHA: ${{ inputs.gated-sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
+          if [ -z "${actual}" ] || [ "${actual}" != "${GATED_SHA}" ]; then
+            echo "::error::Tag ${RELEASE_TAG} no longer points at the gated commit ${GATED_SHA} (now: ${actual:-missing}) — the tag moved between gate and publish; refusing (C12-W2)."
+            exit 1
+          fi
 
       - name: Determine image name
         id: vars
@@ -155,35 +188,57 @@ jobs:
       - name: Build and scan each target platform (gate before publish)
         shell: bash
         env:
-          IMAGE: ${{ steps.vars.outputs.image }}
-          TAG: ${{ steps.vars.outputs.tag }}
           PLATFORMS: ${{ inputs.platforms }}
           CONTEXT: ${{ inputs.context }}
           DOCKERFILE: ${{ inputs.dockerfile }}
+          LABELS: ${{ steps.meta.outputs.labels }}
         run: |
+          # C12-W3 (§11.7): build each platform ONCE to a local OCI archive. The scans
+          # below run against EXACTLY those bytes, and the push step promotes the SAME
+          # archives by digest — there is no second build between scan and publish, so
+          # a mutable base image or networked RUN step can no longer make the pushed
+          # digest differ from the scanned one. (The former type=gha layer cache is
+          # deliberately dropped: cached-rebuild "functional equivalence" was the hole.)
           # NOTE: deliberately NOT `set -e` — the high/critical GATE failure is ACCUMULATED so
           # every platform is still report-scanned (its SARIF written) before we fail. A build or
           # report-scan ERROR still hard-fails via explicit `|| exit 1`.
           set -uo pipefail
-          mkdir -p trivy-sarif
+          mkdir -p trivy-sarif oci
+          # OCI image labels come from the metadata action (GHCR links the package to the
+          # repository via org.opencontainers.image.source — dropping labels would orphan it).
+          label_args=()
+          while IFS= read -r label; do
+            [ -n "${label}" ] && label_args+=(--label "${label}")
+          done <<< "${LABELS}"
           gate_failed=0
           IFS=',' read -ra plats <<< "${PLATFORMS}"
           for raw in "${plats[@]}"; do
             plat="$(echo "${raw}" | xargs)"
             [ -z "${plat}" ] && continue
+            slug="${plat//\//-}"
             echo "::group::Build + scan ${plat}"
-            docker buildx build --platform "${plat}" --load \
-              -t "${IMAGE}:scan-tmp" -f "${DOCKERFILE}" "${CONTEXT}" || exit 1
+            # --provenance/--sbom=false keeps the archive a SINGLE-manifest image, so the
+            # pushed digest provably equals the scanned digest (an embedded attestation
+            # index would change the digest shape). Provenance is attested keylessly
+            # AFTER push (attest-build-provenance); SBOMs are emitted by trivy below.
+            docker buildx build --platform "${plat}" \
+              --provenance=false --sbom=false \
+              "${label_args[@]}" \
+              --output "type=oci,dest=oci/${slug}.tar" \
+              -f "${DOCKERFILE}" "${CONTEXT}" || exit 1
             # §2.13 report/gate split: REPORT all severities to the Security surface (SARIF, no
             # severity filter so medium/low are reported too), then GATE the publish on
             # high/critical. A single --severity HIGH,CRITICAL run would drop medium/low from
             # the SARIF entirely — §2.13 requires medium/low reported (without blocking).
-            trivy image --ignore-unfixed \
-              --format sarif --output "trivy-sarif/${plat//\//-}.sarif" "${IMAGE}:scan-tmp" || exit 1
+            trivy image --ignore-unfixed --input "oci/${slug}.tar" \
+              --format sarif --output "trivy-sarif/${slug}.sarif" || exit 1
+            # §11.7: per-platform SBOM of the exact scanned bytes (uploaded as an artifact).
+            trivy image --input "oci/${slug}.tar" \
+              --format cyclonedx --output "oci/${slug}.sbom.cdx.json" || exit 1
             # Accumulate the gate (don't abort), so a high/critical on an early platform doesn't
             # skip scanning/reporting later platforms (§2.13 medium/low reporting completeness).
             if ! trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
-              --format table "${IMAGE}:scan-tmp"; then
+              --format table --input "oci/${slug}.tar"; then
               gate_failed=1
             fi
             echo "::endgroup::"
@@ -200,28 +255,68 @@ jobs:
         with:
           sarif_file: trivy-sarif
 
-      # NOTE (scan-vs-push image identity, §11.7): the scan above builds each platform
-      # with `--load` and the push below rebuilds via build-push-action. Both share the
-      # same Dockerfile, context, and `type=gha` build cache, so the pushed layers are the
-      # cached scanned layers — functionally equivalent, but NOT a proven byte-identical
-      # digest match. A stronger guarantee (build once to a local OCI store, scan, then push
-      # that exact artifact by digest) is a deferred hardening; it interacts with multi-arch
-      # `--load` limitations and cannot be exercised without a live registry (operator-verified
-      # DoD, §9.9). The gate still blocks publish on a HIGH/CRITICAL finding in those layers.
-      - name: Build and push image
-        id: build
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+      - name: Upload image SBOMs
+        uses: actions/upload-artifact@v7
         with:
-          context: ${{ inputs.context }}
-          file: ${{ inputs.dockerfile }}
-          platforms: ${{ inputs.platforms }}
-          push: ${{ inputs.push }}
-          tags: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: true
-          sbom: true
+          name: aviato-image-sboms
+          path: oci/*.sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 90
+
+      # C12-W3 (§11.7): promote the EXACT scanned archives by digest — skopeo preserves
+      # the manifest bytes, so pushed digest == scanned digest is ASSERTED, not assumed.
+      # Each platform lands on a stable per-arch tag (<tag>-<platform> — a registry
+      # manifest PUT needs a tag); the release tag is then ASSEMBLED from those verified
+      # digests with imagetools, so what ships is provably what was scanned.
+      - name: Push scanned digests and assemble release tag (C12-W3)
+        id: build
+        if: ${{ inputs.push }}
+        shell: bash
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          set -euo pipefail
+          # skopeo ships preinstalled on GitHub's ubuntu runners; fail CLOSED if absent
+          # rather than fetching one at run time (§11.3 forbids unpinned fetch-execute).
+          if ! command -v skopeo >/dev/null 2>&1; then
+            echo "::error::skopeo is not available on the runner; cannot promote scanned digests (C12-W3)."
+            exit 1
+          fi
+          digest_refs=()
+          IFS=',' read -ra plats <<< "${PLATFORMS}"
+          for raw in "${plats[@]}"; do
+            plat="$(echo "${raw}" | xargs)"
+            [ -z "${plat}" ] && continue
+            slug="${plat//\//-}"
+            local_digest="$(skopeo inspect --format '{{.Digest}}' "oci-archive:oci/${slug}.tar")"
+            skopeo copy --digestfile "oci/${slug}.pushed" \
+              "oci-archive:oci/${slug}.tar" "docker://${IMAGE}:${TAG}-${slug}"
+            pushed_digest="$(cat "oci/${slug}.pushed")"
+            if [ "${pushed_digest}" != "${local_digest}" ]; then
+              echo "::error::Pushed digest ${pushed_digest} != scanned digest ${local_digest} for ${plat}; refusing to assemble the release tag (C12-W3)."
+              exit 1
+            fi
+            echo "${plat}: scanned digest ${local_digest} pushed byte-identical."
+            digest_refs+=("${IMAGE}@${pushed_digest}")
+          done
+          if [ "${#digest_refs[@]}" -eq 0 ]; then
+            echo "::error::No platforms produced a pushed digest; refusing to assemble the release tag."
+            exit 1
+          fi
+          docker buildx imagetools create -t "${IMAGE}:${TAG}" "${digest_refs[@]}"
+          # Final identity proof: the release tag must reference ONLY the scanned digests.
+          manifest_raw="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --raw)"
+          for ref in "${digest_refs[@]}"; do
+            d="${ref#*@}"
+            if ! grep -q "${d}" <<< "${manifest_raw}"; then
+              echo "::error::Release tag manifest does not reference scanned digest ${d} (C12-W3)."
+              exit 1
+            fi
+          done
+          tag_digest="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          echo "digest=${tag_digest}" >> "${GITHUB_OUTPUT}"
 
       # §13.2/§11.7: keyless OIDC build provenance attestation for the pushed image.
       - name: Attest image provenance

@@ -102,6 +102,12 @@ def _is_feature_unavailable(exc: CommandError) -> bool:
     "not enabled" is NOT misclassified as a benign adoption warning and is allowed to raise.
     """
     msg = exc.stderr.lower()
+    # finding 25: require an explicit CLIENT-error HTTP status alongside the wording — a
+    # 5xx/transient/network failure whose body merely contains these phrases must NOT be
+    # misread as a benign §17 prerequisite gap (that would silently skip a security
+    # toggle a retry would have applied). gh appends "(HTTP NNN)" to API errors.
+    if not any(f"http {code}" in msg for code in (403, 404, 422)):
+        return False
     if "advanced security" in msg:
         return True
     availability = "not available" in msg or "not enabled" in msg or "must be enabled" in msg
@@ -534,7 +540,12 @@ class GitHubPlatform:
         )
 
     def probe_health(
-        self, repo: str, *, environments: tuple[str, ...] = (), probe_pages: bool = False
+        self,
+        repo: str,
+        *,
+        environments: tuple[str, ...] = (),
+        probe_pages: bool = False,
+        drift_workflow_path: str | None = None,
     ) -> tuple[bool | None, bool | None, dict[str, bool | None]]:
         """Probe issue-channel availability, scan-heartbeat presence, and §17 remote prereqs.
 
@@ -604,6 +615,50 @@ class GitHubPlatform:
                 remote[key] = github.protected_environment_has_reviewers(repo, env_name)
             except github.GitHubAPIError:
                 remote[key] = None
+        # finding 32 (§2.13/§17 "probeable"): code scanning was the one §17 prerequisite
+        # doctor could not see. A 200 on the analyses read (any list, even empty) means
+        # code scanning is ENABLED (workflow- or default-setup); a genuine 404 means not
+        # yet; anything else is unknown.
+        try:
+            analyses = github.gh_json_optional(f"repos/{repo}/code-scanning/analyses?per_page=1", default=())
+            remote["code_scanning"] = not isinstance(analyses, tuple)
+        except github.GitHubAPIError:
+            remote["code_scanning"] = None
+        # findings 31/30: the drift automation's API state — a workflow disabled in the
+        # GitHub UI (or persistently failing, e.g. silently throttled) previously read
+        # "present: yes" from the local file alone, the exact state §5.4's probe exists
+        # to expose. The path is a Library artifact name passed in as data.
+        if drift_workflow_path:
+            try:
+                # second-review fix: PAGINATED — a repo with >100 workflows must not get a
+                # false determinate "disabled" because the drift caller sat on page 2.
+                # --slurp returns one page-object per page for this object-shaped endpoint.
+                listing = github.gh_json_paginated_optional(f"repos/{repo}/actions/workflows?per_page=100", default=())
+                pages = listing if isinstance(listing, list) else [listing]
+                workflows = [w for page in pages if isinstance(page, dict) for w in (page.get("workflows") or [])]
+                match = next(
+                    (
+                        w
+                        for w in workflows
+                        if isinstance(w, dict) and str(w.get("path", "")).endswith(drift_workflow_path)
+                    ),
+                    None,
+                )
+                if match is None:
+                    remote["drift_automation_enabled"] = False
+                    remote["drift_automation_last_run_ok"] = None
+                else:
+                    remote["drift_automation_enabled"] = match.get("state") == "active"
+                    runs = github.gh_json_optional(
+                        f"repos/{repo}/actions/workflows/{match.get('id')}/runs?per_page=1", default=()
+                    )
+                    run_items = (runs.get("workflow_runs") or []) if isinstance(runs, dict) else []
+                    first = run_items[0] if run_items and isinstance(run_items[0], dict) else None
+                    conclusion = first.get("conclusion") if first else None
+                    remote["drift_automation_last_run_ok"] = None if conclusion is None else conclusion == "success"
+            except github.GitHubAPIError:
+                remote["drift_automation_enabled"] = None
+                remote["drift_automation_last_run_ok"] = None
         return issue_channel, heartbeat, remote
 
     def _actor_role(self, repo: str, login: str | None) -> tuple[str | None, bool]:

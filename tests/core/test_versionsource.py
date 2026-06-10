@@ -219,3 +219,10 @@ def test_bump_text_silently_ignores_build_number_on_non_app_formats() -> None:
     assert (
         _json.loads(bump_text("package.json", '{"version":"0.1.0"}', "0.2.0", build_number="42"))["version"] == "0.2.0"
     )
+
+
+def test_bump_text_rejects_non_object_package_json() -> None:
+    # finding 21: valid JSON need not be an object — a top-level array previously
+    # AttributeError'd on .get and escaped as a raw traceback instead of AviatoError.
+    with pytest.raises(AviatoError, match="no top-level version string"):
+        bump_text(Path("package.json"), "[1, 2, 3]", "1.2.3", None)

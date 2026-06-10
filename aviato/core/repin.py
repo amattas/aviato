@@ -41,7 +41,7 @@ def _is_downgrade(current: str, target: str) -> bool:
         return False
 
 
-def _profile_identity(registry: Registry, profile: str) -> tuple:
+def _profile_identity(registry: Registry, profile: str) -> tuple[tuple[str, ...], ...]:
     """A profile's stable identity for re-pin (§6.5, R1-7): a digest of its FULL resolved
     composition, not just the version-source locations. A profile name is a public identity;
     if the same name resolves to a different shape at another version (different pipelines,

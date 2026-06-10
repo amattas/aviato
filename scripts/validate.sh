@@ -19,7 +19,7 @@ else
 fi
 
 if command -v black >/dev/null 2>&1; then
-  black --check --line-length 120 --target-version py311 aviato tests scripts
+  black --check --line-length 120 --target-version py312 aviato tests scripts
 else
   SKIPPED+=("black (formatter compatibility)")
 fi
@@ -28,6 +28,49 @@ if command -v pytest >/dev/null 2>&1; then
   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest
 else
   SKIPPED+=("pytest (test suite)")
+fi
+
+if python3 -c "import build" >/dev/null 2>&1; then
+  rm -rf _wheelout
+  # --no-isolation: the local gate must work offline (no pip fetch of setuptools);
+  # the ambient env carries the build backend via the [dev] install.
+  python3 -m build --wheel --no-isolation --outdir _wheelout >/dev/null
+  # The wheel must ship the module-source tree: a pip-installed aviato (consumer CI,
+  # drift automation) resolves profiles/policy from package data (§5.10), so a
+  # packaging regression dropping aviato/library/** breaks every consumer install
+  # while building "successfully" — assert the data is actually inside the wheel.
+  python3 - <<'PY'
+import glob
+import sys
+import zipfile
+
+wheel = sorted(glob.glob("_wheelout/*.whl"))[-1]
+names = zipfile.ZipFile(wheel).namelist()
+required = ["aviato/library/policy.yml", "aviato/plugins/denylist.txt"]
+missing = [r for r in required if r not in names]
+if missing:
+    sys.exit(f"wheel {wheel} is missing packaged data: {missing}")
+print(f"wheel package-data OK: {wheel}")
+PY
+else
+  SKIPPED+=("build (wheel packaging + package-data)")
+fi
+
+# Must run from the repo root: .yamllint.yml's ignore globs are relative, and an
+# absolute-path invocation bypasses them (the scaffold caller bodies carry {{ }}
+# placeholders that are deliberately excluded). Same invocation as
+# reusable-common-lint.yml's blocking step.
+if command -v mypy >/dev/null 2>&1; then
+  # finding 38: strict typing gates the package (scope/strictness from [tool.mypy]).
+  mypy
+else
+  SKIPPED+=("mypy (strict type-check)")
+fi
+
+if command -v yamllint >/dev/null 2>&1; then
+  yamllint -s .
+else
+  SKIPPED+=("yamllint (YAML lint)")
 fi
 
 if command -v shellcheck >/dev/null 2>&1; then

@@ -59,11 +59,21 @@ on:
         required: false
         type: string
         default: github-pages
+      gated-sha:
+        description: >-
+          The commit SHA the release gate validated (reusable-release-gate.yml's
+          gated-sha output). C12-W2: build docs from this immutable commit — never
+          the mutable tag — and re-verify the tag still points at it.
+        required: true
+        type: string
       docs-retention:
-        description: Number of most-recent versions to keep (§13.3 retention cap).
+        description: >-
+          Optional retention cap (§13.3). 0 — the default — keeps EVERY released
+          version's docs (operator decision, 2026-06); set N>0 to prune to the
+          newest N versions on each release.
         required: false
         type: number
-        default: 10
+        default: 0
 
 # C12-W4 (§13.3/§1530 least privilege): permissions are PER-JOB, not workflow-wide. The build job runs
 # the consumer's install/emit/build `eval`s and holds ONLY `contents: read` (+ `actions: read` to read
@@ -94,8 +104,9 @@ jobs:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:
-          # Build from the release tag — explicit in-run, or the tag ref otherwise.
-          ref: ${{ inputs.release-tag || github.ref }}
+          persist-credentials: false
+          # C12-W2: build from the IMMUTABLE gated commit, not the mutable tag.
+          ref: ${{ inputs.gated-sha }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -103,7 +114,7 @@ jobs:
         id: release
         shell: bash
         env:
-          TAG_PATTERN: '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]+)?$'
+          TAG_PATTERN: '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$'
           TAG_FORMAT_DESCRIPTION: 'N.N.N, N.N.N-alphaN, or N.N.N-betaN'
           RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
         run: |
@@ -123,8 +134,21 @@ jobs:
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
+      - name: Verify tag still points at the gated commit (C12-W2)
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          GATED_SHA: ${{ inputs.gated-sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
+          if [ -z "${actual}" ] || [ "${actual}" != "${GATED_SHA}" ]; then
+            echo "::error::Tag ${RELEASE_TAG} no longer points at the gated commit ${GATED_SHA} (now: ${actual:-missing}) — the tag moved between gate and deploy; refusing (C12-W2)."
+            exit 1
+          fi
+
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm
@@ -136,8 +160,13 @@ jobs:
           set -euo pipefail
           npm_version="$(npm --version)"
           npm_major="${npm_version%%.*}"
-          if ! [[ "${npm_major}" =~ ^[0-9]+$ ]] || [ "${npm_major}" -lt 11 ]; then
-            echo "::error::npm ${npm_version} does not support min-release-age. Use Node/npm with npm >=11 before running installs."
+          npm_minor="$(printf '%s' "${npm_version}" | cut -d. -f2)"
+          # finding 13 (verified empirically against the registry): min-release-age is
+          # DEFINED from npm 11.10.0 — npm 11.0–11.9 silently IGNORE the key, leaving
+          # the §11.7 release-age cooldown inert while looking configured.
+          if ! [[ "${npm_major}" =~ ^[0-9]+$ && "${npm_minor}" =~ ^[0-9]+$ ]] || \
+             [ "${npm_major}" -lt 11 ] || { [ "${npm_major}" -eq 11 ] && [ "${npm_minor}" -lt 10 ]; }; then
+            echo "::error::npm ${npm_version} does not support min-release-age (requires npm >=11.10). Update Node/npm before running installs."
             exit 1
           fi
           npm config set ignore-scripts true --location=user
@@ -150,7 +179,7 @@ jobs:
           npm config set min-release-age 7 --location=user
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Install
         shell: bash
@@ -257,6 +286,12 @@ jobs:
           python3 - "${RETENTION}" <<'PY'
           import json, sys, pathlib, shutil
           cap = int(sys.argv[1])
+          # docs-retention <= 0 (the default) keeps EVERY released version (§13.3).
+          # NB: without this guard, versions[:0] would prune EVERYTHING — the exact
+          # inverse of "keep all" (finding 37 inversion hazard).
+          if cap <= 0:
+              print("docs-retention <= 0: keeping all versions")
+              raise SystemExit(0)
           vf = pathlib.Path("versions.json")
           if not vf.is_file():
               raise SystemExit(0)
@@ -312,4 +347,4 @@ jobs:
     steps:
       - name: Deploy Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

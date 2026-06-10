@@ -65,12 +65,21 @@ on:
           else
             swift build
           fi
-      # §2.14 shared command contract: the five core inputs (working-directory,
-      # install/lint/test/build-command) and the run-* toggles below are identical
-      # across the python/node/swift reusable CI. Swift intentionally has no separate
-      # `format-command`/`run-format` or `typecheck-command`/`run-typecheck`: formatting
-      # (`swift-format lint`) is folded into `lint-command`, and Swift's build IS its
-      # type check — so those toggles would be permanently no-ops here.
+      # §2.14 shared command contract (contract-parity decision, review finding 27 —
+      # supersedes the earlier "Swift intentionally has no format/typecheck inputs"
+      # note): ALL language CIs expose the SAME input set, so a uniform caller or
+      # composition can address every language identically. For Swift the format and
+      # typecheck steps default OFF with EMPTY commands — `swift-format lint` is
+      # folded into lint-command and the build IS the type check — but the inputs
+      # exist with disabled defaults rather than being omitted.
+      format-command:
+        required: false
+        type: string
+        default: ""
+      typecheck-command:
+        required: false
+        type: string
+        default: ""
       run-install:
         required: false
         type: boolean
@@ -79,6 +88,14 @@ on:
         required: false
         type: boolean
         default: true
+      run-format:
+        required: false
+        type: boolean
+        default: false
+      run-typecheck:
+        required: false
+        type: boolean
+        default: false
       run-tests:
         required: false
         type: boolean
@@ -107,6 +124,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Select Xcode
         if: ${{ inputs.xcode-version != '' }}
@@ -127,6 +146,20 @@ jobs:
         env:
           LINT_COMMAND: ${{ inputs.lint-command }}
         run: eval "$LINT_COMMAND"
+
+      - name: Format
+        if: ${{ inputs.run-format && inputs.format-command != '' }}
+        shell: bash
+        env:
+          FORMAT_COMMAND: ${{ inputs.format-command }}
+        run: eval "$FORMAT_COMMAND"
+
+      - name: Type check
+        if: ${{ inputs.run-typecheck && inputs.typecheck-command != '' }}
+        shell: bash
+        env:
+          TYPECHECK_COMMAND: ${{ inputs.typecheck-command }}
+        run: eval "$TYPECHECK_COMMAND"
 
       - name: Test
         if: ${{ inputs.run-tests && inputs.test-command != '' }}

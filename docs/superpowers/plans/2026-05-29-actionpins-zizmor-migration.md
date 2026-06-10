@@ -1,3 +1,7 @@
+> **STATUS: IMPLEMENTED** (zizmor==pinned + bundled config + fail-closed fetch check
+> shipped; common-lint runs `aviato lint-actions`. The unchecked boxes below are the
+> historical plan, not pending work).
+
 # actionpins → zizmor + fail-closed fetch check — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

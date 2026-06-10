@@ -92,9 +92,17 @@ def test_python_service_is_a_container_service_not_a_library(registry: Registry)
     # defaults to the repo slug.
     rs = resolve_profile(registry, "python-service")
     var_names = {v.name for v in rs.variables}
-    # `default-branch` (R4-3) is the only var — an optional, every-profile branch override templated
-    # into caller triggers; there is no required container-service-specific variable.
-    assert var_names == {"default-branch"}, var_names
+    # Only the every-profile vars — `default-branch` (R4-3), `owner` (finding 28), and
+    # the algolia opt-in set (finding 20); there is no required container-service-
+    # specific variable (no wheel/import packaging, no image-name).
+    assert var_names == {
+        "default-branch",
+        "owner",
+        "algolia",
+        "algolia-app-id",
+        "algolia-search-api-key",
+        "algolia-index-name",
+    }, var_names
     assert "distribution-name" not in var_names and "import-name" not in var_names
     assert "image-name" not in var_names
     assert rs.version_source.locations == ("VERSION",)
@@ -165,6 +173,83 @@ def test_required_status_checks_include_language_verify(registry: Registry, name
     assert "security / Security baseline heartbeat" in checks
 
 
+def test_common_scaffold_ships_shared_governance_files() -> None:
+    # §12.1 (finding 48): contributing, code owners, and issue/PR templates come from
+    # the common scaffold — seed-once, so the consumer owns them after seeding.
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    expected = {
+        "CONTRIBUTING.md",
+        ".github/CODEOWNERS",
+        ".github/ISSUE_TEMPLATE/bug_report.md",
+        ".github/ISSUE_TEMPLATE/feature_request.md",
+        ".github/pull_request_template.md",
+    }
+    for profile, variables in (
+        ("python-library", {"distribution-name": "a", "import-name": "a"}),
+        ("node-service", {"project-name": "a", "language-variant": "typescript"}),
+    ):
+        items = materialize_items(reg, profile, variables, pin="0")
+        outputs = {i.output for i in items}
+        assert expected <= outputs, (profile, expected - outputs)
+        assert all(i.seed_once for i in items if i.output in expected)
+
+    owned = materialize_items(
+        reg, "python-library", {"distribution-name": "a", "import-name": "a", "owner": "octocat"}, pin="0"
+    )
+    codeowners = next(i for i in owned if i.output == ".github/CODEOWNERS")
+    assert "* @octocat" in codeowners.body
+
+
+def test_algolia_opt_in_renders_templated_search_config() -> None:
+    # finding 20: algolia=true selects the templated variant — exactly one config
+    # renders (the same-output_path variants are mutually exclusive by `when`), the
+    # credentials are {{ }} placeholders the lenient seed-once render PRESERVES when
+    # unset, and the duplicate explicit theme entry stays gone.
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    variables = {"distribution-name": "acme", "import-name": "acme", "algolia": "true"}
+    items = materialize_items(reg, "python-library", variables, docs=True, pin="0")
+    configs = [i for i in items if i.output == "website/docusaurus.config.js"]
+    assert len(configs) == 1
+    body = configs[0].body
+    assert "algolia:" in body
+    assert "{{ algolia-app-id }}" in body, "unset optional vars must keep their placeholders"
+    assert "'@docusaurus/theme-search-algolia'" not in body
+    # ...and providing the values substitutes them.
+    variables_set = dict(variables, **{"algolia-app-id": "ABC123"})
+    items_set = materialize_items(reg, "python-library", variables_set, docs=True, pin="0")
+    body_set = next(i.body for i in items_set if i.output == "website/docusaurus.config.js")
+    assert "appId: 'ABC123'" in body_set
+
+
+def test_unset_optional_variables_never_render_as_none() -> None:
+    # finding 28: resolve_variables emits None for unset optionals; the render layer
+    # must omit them (placeholder preserved), never bake the literal "None".
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    variables = {"distribution-name": "acme", "import-name": "acme", "owner": None}
+    items = materialize_items(reg, "python-library", variables, pin="0")
+    license_body = next(i.body for i in items if i.output == "LICENSE")
+    assert "None" not in license_body
+    assert "{{ owner }}" in license_body
+
+
+def test_owner_variable_seeds_license() -> None:
+    # finding 28: a detected owner (CLI autodetect tier) lands in the seed-once LICENSE.
+    from aviato.core.onboarding import materialize_items
+
+    reg = Registry(MODULE_SOURCE_ROOT)
+    variables = {"distribution-name": "acme", "import-name": "acme", "owner": "octocat"}
+    items = materialize_items(reg, "python-library", variables, pin="0")
+    license_body = next(i.body for i in items if i.output == "LICENSE")
+    assert "octocat" in license_body
+    assert "{{ owner }}" not in license_body
+
+
 def test_docs_opt_in_scaffolds_runnable_docusaurus_site() -> None:
     # §13.3/#4: docs:true must scaffold a *runnable* site (config + sidebars + a docs
     # package with docusaurus deps + at least one source page), not just a config.
@@ -193,13 +278,16 @@ def test_docs_opt_in_scaffolds_runnable_docusaurus_site() -> None:
     assert '"lint": "eslint ."' in pkg.body
     assert '"build": "docusaurus build"' in pkg.body
     assert '"node": ">=24.0"' in pkg.body
-    assert '"npm": ">=11.0.0"' in pkg.body
+    assert '"npm": ">=11.10.0"' in pkg.body  # finding 13: min-release-age needs npm >=11.10
 
     config = next(i for i in items_on if i.output == "website/docusaurus.config.js")
     assert "markdown: { mermaid: true }" in config.body
     assert "'@docusaurus/theme-mermaid'" in config.body
-    assert "'@docusaurus/theme-search-algolia'" in config.body
-    assert "algolia:" in config.body
+    # finding 20: search is OPT-IN (default algolia=false) and the explicit theme entry
+    # is gone — preset-classic auto-loads it from themeConfig.algolia, and listing it
+    # too registered the plugin twice, failing every docs build at first deploy.
+    assert "'@docusaurus/theme-search-algolia'" not in config.body
+    assert "algolia:" not in config.body
     assert "sitemap:" in config.body
 
     npmrc = next(i for i in items_on if i.output == "website/.npmrc")
@@ -226,7 +314,14 @@ def test_python_profile_scaffolds_pyproject_manifest() -> None:
     assert item.seed_once is True
     assert 'version = "0.1.0"' in item.body
     assert "pytest-cov" in item.body
-    assert "build>=" in item.body
+    # finding 12: the seeded dev extras are EXACT-pinned (==), like requirements-dev —
+    # CI installs them via `-e .[dev]`, so floors would float invisibly (§11.3).
+    assert "build==" in item.body
+    assert ">=" not in item.body.split("[project.optional-dependencies]", 1)[1].split("[", 1)[0]
+    # §12.1 (finding 48): measure-only test+coverage config ships in the manifest.
+    assert "[tool.pytest.ini_options]" in item.body
+    assert "[tool.coverage.run]" in item.body
+    assert 'source = ["acme"]' in item.body
     assert 'name = "acme"' in item.body  # lenient render filled the package name
 
 
@@ -363,7 +458,7 @@ def test_node_projects_scaffold_npm_hardening_config(variant: str) -> None:
     assert "engine-strict=true" in npmrc.body
     pkg = next(i for i in items if i.output == "package.json")
     assert '"node": ">=24.0"' in pkg.body
-    assert '"npm": ">=11.0.0"' in pkg.body
+    assert '"npm": ">=11.10.0"' in pkg.body  # finding 13: min-release-age needs npm >=11.10
 
 
 def test_node_javascript_has_no_fake_build_gate() -> None:

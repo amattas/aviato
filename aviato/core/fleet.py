@@ -20,6 +20,11 @@ class RepoScan:
     statuses: dict[str, str] = field(default_factory=dict)
     seed_divergence: list[str] = field(default_factory=list)
     secret_in_declaration: bool = False
+    # finding 33: §5.11 says "run diagnosis (§5.4)" — the fleet sweep previously omitted
+    # the §17 prerequisite and drift-automation probes doctor passes, so a fleet-wide
+    # missing-prerequisite / missing-drift-workflow condition was invisible at scale.
+    prerequisites: dict[str, bool] = field(default_factory=dict)
+    drift_automation_present: bool | None = None
     error: str | None = None
     # True when the repo was skipped because it is archived and --include-archived was not
     # passed (§5.11). Distinct from ``error`` (it is a deliberate skip, not a failure).
@@ -50,6 +55,7 @@ def scan_fleet(
     *,
     include_archived: bool = False,
     archived_probe: Callable[[Path], bool | None] | None = None,
+    drift_automation_markers: Sequence[str] = (),
 ) -> list[RepoScan]:
     """Run §5.4 diagnosis across many local repositories, read-only (§5.11).
 
@@ -85,6 +91,11 @@ def scan_fleet(
                 expected,
                 declaration_variables=declaration.variables,
                 secret_var_names=secret_names,
+                # finding 33: full §5.4 parity with doctor — prerequisites come from the
+                # profile's plug-in data; the drift markers are Library artifact names
+                # the CLI supplies (core never hardcodes them, review #18).
+                prerequisite_paths=registry.profile_doc(declaration.profile).get("prerequisites", {}),
+                drift_automation_markers=drift_automation_markers,
                 profile=declaration.profile,
                 is_library=is_library(root),
                 bootstrap_declared=declaration.bootstrap,
@@ -96,9 +107,11 @@ def scan_fleet(
             RepoScan(
                 path=str(root),
                 profile=declaration.profile,
-                statuses=report.statuses,
+                statuses=dict[str, str](report.statuses),
                 seed_divergence=report.seed_divergence,
                 secret_in_declaration=report.secret_in_declaration,
+                prerequisites=dict(report.prerequisites),
+                drift_automation_present=report.drift_automation_present if drift_automation_markers else None,
             )
         )
     return scans

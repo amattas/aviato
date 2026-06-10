@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -42,5 +44,10 @@ jobs:
           sudo tar -xz -C /usr/local/bin -f "${tarball}" actionlint
 
       - name: Validate
+        # Strict: in CI a missing gate tool is a broken runner/deps regression, not a
+        # local convenience — without this, validate.sh banners the skip and exits 0,
+        # so e.g. black silently vanishing would keep CI green (finding 14).
+        env:
+          AVIATO_STRICT_TOOLS: "1"
         run: ./scripts/validate.sh
 
