@@ -17,11 +17,14 @@ common-lint:
   runner: linux
   status_check: "common-lint / Common lint"
 release:
-  # §5.9 release: proposes the version-bump PR (pull-requests: write) and tags +
-  # publishes the GitHub release (contents: write). Mirrors reusable-release.yml,
-  # which is privilege-SPLIT (C12-W1): derive runs under contents:read, only the
-  # propose/tag job holds the writes — the union across jobs is declared here.
-  privileges: ["contents: read", "contents: write", "pull-requests: write"]
+  # §5.9 release: proposes the version-bump PR (pull-requests: write), tags +
+  # publishes the GitHub release (contents: write), and dispatches the caller at
+  # the release branch so the release PR reports required status checks
+  # (actions: write — workflow_dispatch is exempt from GITHUB_TOKEN event
+  # suppression). Mirrors reusable-release.yml, which is privilege-SPLIT (C12-W1):
+  # derive runs under contents:read, only the propose/tag job holds the writes —
+  # the union across jobs is declared here.
+  privileges: ["contents: read", "contents: write", "pull-requests: write", "actions: write"]
   runner: linux
 python-verify:
   privileges: ["contents: read"]

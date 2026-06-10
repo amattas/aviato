@@ -13,15 +13,20 @@ on:
       - "*.*.*"
   schedule:
     - cron: "23 5 * * 1"
+  # §5.9: lets the release propose phase dispatch this workflow at the
+  # release/<next> branch (workflow_dispatch is exempt from GITHUB_TOKEN event
+  # suppression), so the release PR reports the same required status checks as
+  # any human branch.
+  workflow_dispatch:
 
 # Granted to the UNION of every called reusable workflow's permissions: a caller
 # cannot elevate the token for a called workflow, so it must grant >= their needs
-# (release-gate: actions:read; GHCR/PyPI provenance: id-token+attestations:write).
+# (release propose-dispatch: actions:write; GHCR/PyPI provenance: id-token+attestations:write).
 permissions:
   contents: write
   pull-requests: write
   security-events: write
-  actions: read
+  actions: write
 
 jobs:
   ci:
