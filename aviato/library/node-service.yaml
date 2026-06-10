@@ -35,7 +35,7 @@ toolchain:
   formatter: prettier
   type_checker: tsc
 notes:
-  - "Requires a seed-once container build definition before GHCR publishing (§13.2)."
+  - "Requires an OPERATOR-PROVIDED container build definition before GHCR publishing (§13.2; probed, never seeded — R5-6)."
   - "type-check runs only when language-variant is typescript (§12.2)."
 docs_pipeline: docs-pages
 prerequisites:

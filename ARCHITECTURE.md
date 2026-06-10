@@ -26,11 +26,15 @@ resolution/composition, the consumer declaration contract, managed-marker
 scaffolding with seed-once, diagnosis, file/settings drift, the fail-closed
 authorization gate, version-pin compatibility, bootstrap detection, Conventional
 Commit version derivation, onboarding/sync, re-pin, and offboarding. The
-remaining gap to the full `REQUIREMENTS.md` is the *platform-side* orchestration
-of the §5.5–§5.7/§5.9 flows (the GitHub automation that opens proposals, files
-tracking issues, applies settings, and cuts releases) plus the live-CI
-definition-of-done runs — the engine primitives those flows compose are built
-and unit-tested.
+*platform-side* orchestration of the §5.5–§5.7/§5.9 flows is implemented as
+well: opening proposals, filing tracking issues, applying settings, and cutting
+releases live in `aviato/core/` (`file_drift_flow`, `settings_drift_flow`,
+`reconcile_flow`, `fleet`) behind the `aviato/github_platform.py` binding, and
+are surfaced through the `drift-report`/`reconcile`/`scan` CLI commands and the
+`reusable-consumer-automation.yml`/`reusable-release.yml` workflows. What
+remains is live end-to-end operator verification of those flows against a real
+GitHub repository — the engine primitives and the binding's response-mapping
+are unit-tested.
 
 ## Boundaries
 
@@ -55,23 +59,37 @@ Reusable workflows live in `.github/workflows` and are consumed through
 
 - `reusable-python-ci.yml` runs Python install, lint, and test commands.
 - `reusable-node-ci.yml` runs Node install, lint, test, and build commands;
-  defaults to Node 24; and blocks npm <11 before install so `min-release-age=7`
-  and `ignore-scripts=true` are enforceable. Its default Node tool invocations use
-  `npx --no-install`.
-- `reusable-common-lint.yml` mirrors the local action/tool pin scanner, including
-  unsafe plain `npx` detection, so consumers fail in CI on supply-chain drift.
+  defaults to Node 24; and blocks npm <11.10 (the `min-release-age` support
+  floor) before install so `min-release-age=7` and `ignore-scripts=true` are
+  enforceable. Its default Node tool invocations use `npx --no-install`.
+- `reusable-common-lint.yml` runs the same `aviato lint-actions` implementation
+  as `aviato validate` (no second copy to drift), including unsafe plain `npx`
+  detection, so consumers fail in CI on supply-chain drift.
 - `reusable-swift-ci.yml` runs Swift/Xcode lint, test, and build commands on
   macOS.
-- `reusable-docker-ghcr.yml` publishes release images to GHCR.
+- `reusable-docker-ghcr.yml` builds and Trivy-scans OCI archives, then promotes
+  the exact scanned archives to GHCR by digest — no rebuild between scan and
+  push. The publish job runs in a deployment environment (default `ghcr`).
 - `reusable-pypi-publish.yml` publishes Python packages through PyPI trusted
-  publishing.
+  publishing; the publish job runs in a deployment environment (default
+  `pypi`).
 - `reusable-docs-pages.yml` installs with the same npm hardening, lints the
-  Docusaurus site, versions it, and publishes it to GitHub Pages.
+  Docusaurus site, versions it, and publishes it to GitHub Pages. Its
+  `docs-retention` input defaults to 0, which keeps every released version's
+  docs.
 - `reusable-app-store-connect.yml` archives, signs, exports, and uploads Apple
   app builds to App Store Connect.
 - `reusable-security-baseline.yml` provides CodeQL and dependency-review gates.
+- `reusable-release.yml` derives the next version from Conventional Commits and
+  cuts the release (release PR, then tag + GitHub release), split into a
+  read-only derive job and a write release job.
 - `reusable-release-gate.yml` validates release tags before deployment or
-  publishing workflows proceed.
+  publishing workflows proceed and exports the validated commit as a
+  `gated-sha` output; deploy workflows check out that exact commit — never the
+  mutable tag — and re-verify the tag still points at it before publishing.
+- `reusable-consumer-automation.yml` runs the scheduled drift report: it opens
+  file-drift proposals and files settings-drift tracking issues, and never
+  mutates protected settings.
 
 The CI workflows use a common language-module contract:
 
@@ -89,10 +107,11 @@ Every language workflow should expose the same input names. Unsupported steps
 use an empty command and a disabled default.
 
 Docs-enabled profiles scaffold a Docusaurus `website/` with the first-party
-Docusaurus ESLint plugin, Algolia search, Mermaid rendering, and sitemap
-configuration through the classic preset. Node and docs scaffolds include
-managed `.npmrc` files with the npm supply-chain defaults and package engines
-requiring Node 24/npm 11.
+Docusaurus ESLint plugin, opt-in Algolia search (enabled via the `algolia`
+profile variable; default off), Mermaid rendering, and sitemap configuration
+through the classic preset. Node and docs scaffolds include managed `.npmrc`
+files with the npm supply-chain defaults and package engines requiring
+Node 24/npm >=11.10.
 
 ### Caller Templates
 
@@ -158,25 +177,53 @@ The Python CLI lives in `aviato/`.
 
 - `aviato audit <root>` discovers and audits repositories under a local root.
 - `aviato audit --repo <path>` audits one local repository.
-- `aviato apply-rulesets <owner/repo>` applies configured rulesets.
+- `aviato apply-rulesets <owner/repo>` applies configured rulesets (dry-run by
+  default; `--apply` mutates). `--declaration <path>` resolves status checks
+  and approvals through a consumer's `.github/aviato.yaml` overrides so an
+  apply never re-adds a check the consumer removed.
 - `aviato render-rulesets` renders the ruleset payloads after policy injection.
 - `aviato validate` validates this repository's policy infrastructure.
 - `aviato onboard <path-or-owner/repo>` prints the composition-backed onboarding
-  plan (pipelines, templates, variables, settings) for one explicit target. Fresh
+  plan (pipelines, templates, variables, settings) for one explicit target;
+  `--write` adopts a local repo, `--open-pr` adopts an existing repo through a
+  reviewable scaffold PR, and `--docs` composes the opt-in docs deploy. Fresh
   writes require `--pin`; onboarding preserves an existing pin and directs pin
   movement to `aviato repin`.
 - `aviato provision <owner/repo>` creates and scaffolds a new consumer repository
-  with staged protection; it also requires an explicit published pin.
+  with staged protection; it also requires an explicit published pin and
+  accepts `--docs`.
 - `aviato doctor <path>` classifies a consumer's managed artifacts (§5.4).
 - `aviato sync <path>` materializes managed/seed-once artifacts into a consumer
   repository from its declaration (§5.3).
+- `aviato scan <paths...>` diagnoses many local consumer repositories
+  (read-only); `--fix` opens managed-file proposals and `--audit` also surfaces
+  each repo's open settings-drift tracking issue (§5.11).
+- `aviato drift-report <path>` reports file + settings drift for one consumer
+  (`--file-only`, `--settings-only`, `--require-settings`) (§5.5/§5.6).
+- `aviato reconcile <path> <issue> --confirm <diff-id>` applies settings from a
+  tracking issue — operator-gated and diff-bound (§5.7).
+- `aviato complete-protection <path>` idempotently (re-)applies full branch
+  protection (§5.2 recovery).
+- `aviato repin <path> <version>` moves the Library version pin: `--write`
+  mutates locally, `--open-pr` opens a reviewable re-pin proposal (§5.12).
+- `aviato offboard <path>` removes a consumer from Aviato management:
+  `--write` (optionally `--delete-files`) mutates locally, `--open-pr` opens a
+  reviewable removal proposal (§5.13).
+- `aviato next-version --current X.Y.Z --commit "..."` derives the next SemVer
+  from Conventional Commits (§5.9).
+- `aviato bump-version <version> <path>` writes a version into the
+  version-source locations (§3.3).
+- `aviato is-highest <candidate> <existing...>` exits 0 iff the candidate is
+  the highest release (§8.14 alias gate).
+- `aviato lint-actions [path]` runs the §11.3 supply-chain pinning gate (zizmor
+  for `uses:`/images plus the fail-closed `curl|bash` check).
 
 Compatibility shell wrappers live in `scripts/`.
 
 - `audit-repos.sh` discovers local repositories, reads GitHub state, evaluates
   policy status, and renders a tabular report by calling the CLI.
 - `apply-rulesets.sh` creates or updates configured GitHub rulesets by calling
-  the CLI.
+  the CLI (dry-run by default; `--apply` mutates).
 - `validate.sh` runs repository validation and local tests.
 
 ### Local Reports
@@ -280,6 +327,8 @@ Validation should cover:
 
 - shell syntax and linting while shell scripts remain;
 - Ruff lint/format plus Black compatibility for the Library source tree;
+- strict mypy type-checking of the Library package (the Library's own
+  declaration sets `run-typecheck: true`);
 - GitHub Actions workflow linting;
 - YAML syntax for `aviato/library/policy.yml` and `aviato/library/rulesets.yml`;
 - JSON syntax for `aviato/library/rulesets/*.json`;
@@ -290,7 +339,7 @@ Validation should cover:
   artifact through local self-reference and that none use released refs;
 - workflow guard tests for npm install hardening, docs linting, App Store secret
   scoping, and `local-install` bootstrap confinement;
-- Python tests once the CLI exists.
+- the Python test suite (`pytest`).
 
 CI should install required validation tools and run the validation script on
 pull requests and default-branch pushes.
@@ -300,6 +349,4 @@ pull requests and default-branch pushes.
 - Persistent committed inventory of consumer repositories.
 - Automatic unattended mutation of protected consumer repository settings.
 - Multiple hosting-platform bindings.
-- A full module/profile engine before the lightweight GitHub implementation is
-stable.
 - Release publishing from legacy release branches.

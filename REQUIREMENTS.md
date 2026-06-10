@@ -788,9 +788,11 @@ binding, §2.14).
 (patch / minor / major) → write the version via each affected language plug-in's
 **version-source module** (§3.3) — the core never hardcodes a version location →
 produce release artifacts (version bump, changelog, tagged release) → **advance
-the floating major reference to the new release unconditionally** (it is a
-published pointer; the Library cannot and does not query who consumes it, per
-§2.2). The release process must not depend on a not-yet-existing release (§2.10):
+the floating major reference to the new release without consulting consumers**
+(it is a published pointer; the Library cannot and does not query who consumes
+it, per §2.2), **guarded monotonically per §8.14** — an out-of-order or re-run
+release of an OLDER version never regresses the pointer (`aviato is-highest`
+gates the move within the major line). The release process must not depend on a not-yet-existing release (§2.10):
 in bootstrap, the release pipeline resolves its own module/action references
 locally.
 
@@ -1716,12 +1718,12 @@ only where unavoidable — secrets), triggered on a release tag (§11.1).
 provenance/attestation, scan dependencies (gate on high/critical, §11.7)** →
 publish via **OIDC Trusted Publishing** with SBOM/provenance attached → confirm
 the version is resolvable.
-**Resolvability confirmation is best-effort, not a gate (deliberate):** the publish itself is
-the authoritative success; the post-publish "version resolvable on the index" check retries and
-then **warns rather than fails**, because PyPI index propagation has a real, unbounded delay and
-failing the run on propagation latency would falsely mark a *successful* publish as failed (and a
-re-run cannot re-upload an immutable version, §11.6). The DoD (§11.6) is operator-verified, which
-is where resolvability is actually confirmed; the in-run check is an advisory signal.
+**Resolvability confirmation is a GATE (C12-W7, deliberate):** a published version that never
+becomes resolvable is a FAILED release, not a warning — a green run that left an uninstallable
+upload is worse than a loud failure. The check retries generously (≈8 minutes) for real index
+propagation delay, then **fails closed**. (An earlier draft of this section said "warns rather
+than fails"; that wording predated the C12-W7 hardening and must not be restored — the workflow,
+not this paragraph, was always the operative artifact.) The DoD (§11.6) remains operator-verified.
 **Auth:** OIDC; `id-token: write` + `contents: read`; **no stored secret**.
 **Prerequisite (out-of-band):** register the repo + workflow as a trusted
 publisher on PyPI (and TestPyPI for verification).
@@ -1752,7 +1754,7 @@ concurrency group** so a slower older-release deploy cannot regress `latest`
 (§8.14).
 **Auth:** platform token, `packages: write` + `contents: read`; **no stored
 secret**.
-**Prerequisites:** a container build definition present (seed-once, §6.3, so the
+**Prerequisites:** a container build definition present (operator-provided and PROBED — R5-6: Aviato never seeds one; so the
 operator owns it after seeding); package visibility/permissions set so the package
 links to the repository.
 **DoD:** a real push of a test image (dedicated test namespace, §11.6) and a real
@@ -1765,7 +1767,7 @@ flowchart TD
     S --> C["Login to registry with platform token (packages: write)"]
     C --> D["Push immutable semver tag + attach SBOM/provenance"]
     D --> D2["Move latest ONLY if highest released version<br/>(per-alias concurrency group; §8.14)"]
-    P["Prerequisite: seed-once container build definition; package linked to repo"] -.-> B
+    P["Prerequisite: operator-provided container build definition (probed, never seeded); package linked to repo"] -.-> B
 ```
 
 ### 13.3 Documentation site (Docusaurus → GitHub Pages, multi-version)
@@ -2025,7 +2027,7 @@ adoption-time warnings.
 - **PyPI:** register the repo + publishing workflow as a Trusted Publisher on PyPI
   and TestPyPI. **(probeable** that the workflow is configured; the PyPI-side
   registration is an adoption warning.**)**
-- **GHCR:** ensure the seed-once container build definition exists **(probeable)**;
+- **GHCR:** provide the container build definition (operator-owned, probed — never seeded, R5-6) **(probeable)**;
   set package visibility/permissions to link the package to the repository.
 - **Docusaurus docs (only when `docs: true`):** enable GitHub Pages for the
   repository with the **GitHub Actions** source **(probeable)**. Configure the

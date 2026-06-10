@@ -1,7 +1,7 @@
 # Design — Replace the flapping supply-chain detector with zizmor + a fail-closed fetch check
 
 **Date:** 2026-05-29
-**Status:** approved (design); pending spec review
+**Status:** implemented (shipped 2026-05/06; retained as the design record)
 **Author:** review cycle 9 follow-up (Opus + Codex)
 
 ## 1. Problem
