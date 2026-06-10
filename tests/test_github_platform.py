@@ -1069,16 +1069,21 @@ def test_probe_health_reports_code_scanning_and_drift_state(monkeypatch: pytest.
     def fake_optional(endpoint: str, *, default=None):
         if "code-scanning/analyses" in endpoint:
             return []  # 200 with no analyses yet ⇒ enabled
-        if endpoint.endswith("actions/workflows?per_page=100"):
-            wf = {"id": 5, "path": ".github/workflows/aviato-drift.yml", "state": "disabled_manually"}
-            return {"workflows": [wf]}
         if "actions/workflows/5/runs" in endpoint:
             return {"workflow_runs": [{"conclusion": "failure"}]}
         if endpoint.startswith("repos/o/r"):
             return {"has_issues": True, "default_branch": "main"}
         return default
 
+    def fake_paginated_optional(endpoint: str, *, default=None):
+        # the workflow listing is PAGINATED (--slurp → one page-object per page)
+        if endpoint.endswith("actions/workflows?per_page=100"):
+            wf = {"id": 5, "path": ".github/workflows/aviato-drift.yml", "state": "disabled_manually"}
+            return [{"workflows": [wf]}]
+        return default
+
     monkeypatch.setattr(github, "gh_json_optional", fake_optional)
+    monkeypatch.setattr(github, "gh_json_paginated_optional", fake_paginated_optional)
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
     _, _, remote = GitHubPlatform().probe_health("o/r", drift_workflow_path=".github/workflows/aviato-drift.yml")
     assert remote["code_scanning"] is True
@@ -1090,13 +1095,17 @@ def test_probe_health_drift_workflow_absent_reads_disabled(monkeypatch: pytest.M
     def fake_optional(endpoint: str, *, default=None):
         if "code-scanning/analyses" in endpoint:
             return default  # genuine 404 ⇒ not enabled
-        if endpoint.endswith("actions/workflows?per_page=100"):
-            return {"workflows": []}
         if endpoint.startswith("repos/o/r"):
             return {"has_issues": True, "default_branch": "main"}
         return default
 
+    def fake_paginated_optional(endpoint: str, *, default=None):
+        if endpoint.endswith("actions/workflows?per_page=100"):
+            return [{"workflows": []}]
+        return default
+
     monkeypatch.setattr(github, "gh_json_optional", fake_optional)
+    monkeypatch.setattr(github, "gh_json_paginated_optional", fake_paginated_optional)
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
     _, _, remote = GitHubPlatform().probe_health("o/r", drift_workflow_path=".github/workflows/aviato-drift.yml")
     assert remote["code_scanning"] is False

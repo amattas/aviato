@@ -50,7 +50,8 @@ docs-pages:
   privileges: ["contents: read", "id-token: write", "pages: write", "actions: read"]
   runner: linux
 app-store-connect:
-  privileges: ["contents: read"]
+  # actions: read — the §11.4 environment-reviewer probe reads environment protection rules.
+  privileges: ["contents: read", "actions: read"]
   # R7-3-APPSTORE-ENV: §17 declares the deploy MUST run in a protected GitHub Environment with at
   # least one required reviewer. The environment name is plug-in DATA (not core knowledge); doctor
   # reads it from the resolved pipeline modules to probe existence + reviewer count.

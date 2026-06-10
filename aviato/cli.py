@@ -4,6 +4,7 @@ import argparse
 import atexit
 import contextlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -462,16 +463,18 @@ def _proposal_slug(target: str) -> str:
     return normalize_slug(remote_url(Path(target)))
 
 
-def _autodetect_vars(root: Path) -> dict[str, str]:
+def _autodetect_vars(target: str) -> dict[str, str]:
     """§5.2 auto-detection tier: only values READ from authoritative sources (finding 28).
 
-    ``owner`` comes from the repository's own git remote (the slug's owner half) — the
-    authoritative identity, not a heuristic guess, so the day-zero "no identity-bearing
-    auto-mapping" rule's rationale (wrong guesses get persisted) does not apply to it.
-    Absent/foreign remote → empty mapping: the variable stays unset and seed-once
-    templates keep their ``{{ owner }}`` placeholder for the operator.
+    ``owner`` comes from the slug argument (proposal paths) or the repository's own git
+    remote — the authoritative identity, not a heuristic guess, so the day-zero "no
+    identity-bearing auto-mapping" rule's rationale (wrong guesses get persisted) does
+    not apply to it. Absent/foreign remote → empty mapping: the variable stays unset
+    and seed-once templates keep their ``{{ owner }}`` placeholder for the operator.
     """
-    slug = normalize_slug(remote_url(root))
+    if not Path(target).is_dir() and is_owner_repo_slug(target):
+        return {"owner": target.split("/", 1)[0]}
+    slug = normalize_slug(remote_url(Path(target)))
     if slug:
         return {"owner": slug.split("/", 1)[0]}
     return {}
@@ -497,7 +500,7 @@ def _resolve_onboard_declaration(
         # wrong guess (a directory name is not a PyPI distribution name) is worse than
         # failing closed. The one exception (finding 28, decision recorded in
         # _autodetect_vars): `owner` is read from the repo's own git remote.
-        autodetect=_autodetect_vars(Path(args.target)),
+        autodetect=_autodetect_vars(args.target),
     )
     plan_onboarding(
         registry,
@@ -1807,16 +1810,19 @@ def cmd_next_version(args: argparse.Namespace) -> int:
 
 def cmd_bump_version(args: argparse.Namespace) -> int:
     """Write a new version into the profile's version-source locations (§3.3/§5.9)."""
-    # finding 21: refuse a malformed version BEFORE writing — a garbage value would be
-    # spliced into manifests and reported as success. A bare-major pin (N) is a Library
-    # ref, not a release version, and is equally refused.
-    if not is_known_version_pin(args.version) or "." not in args.version.lstrip("v"):
+    # finding 21 (+ second-review fix): refuse a malformed version BEFORE writing — a
+    # garbage value would be spliced into manifests and reported as success. Gate on
+    # the RELEASE grammar (prereleases are policy-valid bump targets; leading zeros
+    # are not, finding 47; a bare-major pin is a Library ref, not a release version).
+    candidate = args.version.strip()
+    bare = candidate[1:] if candidate.startswith("v") else candidate
+    if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?", bare):
         print(
             f"not a release version: {args.version!r} (expected X.Y.Z or X.Y.Z-alphaN/-betaN)",
             file=sys.stderr,
         )
         return 2
-    args.version = normalize_pin(args.version)
+    args.version = bare
     root = Path(args.path).resolve()
     declaration_path = root / ".github" / "aviato.yaml"
     if not declaration_path.is_file():

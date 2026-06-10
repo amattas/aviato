@@ -102,3 +102,20 @@ def test_bump_version_refuses_malformed_and_bare_major(tmp_path, capsys) -> None
     rc = main(["bump-version", "1", str(tmp_path)])
     assert rc == 2
     assert "not a release version" in capsys.readouterr().err
+
+
+def test_bump_version_accepts_policy_valid_prereleases(tmp_path, capsys) -> None:
+    # second-review fix: X.Y.Z-alphaN/-betaN are policy-valid bump targets and must
+    # pass the input gate (the failure here is the missing declaration, proving the
+    # version validation accepted it); leading-zero components are rejected (finding 47).
+    from aviato.cli import main
+
+    rc = main(["bump-version", "1.2.3-alpha1", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "not a release version" not in err
+    assert "no declaration" in err
+
+    rc = main(["bump-version", "01.2.3", str(tmp_path)])
+    assert rc == 2
+    assert "not a release version" in capsys.readouterr().err

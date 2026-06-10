@@ -836,15 +836,19 @@ def unpinned_pyproject_extra_lines(text: str) -> list[str]:
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()
         if line.startswith("["):
-            in_extras = line == "[project.optional-dependencies]"
+            # second-review fix: prefix match so nested extras tables
+            # ([project.optional-dependencies.docs]) stay in scope.
+            in_extras = line.rstrip("]").startswith("[project.optional-dependencies")
             continue
         if not in_extras:
             continue
-        match = re.match(r'^"([^"]+)"', line)
-        if not match or "{{" in match.group(1):
-            continue
-        if "==" not in match.group(1):
-            flagged.append(match.group(1))
+        # second-review fix: scan EVERY quoted string on the line (inline arrays,
+        # single OR double quotes) — a valid-TOML reformat must not disable the gate.
+        for req in re.findall(r"[\"']([^\"']+)[\"']", line):
+            if "{{" in req:
+                continue
+            if "==" not in req:
+                flagged.append(req)
     return flagged
 
 

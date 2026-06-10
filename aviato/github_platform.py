@@ -630,8 +630,12 @@ class GitHubPlatform:
         # to expose. The path is a Library artifact name passed in as data.
         if drift_workflow_path:
             try:
-                listing = github.gh_json_optional(f"repos/{repo}/actions/workflows?per_page=100", default=())
-                workflows = (listing.get("workflows") or []) if isinstance(listing, dict) else []
+                # second-review fix: PAGINATED — a repo with >100 workflows must not get a
+                # false determinate "disabled" because the drift caller sat on page 2.
+                # --slurp returns one page-object per page for this object-shaped endpoint.
+                listing = github.gh_json_paginated_optional(f"repos/{repo}/actions/workflows?per_page=100", default=())
+                pages = listing if isinstance(listing, list) else [listing]
+                workflows = [w for page in pages if isinstance(page, dict) for w in (page.get("workflows") or [])]
                 match = next(
                     (
                         w

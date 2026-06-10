@@ -78,3 +78,16 @@ def test_gh_read_gives_up_after_bounded_attempts(monkeypatch: pytest.MonkeyPatch
     with pytest.raises(github.GitHubAPIError):
         github.gh_json("repos/o/r")
     assert len(calls) == github._RATE_LIMIT_ATTEMPTS
+
+
+def test_run_timeout_degrades_when_check_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    # second-review fix: with check=False a timeout must RETURN a failed result (like
+    # any other failure) so allow_error/optional read paths degrade — one slow call
+    # must not abort a whole fleet sweep.
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = run(["gh", "api", "x"], check=False, timeout=1)
+    assert result.returncode == 124
+    assert "timed out" in result.stderr

@@ -317,9 +317,14 @@ def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
 
     resolve_blocks: dict[str, str] = {}
     for body in sorted(scaffold_dir.glob("wf-docs-*.yml")):
-        match = re.search(r"(?ms)^  resolve:\n.*?(?=^  [a-z][a-z-]*:\n|\Z)", body.read_text(encoding="utf-8"))
-        if match:
-            resolve_blocks[body.name] = match.group(0)
+        # second-review fix: the boundary tolerates trailing comments on the next job
+        # key, and a body with NO resolve block is itself an error (the most divergent
+        # state must not fail open).
+        match = re.search(r"(?ms)^  resolve:\n.*?(?=^  [A-Za-z0-9_-]+:|\Z)", body.read_text(encoding="utf-8"))
+        if match is None:
+            errors.append(f"{body.name} has no resolve job; docs callers share one resolve block (finding 43)")
+            continue
+        resolve_blocks[body.name] = match.group(0)
     if len(set(resolve_blocks.values())) > 1:
         errors.append(
             "the wf-docs resolve jobs have drifted apart; keep the shared resolve block "

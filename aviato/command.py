@@ -37,10 +37,14 @@ def run(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        # finding 10: a hang is an environment/network failure, not a bug — map it to
-        # CommandError (exit 124, the coreutils timeout convention) so allow_error
-        # paths degrade and gate paths fail loud, exactly like any other failure.
-        raise CommandError(command, 124, f"timed out after {timeout}s: {exc}") from exc
+        # finding 10 (+ second-review fix): a hang is an environment/network failure,
+        # not a bug — treat it EXACTLY like any other failure. With check=True it
+        # raises CommandError (exit 124, the coreutils timeout convention); with
+        # check=False it RETURNS a failed CompletedProcess so allow_error/optional
+        # read paths degrade instead of one slow call aborting a whole fleet sweep.
+        if check:
+            raise CommandError(command, 124, f"timed out after {timeout}s: {exc}") from exc
+        return subprocess.CompletedProcess(list(command), 124, "", f"timed out after {timeout}s: {exc}")
     except OSError as exc:
         # R2-4-4: a missing binary (`gh`/`git` not on PATH → FileNotFoundError) or other launch
         # failure is an operator-environment error, not a bug — surface it as a CommandError so the
