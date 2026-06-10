@@ -65,7 +65,7 @@ RELEASE_WORKFLOWS = [
 LIBRARY_SLUG = "amattas/aviato"
 
 
-def _check_policy_examples(policy: dict, errors: list[str]) -> None:
+def _check_policy_examples(policy: dict[str, Any], errors: list[str]) -> None:
     pattern = re.compile(release_tag_pattern(policy))
     examples = policy.get("release", {}).get("examples", {})
     for value in examples.get("valid", []):
@@ -76,7 +76,7 @@ def _check_policy_examples(policy: dict, errors: list[str]) -> None:
             errors.append(f"policy invalid release example matches tag_pattern: {value}")
 
 
-def _check_release_pattern_drift(root: Path, data_root: Path, policy: dict, errors: list[str]) -> None:
+def _check_release_pattern_drift(root: Path, data_root: Path, policy: dict[str, Any], errors: list[str]) -> None:
     pattern = release_tag_pattern(policy)
     description = policy.get("release", {}).get("tag_format_description")
 
@@ -201,7 +201,7 @@ def _check_release_workflow_contract(root: Path, errors: list[str]) -> None:
             errors.append(f"{rel_path} does not gate publishing on a tag ref (missing GITHUB_REF_TYPE != tag guard)")
 
 
-def _check_baseline_settings_drift(root: Path, policy: dict, errors: list[str]) -> None:
+def _check_baseline_settings_drift(root: Path, policy: dict[str, Any], errors: list[str]) -> None:
     """The desired-state baseline must not drift from policy.yml's required approvals.
 
     ``policy.yml`` is the single source of truth for the default required PR approvals;

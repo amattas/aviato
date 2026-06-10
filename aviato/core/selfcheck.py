@@ -98,6 +98,10 @@ def core_import_violations(core_dir: Path | None = None) -> list[str]:
                     if element.level == 0
                     else _resolve_relative(element.level, element.module, package_parts)
                 )
+                if base is None:
+                    # Unreachable for parseable source (an absolute ImportFrom always
+                    # carries a module name); skip rather than form a bogus base.
+                    continue
                 names = [f"{base}.{alias.name}" for alias in element.names]
                 if _is_plugin_module(base) or any(_is_plugin_module(name) for name in names):
                     violations.append(f"{path.name}:{element.lineno}")

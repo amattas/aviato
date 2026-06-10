@@ -143,9 +143,8 @@ def test_callers_pass_gated_sha_to_deploys() -> None:
         body = caller.read_text(encoding="utf-8")
         if not any(d in body for d in _DEPLOY_WORKFLOWS):
             continue
-        assert "gated-sha: ${{ needs.release-gate.outputs.gated-sha }}" in body, (
-            f"{caller.name} wires a deploy without threading the gated SHA (C12-W2)"
-        )
+        threaded = "gated-sha: ${{ needs.release-gate.outputs.gated-sha }}" in body
+        assert threaded, f"{caller.name} wires a deploy without threading the gated SHA (C12-W2)"
 
 
 def test_language_ci_contract_parity() -> None:
@@ -234,9 +233,8 @@ def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
             for step in job.get("steps", []) or []:
                 if not str(step.get("uses", "")).startswith("actions/checkout"):
                     continue
-                assert (step.get("with") or {}).get("persist-credentials") is False, (
-                    f"{path.name}:{job_name}: checkout must set persist-credentials: false"
-                )
+                persist = (step.get("with") or {}).get("persist-credentials")
+                assert persist is False, f"{path.name}:{job_name}: checkout must set persist-credentials: false"
 
 
 def test_release_workflow_splits_derive_from_write_job() -> None:

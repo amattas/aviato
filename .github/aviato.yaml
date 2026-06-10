@@ -2,3 +2,7 @@ profile: aviato-library
 version: '0'
 docs: false
 bootstrap: true
+variables:
+  # finding 38: strict type-check scoped to the package (the shared caller default
+  # checks '.', which would pull the not-yet-strict tests into the gate).
+  typecheck-command: python -m mypy --strict aviato

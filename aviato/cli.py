@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -20,9 +21,10 @@ from .core.composition import resolve_profile
 from .core.declaration import Declaration, declaration_to_yaml, dump_declaration, load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
 from .core.errors import AviatoError, CompatibilityError, DeclarationError
-from .core.file_drift_flow import _PROPOSABLE, run_file_drift
-from .core.fleet import scan_fleet
+from .core.file_drift_flow import _PROPOSABLE, FileDriftOutcome, run_file_drift
+from .core.fleet import RepoScan, scan_fleet
 from .core.marker import parse_marker_from_text
+from .core.model import ResolvedSet, VariableSpec
 from .core.offboarding import offboard as offboard_repo
 from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, resolved_artifacts
 from .core.provision import provision_repo
@@ -296,7 +298,7 @@ def _tri(value: bool | None) -> str:
     return "unknown" if value is None else ("yes" if value else "no")
 
 
-def _desired_settings(resolved) -> dict:
+def _desired_settings(resolved: ResolvedSet) -> dict[str, Any]:
     """Flat reconcilable settings: branch protection + repo security toggles (§5.6/§2.13).
 
     Rulesets are applied separately (`apply-rulesets`) and are not part of the
@@ -318,7 +320,7 @@ def _desired_settings(resolved) -> dict:
 
 def _drifted_rulesets(
     slug: str,
-    platform,
+    platform: GitHubPlatform,
     *,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,
@@ -381,7 +383,7 @@ def _parse_var_flags(pairs: list[str] | None) -> dict[str, str]:
     return resolved
 
 
-def _env_vars(specs) -> dict[str, str]:
+def _env_vars(specs: Iterable[VariableSpec]) -> dict[str, str]:
     env: dict[str, str] = {}
     for spec in specs:
         key = "AVIATO_VAR_" + spec.name.upper().replace("-", "_")
@@ -417,7 +419,7 @@ def _require_published_pin(pin: str, *, allow_unresolved: bool) -> None:
     )
 
 
-def _resolve_onboard_pin(args: argparse.Namespace, existing) -> str:
+def _resolve_onboard_pin(args: argparse.Namespace, existing: Declaration | None) -> str:
     """Resolve the version pin to record (§6.1/§5.12).
 
     Onboarding must not double as a re-pin. If the repo is already adopted, the
@@ -475,7 +477,9 @@ def _autodetect_vars(root: Path) -> dict[str, str]:
     return {}
 
 
-def _resolve_onboard_declaration(args: argparse.Namespace, registry: Registry, resolved, existing):
+def _resolve_onboard_declaration(
+    args: argparse.Namespace, registry: Registry, resolved: ResolvedSet, existing: Declaration | None
+) -> tuple[Declaration, dict[str, Any]]:
     """Resolve variables (§5.2 precedence), enforce the migrate guard, resolve the
     version pin (§5.12 re-pin exclusivity), and build the declaration. Raises
     :class:`AviatoError` on a missing required var, a profile change without
@@ -519,7 +523,7 @@ def _resolve_onboard_declaration(args: argparse.Namespace, registry: Registry, r
     return declaration, variables
 
 
-def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> int:
+def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: ResolvedSet) -> int:
     """Adopt a local repository (§5.2): resolve variables, write the declaration, scaffold."""
     target = Path(args.target)
     if not target.is_dir():
@@ -582,7 +586,7 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved) -> in
     return 0
 
 
-def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved) -> int:
+def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: ResolvedSet) -> int:
     """Adopt an EXISTING repository via a proposal (§5.2): scaffold the declaration +
     managed artifacts onto a branch and open a PR, enumerating untouched seed-once /
     operator-owned files. Non-destructive: works in a fresh temp clone, never the
@@ -882,7 +886,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
-def _scan_has_file_drift(scan) -> bool:
+def _scan_has_file_drift(scan: RepoScan) -> bool:
     # A repo is fixable by --fix iff it has a proposable managed-file status. Reuse
     # file_drift_flow._PROPOSABLE directly (not a copy) so the scan gate can never drift
     # from what run_file_drift actually proposes; "dirty-drift" stays excluded (§5.4/§5.5).
@@ -981,7 +985,7 @@ def _print_repo_audit(root: Path) -> None:
         print(f"  audit: #{issue.get('number')} {str(issue.get('title'))!r} updated {issue.get('updated_at')}")
 
 
-def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin: bool = False):
+def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin: bool = False) -> FileDriftOutcome:
     """Open a managed-file drift proposal for one repo (§5.5), shared by scan --fix.
 
     Resolves the repo's declaration, re-diagnoses, and routes the same

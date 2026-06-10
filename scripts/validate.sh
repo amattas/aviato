@@ -60,6 +60,13 @@ fi
 # absolute-path invocation bypasses them (the scaffold caller bodies carry {{ }}
 # placeholders that are deliberately excluded). Same invocation as
 # reusable-common-lint.yml's blocking step.
+if command -v mypy >/dev/null 2>&1; then
+  # finding 38: strict typing gates the package (scope/strictness from [tool.mypy]).
+  mypy
+else
+  SKIPPED+=("mypy (strict type-check)")
+fi
+
 if command -v yamllint >/dev/null 2>&1; then
   yamllint -s .
 else

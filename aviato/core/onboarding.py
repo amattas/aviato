@@ -8,7 +8,7 @@ from typing import Any
 from .composition import resolve_profile
 from .declaration import Declaration
 from .errors import CompositionError, DeclarationError
-from .model import TemplateModule
+from .model import ResolvedSet, TemplateModule
 from .registry import Registry
 from .render import render
 from .scaffold import ScaffoldItem
@@ -95,7 +95,7 @@ def validate_variable_constraints(registry: Registry, profile: str, variables: M
             raise DeclarationError(f"profile {profile!r} requires at least one of {joined} to be set (§12.3)")
 
 
-def applicable_templates(resolved, variables: Mapping[str, Any]) -> list[TemplateModule]:
+def applicable_templates(resolved: ResolvedSet, variables: Mapping[str, Any]) -> list[TemplateModule]:
     """The resolved templates that apply given the variables (filters §12.2/§6.1 conditionals)."""
     return [t for t in resolved.templates if template_applies(t, variables)]
 

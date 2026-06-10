@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 # §11.3: third-party actions/tools must be pinned by commit digest (40-hex SHA).
@@ -255,7 +256,7 @@ def _resolved_program(node: object) -> str | None:
         base = _basename(words[i])
         if base not in _WRAPPERS:
             return base
-        arg_flags = _WRAPPER_ARG_FLAGS.get(base, frozenset())
+        arg_flags: AbstractSet[str] = _WRAPPER_ARG_FLAGS.get(base, frozenset())
         i += 1
         while i < len(words) and words[i].startswith("-"):  # skip the wrapper's own flags …
             flag = words[i]
@@ -531,7 +532,7 @@ class _FetchWalk:
             self.walk(child)
 
     def _pipeline(self, node: object) -> None:
-        elements = [p for p in node.parts if getattr(p, "kind", None) != "pipe"]
+        elements = [p for p in getattr(node, "parts", []) if getattr(p, "kind", None) != "pipe"]
         for idx, element in enumerate(elements):
             # (A) a fetch's bytes flow into a downstream element. Safe only if EVERY downstream element
             # is a pure-sink command — a stream cannot be checksum-verified mid-flight, so a verifier

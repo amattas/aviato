@@ -5,6 +5,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from . import github
 from .github import GitHubAPIError
@@ -29,7 +30,7 @@ class AuditRow:
     invalid_tags: str
 
 
-def _requires_pr(rules: list[dict], protection: dict) -> bool:
+def _requires_pr(rules: list[dict[str, Any]], protection: dict[str, Any]) -> bool:
     rules_pr = any(rule.get("type") == "pull_request" for rule in rules)
     classic_pr = (
         "required_pull_request_reviews" in protection and protection.get("required_pull_request_reviews") is not None
@@ -37,14 +38,14 @@ def _requires_pr(rules: list[dict], protection: dict) -> bool:
     return rules_pr or classic_pr
 
 
-def _force_push_blocked(rules: list[dict], protection: dict) -> bool:
+def _force_push_blocked(rules: list[dict[str, Any]], protection: dict[str, Any]) -> bool:
     rules_nff = any(rule.get("type") == "non_fast_forward" for rule in rules)
     allow_force_pushes = protection.get("allow_force_pushes")
     classic_force_blocked = isinstance(allow_force_pushes, dict) and allow_force_pushes.get("enabled") is not True
     return rules_nff or classic_force_blocked
 
 
-def audit_repo(repo: Path, *, root: Path, policy: dict) -> AuditRow:
+def audit_repo(repo: Path, *, root: Path, policy: dict[str, Any]) -> AuditRow:
     pattern = re.compile(release_tag_pattern(policy))
     repo_path = repo.resolve()
     root_path = root.resolve()
@@ -92,11 +93,11 @@ def audit_repo(repo: Path, *, root: Path, policy: dict) -> AuditRow:
     )
 
 
-def audit_repos(repos: Iterable[Path], *, root: Path, policy: dict) -> list[AuditRow]:
+def audit_repos(repos: Iterable[Path], *, root: Path, policy: dict[str, Any]) -> list[AuditRow]:
     return [audit_repo(repo, root=root, policy=policy) for repo in repos]
 
 
-def discover_and_audit(root: Path, *, policy: dict) -> list[AuditRow]:
+def discover_and_audit(root: Path, *, policy: dict[str, Any]) -> list[AuditRow]:
     return audit_repos(discover_repos(root), root=root, policy=policy)
 
 

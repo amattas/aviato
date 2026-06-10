@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 from ..command import run
 from ..paths import POLICY_DATA_ROOT
@@ -33,7 +34,7 @@ def _zizmor_available() -> bool:
     return shutil.which("zizmor") is not None
 
 
-def _finding_location(finding: dict) -> str:
+def _finding_location(finding: dict[str, Any]) -> str:
     """Best-effort 'file' string from a zizmor JSON finding (schema-tolerant).
 
     Real shape verified against zizmor 1.25.2:
@@ -49,7 +50,7 @@ def _finding_location(finding: dict) -> str:
             name = local.get("given_path") or local.get("prefix")
             if name:
                 return str(name)
-    return finding.get("ident", "?")
+    return str(finding.get("ident", "?"))
 
 
 def zizmor_uses_image_violations(workflow_dir: Path) -> list[str]:

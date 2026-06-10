@@ -180,7 +180,12 @@ def bump_files(root: Path, locations: list[str], new_version: str, build_number:
     # R6-3-DUP: dedupe locations (preserving first occurrence) so a profile that lists the same
     # version-source path twice doesn't double-write or double-report it in `changed`.
     seen: set[str] = set()
-    locations = [loc for loc in locations if not (loc in seen or seen.add(loc))]
+    deduped: list[str] = []
+    for loc in locations:
+        if loc not in seen:
+            seen.add(loc)
+            deduped.append(loc)
+    locations = deduped
     pending: list[tuple[Path, str, str]] = []
     for location in locations:
         path = Path(root) / location

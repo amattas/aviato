@@ -127,8 +127,9 @@ def run_settings_drift(
     # label is the actual void; §5.7 apply-time recompute remains the authoritative gate. Rulesets
     # carry no consent, so this is settings-only. Computed BEFORE the resolved branch so a
     # resolved-to-empty diff also voids its stale consent.
-    consent_voided = issue is not None and issue.consent_diff_id is not None and issue.consent_diff_id != current_id
-    if consent_voided:
+    consent_voided = False
+    if issue is not None and issue.consent_diff_id is not None and issue.consent_diff_id != current_id:
+        consent_voided = True
         platform.revoke_consent(repo, issue_key, issue.consent_diff_id)
 
     if not diff.changes and not drifted_rulesets:

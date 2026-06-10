@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .command import run
+# Explicit re-export (`as run`): github_platform (and test monkeypatches) access this
+# helper as a real `aviato.github.run` module attribute.
+from .command import run as run
 
 # §5.5 (finding 30): rate-limit responses are tolerated and RETRIED (bounded), so a
 # scheduled fleet run doesn't fail outright on the first 403/429 throttle; a
@@ -251,7 +253,7 @@ def pages_source_is_actions(slug: str) -> bool | None:
     build_type = pages.get("build_type")
     if build_type is None:
         return None  # field absent — unknown, never a determinate "no"
-    return build_type == "workflow"
+    return bool(build_type == "workflow")
 
 
 def active_branch_rules(slug: str, branch: str) -> list[dict[str, Any]]:

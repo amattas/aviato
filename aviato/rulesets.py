@@ -4,7 +4,7 @@ import json
 from collections.abc import Iterator
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 # R7-4-RULESET-DRIFT (documented asymmetry): `_subset_match` falls through to strict scalar
 # equality (e.g. `required_approving_review_count`), so a manually-tightened LIVE value (5 against
@@ -105,7 +105,7 @@ def render_ruleset(
         tag_path = patch.get("tag_name_pattern", "release.tag_pattern")
         _patch_tag_ruleset(rendered, str(get_path(policy, tag_path)))
 
-    return rendered
+    return cast(dict[str, Any], rendered)
 
 
 def _subset_match(desired: Any, live: Any) -> bool:
@@ -121,7 +121,7 @@ def _subset_match(desired: Any, live: Any) -> bool:
         return isinstance(live, dict) and all(k in live and _subset_match(v, live[k]) for k, v in desired.items())
     if isinstance(desired, list):
         return isinstance(live, list) and all(any(_subset_match(d, item) for item in live) for d in desired)
-    return desired == live
+    return bool(desired == live)
 
 
 def ruleset_content_drift(desired: dict[str, Any], live: dict[str, Any]) -> bool:

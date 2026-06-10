@@ -107,7 +107,7 @@ def scan_fleet(
             RepoScan(
                 path=str(root),
                 profile=declaration.profile,
-                statuses=report.statuses,
+                statuses=dict[str, str](report.statuses),
                 seed_divergence=report.seed_divergence,
                 secret_in_declaration=report.secret_in_declaration,
                 prerequisites=dict(report.prerequisites),

@@ -31,6 +31,7 @@ jobs:
       lint-command: "python -m ruff check ."
       test-command: "python -m pytest --cov --cov-report=term-missing"
       build-command: "python -m build"
+      typecheck-command: "{{ typecheck-command }}"
       run-typecheck: {{ run-typecheck }}
       run-build: true
 
