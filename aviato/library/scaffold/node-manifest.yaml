@@ -1,7 +1,0 @@
-name: node-manifest
-# Seed-once project manifest for the TypeScript variant (scripts + engines, §12.2).
-output_path: package.json
-source: files/package.json.ts.txt
-seed_once: true
-when:
-  language-variant: typescript

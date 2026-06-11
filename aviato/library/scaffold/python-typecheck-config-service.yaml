@@ -1,8 +1,0 @@
-name: python-typecheck-config-service
-# Non-strict mypy config for a container service (R4-1): same output path as the library config,
-# so python-service-sc swaps it in (remove python-typecheck-config, add this) to deliver the
-# genuinely non-strict type-check the service CI intends.
-output_path: mypy.ini
-source: files/mypy-service.ini.txt
-comment: "#"
-seed_once: false

@@ -1,0 +1,15 @@
+Adversarial correctness review of SIX recently-committed fixes (git HEAD). For each, determine if it is CORRECT, INCOMPLETE, or REGRESSED (introduced a new bug / false positive). Cite exact file:line, confirm with `PYTHONPATH=. python3 -c` probes importing modules directly (pytest plugins are broken here). These are the recent commits 738e93b/0786b55/ba943f0/e424086/449b013.
+
+1. N1 (aviato/core/composition.py _validate_settings_leaf_types + _leaf_type): rejects a settings override that changes a managed leaf's TYPE or drops it. CHECK: does it OVER-reject a LEGITIMATE override (e.g. required_reviews: 0, or a security toggle bool override)? Does bool-vs-int ordering work (isinstance(True,int))? Can a nested dict leaf (security block) be wrongly rejected? Does it run on BOTH default_branch and security blocks without crashing on a present-null?
+
+2. N3 (aviato/github_platform.py map_branch_settings + _has_bypass_allowance): a classic PR bypass allowance forces requires_pull_request=False, required_reviews=0. CHECK: side effects — does this cause a FALSE drift on a repo that legitimately has NO bypass (empty allowances dict {users:[],teams:[],apps:[]})? Does an empty-but-present allowances block read as bypassed? Does it interact wrongly with the ruleset-owned-branch enforce_admins logic?
+
+3. C12-3 (aviato/cli.py cmd_apply_rulesets --declaration): resolves status checks + approvals WITH overrides. CHECK: if --declaration AND --profile are both passed, which wins / is there a conflict? If the declaration file is missing/malformed, clean error? Does required_approvals=None fallback to the resolved override correctly?
+
+4. C12-R3-1 (aviato/core/reconcile_flow.py): re-reads issue + live settings before apply and re-authorizes. CHECK: does the re-read DOUBLE the platform reads on the non-apply path (it should only re-read on apply)? If the fresh diff CHANGED but still authorizes (consent bound to new id?), does it apply the FRESH diff (correct) or the stale one? Does the abort path comment + return the fresh diff? Any path where apply happens WITHOUT the re-read?
+
+5. Pagination (aviato/github.py gh_json_paginated_optional): CHECK the --slurp flatten — does it correctly flatten when a SINGLE page is returned (not double-wrapped)? Does an empty result return default? Does a 404 return default but a 500 raise?
+
+6. C12-W4 Pages split (.github/workflows/reusable-docs-pages.yml): build job (contents:read) + deploy job (id-token/pages write). CHECK: does the deploy job actually receive the Pages artifact uploaded by the build job (upload-pages-artifact in build, deploy-pages in deploy — is that valid cross-job)? Is `highest` gating correctly threaded via needs.build.outputs? Did any step that needs the working tree end up in the deploy job (which doesn't checkout)?
+
+Report only CONFIRMED issues with file:line + probe + one-line fix. If a fix is correct, say so briefly. Be concise.

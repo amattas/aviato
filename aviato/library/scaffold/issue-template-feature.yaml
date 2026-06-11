@@ -1,4 +1,0 @@
-name: issue-template-feature
-output_path: .github/ISSUE_TEMPLATE/feature_request.md
-source: files/issue-template-feature.md.txt
-seed_once: true

@@ -1,0 +1,7 @@
+FINAL confirmation pass on aviato/plugins/actionpins.py `fetch_execute_violations` at git HEAD (commit cb13d57). Two detector changes were JUST made: (1) `_is_interpreter` now resolves the PROGRAM through wrappers (+ wrapper-present fallback to any-word) instead of matching any word — fixing the `grep bash -e"$(curl)"` FP; (2) a shell's static `-c`/`-e` STRING operand is now recursively scanned as shell (`bash -c 'curl|bash'` flags), depth-guarded, and `python/perl/ruby -c` is NOT re-parsed.
+
+Determine if these two changes introduced a NEW regression: (a) a wrapper-hidden interpreter that NOW fails open because resolved-program missed it (try sudo/env/timeout/nice/stdbuf/nohup + bash -c "$(curl)"), or (b) a NEW false positive from the recursive `-c` scan (a benign/data `bash -c '...'` that wrongly flags), or (c) the `-c` recursion mis-handling python/ruby/perl (re-parsing their code as shell).
+
+DOCUMENTED out-of-scope (do NOT report): heredoc-body, ${X:-$(curl)}, dynamic $CMD, block-level verify imprecision, templated quoted run key, conservative FPs (curl|tar, curl|...|tee, time... unparsed). 
+
+Read actionpins.py + tests/core/test_fetch_execute.py. Confirm EVERY claim with `PYTHONPATH=. python3 -c` probes. VERDICT: did cb13d57's two changes introduce a regression, or is the detector STABLE? Be blunt, state confidence.

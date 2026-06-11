@@ -1,0 +1,9 @@
+FINAL confirmation on aviato/plugins/actionpins.py at git HEAD (faaeb10). The wrapper resolution was just reworked: _resolved_program now consumes a wrapper's arg-taking options (_WRAPPER_ARG_FLAGS: sudo -u/-g/-C/-p/-r/-t/-U/-h, env -u/-C/-S, timeout -k/-s, nice -n, ionice, stdbuf -i/-o/-e, doas) so `sudo -u root bash` resolves to `bash`; the any-word wrapper-fallback was REMOVED from _fetch_tool/_is_interpreter/_is_shell. Just-fixed FPs: `bash -e 'curl|bash'` and `sudo grep bash -c '...'` now pass.
+
+Determine if removing the fallback + the arg-flag grammar introduced a NEW fail-open: a realistic WRAPPED interpreter/fetch whose resolution now misses the program → returns []. Probe especially: a wrapper arg-option NOT in the list (e.g. `sudo --preserve-env=X bash -c "$(curl)"`, `timeout --preserve-status 5 bash -c "$(curl)"`, `nice -10 bash -c "$(curl)"` [old -NN form], `stdbuf -oL bash -c "$(curl)"`, `env -S 'bash -c ...'`, `sudo -i bash -c "$(curl)"`, multiple stacked wrappers `sudo timeout 5 bash -c "$(curl)"`). For each, does it FLAG (good) or [] (new fail-open)?
+
+Also recheck no NEW false positive: `sudo grep curl file`, `timeout 5 jq .`, `env CARGO=1 cargo build`.
+
+DOCUMENTED out-of-scope (do NOT report): heredoc-body, ${X:-$(curl)}, dynamic $CMD, block-level verify imprecision, templated quoted run key, conservative FPs, a non-shell language `-c` (python/ruby) not parsed as shell, and a rare un-listed wrapper arg-option degrading to over-detect (fail-CLOSED is fine; only a fail-OPEN is a finding).
+
+Confirm with `PYTHONPATH=. python3 -c` probes. VERDICT: STABLE at faaeb10, or a NEW fail-open from the wrapper-resolution rework? Blunt, with confidence.

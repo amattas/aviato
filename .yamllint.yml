@@ -2,11 +2,6 @@
 extends: default
 
 ignore: |
-  aviato/library/scaffold/files/*.yml
-  aviato.egg-info/**
-  build/**
-  dist/**
-  _wheelout/**
   node_modules/**
   **/node_modules/**
 

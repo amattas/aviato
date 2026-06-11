@@ -1,6 +1,0 @@
-name: python-dev-deps
-# Seed-once dev-tool requirements the container-service CI installs (it does NOT `pip install -e .`,
-# so the dev tools live here rather than in a pyproject [dev] extra). The developer owns it.
-output_path: requirements-dev.txt
-source: files/requirements-dev.txt.txt
-seed_once: true

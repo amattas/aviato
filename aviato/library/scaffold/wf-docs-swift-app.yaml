@@ -1,7 +1,0 @@
-name: wf-docs-swift-app
-output_path: .github/workflows/aviato-docs.yml
-source: files/wf-docs-swift-app.yml
-comment: "#"
-seed_once: false
-when:
-  docs: "true"

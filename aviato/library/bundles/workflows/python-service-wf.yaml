@@ -1,7 +1,0 @@
-name: python-service-wf
-extends: base
-add:
-  - python-verify
-  - release
-  - ghcr-publish
-remove: []

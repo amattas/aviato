@@ -1,7 +1,0 @@
-name: docs-eslint-config
-output_path: website/eslint.config.mjs
-source: files/docs-eslint.config.mjs.txt
-comment: "//"
-seed_once: false
-when:
-  docs: "true"

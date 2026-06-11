@@ -4,9 +4,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
-
-  - package-ecosystem: pip
-    directory: /
+  # Keep the docs-site scaffold's dependency set fresh — consumers copy its
+  # package.json + lockfile verbatim.
+  - package-ecosystem: npm
+    directory: /starter/docs-site
     schedule:
       interval: weekly
-

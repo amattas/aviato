@@ -1,8 +1,9 @@
+# CI — lint the kit masters. Keep the job id `ci` — the branch ruleset
+# requires a check context named "ci".
 name: CI
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
@@ -10,44 +11,31 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: Validate Aviato
+  ci:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install Python dependencies
-        run: python -m pip install -e .[dev]
-
-      - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
-
-      - name: Install actionlint
-        shell: bash
+      - name: yamllint
+        run: |
+          python3 -m pip install --quiet yamllint==1.38.0
+          yamllint -s .
+      - name: Install actionlint (checksum-verified)
         run: |
           set -euo pipefail
           version="1.7.4"
           sha256="fc0a6886bbb9a23a39eeec4b176193cadb54ddbe77cdbb19b637933919545395"
           tarball="${RUNNER_TEMP:-/tmp}/actionlint.tar.gz"
-          # §11.3: verify the shell-fetched tool by checksum before executing it.
           curl -sSL "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz" -o "${tarball}"
           echo "${sha256}  ${tarball}" | sha256sum -c -
           sudo tar -xz -C /usr/local/bin -f "${tarball}" actionlint
-
-      - name: Validate
-        # Strict: in CI a missing gate tool is a broken runner/deps regression, not a
-        # local convenience — without this, validate.sh banners the skip and exits 0,
-        # so e.g. black silently vanishing would keep CI green (finding 14).
-        env:
-          AVIATO_STRICT_TOOLS: "1"
-        run: ./scripts/validate.sh
-
+      - name: actionlint (this repo + every kit workflow master)
+        run: |
+          actionlint .github/workflows/*.yml starter/*/ci.yml starter/*/release.yml starter/docs-site/docs.yml
+      - name: shellcheck
+        run: shellcheck starter/rulesets/apply-rulesets.sh
+      - name: Validate ruleset payloads
+        run: |
+          jq -e .name starter/rulesets/ruleset-branch.json
+          jq -e .name starter/rulesets/ruleset-tag.json

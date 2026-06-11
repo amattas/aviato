@@ -1,7 +1,0 @@
-name: wf-docs-python-library
-output_path: .github/workflows/aviato-docs.yml
-source: files/wf-docs-python-library.yml
-comment: "#"
-seed_once: false
-when:
-  docs: "true"

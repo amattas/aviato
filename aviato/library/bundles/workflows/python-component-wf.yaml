@@ -1,8 +1,0 @@
-name: python-component-wf
-# Zero-deploy profile (§10.3): verify + release + security baseline only; the
-# GitHub release is the sole output, no deployment plug-in.
-extends: base
-add:
-  - python-verify
-  - release
-remove: []

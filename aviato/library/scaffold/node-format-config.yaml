@@ -1,4 +1,0 @@
-name: node-format-config
-output_path: .prettierrc.json
-source: files/prettierrc.json.txt
-seed_once: true

@@ -1,4 +1,0 @@
-name: swift-format-config
-output_path: .swift-format
-source: files/swift-format.txt
-seed_once: true

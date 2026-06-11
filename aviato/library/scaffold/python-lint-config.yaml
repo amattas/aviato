@@ -1,5 +1,0 @@
-name: python-lint-config
-output_path: ruff.toml
-source: files/ruff.toml.txt
-comment: "#"
-seed_once: false

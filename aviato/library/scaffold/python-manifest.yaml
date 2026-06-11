@@ -1,6 +1,0 @@
-name: python-manifest
-# Seed-once project manifest: the release version-source target (§3.3) and the
-# dev tools the default Python CI invokes. The developer owns it after seeding.
-output_path: pyproject.toml
-source: files/pyproject.toml.txt
-seed_once: true

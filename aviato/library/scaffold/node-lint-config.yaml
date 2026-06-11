@@ -1,5 +1,0 @@
-name: node-lint-config
-output_path: eslint.config.mjs
-source: files/eslint.config.mjs.txt
-comment: "//"
-seed_once: false

@@ -1,5 +1,0 @@
-name: editorconfig
-output_path: .editorconfig
-source: files/editorconfig.txt
-comment: "#"
-seed_once: false

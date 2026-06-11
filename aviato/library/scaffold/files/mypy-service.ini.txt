@@ -1,7 +1,0 @@
-[mypy]
-# Non-strict type-check for a container SERVICE (R4-1/§13.2): typed, but lower adoption friction
-# than the library default's `strict = true`. A service's artifact is its Docker image, not a
-# distributed wheel, so the strict-typing bar that protects a library's public API is relaxed.
-warn_unused_configs = true
-warn_redundant_casts = true
-warn_unused_ignores = true

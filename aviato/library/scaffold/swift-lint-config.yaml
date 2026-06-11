@@ -1,5 +1,0 @@
-name: swift-lint-config
-output_path: .swiftlint.yml
-source: files/swiftlint.yml.txt
-comment: "#"
-seed_once: false

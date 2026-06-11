@@ -1,4 +1,0 @@
-name: contributing
-output_path: CONTRIBUTING.md
-source: files/contributing.md.txt
-seed_once: true

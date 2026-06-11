@@ -1,17 +1,10 @@
 .DS_Store
-__pycache__/
-.pytest_cache/
-*.egg-info/
-build/
-dist/
-.venv/
-.aviato/
-_wheelout/
-# Self-docs site dependencies/output (the docs SOURCES under website/ are committed).
 node_modules/
-website/build/
-website/.docusaurus/
+# operator working artifacts
+FINDINGS.md
+OVERLAY.md
 catalog.md
 repos-*.txt
-
-/.review
+# local docs-site test builds
+starter/docs-site/build/
+starter/docs-site/.docusaurus/

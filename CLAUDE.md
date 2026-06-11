@@ -1,165 +1,32 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## What this is
 
-## What This Is
+A copy-paste starter kit for amattas's repos — CI, tag-push releases,
+Docusaurus docs, rulesets, Dependabot. `starter/` holds the master copies;
+consumer repos carry their own copies of these files (vendored, never
+referenced cross-repo — PyPI trusted publishing matches the workflow file
+in-repo, and repos must not break when this one changes).
 
-Aviato is a reusable GitHub policy, CI, release, and onboarding conventions library. It ships reusable Actions workflows, ruleset payloads, caller templates, and an operator-run Python CLI (`aviato`). It deliberately keeps **no persistent inventory of consumer repositories** — audits and onboarding always target a local root or one explicit repo, and privileged changes are operator-initiated, never unattended.
+There is deliberately **no engine here**: no CLI, no package, no tests, no
+drift automation. The previous incarnation of this repo was exactly that and
+was stripped (see git history before the strip commit if needed).
 
-## Commands
+## Working on the kit
 
-```bash
-python3 -m pip install -e .[dev]   # install CLI + dev tools (black, mypy, pytest, ruff, yamllint)
-./scripts/validate.sh              # full local gate: compile, validate, ruff, black, mypy --strict, pytest, build, yamllint, shellcheck, actionlint
-python3 -m pytest                  # run tests
-python3 -m pytest tests/test_rulesets.py::test_rendered_tag_ruleset_uses_policy_pattern  # single test
-ruff check . && ruff format --check . && black --check --line-length 120 --target-version py312 aviato tests scripts
-```
-
-Note: `validate.sh` runs pytest with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`. Tests must not depend on third-party pytest plugins. `ruff`/`black`/`pytest`/`shellcheck`/`actionlint` are skipped when not installed locally, but the run ends with a **loud banner** listing every skipped tool (because CI runs them — a green local gate with skips does **not** mean CI is green). Run with `AVIATO_STRICT_TOOLS=1 ./scripts/validate.sh` for CI-parity: a missing tool then fails the gate. CI installs all of them.
-
-CLI surface (entrypoint `aviato.cli:main`):
-
-```bash
-aviato audit .                              # discover + audit repos under a local root
-aviato audit --repo /path/to/repo           # audit one explicit local repo
-aviato apply-rulesets OWNER/REPO            # dry-run rulesets
-aviato apply-rulesets OWNER/REPO --apply    # apply rulesets
-aviato apply-rulesets OWNER/REPO --required-approvals 0 --apply  # solo-repo override
-aviato apply-rulesets OWNER/REPO --declaration /path/.github/aviato.yaml --apply  # override-aware apply (C12-3): resolves checks/approvals through the consumer's declared overrides — what settings-drift remediation recommends
-aviato render-rulesets                       # print rendered ruleset JSON
-aviato onboard PATH --profile python-library --pin 1.2.3 [--write --allow-dirty --var k=v --docs]  # plan, or adopt a local repo (§5.2); --docs composes the opt-in docs deploy (§13.3)
-aviato onboard OWNER/REPO --profile python-library --pin 1.2.3 --open-pr  # adopt an existing repo via a reviewable scaffold PR (§5.2)
-aviato doctor /path/to/consumer              # classify managed artifacts + probe health (§5.4)
-aviato sync /path/to/consumer                # materialize managed artifacts incl. caller workflows (§5.3/§15)
-aviato scan /path/a /path/b [--fix --audit]  # fleet diagnosis; --fix opens managed-file proposals, --audit surfaces open settings-drift tracking issues (§5.11/§5.5)
-aviato drift-report /path/to/consumer [--file-only|--settings-only] [--require-settings]  # file + settings drift (§5.5/§5.6); --require-settings exits non-zero if settings can't be read
-aviato reconcile /path/to/consumer <issue> --confirm <diff-id>  # operator-gated settings apply, diff-bound (§5.7)
-aviato complete-protection /path/to/consumer # idempotently (re-)apply full branch protection (§5.2 recovery)
-aviato repin /path/to/consumer X.Y.Z [--write | --open-pr]  # move the Library version pin; --open-pr opens a reviewable re-pin proposal (§5.12)
-aviato offboard /path/to/consumer [--write --delete-files | --open-pr]  # remove from Aviato mgmt; --open-pr opens a reviewable removal proposal (§5.13)
-aviato next-version --current 1.2.3 --commit "feat: x"  # SemVer from Conventional Commits (§5.9)
-aviato bump-version 1.3.0 /path/to/consumer  # write version into version-source locations (§3.3)
-aviato provision OWNER/REPO --profile python-library --pin 1.2.3 [--var k=v --public --docs]  # create + stage-protect + scaffold a NEW repo (§5.2/§2.11)
-aviato is-highest 1.2.3 1.0.0 1.2.3          # exit 0 iff arg1 is the highest release among the rest (§8.14 alias gate)
-aviato lint-actions [PATH]                    # §11.3 supply-chain gate: zizmor (unpinned uses:/images) + fail-closed curl|bash + non-exact pip pins
-aviato validate                              # validate policy infra + agnosticism + digest pins + template parity + inline monotonic-alias parity
-aviato provision OWNER/REPO --profile node-service --pin 1.2.3  # create + scaffold with staged protection (§5.2)
-```
-
-Fresh `onboard --write` and `provision` require an explicit Library pin that
-resolves to a published tag/branch. `--allow-unresolved-pin` is only for
-intentional offline/test scaffolds. Re-onboarding an adopted repo preserves the
-existing pin; use `aviato repin` to move it.
-
-**Onboarding materializes the caller workflows.** A profile's scaffold bundle includes
-the `.github/workflows/aviato-ci.yml` (verify/release/deploy/security) and
-`aviato-drift.yml` (scheduled drift/report) callers, so `sync`/`onboard --write` give a
-consumer the actual workflows required by §15 — not just composed pipeline names. The
-common scaffold also seeds `CONTRIBUTING.md`, `.github/CODEOWNERS`, and issue/PR
-templates (seed-once, §12.1). Caller
-workflows live as packaged bodies under `aviato/library/scaffold/files/wf-*.yml` — these
-are the **authoritative source**. The top-level `templates/profile-*.yml` and
-`templates/consumer-automation.yml` are documented copyable EXAMPLES **rendered from**
-those scaffold bodies (run `python3 scripts/regen-templates.py` after editing a caller);
-`aviato validate` fails if they drift (`_check_template_scaffold_parity`).
-
-Node and docs callers now assume npm 11.10+ for install hardening. The reusable Node
-and Docusaurus workflows default to Node 24, fail closed on npm <11.10 (the
-`min-release-age` support floor), and set `ignore-scripts=true`,
-`engine-strict=true`, and `min-release-age=7`; Node/docs scaffolds also include
-managed `.npmrc` files with `engine-strict=true` and package engines requiring
-Node 24/npm >=11.10. Use `npx --no-install` for Node tool bins so missing local
-dependencies fail instead of fetching; common lint rejects unsafe plain `npx` in
-workflows. Docs scaffolding includes Docusaurus ESLint, opt-in Algolia search
-(the `algolia` profile variable; default off), Mermaid rendering, and sitemap
-configuration.
-
-The Library's own declaration uses the internal `aviato-library` profile with
-`bootstrap: true`. `local-install: true` is valid only on this structural Library
-bootstrap path; consumer workflows must fail before `pip install -e .` if they
-try to enable local install.
-
-`scripts/audit-repos.sh` and `scripts/apply-rulesets.sh` are thin compatibility wrappers that exec the CLI.
-
-## Architecture
-
-### The agnostic core engine (`aviato/core/`) vs. plug-in data
-
-`REQUIREMENTS.md` mandates a composition of plug-in modules around an **agnostic
-core** (§2.1). The core lives in `aviato/core/` and must contain **no** language-
-or deployment-specific logic. Day-zero specifics (Python/Node/Swift, PyPI/GHCR/
-Pages/Apple) live as **data** under `aviato/library/` — the §5.10 module-source tree:
-per-profile manifests at `aviato/library/<profile>.yaml`, `aviato/library/bundles/{workflows,scaffold,settings}/`,
-and the scaffold template bodies at `aviato/library/scaffold/` — loaded by
-`aviato/core/registry.py` (via `paths.MODULE_SOURCE_ROOT`) and resolved by
-`aviato/core/composition.py` into a `ResolvedSet`.
-
-**The agnosticism is falsifiable and enforced (§9b).** `aviato/core/selfcheck.py`
-fails if any `aviato/core/*.py` (a) imports `aviato.plugins`, or (b) contains a
-denylisted identifier (the list is **data** at `aviato/plugins/denylist.txt`, not
-hardcoded — so the checker's own source carries none of the words it scans for).
-This runs inside `aviato validate`. **When adding a capability, add a module/data —
-never put `python`/`ruff`/`ghcr`/etc. into core code.** If a change seems to need
-editing core to add a target, the abstraction is wrong (§4.3). Comment-syntax
-knowledge that names extensions (e.g. `.swift`) lives in
-`aviato/plugins/comment_syntax.py`, not core, for the same reason.
-
-Core module map: `composition` (§5.1/§4.2 resolution), `declaration` (§6.1),
-`variables` (§5.2/§6.6 + §8.15 secret guard), `marker` (§6.2), `scaffold`
-(§5.3/§6.3 seed-once + sidecar), `diagnosis` (§5.4), `filedrift`/`settingsdrift`
-(§5.5/§5.6 primitives), `consent` (§5.8 fail-closed gate), `reconcile` (§5.7
-decision logic), `version` (§2.6 compatibility), `versioning` (§5.9 Conventional
-Commit bump), `bootstrap` (§5.10), `onboarding` (§5.2), `repin` (§5.12),
-`offboarding` (§5.13), `selfcheck` (§9b).
-
-**Orchestration vs. binding (§2.14).** The platform-touching flows are split:
-the *decision/orchestration* logic lives in core (`settings_drift_flow` §5.6,
-`file_drift_flow` §5.5, `reconcile_flow` §5.7, `fleet` §5.11) and depends only on
-the `Platform` **port** (`core/ports.py`) — so it's unit-tested against an
-in-memory fake (`tests/core/fakeplatform.py`). The concrete GitHub binding is
-`aviato/github_platform.py` (outside core; may name `gh`), composing the tested
-`github.py` helpers. **The live end-to-end runs of these flows, and the Part II
-deploy pipelines (PyPI/GHCR/Pages/Apple), are operator-verified by design**
-(§9.2/§9.9/§13.4.7) — the engine primitives and the GitHub binding's
-response-mapping are tested, but a real GitHub repo + credentials are needed to
-exercise them live. Process flows reference `REQUIREMENTS.md` section numbers in
-docstrings — keep them accurate when changing behavior.
-
-### policy.yml is the single source of truth
-
-The policy/ruleset data lives **inside the package** at `aviato/library/policy.yml`,
-`aviato/library/rulesets.yml`, and `aviato/library/rulesets/*.json` (so it ships in the
-wheel and a pip-installed `aviato` can render rulesets — §5.6/§11.3). Loaders default to
-`paths.POLICY_DATA_ROOT` (= `aviato/library`); `is_library`/§5.10 keys off
-`aviato/library/policy.yml`. (`aviato validate` runs from a source checkout only.)
-
-`aviato/library/policy.yml` owns policy constants — most importantly the release tag pattern (`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$`) and default required PR approvals. That pattern is **intentionally duplicated** into several places that need a literal at definition time:
-
-- every release workflow in `RELEASE_WORKFLOWS` (embeds the literal in its `TAG_PATTERN` env so validation is pinned to the same ref)
-- rendered ruleset payloads (injected at render time, not stored)
-
-`aviato/validation.py` enforces these copies stay in sync via drift checks. **When you change the tag pattern or any embedded constant, update `policy.yml` and let validation tell you every copy that drifted — never treat docs or a workflow as the source of truth.** Docs (`README.md`, `ARCHITECTURE.md`, `REQUIREMENTS.md`) describe policy but are not authoritative.
-
-### Rendering pipeline (policy → rulesets)
-
-`aviato/library/rulesets.yml` is a manifest mapping each ruleset JSON template in `aviato/library/rulesets/` to a target (`branch`/`tag`) and a `patch` of dotted policy paths to inject. `aviato/rulesets.py` deep-copies the JSON template and patches values from `policy.yml` (or a `--required-approvals` override) at render time. `apply_rulesets` then upserts each rendered payload to GitHub. To add a ruleset: add the JSON template under `aviato/library/rulesets/`, register it in `aviato/library/rulesets.yml`, and (if required) add it to `REQUIRED_FILES` in `validation.py`.
-
-### GitHub access is via the `gh` CLI only
-
-`aviato/github.py` shells out to `gh api` (through `aviato/command.py`'s `run` helper) for every GitHub interaction — there is no SDK or token handling in code. Read calls use `allow_error=True` to degrade gracefully (audit rows show `API_ERROR`/`NO_REMOTE`); `upsert_ruleset` finds an existing ruleset by name and PUTs vs POSTs accordingly.
-
-### Validation is the gate
-
-`aviato/validation.py` (`validate()`) is what CI runs and what guards correctness. It checks required files exist, YAML/JSON parse, `policy.yml` examples actually match/reject the pattern, pattern drift across embedded copies, template `uses:` references point at workflows that exist, release workflows are tag-only (no `release/*`, no checkout by repository name, must reference `GITHUB_REF_TYPE`/`tag`), third-party actions/tools are digest-pinned (§11.3, `_check_action_pins` → `aviato lint-actions`, which delegates `uses:`/image pinning to a bundled-config **zizmor** and runs a **fail-closed** `curl|bash` check — never interpreter enumeration, which fails open and flapped for 8 cycles; the same impl runs in every consumer's CI via `reusable-common-lint.yml`, with no grep mirror to drift), the `templates/profile-*.yml` examples match the rendered scaffold (`_check_template_scaffold_parity`), the Library bootstrap declaration resolves all managed artifacts through local refs (`_check_library_bootstrap`), and the inline `highest.py` heredocs embedded in the GHCR/Pages deploy workflows still agree with `core.versioning.is_highest` (§8.14/§13.2, `_check_monotonic_alias_parity` — runs the snippet against a battery of cases so a hand-copied comparator can't silently drift). Adding a new required workflow/file or release workflow means updating `REQUIRED_FILES` / `RELEASE_WORKFLOWS`.
-
-### Reusable workflows share one command contract
-
-All language CI workflows (`reusable-python-ci`, `reusable-node-ci`, `reusable-swift-ci`) expose the same inputs: `working-directory`, `install-command`, `lint-command`, `test-command`, `build-command`, and the `run-*` toggles. Keep this contract identical across languages; unsupported steps use an empty command and a disabled default. The `templates/profile-*.yml` examples compose these reusable workflows for a repo shape and stay thin (select workflow + supply inputs, no duplicated release/protection logic); they are rendered from the scaffold bodies (see "Onboarding materializes the caller workflows"), not hand-edited.
-
-## Conventions
-
-- **Terminology:** use "default branch", not "main" (main is only an example). Rulesets target `~DEFAULT_BRANCH`; report fields use names like `default_branch_requires_pr`.
-- **Release publishing is tag-only.** Branch-based release *publishing* (legacy `release/*` / `release/latest` publish branches) is a migration artifact, rejected by validation — do not add branch-based release support. (Distinct from `reusable-release.yml`'s short-lived `release/<version>` PR *source* branch, which is not publishing and is fine.)
-- Ruleset JSON files stay readable templates; policy values are injected, not hardcoded.
-- `catalog.md` and `repos-*.txt` are operator working artifacts, not committed library state.
+- The kit files are MASTERS. A learning from a consumer repo (pydmp, hass-dmp,
+  …) gets backported here so the next migration inherits it; keep masters and
+  consumers byte-comparable where possible.
+- Lint gate (same as CI): `yamllint -s .`, `actionlint` on
+  `.github/workflows/*.yml starter/*/ci.yml starter/*/release.yml
+  starter/docs-site/docs.yml`, `shellcheck starter/rulesets/apply-rulesets.sh`.
+- Workflow conventions: job id `ci` is the required check everywhere; release
+  workflows trigger only on digit-initiated tags (`["[0-9]*"]`) and create the
+  GitHub release LAST; third-party actions digest-pinned, first-party on major
+  tags; every `${{ }}` in run blocks goes through `env:`.
+- The docs scaffold (`starter/docs-site/`) encodes hard-won MDX/Docusaurus
+  fixes (per-mode prism themes, `mdx.format: md` for generated pages, the
+  `<p>`-nesting hydration trap) — don't simplify them away.
+- Releasing consumers: bump the version source, merge, `git tag X.Y.Z && git
+  push origin X.Y.Z`. Never create releases via the GitHub UI (the tag it
+  creates fires the workflow, which then collides with the existing release).
