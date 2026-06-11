@@ -1,0 +1,39 @@
+# CI — every PR and push to the default branch.
+# Copy to: .github/workflows/ci.yml
+#
+# CUSTOMIZE:
+#  - python-version
+#  - the Install/Lint/Test commands to match the project
+# Keep the job id `ci` — the branch ruleset requires a check context named "ci".
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e .[dev]
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Test
+        run: python -m pytest
+      - name: Build
+        run: |
+          python -m pip install --quiet build==1.5.0
+          python -m build

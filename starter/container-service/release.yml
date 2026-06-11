@@ -1,0 +1,74 @@
+# Release — fires when you push a SemVer tag. Releasing is:
+#   git tag 1.2.3 && git push origin 1.2.3
+# Build once → scan the built image → push the SCANNED image to GHCR → GitHub release.
+# Copy to: .github/workflows/release.yml (pair with the ci.yml for the repo's language)
+#
+# CUSTOMIZE:
+#  - Dockerfile path / build context if not the repo root
+#  - drop the `:latest` tag push if you don't want a floating tag
+name: Release
+
+on:
+  push:
+    tags: ["**"]
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release
+      packages: write # push to GHCR
+    steps:
+      - name: Validate tag format
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s\n' "${TAG}" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$'; then
+            echo "::error::Tag '${TAG}' is not X.Y.Z (optionally -alphaN/-betaN)"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build image
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # GHCR requires a lowercase image name.
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "IMAGE=${image}" >> "${GITHUB_ENV}"
+          docker build -t "${image}:${TAG}" .
+      - name: Scan the built image (gate on HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.33.1
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Push the scanned image
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE}:${TAG}"
+          docker tag "${IMAGE}:${TAG}" "${IMAGE}:latest"
+          docker push "${IMAGE}:latest"
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          args=(--generate-notes --verify-tag)
+          case "${TAG}" in *-alpha*|*-beta*) args+=(--prerelease) ;; esac
+          gh release create "${TAG}" "${args[@]}"

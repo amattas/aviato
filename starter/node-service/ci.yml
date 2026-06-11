@@ -1,0 +1,38 @@
+# CI — every PR and push to the default branch.
+# Copy to: .github/workflows/ci.yml (and copy `npmrc` → `.npmrc` at the repo root)
+#
+# CUSTOMIZE:
+#  - node-version
+#  - the Lint/Test/Build scripts to match package.json (remove steps the project lacks)
+# Keep the job id `ci` — the branch ruleset requires a check context named "ci".
+# The repo .npmrc sets ignore-scripts / engine-strict / min-release-age (needs npm >= 11.10,
+# bundled with current Node 24).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run build
