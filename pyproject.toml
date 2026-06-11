@@ -36,7 +36,7 @@ dev = [
   # 3.12 runners don't ship setuptools by default. Mirrors [build-system]'s floor
   # (same constraint, not a gate tool whose drift changes lint outcomes).
   "setuptools>=69",
-  "yamllint==1.35.1",
+  "yamllint==1.38.0",
 ]
 
 [project.scripts]
