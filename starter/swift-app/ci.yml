@@ -1,0 +1,32 @@
+# CI — every PR and push to the default branch.
+# Copy to: .github/workflows/ci.yml
+#
+# CUSTOMIZE:
+#  - xcode-version
+#  - swap the SwiftPM commands for xcodebuild if this is an Xcode-project app, e.g.
+#    xcodebuild -scheme MyApp -destination 'platform=iOS Simulator,name=iPhone 16' test
+# Keep the job id `ci` — the branch ruleset requires a check context named "ci".
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: latest-stable
+      - name: Build
+        run: swift build -v
+      - name: Test
+        run: swift test -v
