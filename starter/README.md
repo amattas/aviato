@@ -47,3 +47,8 @@ you're expected to adjust (commands, paths, Python/Node versions).
   ride major tags. Dependabot bumps both weekly.
 - pip-installed tools in workflows are exact-pinned (`build==1.5.0`,
   `twine==6.2.0`).
+- Container releases are multi-arch (amd64 + arm64 on native runners, for ARM
+  k8s nodes); each arch is scanned before its bytes are pushed, then a manifest
+  ties them together. Single-arch repos delete one matrix entry.
+- Docs are Docusaurus everywhere — repos still on mkdocs convert as part of
+  their migration; there is deliberately no mkdocs flavor.

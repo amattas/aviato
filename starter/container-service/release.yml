@@ -1,10 +1,14 @@
 # Release — fires when you push a SemVer tag. Releasing is:
 #   git tag 1.2.3 && git push origin 1.2.3
-# Build once → scan the built image → push the SCANNED image to GHCR → GitHub release.
+# Multi-arch (amd64 + arm64 on native runners — no QEMU): build once per arch →
+# scan each image → push the SCANNED per-arch tags → assemble the multi-arch
+# manifest → GitHub release last. Per-arch tags (:X.Y.Z-amd64/-arm64) remain in
+# GHCR alongside the manifest; harmless.
 # Copy to: .github/workflows/release.yml (pair with the ci.yml for the repo's language)
 #
 # CUSTOMIZE:
 #  - Dockerfile path / build context if not the repo root
+#  - amd64-only repo? delete the arm64 matrix entry and its ref in the manifest step
 #  - drop the `:latest` tag push if you don't want a floating tag
 name: Release
 
@@ -15,11 +19,19 @@ on:
 permissions: {}
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
-      contents: write # create the GitHub release
-      packages: write # push to GHCR
+      contents: read
+      packages: write # push the per-arch image
     steps:
       - name: Validate tag format
         env:
@@ -33,19 +45,20 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Build image
+      - name: Build image (${{ matrix.arch }})
         env:
           TAG: ${{ github.ref_name }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          # GHCR requires a lowercase image name.
+          # GHCR requires a lowercase image name; native runner builds its own arch.
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           echo "IMAGE=${image}" >> "${GITHUB_ENV}"
-          docker build -t "${image}:${TAG}" .
+          docker build -t "${image}:${TAG}-${ARCH}" .
       - name: Scan the built image (gate on HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.33.1
         with:
-          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}
+          image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}-${{ matrix.arch }}
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
@@ -55,14 +68,34 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Push the scanned image
+      - name: Push the scanned image (${{ matrix.arch }})
+        env:
+          TAG: ${{ github.ref_name }}
+          ARCH: ${{ matrix.arch }}
+        run: docker push "${IMAGE}:${TAG}-${ARCH}"
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release
+      packages: write # push the manifest + latest tag
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Assemble the multi-arch manifest
         env:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          docker push "${IMAGE}:${TAG}"
-          docker tag "${IMAGE}:${TAG}" "${IMAGE}:latest"
-          docker push "${IMAGE}:latest"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx imagetools create -t "${image}:${TAG}" \
+            "${image}:${TAG}-amd64" "${image}:${TAG}-arm64"
+          docker buildx imagetools create -t "${image}:latest" "${image}:${TAG}"
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -71,4 +104,4 @@ jobs:
           set -euo pipefail
           args=(--generate-notes --verify-tag)
           case "${TAG}" in *-alpha*|*-beta*) args+=(--prerelease) ;; esac
-          gh release create "${TAG}" "${args[@]}"
+          gh release create "${TAG}" "${args[@]}" -R "${GITHUB_REPOSITORY}"
