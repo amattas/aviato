@@ -4,8 +4,10 @@
 # Copy to: .github/workflows/release.yml
 #
 # One-time: register the PyPI trusted publisher (pypi.org → Publishing) with
-# workflow `release.yml` and NO environment. PyPI matches the workflow file
-# containing the publish step, so this file must live in this repo.
+# workflow `release.yml` and environment `release`. PyPI matches the workflow
+# file containing the publish step plus the environment — that's why this file
+# must live in the repo itself. Referencing the environment auto-creates it on
+# GitHub; no extra setup.
 #
 # CUSTOMIZE:
 #  - python-version
@@ -22,6 +24,7 @@ permissions: {}
 jobs:
   release:
     runs-on: ubuntu-latest
+    environment: release # must match the trusted publisher registration
     permissions:
       contents: write # create the GitHub release
       id-token: write # PyPI trusted publishing (OIDC)
