@@ -6,7 +6,10 @@ name: Release
 
 on:
   push:
-    tags: ["**"]
+    # Only digit-initiated tags: version-shaped tags (including malformed ones,
+    # which fail validation LOUDLY — a typo'd release tag must not be a silent
+    # no-op) trigger; v-prefixed legacy tags and non-version tags don't.
+    tags: ["[0-9]*"]
 
 permissions: {}
 
@@ -25,7 +28,7 @@ jobs:
             echo "::error::Tag '${TAG}' is not X.Y.Z (optionally -alphaN/-betaN)"
             exit 1
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Create the GitHub release
