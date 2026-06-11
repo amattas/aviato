@@ -32,10 +32,12 @@ you're expected to adjust (commands, paths, Python/Node versions).
    (Settings-based; needs no workflow file.)
 3. **Pages** (docs sites only): Settings → Pages → Source: GitHub Actions.
 4. **PyPI trusted publisher** (Python libraries only): pypi.org → Publishing →
-   pending publisher with workflow **`release.yml`** and **no environment**.
-   PyPI matches the workflow file that contains the publish step — that's why
-   the workflow must live in the repo itself, and why this kit vendors files
-   instead of referencing shared workflows cross-repo.
+   publisher with workflow **`release.yml`** and environment **`release`**.
+   PyPI matches the workflow file that contains the publish step plus the
+   environment — that's why the workflow must live in the repo itself, and why
+   this kit vendors files instead of referencing shared workflows cross-repo.
+   Repos with an older registration (different filename/environment): update
+   the registration to `release.yml` + `release` during migration.
 
 ## Conventions baked in
 
