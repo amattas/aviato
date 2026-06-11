@@ -24,8 +24,10 @@ jobs:
       - name: Install actionlint (checksum-verified)
         run: |
           set -euo pipefail
-          version="1.7.4"
-          sha256="fc0a6886bbb9a23a39eeec4b176193cadb54ddbe77cdbb19b637933919545395"
+          # 1.7.4 predates GitHub's ARM runner labels (ubuntu-24.04-arm) and
+          # flags the kit's multi-arch container release as a runner-label error.
+          version="1.7.12"
+          sha256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
           tarball="${RUNNER_TEMP:-/tmp}/actionlint.tar.gz"
           curl -sSL "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz" -o "${tarball}"
           echo "${sha256}  ${tarball}" | sha256sum -c -
