@@ -45,7 +45,7 @@ jobs:
             echo "::error::Tag '${TAG}' is not X.Y.Z (optionally -alphaN/-betaN)"
             exit 1
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Build image (${{ matrix.arch }})
