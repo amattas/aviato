@@ -102,7 +102,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
     steps:
       - name: Checkout consumer repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
           # C12-W2: build from the IMMUTABLE gated commit, not the mutable tag.
