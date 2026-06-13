@@ -16,11 +16,26 @@ first; the release workflow refuses a tag that doesn't match.
 | Python app/tool (no PyPI) | `python-app/` same three files | same destinations |
 | Node service | `node-service/ci.yml`, `release.yml`, `dependabot.yml`, `npmrc` | same destinations; `npmrc` → `.npmrc` at repo root |
 | Container service | `container-service/release.yml` **plus** the `ci.yml`+`dependabot.yml` for the repo's language | `.github/workflows/release.yml` |
-| Docs site (Docusaurus) | `docs-site/docs.yml` | `.github/workflows/docs.yml` |
+| Docs site (Docusaurus) | `docs-site/docs.yml` → `.github/workflows/docs.yml`; everything else in `docs-site/` → `website/` (`npmrc` → `website/.npmrc`) | full site scaffold — see below |
 | Swift app | `swift-app/ci.yml`, `dependabot.yml` | same destinations |
 
 Every workflow has a `# CUSTOMIZE` comment block at the top listing the lines
 you're expected to adjust (commands, paths, Python/Node versions).
+
+### Docs-site scaffold (proven on pydmp)
+
+`docs-site/` is a complete Docusaurus site, not just the deploy workflow:
+self-hosted full-text search (no Algolia account), per-mode Prism themes
+(Docusaurus's default is a dark palette in BOTH modes — unreadable on light),
+browser-preference color mode, native doc versioning (latest release at the
+site root, main at `/dev`, dropdown in the navbar), hardened `.npmrc`, IBM
+Plex design system with a swappable accent palette, and a committed lockfile.
+Fill the ALL-CAPS placeholders (`PROJECT`/`OWNER`/`REPO`), and gitignore
+`website/{node_modules,build,.docusaurus}` + the generated API reference.
+Python repos: uncomment the pydoc-markdown block in `docs.yml` for
+docstring-generated API docs (the `mdx.format: md` front matter it writes is
+load-bearing). Cutting a docs version joins each release-bump PR:
+`cd website && npm run docusaurus docs:version X.Y.Z`.
 
 ## One-time setup per repo (clicks + one script, no automation)
 

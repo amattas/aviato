@@ -36,6 +36,23 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      # PYTHON API DOCS (optional): generate an API reference from docstrings
+      # before the site build — uncomment and set PACKAGE/-I path. The
+      # `mdx.format: md` front matter is load-bearing: generated markdown
+      # contains braces MDX treats as JSX expressions, failing the build.
+      # Gitignore `website/docs/api/reference.md`; versioned snapshots commit
+      # their own frozen copy when you cut a docs version.
+      # - uses: actions/setup-python@v6
+      #   with:
+      #     python-version: "3.12"
+      # - name: Generate API reference from docstrings
+      #   run: |
+      #     python -m pip install --quiet -e . "pydoc-markdown==4.8.2"
+      #     mkdir -p website/docs/api
+      #     {
+      #       printf -- '---\ntitle: API Reference\nmdx:\n  format: md\n---\n\n'
+      #       pydoc-markdown -I src -p PACKAGE
+      #     } > website/docs/api/reference.md
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
