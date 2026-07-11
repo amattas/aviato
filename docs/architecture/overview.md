@@ -4,8 +4,9 @@
 
 This document describes the current lightweight architecture of this repository
 and the near-term direction agreed for making it more consistent and modular.
-`REQUIREMENTS.md` remains the broader requirements document; this file is the
-implementation-facing map of what Aviato is today.
+`docs/requirements/` (§ index in `docs/requirements/README.md`) remains the
+broader requirements document; this file is the implementation-facing map of
+what Aviato is today.
 
 ## Purpose
 
@@ -23,7 +24,8 @@ The current implementation is intentionally small:
 - generated or local reporting artifacts.
 
 The current implementation includes the day-zero workflow surface from
-`REQUIREMENTS.md` **and** the agnostic core engine (`aviato/core/`): profile
+`docs/requirements/` (§ index in `docs/requirements/README.md`) **and** the
+agnostic core engine (`aviato/core/`): profile
 resolution/composition, the consumer declaration contract, managed-marker
 scaffolding with seed-once, diagnosis, file/settings drift, the fail-closed
 authorization gate, version-pin compatibility, bootstrap detection, Conventional
