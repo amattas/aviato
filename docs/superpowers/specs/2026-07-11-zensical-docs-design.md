@@ -54,11 +54,16 @@ Mermaid, hardened supply chain, tag-push deploys, monotonic `latest`.
 - Main push → `mike deploy --push dev`.
 - All release versions are kept — preserves the recorded keep-all-releases
   decision (`docs-retention` cap remains available: prune via `mike delete`).
+- **Branch-only deploy; Pages is decoupled and optional.** The workflow's sole
+  output is commits to a docs branch (`docs-branch` input, default `gh-pages`)
+  via `mike --branch`. It never reads or mutates Pages settings and succeeds
+  identically whether Pages is enabled or not — serving is a per-repo operator
+  toggle (Settings → Pages → deploy from branch), flippable on/off at any time
+  without touching the workflow. Documented in the starter README setup
+  section as an optional step.
 - **Privilege change:** the `docs-pages` pipeline moves from
-  `pages:write + id-token:write` to `contents: write` (pushes gh-pages);
-  `aviato/library/pipelines.yaml` updated. Pages source becomes
-  "deploy from branch: gh-pages" — a one-time operator click per repo,
-  documented in the starter README setup section. Rulesets are unaffected
+  `pages:write + id-token:write` to `contents: write` (pushes the docs
+  branch); `aviato/library/pipelines.yaml` updated. Rulesets are unaffected
   (they target the default branch + release tags).
 - §11.3 pip-pin gate: extended so a `git+…@<40-hex-sha>` pin **passes as exact**
   (and a branch/tag/short ref still fails). No exemption — fail-closed stays.
@@ -108,8 +113,10 @@ add `zensical.toml` + `requirements.txt`); `.gitignore` swaps
 
 **Docs & ledgers:**
 - §13.3 (`docs/requirements/modules/deployment/docs-site/requirements.md`)
-  rewritten for Zensical (stages, DoD: version in switcher, latest resolves,
-  built-in search returns results, Mermaid renders, sitemap present).
+  rewritten for Zensical (stages, DoD: version present on the docs branch with
+  correct alias state after deploy; and — when the operator has Pages enabled —
+  latest resolves, built-in search returns results, Mermaid renders, sitemap
+  present. The served-site checks are conditional on Pages being on.)
 - Settled entries added (docs-site + starter-kit backlogs): "Zensical
   everywhere — supersedes G1 Docusaurus-everywhere and Algolia-configurable
   (operator decision 2026-07-11)". Open backlog entry added: "replace the mike
