@@ -41,6 +41,7 @@ docs/
 │  │  ├─ consumer-contract.md  # §6 (6.1–6.6)
 │  │  ├─ state-and-failures.md # §7 + §8 (incl. 8.x list items)
 │  │  ├─ definition-of-done.md # §9 + §9b
+│  │  ├─ glossary.md           # §18
 │  │  └─ backlog.md
 │  └─ modules/
 │     ├─ README.md             # catalog: §10 (10.1, 10.3), §15, §16, §17

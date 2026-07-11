@@ -126,7 +126,7 @@ No commit yet — the suite must stay green per commit; this test is committed w
 
 **Files:**
 - Create: `<scratchpad>/split_docs.py` (one-off, NOT committed)
-- Create: `docs/requirements/README.md` + 32 split files (mapping below)
+- Create: `docs/requirements/README.md` + 33 split files (mapping below)
 - Modify: `REQUIREMENTS.md` (→ pointer stub)
 - Test: `tests/test_docs_index.py` (from Task 1)
 
@@ -157,6 +157,7 @@ MAPPING: dict[str, list[str]] = {
     "core/consumer-contract.md": ["6"] + [f"6.{i}" for i in range(1, 7)],
     "core/state-and-failures.md": ["7", "8"],
     "core/definition-of-done.md": ["9", "9b"],
+    "core/glossary.md": ["18"],
     "modules/README.md": ["10", "10.1", "10.3", "15", "16", "17"],
     "modules/onboarding/flow.md": ["5.2"],
     "modules/onboarding/bootstrap.md": ["5.10"],
@@ -275,7 +276,7 @@ print(f"requirements: {len(MAPPING) + 1} files, {len(order)} sections; architect
 - [ ] **Step 2: Run it**
 
 Run: `python3 <scratchpad>/split_docs.py`
-Expected: `requirements: 33 files, 77 sections; architecture: 4 files` (section count = every `#`/`##`/`###` numbered heading; if the assert fires, a heading key is missing from MAPPING — fix MAPPING, not the source).
+Expected: `requirements: 34 files, 78 sections; architecture: 4 files` (section count = every `#`/`##`/`###` numbered heading; if the assert fires, a heading key is missing from MAPPING — fix MAPPING, not the source).
 
 - [ ] **Step 3: Spot-check the output**
 
