@@ -37,6 +37,13 @@ docstring-generated API docs (the `mdx.format: md` front matter it writes is
 load-bearing). Cutting a docs version joins each release-bump PR:
 `cd website && npm run docusaurus docs:version X.Y.Z`.
 
+### Agent skill (any repo)
+
+`skills/docs-structure/` → copy to `.claude/skills/docs-structure/` (Claude
+Code) and reference it from `AGENTS.md` for other agentic coders. It defines
+the `docs/` tree convention: per-module requirements with per-module
+`backlog.md`, architecture docs, and Mermaid-only diagrams in markdown.
+
 ## One-time setup per repo (clicks + one script, no automation)
 
 1. **Rulesets:** `./rulesets/apply-rulesets.sh OWNER/REPO` — branch protection
