@@ -86,7 +86,7 @@ try to enable local install.
 
 ### The agnostic core engine (`aviato/core/`) vs. plug-in data
 
-`REQUIREMENTS.md` mandates a composition of plug-in modules around an **agnostic
+The requirements (`docs/requirements/`, § index in its README) mandate a composition of plug-in modules around an **agnostic
 core** (§2.1). The core lives in `aviato/core/` and must contain **no** language-
 or deployment-specific logic. Day-zero specifics (Python/Node/Swift, PyPI/GHCR/
 Pages/Apple) live as **data** under `aviato/library/` — the §5.10 module-source tree:
@@ -123,7 +123,7 @@ in-memory fake (`tests/core/fakeplatform.py`). The concrete GitHub binding is
 deploy pipelines (PyPI/GHCR/Pages/Apple), are operator-verified by design**
 (§9.2/§9.9/§13.4.7) — the engine primitives and the GitHub binding's
 response-mapping are tested, but a real GitHub repo + credentials are needed to
-exercise them live. Process flows reference `REQUIREMENTS.md` section numbers in
+exercise them live. Process flows reference requirements § numbers (index: `docs/requirements/README.md`) in
 docstrings — keep them accurate when changing behavior.
 
 ### policy.yml is the single source of truth
@@ -139,7 +139,7 @@ wheel and a pip-installed `aviato` can render rulesets — §5.6/§11.3). Loader
 - every release workflow in `RELEASE_WORKFLOWS` (embeds the literal in its `TAG_PATTERN` env so validation is pinned to the same ref)
 - rendered ruleset payloads (injected at render time, not stored)
 
-`aviato/validation.py` enforces these copies stay in sync via drift checks. **When you change the tag pattern or any embedded constant, update `policy.yml` and let validation tell you every copy that drifted — never treat docs or a workflow as the source of truth.** Docs (`README.md`, `ARCHITECTURE.md`, `REQUIREMENTS.md`) describe policy but are not authoritative.
+`aviato/validation.py` enforces these copies stay in sync via drift checks. **When you change the tag pattern or any embedded constant, update `policy.yml` and let validation tell you every copy that drifted — never treat docs or a workflow as the source of truth.** Docs (`README.md`, `docs/architecture/`, `docs/requirements/`) describe policy but are not authoritative.
 
 ### Rendering pipeline (policy → rulesets)
 
