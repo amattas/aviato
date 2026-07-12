@@ -1,84 +1,76 @@
 <!-- Split from REQUIREMENTS.md (2026-07-11) - section numbering preserved verbatim. Index: docs/requirements/README.md -->
 
-### 13.3 Documentation site (Docusaurus → GitHub Pages, multi-version)
+### 13.3 Documentation site (Zensical → docs branch, multi-version)
 
 **Applies to:** any profile with `docs: true` (§6.1); **opt-in, default off**. The
-docs site is built with **Docusaurus** and published to **GitHub Pages**.
-**Trigger:** version tag only — each release **adds a new docs version** and moves
-the **`latest` alias** to it. **Runner:** Linux (Docusaurus is a Node build; it
-runs on Linux even for Python/Swift profiles).
+docs site is built with **Zensical** and versioned onto a dedicated **docs branch**
+(default `gh-pages`) via a **mike fork**. **Trigger:** version tag only — each
+policy-conformant release **adds a new docs version**; the **`latest` alias** moves
+only when that release is the highest released version (§8.14). **Runner:** Linux.
 
 **Inputs (the producer/consumer boundary, §2.9):** the deploy consumes **md/mdx
 only** — both the repo's **authored** narrative docs and the **language-emitted**
-md/mdx (§12). It never inspects source, never runs a language toolchain, and is
-therefore language-agnostic. A language plug-in that emits no md/mdx still yields a
-valid narrative-only site.
+md/mdx (§12), emitted before the mike deploy so the generated reference is captured
+in that version's snapshot. It never inspects source directly and is therefore
+language-agnostic. A language plug-in that emits no md/mdx still yields a valid
+narrative-only site.
 
 **Configuration (day-zero, fixed baseline):**
-- **Versioning & retention:** Docusaurus native versioning — a **version dropdown**
-  and a **`latest` alias** at the newest release. Each cut copies the full docs tree
-  into `versioned_docs/version-X/`. **Retention (operator decision, 2026-06): every
-  released version's docs are KEPT** — `docs-retention` defaults to 0 (unlimited);
-  an operator may set N>0 to cap to the newest N versions, in which case older
-  snapshots are pruned on each release. Versioned snapshots live on the published
-  **`gh-pages` artifact**, not the source branch. (Replaces the previous mkdocs +
-  `mike` setup; append-only and reviewable.)
-- **Search:** Algolia DocSearch via `@docusaurus/theme-search-algolia`, **opt-in**
-  through the `algolia` profile variable (default off — a fresh docs scaffold builds
-  with no search config rather than dead placeholder credentials). When enabled, the
-  public application ID, public search API key, and index name thread from the
-  `algolia-*` variables (not stored secrets); the operator must provision the
-  Algolia index before publishing (§17).
-- **Theme/features:** `@docusaurus/preset-classic`, **docs-first** (no blog), with
-  the version dropdown and a light/dark toggle; `@docusaurus/theme-mermaid` with
-  `markdown.mermaid: true`; sitemap configuration through the classic preset; and
-  the first-party Docusaurus ESLint plugin as a blocking docs-site lint.
-- **Install hardening:** docs scaffolds include `website/.npmrc` with
-  `ignore-scripts=true`, `min-release-age=7`, and `engine-strict=true`; the docs
-  package manifest declares Node >=24 and npm >=11, and the docs workflow
-  defaults to Node 24 and refuses npm <11 before install.
+- **Toolchain:** `zensical` + a **mike fork**
+  (`git+https://github.com/squidfunk/mike.git@2d4ad799442f4592db8ad53b179bfb33db8c69ac`),
+  exact-pinned in `website/requirements.txt` per consumer — a VCS pin is a full commit
+  SHA (§11.3). Dependabot bumps the `zensical` pin; the mike fork pin moves only when
+  Zensical ships native multi-version support (tracked in the backlog).
+- **Versioning & retention:** mike versions onto the docs branch — each release
+  commits a version directory there, not into the source tree. **Retention (operator
+  decision, 2026-06): every released version's docs are KEPT** — `docs-retention`
+  defaults to 0 (unlimited); an operator may set N>0 to cap to the newest N versions,
+  pruned via `mike delete` on each release.
+- **Deploy target:** the `docs-branch` input (default `gh-pages`). The workflow
+  refuses to target the repository default branch. **Pages serving is decoupled and
+  optional** — enabling GitHub Pages to serve this branch is a separate operator
+  toggle; the workflow succeeds identically whether Pages is enabled or not.
+- **Search:** Zensical's built-in search — no external search service, no Algolia
+  configuration (superseded; see backlog).
 
-**Stages:** gather authored + emitted md/mdx → install hardened npm dependencies →
-lint the docs site → `docusaurus docs:version` for the release tag (cut a new
-version) → **prune only if a retention cap is set (default: keep all)** → build the static site (versioning,
-Algolia search UI, Mermaid diagrams, sitemap) → publish to Pages via the platform token →
-**move the `latest` alias only if this release is the highest released version**
-(monotonic guard), under a **per-alias deploy concurrency group** so a slower
-older-release deploy cannot regress `latest`/docs (§8.14).
-**Day-zero limitation (conservative monotonic gate):** the implementation gates the
-**entire** docs job — version-cut, build, and publish — on the monotonic
-"highest-released-version" guard, not just the `latest`-alias move. Consequence: a
-release that is **not** the highest (e.g. a backport patch to an older line published
-after a newer major already shipped) does **not** retroactively add its own docs
-version. This is deliberately conservative: publishing an older release's site without
-correctly merging it into the newer published version set risks regressing live docs,
-which has no apply-time recompute (§2.12) and is operator-verified only (§9.9). Adding
-a non-highest version *without* moving `latest` (a true §13.3 "every release adds a
-version") requires merging into the existing `gh-pages` version set and is a
-post-day-zero refinement. Likewise the version sources read forward between releases
-are persisted as a **time-bounded build artifact** rather than durably from the
-published `gh-pages` artifact; a release gap exceeding that window would lose prior
-snapshots — also a post-day-zero hardening. Day-zero releases are monotonic, so
-neither edge is exercised by the normal release cadence.
-**Auth:** platform token, `pages: write` + `id-token: write` + `contents: read`;
-**no stored secret**.
-**Why a deployment plug-in:** publishing to Pages is a privileged outward publish;
-modeling it under §13 (tag-gated, declared privileges) keeps it consistent with
-"deployment runs only on a release tag" rather than escaping the deployment
+**Stages (implemented in `reusable-docs-pages.yml`):** gated checkout of the
+release-gate-validated commit (C12-W2: build from the immutable `gated-sha`, never
+the mutable tag, and re-verify the tag still points at it) → pinned install from
+`docs-requirements` (fails closed if the requirements file is missing, §11.3) →
+authenticated fail-closed fetch of the existing docs branch (an unreadable remote
+refuses rather than building an orphan branch) → emit language docs (consumer `eval`,
+read-only token, §12) → **§8.14 monotonic guard** (fail-closed: an unlistable tag set
+skips the deploy) → refuse to target the default branch → `mike deploy` on the local
+branch (every policy-conformant release deploys its own version; `latest` alias +
+`mike set-default` move only when this release is the highest) → optional retention
+prune via `mike delete` when `docs-retention` > 0 → bundle the local docs branch as a
+git-bundle artifact → handoff to the push job, which fast-forward-pushes it.
+**Auth (C12-W4, adapted for branch deploys):** permissions are per-job — the build
+job runs the consumer's emit command and holds only `contents: read`; only the
+separate push job, which runs **no consumer code**, holds `contents: write` and
+verifies the bundle fast-forwards before pushing (refuses on concurrent-deploy or
+rewritten-history mismatch). No stored secret.
+**Why a deployment plug-in:** publishing the docs branch is a privileged outward
+write; modeling it under §13 (tag-gated, declared privileges) keeps it consistent
+with "deployment runs only on a release tag" rather than escaping the deployment
 interface.
-**Operator prerequisite:** GitHub Pages enabled with the **GitHub Actions** source
-(§17).
-**DoD:** a real multi-version Pages publish on a tag — the new version is
-reachable, the **version dropdown lists it**, the **`latest` alias resolves** to
-it, **Algolia search returns results**, Mermaid diagrams render, and
-`/sitemap.xml` is present on the published site.
+**Operator prerequisite:** none to produce the docs branch. Serving it via GitHub
+Pages (source: the docs branch, or a workflow reading from it) is an optional,
+separate operator toggle (§17).
+**DoD:** always verifiable from the docs branch alone — after a release deploy, the
+branch contains the new version's directory, and alias state is correct (`latest`
+moved iff this release is the highest, per the monotonic guard). When the operator
+has additionally enabled Pages to serve the branch: `latest` resolves at the site
+root, Zensical's built-in search returns results, Mermaid diagrams render, and
+`/sitemap.xml` is present on the served site.
 
 ```mermaid
 flowchart TD
-    A["Version tag (release cut), docs=true"] --> B["Gather md/mdx: authored + language-emitted (§12)"]
-    B --> C["docs:version (new version) + prune to retention cap"]
-    C --> D["Build Docusaurus site (versioning + Algolia search + Mermaid + sitemap)"]
-    D --> E["Publish to Pages (pages: write, no stored secret)"]
-    E --> G["Move 'latest' ONLY if highest released version<br/>(per-alias concurrency group; §8.14)"]
-    G --> F["Confirm: version in dropdown, 'latest' resolves, search works"]
+    A["Version tag (release cut), docs=true"] --> B["Gated checkout (gated-sha) + pinned install (§11.3)"]
+    B --> C["Fetch existing docs branch (fail-closed) + emit language docs (§12)"]
+    C --> D["§8.14 monotonic guard"]
+    D --> E["mike deploy on local branch (+ retention prune)"]
+    E --> F["Bundle handoff to push job"]
+    F --> G["Fast-forward push (contents: write, no consumer code)"]
+    G --> H["Confirm: version dir + alias state on branch;<br/>site checks only if Pages is enabled"]
 ```

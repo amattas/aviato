@@ -23,10 +23,12 @@ Reusable workflows live in `.github/workflows` and are consumed through
 - `reusable-pypi-publish.yml` publishes Python packages through PyPI trusted
   publishing; the publish job runs in a deployment environment (default
   `pypi`).
-- `reusable-docs-pages.yml` installs with the same npm hardening, lints the
-  Docusaurus site, versions it, and publishes it to GitHub Pages. Its
-  `docs-retention` input defaults to 0, which keeps every released version's
-  docs.
+- `reusable-docs-pages.yml` installs the pinned Zensical + mike-fork toolchain,
+  emits language docs, and versions the site onto a docs branch (default
+  `gh-pages`) via mike; a separate no-consumer-code push job (C12-W4) fast-
+  forward-pushes the bundle handoff. Its `docs-retention` input defaults to 0,
+  which keeps every released version's docs. Pages serving of that branch is a
+  separate, optional operator toggle.
 - `reusable-app-store-connect.yml` archives, signs, exports, and uploads Apple
   app builds to App Store Connect.
 - `reusable-security-baseline.yml` provides CodeQL and dependency-review gates.
@@ -56,12 +58,9 @@ The CI workflows use a common language-module contract:
 Every language workflow should expose the same input names. Unsupported steps
 use an empty command and a disabled default.
 
-Docs-enabled profiles scaffold a Docusaurus `website/` with the first-party
-Docusaurus ESLint plugin, opt-in Algolia search (enabled via the `algolia`
-profile variable; default off), Mermaid rendering, and sitemap configuration
-through the classic preset. Node and docs scaffolds include managed `.npmrc`
-files with the npm supply-chain defaults and package engines requiring
-Node 24/npm >=11.10.
+Docs-enabled profiles scaffold a Zensical `website/` with an exact-pinned
+`requirements.txt` (zensical + the mike fork, §11.3), Zensical's built-in
+search, Mermaid rendering, and sitemap configuration.
 
 ### Caller Templates
 

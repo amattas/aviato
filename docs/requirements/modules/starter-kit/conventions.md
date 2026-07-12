@@ -21,6 +21,7 @@ masters. These decisions are normative for the kit and its consumers.
   workflows exact-pinned. Dependabot bumps weekly.
 - Container releases are multi-arch (amd64 + arm64 on native runners); each arch
   scanned before its bytes are pushed, then a manifest ties them together.
-- Docs are Docusaurus everywhere (no mkdocs flavor); docs deploy on main pushes;
-  native versioning (latest at root, main at `/dev`).
+- Docs are Zensical everywhere, versioned onto a docs branch (default
+  `gh-pages`) via a mike fork; docs deploy on release tags. GitHub Pages
+  serving of that branch is a separate, optional operator toggle.
 - Learnings from consumer repos are backported to the kit masters.
