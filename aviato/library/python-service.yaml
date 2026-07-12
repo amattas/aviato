@@ -8,6 +8,9 @@ variables:
   # an unset optional is omitted from render vars so seed-once templates keep the
   # {{ owner }} placeholder instead of baking "None".
   - {name: owner, type: string, required: false}
+  # seeds the zensical.toml site metadata (seed-once; unset leaves the placeholder)
+  - {name: repo, type: string, required: false}
+  - {name: project-name, type: string, required: false}
   # R4-3: optional; the consumer's default branch (default `main`), templated into the
   # generated callers' trigger filters and release-gate input for non-`main` repos.
   - {name: default-branch, type: string, required: false, default: main}

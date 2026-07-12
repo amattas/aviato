@@ -13,6 +13,10 @@ variables:
   - {name: typecheck-command, type: string, required: false, default: "python -m mypy --strict ."}
   # Self-docs: the API-reference emit command targets the import package.
   - {name: import-name, type: string}
+  # seeds the zensical.toml site metadata (seed-once; unset leaves the placeholder)
+  - {name: owner, type: string, required: false}
+  - {name: repo, type: string, required: false}
+  - {name: project-name, type: string, required: false}
 docs_pipeline: docs-pages
 version_source:
   locations: [pyproject.toml]

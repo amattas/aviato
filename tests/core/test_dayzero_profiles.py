@@ -92,12 +92,15 @@ def test_python_service_is_a_container_service_not_a_library(registry: Registry)
     # defaults to the repo slug.
     rs = resolve_profile(registry, "python-service")
     var_names = {v.name for v in rs.variables}
-    # Only the every-profile vars — `default-branch` (R4-3) and `owner` (finding 28);
-    # there is no required container-service-specific variable (no wheel/import
-    # packaging, no image-name).
+    # Only the every-profile vars — `default-branch` (R4-3), `owner` (finding 28), and the
+    # optional docs-site metadata vars `repo`/`project-name` (seed the zensical.toml);
+    # there is no required container-service-specific variable (no wheel/import packaging,
+    # no image-name).
     assert var_names == {
         "default-branch",
         "owner",
+        "repo",
+        "project-name",
     }, var_names
     assert "distribution-name" not in var_names and "import-name" not in var_names
     assert "image-name" not in var_names
