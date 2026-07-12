@@ -28,6 +28,7 @@ from .core.marker import parse_marker_from_text
 from .core.model import ResolvedSet, VariableSpec
 from .core.offboarding import offboard as offboard_repo
 from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, resolved_artifacts
+from .core.pathguard import confined_target
 from .core.provision import provision_repo
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
@@ -55,6 +56,19 @@ DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
 # data, like the markers above.
 DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
 LIBRARY_REMOTE_URL = "https://github.com/amattas/aviato.git"
+DECLARATION_RELATIVE_PATH = ".github/aviato.yaml"
+
+
+def _consumer_declaration_target(root: Path, *, operation: str) -> Path:
+    return confined_target(root, DECLARATION_RELATIVE_PATH, operation=operation)
+
+
+def _load_consumer_declaration(root: Path) -> Declaration:
+    return load_declaration(_consumer_declaration_target(root, operation="read declaration"))
+
+
+def _dump_consumer_declaration(declaration: Declaration, root: Path) -> None:
+    dump_declaration(declaration, root, DECLARATION_RELATIVE_PATH)
 
 
 def _non_negative_int(value: str) -> int:
@@ -147,7 +161,13 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
     required_approvals = args.required_approvals
     try:
         if getattr(args, "declaration", None):
-            declaration = load_declaration(Path(args.declaration))
+            supplied_declaration = Path(args.declaration)
+            if supplied_declaration.name != "aviato.yaml" or supplied_declaration.parent.name != ".github":
+                raise DeclarationError(
+                    f"declaration must use the canonical {DECLARATION_RELATIVE_PATH} consumer path: "
+                    f"{supplied_declaration}"
+                )
+            declaration = _load_consumer_declaration(supplied_declaration.parent.parent)
             extra_checks = _profile_status_checks(declaration.profile, declaration.overrides)
             if required_approvals is None:
                 from .core.composition import resolve_profile
@@ -550,8 +570,8 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         )
         return 2
 
-    declaration_path = target / ".github" / "aviato.yaml"
-    existing = load_declaration(declaration_path) if declaration_path.is_file() else None
+    declaration_path = _consumer_declaration_target(target, operation="inspect declaration")
+    existing = _load_consumer_declaration(target) if declaration_path.is_file() else None
 
     try:
         declaration, variables = _resolve_onboard_declaration(args, registry, resolved, existing)
@@ -559,8 +579,7 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         print(str(exc), file=sys.stderr)
         return 2
 
-    declaration_path.parent.mkdir(parents=True, exist_ok=True)
-    dump_declaration(declaration, declaration_path)
+    _dump_consumer_declaration(declaration, target)
     print(f"wrote {declaration_path.relative_to(target)}")
 
     # Scaffold with the RESOLVED declaration.docs (the preserved/effective value), so the docs
@@ -622,8 +641,8 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
         print(f"could not clone {slug}: {exc}", file=sys.stderr)
         return 1
 
-    declaration_path = clone / ".github" / "aviato.yaml"
-    existing = load_declaration(declaration_path) if declaration_path.is_file() else None
+    declaration_path = _consumer_declaration_target(clone, operation="inspect declaration")
+    existing = _load_consumer_declaration(clone) if declaration_path.is_file() else None
     try:
         declaration, variables = _resolve_onboard_declaration(args, registry, resolved, existing)
     except AviatoError as exc:
@@ -693,10 +712,11 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     # declaration with no docs artifacts). Apply it to the resolved set + plan here for a LOCAL
     # target; the --open-pr path reads the existing from its clone and uses declaration.docs.
     if not args.docs:
-        decl_path = Path(args.target) / ".github" / "aviato.yaml"
+        target_root = Path(args.target)
+        decl_path = _consumer_declaration_target(target_root, operation="inspect declaration")
         if decl_path.is_file():
             with contextlib.suppress(AviatoError):
-                args.docs = load_declaration(decl_path).docs
+                args.docs = _load_consumer_declaration(target_root).docs
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
         resolved = resolve_profile(registry, args.profile, docs=args.docs)
@@ -715,9 +735,10 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     # without --migrate-profile).
     known_vars = _parse_var_flags(args.var)
     canonical_pin = normalize_pin(args.pin) if args.pin is not None else None
-    decl_path = Path(args.target) / ".github" / "aviato.yaml"
+    target_root = Path(args.target)
+    decl_path = _consumer_declaration_target(target_root, operation="inspect declaration")
     if decl_path.is_file():
-        existing = load_declaration(decl_path)
+        existing = _load_consumer_declaration(target_root)
         if existing.profile != args.profile and not getattr(args, "migrate_profile", False):
             raise AviatoError(
                 f"repository already declares profile {existing.profile!r}; pass --migrate-profile "
@@ -769,14 +790,14 @@ def cmd_onboard(args: argparse.Namespace) -> int:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
@@ -848,14 +869,14 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 def cmd_sync(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         items = materialize_items(
             registry,
             declaration.profile,
@@ -1005,11 +1026,11 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
     — exactly like ``drift-report``/``sync`` — so an incompatible local tool cannot
     regenerate a consumer's files (unless the operator passes --override-version-pin).
     """
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         raise AviatoError(f"no declaration at {declaration_path}")
 
-    declaration = load_declaration(declaration_path)
+    declaration = _load_consumer_declaration(root)
     expected = _expected_artifacts(registry, declaration)
     # §2.6 pin gate before any remote/proposal work (matches drift-report/sync): an
     # incompatible local tool must not regenerate a consumer's files via scan --fix.
@@ -1112,14 +1133,14 @@ def cmd_repin(args: argparse.Namespace) -> int:
         return _repin_proposal(args)
 
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         plan = plan_repin(registry, declaration, args.version)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -1173,7 +1194,7 @@ def cmd_repin(args: argparse.Namespace) -> int:
         bootstrap=updated.bootstrap,
         overrides=updated.overrides,
     )
-    dump_declaration(updated, declaration_path)
+    _dump_consumer_declaration(updated, root)
     print(f"wrote pin {plan.target_version} to {declaration_path.relative_to(root)}")
     result = scaffold(root, items, profile=updated.profile, version=updated.version)
     for output in result.written:
@@ -1216,14 +1237,14 @@ def _repin_proposal(args: argparse.Namespace) -> int:
         print(f"could not clone {slug}: {exc}", file=sys.stderr)
         return 1
 
-    declaration_path = clone / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(clone, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}; onboard first", file=sys.stderr)
         return 2
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(clone)
         plan = plan_repin(registry, declaration, args.version)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -1260,7 +1281,7 @@ def _repin_proposal(args: argparse.Namespace) -> int:
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    dump_declaration(updated, declaration_path)
+    _dump_consumer_declaration(updated, clone)
     result = scaffold(clone, items, profile=updated.profile, version=updated.version)
 
     body_lines = [
@@ -1295,14 +1316,14 @@ def cmd_offboard(args: argparse.Namespace) -> int:
         return _offboard_proposal(args)
 
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         expected = _expected_artifacts(registry, declaration)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -1361,14 +1382,14 @@ def _offboard_proposal(args: argparse.Namespace) -> int:
         print(f"could not clone {slug}: {exc}", file=sys.stderr)
         return 1
 
-    declaration_path = clone / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(clone, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}; nothing to offboard", file=sys.stderr)
         return 2
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(clone)
         expected = _expected_artifacts(registry, declaration)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -1408,7 +1429,7 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
     not the gated §5.7 drift/consent flow.
     """
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
@@ -1420,7 +1441,7 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
@@ -1512,9 +1533,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
         atexit.register(shutil.rmtree, workdir, True)  # clean the clone at exit (one command per process)
         clone = workdir / "repo"
         run(["gh", "repo", "clone", slug, str(clone)])
-        decl_path = clone / ".github" / "aviato.yaml"
-        decl_path.parent.mkdir(parents=True, exist_ok=True)
-        dump_declaration(declaration, decl_path)
+        _dump_consumer_declaration(declaration, clone)
         scaffold(clone, items, profile=args.profile, version=args.pin)
         run(["git", "-C", str(clone), "config", "user.name", "aviato-bot"])
         run(["git", "-C", str(clone), "config", "user.email", "aviato-bot@users.noreply.github.com"])
@@ -1608,7 +1627,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         return 2
 
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
@@ -1620,7 +1639,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
@@ -1836,13 +1855,13 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
         return 2
     args.version = bare
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -1881,7 +1900,7 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
 
 def cmd_reconcile(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
@@ -1893,7 +1912,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )

@@ -5,12 +5,27 @@ from pathlib import Path
 import pytest
 
 from aviato.core.diagnosis import ExpectedArtifact, diagnose
-from aviato.core.errors import BootstrapError
+from aviato.core.errors import BootstrapError, PathConfinementError
 from aviato.core.scaffold import ScaffoldItem, scaffold
 
 
 def _scaffold_one(root: Path, output: str, body: str) -> None:
     scaffold(root, [ScaffoldItem(output, body, "#", False)], profile="p", version="v1")
+
+
+def test_diagnose_rejects_nested_symlinked_parent(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    outside_target = outside / "cfg.py"
+    original = b"outside remains unchanged\n"
+    outside_target.write_bytes(original)
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "managed").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(PathConfinementError, match=r"diagnose artifact.*nested/managed/cfg\.py"):
+        diagnose(tmp_path, [ExpectedArtifact("nested/managed/cfg.py", "expected\n")])
+
+    assert outside_target.read_bytes() == original
 
 
 def test_diagnose_tolerates_non_utf8_workflow_file(tmp_path: Path) -> None:

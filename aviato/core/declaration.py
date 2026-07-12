@@ -7,6 +7,7 @@ from typing import Any
 import yaml
 
 from .errors import DeclarationError
+from .scaffold import atomic_write
 from .version import is_known_version_pin
 
 
@@ -138,5 +139,6 @@ def declaration_to_yaml(declaration: Declaration) -> str:
     return yaml.safe_dump(payload, sort_keys=False)
 
 
-def dump_declaration(declaration: Declaration, path: Path) -> None:
-    Path(path).write_text(declaration_to_yaml(declaration), encoding="utf-8")
+def dump_declaration(declaration: Declaration, root: Path, relative: str) -> None:
+    """Atomically write a declaration beneath its known consumer root."""
+    atomic_write(root, relative, declaration_to_yaml(declaration), operation="write declaration")

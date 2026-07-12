@@ -14,14 +14,17 @@ from .model import (
     TemplateModule,
     WorkflowsBundle,
 )
+from .pathguard import confined_target
 
 
-def _load_doc(path: Path) -> dict[str, Any]:
+def _load_doc(root: Path, relative: str) -> dict[str, Any]:
+    path = confined_target(root, relative, operation="read module definition")
     if not path.is_file():
         raise CompositionError(f"missing module definition: {path}")
     # R1-1: a malformed/unreadable module definition must raise CompositionError (an AviatoError),
     # not a raw yaml.YAMLError/OSError that escapes callers guarding only AviatoError.
     try:
+        path = confined_target(root, relative, operation="read module definition")
         with path.open("r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle)
     except yaml.YAMLError as exc:
@@ -33,7 +36,7 @@ def _load_doc(path: Path) -> dict[str, Any]:
     return data
 
 
-def _load_optional_manifest(path: Path) -> dict[str, Any]:
+def _load_optional_manifest(root: Path, relative: str) -> dict[str, Any]:
     """Read a manifest that may legitimately be absent, guarded like :func:`_load_doc` (R2-3-2).
 
     Absent → ``{}``. A malformed/unreadable manifest raises ``CompositionError`` (an AviatoError),
@@ -41,9 +44,11 @@ def _load_optional_manifest(path: Path) -> dict[str, Any]:
     guard only AviatoError — the documented R1-1 invariant, previously not applied to the pipeline
     manifest loaders.
     """
+    path = confined_target(root, relative, operation="read optional manifest")
     if not path.is_file():
         return {}
     try:
+        path = confined_target(root, relative, operation="read optional manifest")
         with path.open("r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
     except yaml.YAMLError as exc:
@@ -81,7 +86,7 @@ class Registry:
         self.root = Path(root)
 
     def profile_doc(self, name: str) -> dict[str, Any]:
-        return _load_doc(self.root / f"{name}.yaml")
+        return _load_doc(self.root, f"{name}.yaml")
 
     def profile(self, name: str) -> Profile:
         doc = self.profile_doc(name)
@@ -96,7 +101,7 @@ class Registry:
             raise CompositionError(f"profile {name!r} missing field: {exc}") from exc
 
     def workflows_bundle(self, name: str) -> WorkflowsBundle:
-        doc = _load_doc(self.root / "bundles" / "workflows" / f"{name}.yaml")
+        doc = _load_doc(self.root, f"bundles/workflows/{name}.yaml")
         return WorkflowsBundle(
             name=doc["name"],
             extends=doc.get("extends"),
@@ -106,7 +111,7 @@ class Registry:
         )
 
     def scaffold_bundle(self, name: str) -> ScaffoldBundle:
-        doc = _load_doc(self.root / "bundles" / "scaffold" / f"{name}.yaml")
+        doc = _load_doc(self.root, f"bundles/scaffold/{name}.yaml")
         return ScaffoldBundle(
             name=doc["name"],
             extends=doc.get("extends"),
@@ -116,7 +121,7 @@ class Registry:
         )
 
     def settings_bundle(self, name: str) -> SettingsBundle:
-        doc = _load_doc(self.root / "bundles" / "settings" / f"{name}.yaml")
+        doc = _load_doc(self.root, f"bundles/settings/{name}.yaml")
         return SettingsBundle(
             name=doc["name"],
             extends=doc.get("extends"),
@@ -129,7 +134,7 @@ class Registry:
         a repo without it. Returns ``{}`` when there is no ``baseline`` bundle (a bare test
         registry), so the floor is enforced only where the Library actually declares one. The
         canonical floor lives in DATA (baseline.yaml), so core names no specific scanner (§9b)."""
-        path = self.root / "bundles" / "settings" / "baseline.yaml"
+        path = confined_target(self.root, "bundles/settings/baseline.yaml", operation="read settings baseline")
         if not path.is_file():
             return {}
         return dict(self.settings_bundle("baseline").settings.get("security", {}))
@@ -141,7 +146,7 @@ class Registry:
         declared — composition tolerates this so test/empty registries still work;
         day-zero pipelines are all declared.
         """
-        manifest = _load_optional_manifest(self.root / "pipelines.yaml")
+        manifest = _load_optional_manifest(self.root, "pipelines.yaml")
         doc = manifest.get(name)
         if not isinstance(doc, dict):
             return None
@@ -158,7 +163,7 @@ class Registry:
 
     def always_on_pipelines(self) -> tuple[str, ...]:
         """Pipelines the data flags ``always_on`` — they must survive every composition (§2.13)."""
-        manifest = _load_optional_manifest(self.root / "pipelines.yaml")
+        manifest = _load_optional_manifest(self.root, "pipelines.yaml")
         return tuple(name for name, doc in manifest.items() if isinstance(doc, dict) and doc.get("always_on"))
 
     def declared_pipelines(self) -> set[str] | None:
@@ -169,13 +174,17 @@ class Registry:
         test/empty registry that declares none (which stays lenient). The day-zero Library has a
         complete manifest, so an unknown pipeline ref there is a typo and must hard-error (§5.1).
         """
-        path = self.root / "pipelines.yaml"
+        path = confined_target(self.root, "pipelines.yaml", operation="read pipeline manifest")
         if not path.is_file():
             return None  # absent → None (distinct from an empty manifest); see docstring
-        return {name for name, doc in _load_optional_manifest(path).items() if isinstance(doc, dict)}
+        return {
+            name
+            for name, doc in _load_optional_manifest(self.root, "pipelines.yaml").items()
+            if isinstance(doc, dict)
+        }
 
     def template_module(self, name: str) -> TemplateModule:
-        doc = _load_doc(self.root / "scaffold" / f"{name}.yaml")
+        doc = _load_doc(self.root, f"scaffold/{name}.yaml")
         return TemplateModule(
             output_path=_confined_relpath(doc.get("output_path"), "output_path"),
             source=_confined_relpath(doc.get("source"), "source"),
@@ -187,7 +196,9 @@ class Registry:
 
     def template_body(self, module: TemplateModule) -> str:
         """Read a template module's raw source body from the module-source tree."""
-        path = self.root / "scaffold" / module.source
+        relative = f"scaffold/{module.source}"
+        path = confined_target(self.root, relative, operation="read template source")
         if not path.is_file():
             raise CompositionError(f"missing template source: {path}")
+        path = confined_target(self.root, relative, operation="read template source")
         return path.read_text(encoding="utf-8")

@@ -2,8 +2,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from aviato.core.errors import PathConfinementError
 from aviato.core.marker import content_hash
 from aviato.core.scaffold import ScaffoldItem, read_sidecar, scaffold
+
+
+def test_scaffold_rejects_symlinked_parent(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (tmp_path / ".github").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(PathConfinementError, match=r"write scaffold output.*\.github/workflows/ci\.yml"):
+        scaffold(
+            tmp_path,
+            [ScaffoldItem(".github/workflows/ci.yml", "name: ci\n", "#")],
+            profile="p",
+            version="1",
+        )
+    assert not (outside / "workflows/ci.yml").exists()
 
 
 def test_writes_managed_file_with_marker_atomically(tmp_path: Path) -> None:
@@ -197,7 +214,7 @@ def test_atomic_write_preserves_existing_mode(tmp_path: Path) -> None:
     target = tmp_path / "script.sh"
     target.write_text("old", encoding="utf-8")
     target.chmod(0o755)
-    atomic_write(target, "new")
+    atomic_write(tmp_path, "script.sh", "new")
     assert target.read_text(encoding="utf-8") == "new"
     assert target.stat().st_mode & 0o777 == 0o755
 
@@ -210,7 +227,7 @@ def test_atomic_write_new_files_honor_umask(tmp_path: Path) -> None:
     previous = os.umask(0o022)
     try:
         target = tmp_path / "fresh.txt"
-        atomic_write(target, "x")
+        atomic_write(tmp_path, "fresh.txt", "x")
         assert target.stat().st_mode & 0o777 == 0o644
     finally:
         os.umask(previous)

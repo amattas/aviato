@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .marker import content_hash, parse_marker_from_text, render_marker, strip_marker_from_text
+from .pathguard import confined_target
 from .version import is_known_version_pin
 
 SIDECAR_PATH = ".github/aviato.seed.json"
@@ -35,8 +36,20 @@ class ScaffoldResult:
     seeded: list[str] = field(default_factory=list)
 
 
-def atomic_write(path: Path, text: str) -> None:
+def atomic_write(root: Path, relative: str, text: str | None = None, *, operation: str = "write file") -> None:
+    # Keep the original path/text form for non-consumer callers while consumer
+    # operations use the root/relative/text form and are re-guarded at replace.
+    if text is not None:
+        confined = True
+        path = confined_target(root, relative, operation=operation)
+        rendered = text
+    else:
+        confined = False
+        path = Path(root)
+        rendered = relative
     path.parent.mkdir(parents=True, exist_ok=True)
+    if confined:
+        path = confined_target(root, relative, operation=operation)
     # finding 22: mkstemp creates the temp file 0600 and os.replace carries that mode to
     # the destination — silently DEMOTING an existing file's permissions (group-read,
     # +x) and creating new files stricter than the umask. Preserve an existing file's
@@ -52,8 +65,10 @@ def atomic_write(path: Path, text: str) -> None:
         # newline="" disables platform newline translation so the bytes on disk are exactly
         # the rendered string — byte-identical output across platforms (§5.3 determinism).
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            handle.write(text)
+            handle.write(rendered)
         os.chmod(tmp_name, mode)
+        if confined:
+            path = confined_target(root, relative, operation=operation)
         os.replace(tmp_name, path)
     except BaseException:
         Path(tmp_name).unlink(missing_ok=True)
@@ -61,7 +76,7 @@ def atomic_write(path: Path, text: str) -> None:
 
 
 def read_sidecar(root: Path) -> dict[str, str]:
-    path = Path(root) / SIDECAR_PATH
+    path = confined_target(root, SIDECAR_PATH, operation="read sidecar")
     if not path.is_file():
         return {}
     # The sidecar is a report-only advisory record (§6.3); a corrupt/truncated/non-UTF-8 one
@@ -69,6 +84,7 @@ def read_sidecar(root: Path) -> dict[str, str]:
     # never crash diagnosis/scaffold — and thus never abort a whole fleet scan (the per-repo
     # guard in scan_fleet catches only AviatoError, so a raw JSONDecodeError would escape).
     try:
+        path = confined_target(root, SIDECAR_PATH, operation="read sidecar")
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
     except (json.JSONDecodeError, UnicodeDecodeError, OSError):
@@ -83,9 +99,12 @@ def _write_sidecar(root: Path, data: dict[str, str]) -> None:
     # process against an operator's local checkout, so concurrent scaffolds of one tree are not an
     # expected workflow; the sidecar is report-only, so the worst case is a stale/incomplete record
     # (no file is ever half-written), recovered on the next single-writer sync.
-    path = Path(root) / SIDECAR_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+    atomic_write(
+        root,
+        SIDECAR_PATH,
+        json.dumps(data, indent=2, sort_keys=True) + "\n",
+        operation="write sidecar",
+    )
 
 
 def render_managed(item: ScaffoldItem, *, profile: str, version: str) -> str:
@@ -122,11 +141,16 @@ def scaffold(
     for item in items:
         overlay[item.output] = item
 
+    # Reject a hostile output before advisory sidecar access can obscure which
+    # managed artifact made the requested scaffold unsafe.
+    for output in overlay:
+        confined_target(root, output, operation="write scaffold output")
+
     sidecar = read_sidecar(root)
     sidecar_changed = False
 
     for output, item in overlay.items():
-        target = root / output
+        target = confined_target(root, output, operation="read scaffold output")
 
         if item.seed_once:
             if target.exists():
@@ -140,12 +164,13 @@ def scaffold(
                 # content is unknowable.
                 if output not in sidecar:
                     try:
+                        target = confined_target(root, output, operation="read scaffold output")
                         sidecar[output] = content_hash(target.read_text(encoding="utf-8"))
                         sidecar_changed = True
                     except (UnicodeDecodeError, OSError):
                         pass  # binary seed-once file (§6.3), or a directory/unreadable path (N4) — no text hash
                 continue
-            atomic_write(target, item.body)
+            atomic_write(root, output, item.body, operation="write scaffold output")
             sidecar[output] = content_hash(item.body)
             sidecar_changed = True
             result.seeded.append(output)
@@ -155,6 +180,7 @@ def scaffold(
         expected_hash = content_hash(item.body)
         if target.exists():
             try:
+                target = confined_target(root, output, operation="read scaffold output")
                 existing = target.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 # A non-UTF-8 file (or a DIRECTORY / otherwise-unreadable path at the managed output,
@@ -209,7 +235,7 @@ def scaffold(
                     result.skipped_modified.append(output)
                     continue
                 # else: template moved or marker stale → regenerate (diagnosis "mergeable").
-        atomic_write(target, rendered)
+        atomic_write(root, output, rendered, operation="write scaffold output")
         result.written.append(output)
 
     if sidecar_changed:

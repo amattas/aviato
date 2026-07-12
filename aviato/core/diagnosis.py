@@ -7,6 +7,7 @@ from typing import Literal
 
 from .errors import BootstrapError
 from .marker import content_hash, parse_marker_from_text, strip_marker_from_text
+from .pathguard import confined_target
 from .scaffold import read_sidecar
 from .version import is_known_version_pin
 
@@ -50,7 +51,7 @@ def _has_drift_automation(root: Path, markers: Sequence[str]) -> bool:
     """
     if not markers:
         return False
-    workflows = root / ".github" / "workflows"
+    workflows = confined_target(root, ".github/workflows", operation="scan drift automation")
     if not workflows.is_dir():
         return False
     # errors="replace": a corrupted/non-UTF-8 workflow file must not crash diagnosis (and thus a
@@ -59,6 +60,8 @@ def _has_drift_automation(root: Path, markers: Sequence[str]) -> bool:
     # "drift automation absent" (matches validation/actionpins dual-extension scans).
     for ext in ("*.yml", "*.yaml"):
         for path in workflows.glob(ext):
+            relative = path.relative_to(Path(root).resolve()).as_posix()
+            path = confined_target(root, relative, operation="read drift automation workflow")
             # C12-R3-4 (§5.11/§2.4): a glob hit can be a DIRECTORY (`aviato-drift.yml/`) or otherwise
             # unreadable — `read_text` then raises `IsADirectoryError`/`OSError` outside the AviatoError
             # net and crashes `doctor` / a whole fleet scan. Skip non-files; treat a read error as "this
@@ -66,6 +69,7 @@ def _has_drift_automation(root: Path, markers: Sequence[str]) -> bool:
             if not path.is_file():
                 continue
             try:
+                path = confined_target(root, relative, operation="read drift automation workflow")
                 text = path.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
@@ -83,7 +87,9 @@ def _probe_prerequisites(root: Path, prerequisite_paths: Mapping[str, Sequence[s
     satisfied if any of its candidate paths exists.
     """
     return {
-        name: any((root / candidate).is_file() for candidate in candidates)
+        name: any(
+            confined_target(root, candidate, operation="probe prerequisite").is_file() for candidate in candidates
+        )
         for name, candidates in prerequisite_paths.items()
     }
 
@@ -98,10 +104,14 @@ def _live_body(text: str) -> str:
     return strip_marker_from_text(text)
 
 
-def _classify_managed(target: Path, expected_body: str, *, profile: str | None = None) -> ArtifactStatus:
+def _classify_managed(
+    root: Path, relative: str, expected_body: str, *, profile: str | None = None
+) -> ArtifactStatus:
+    target = confined_target(root, relative, operation="diagnose artifact")
     if not target.exists():
         return "missing"
     try:
+        target = confined_target(root, relative, operation="diagnose artifact")
         text = target.read_text(encoding="utf-8")
     except (UnicodeDecodeError, OSError):
         # A non-UTF-8 file — OR a DIRECTORY / otherwise-unreadable path (R5-3-DIAG-OS:
@@ -175,7 +185,7 @@ def diagnose(
     sidecar = read_sidecar(root)
 
     for artifact in expected:
-        target = root / artifact.output_path
+        target = confined_target(root, artifact.output_path, operation="diagnose artifact")
         if artifact.seed_once:
             # A recorded seed-once file diverges if it is now MISSING (deleted — §6.3 tamper
             # visibility, e.g. a removed operator-owned seed file) OR its content changed. The `and`/`or`
@@ -195,7 +205,9 @@ def diagnose(
                 if not target.exists() or live_hash != recorded:
                     report.seed_divergence.append(artifact.output_path)
             continue
-        report.statuses[artifact.output_path] = _classify_managed(target, artifact.body, profile=profile)
+        report.statuses[artifact.output_path] = _classify_managed(
+            root, artifact.output_path, artifact.body, profile=profile
+        )
 
     declaration_variables = declaration_variables or {}
     report.secret_in_declaration = any(name in declaration_variables for name in secret_var_names)

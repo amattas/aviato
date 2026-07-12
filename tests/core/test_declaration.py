@@ -54,7 +54,7 @@ def test_non_mapping_is_error(tmp_path: Path) -> None:
 def test_round_trip(tmp_path: Path) -> None:
     decl = Declaration(profile="p", version="2", docs=True, variables={"a": "b"}, overrides={"settings": {}})
     path = tmp_path / "aviato.yaml"
-    dump_declaration(decl, path)
+    dump_declaration(decl, tmp_path, "aviato.yaml")
     assert load_declaration(path) == decl
 
 
@@ -132,7 +132,7 @@ def test_bootstrap_field_parses_round_trips_and_omitted_when_false(tmp_path: Pat
     assert load_declaration  # imported
     lib = Declaration(profile="p", version="2", bootstrap=True)
     path = tmp_path / "aviato.yaml"
-    dump_declaration(lib, path)
+    dump_declaration(lib, tmp_path, "aviato.yaml")
     assert load_declaration(path) == lib  # round-trips bootstrap: true
     assert yaml.safe_load(path.read_text())["bootstrap"] is True
     # default-False declaration must NOT emit the key at all

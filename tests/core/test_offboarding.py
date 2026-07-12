@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from aviato.core.errors import PathConfinementError
 from aviato.core.offboarding import offboard
 from aviato.core.scaffold import ScaffoldItem, scaffold
 
@@ -11,6 +14,31 @@ def _setup_consumer(root: Path) -> None:
     github.mkdir()
     (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
     scaffold(root, [ScaffoldItem("ruff.toml", "line-length = 120\n", "#", False)], profile="p", version="v1")
+
+
+def test_offboard_preflights_symlinked_workflow_leaf_before_mutation(tmp_path: Path) -> None:
+    _setup_consumer(tmp_path)
+    passive_before = (tmp_path / "ruff.toml").read_bytes()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.yml"
+    scaffold(
+        outside.parent,
+        [ScaffoldItem(outside.name, "name: outside\n", "#", False)],
+        profile="p",
+        version="v1",
+    )
+    outside_before = outside.read_bytes()
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir()
+    leaf = workflows / "ci.yml"
+    leaf.symlink_to(outside)
+
+    with pytest.raises(PathConfinementError, match=r"offboard.*\.github/workflows/ci\.yml"):
+        offboard(tmp_path, ["ruff.toml", ".github/workflows/ci.yml"], keep_files=False)
+
+    assert (tmp_path / "ruff.toml").read_bytes() == passive_before
+    assert outside.read_bytes() == outside_before
+    assert leaf.is_symlink()
+    assert (tmp_path / ".github" / "aviato.yaml").is_file()
 
 
 def test_offboard_skips_non_utf8_file_instead_of_crashing(tmp_path: Path) -> None:
