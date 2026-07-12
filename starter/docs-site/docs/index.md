@@ -1,9 +1,4 @@
----
-slug: /
-sidebar_position: 1
-sidebar_label: Overview
-title: PROJECT
----
+# PROJECT
 
 PROJECT is ... (one-paragraph intro — what it is, who it's for, the headline
 capabilities).

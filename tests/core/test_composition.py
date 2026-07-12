@@ -295,7 +295,7 @@ def test_docs_opt_in_seeds_zensical_scaffold(resolved_python_library_docs: Resol
     # carries no module name, so the scaffold set is inspected by output_path (as in
     # test_resolve_resolves_template_refs_to_modules).
     outputs = {t.output_path for t in resolved_python_library_docs.templates}
-    assert {"website/zensical.toml", "website/docs/intro.md", "website/requirements.txt"} <= outputs
+    assert {"website/zensical.toml", "website/docs/index.md", "website/requirements.txt"} <= outputs
     retired = ("sidebars.js", "package.json", "eslint.config.mjs", "/.npmrc")
     assert not any("docusaurus" in o or "algolia" in o or o.endswith(retired) for o in outputs)
 

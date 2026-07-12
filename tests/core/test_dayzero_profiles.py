@@ -241,7 +241,7 @@ def test_docs_opt_in_scaffolds_zensical_site() -> None:
 
     expected = {
         "website/zensical.toml",
-        "website/docs/intro.md",
+        "website/docs/index.md",
         "website/requirements.txt",
     }
     assert expected <= outputs_on
