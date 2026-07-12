@@ -13,6 +13,9 @@ masters. These decisions are normative for the kit and its consumers.
   GitHub release). The GitHub release is created **last**, after publishing.
 - Required check context is the job id `ci`; rulesets applied once via
   `starter/rulesets/apply-rulesets.sh` (idempotent).
+- **All three PR merge methods are allowed** (merge commit, squash, rebase),
+  normalized on every managed repo by `apply-rulesets.sh` for a consistent merge
+  UI across the fleet (2026-07-11 operator decision).
 - **Workflows are vendored, not referenced cross-repo.** PyPI trusted publishing
   matches the workflow file containing the publish step (`release.yml`) plus the
   `release` environment — structurally impossible through a shared cross-repo

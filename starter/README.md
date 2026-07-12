@@ -59,7 +59,8 @@ the `docs/` tree convention: per-module requirements with per-module
 
 1. **Rulesets:** `./rulesets/apply-rulesets.sh OWNER/REPO` — branch protection
    (PR required, `ci` check required, no force-push/deletion, admin bypass for
-   emergencies) and tag protection (tags are immutable). Idempotent; re-run
+   emergencies) and tag protection (tags are immutable). Also normalizes PR
+   merge methods (all three — merge/squash/rebase — allowed). Idempotent; re-run
    any time.
 2. **CodeQL:** repo Settings → Code security → CodeQL analysis → Default setup.
    (Settings-based; needs no workflow file.)
