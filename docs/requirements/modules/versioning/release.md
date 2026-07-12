@@ -18,6 +18,15 @@ gates the move within the major line). The release process must not depend on a 
 in bootstrap, the release pipeline resolves its own module/action references
 locally.
 
+The release gate derives its immutable commit identity from the release tag. When a
+caller supplies `release-tag` (including in-run and `workflow_run` contexts), the gate
+peels `refs/tags/<release-tag>^{commit}`; only a classic tag-triggered run falls back to
+peeling the event `GITHUB_SHA^{commit}`. Every default-branch ancestry check, tag
+equality check, merged-PR lookup, and required-workflow lookup uses that one resolved
+commit. Default-branch membership remains an ancestry invariant
+(`merge-base --is-ancestor`), not branch-tip equality, so a later mainline commit does
+not invalidate an otherwise valid release.
+
 The release proposal must be mergeable under the policy's own branch
 protection: a branch pushed with the platform's automation token never triggers
 CI on its own (the platform suppresses events from that token), so the propose

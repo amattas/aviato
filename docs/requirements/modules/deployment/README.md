@@ -44,6 +44,14 @@ sanctioned mechanisms therefore realize "deploy on the tag" without a stored sec
 Both paths converge on the same gated, tag-pinned deploy; deployments still never run
 on arbitrary push, pull_request, or fork events.
 
+For callers that pass `release-tag`, the surrounding event SHA can be a descendant of
+the release (notably after a `workflow_run`). The release gate therefore peels the
+named tag to its commit and threads that resolved SHA through ancestry, tag-equality,
+merged-PR, and required-workflow checks. In the classic tag-ref context it peels
+`GITHUB_SHA` instead. The branch policy is reachability via
+`git merge-base --is-ancestor`; it intentionally does not require the release commit
+to remain the current default-branch tip.
+
 ### 11.2 Credential posture: OIDC-first, stored secrets only where unavoidable
 
 - Prefer keyless/OIDC or the platform token for every target that supports it.

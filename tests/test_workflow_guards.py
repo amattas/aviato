@@ -164,6 +164,80 @@ def test_callers_pass_gated_sha_to_deploys() -> None:
         assert threaded, f"{caller.name} wires a deploy without threading the gated SHA (C12-W2)"
 
 
+def _release_gate_step(name: str) -> dict:
+    workflow = _load("reusable-release-gate.yml")
+    return next(step for step in workflow["jobs"]["gate"]["steps"] if step.get("name") == name)
+
+
+def test_release_gate_resolves_release_tag_commit_for_descendant_event_sha(tmp_path) -> None:
+    repository = tmp_path / "repository"
+    remote = tmp_path / "remote.git"
+    repository.mkdir()
+    subprocess.run(["git", "init", "--initial-branch=main"], cwd=repository, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Aviato Test"], cwd=repository, check=True)
+    subprocess.run(["git", "config", "user.email", "aviato@example.invalid"], cwd=repository, check=True)
+
+    tracked = repository / "tracked.txt"
+    tracked.write_text("release\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-m", "release"], cwd=repository, check=True, capture_output=True)
+    release_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repository, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    subprocess.run(["git", "tag", "1.2.3"], cwd=repository, check=True)
+
+    tracked.write_text("release\ndescendant\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-am", "descendant"], cwd=repository, check=True, capture_output=True)
+    event_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repository, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    assert event_sha != release_sha
+
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repository, check=True)
+    subprocess.run(["git", "push", "--set-upstream", "origin", "main", "--tags"], cwd=repository, check=True)
+
+    output = tmp_path / "github-output"
+    resolve = _release_gate_step("Resolve gated commit")
+    resolve_env = {
+        **os.environ,
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_SHA": event_sha,
+        "RELEASE_TAG_INPUT": "1.2.3",
+        "RESOLVED_TAG": "1.2.3",
+    }
+    subprocess.run(["bash", "-c", resolve["run"]], cwd=repository, env=resolve_env, check=True)
+    gated_sha = dict(line.split("=", 1) for line in output.read_text().splitlines())["gated-sha"]
+    assert gated_sha == release_sha
+
+    verify = _release_gate_step("Verify tag points at default branch")
+    verify_env = {
+        **os.environ,
+        "DEFAULT_BRANCH": "main",
+        "GATED_SHA": gated_sha,
+        "RESOLVED_TAG": "1.2.3",
+    }
+    subprocess.run(["bash", "-c", verify["run"]], cwd=repository, env=verify_env, check=True)
+
+
+def test_release_gate_threads_resolved_sha_through_later_queries() -> None:
+    workflow = _load("reusable-release-gate.yml")
+    steps = workflow["jobs"]["gate"]["steps"]
+    resolve_index = next(i for i, step in enumerate(steps) if step.get("name") == "Resolve gated commit")
+    later_steps = steps[resolve_index + 1 :]
+    for step in later_steps:
+        assert "GITHUB_SHA" not in step.get("run", ""), f"{step.get('name')} reuses raw event identity"
+
+    output_expression = "${{ steps.resolve-gated-sha.outputs.gated-sha }}"
+    for name in (
+        "Verify tag points at default branch",
+        "Require merged pull request",
+        "Require successful workflow",
+    ):
+        step = next(candidate for candidate in later_steps if candidate.get("name") == name)
+        assert step.get("env", {}).get("GATED_SHA") == output_expression, f"{name} must consume gated-sha"
+
+
 def test_language_ci_contract_parity() -> None:
     # §2.14 (finding 27): every language CI exposes the SAME command contract —
     # unsupported steps carry an empty command + disabled default, never a missing input.
