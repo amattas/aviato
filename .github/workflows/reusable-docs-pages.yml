@@ -1,4 +1,4 @@
-name: Reusable Docusaurus Pages Publish
+name: Reusable Zensical Docs Publish
 
 on:
   workflow_call:
@@ -8,10 +8,6 @@ on:
         required: false
         type: string
         default: ""
-      node-version:
-        required: false
-        type: string
-        default: "24"
       working-directory:
         required: false
         type: string
@@ -23,42 +19,33 @@ on:
         required: false
         type: string
         default: ""
-      install-command:
-        required: false
-        type: string
-        # Reproducible install when a lockfile is committed; falls back to a plain
-        # install on a freshly-scaffolded docs site that has none yet.
-        default: "if [ -f package-lock.json ]; then npm ci; else npm install; fi"
-      lint-command:
-        required: false
-        type: string
-        default: "npm run lint --if-present"
       docs-emit-command:
         description: >-
-          §12 language docs emission: a command that writes API/narrative md(x) into
-          the docs source tree (e.g. pdoc/pydoc-markdown for Python, TypeDoc markdown
-          for Node) before the Docusaurus version-cut + build. Empty = narrative-only
-          (Swift), where the scaffolded pages are the source.
+          §12 language docs emission: a command that writes API/narrative markdown
+          into the docs source tree (e.g. pydoc-markdown for Python) before the
+          mike version deploy. Empty = narrative-only (Swift).
         required: false
         type: string
         default: ""
       docs-source-directory:
-        description: Working directory for docs-emit-command (the project root, where source lives).
         required: false
         type: string
         default: "."
-      build-command:
+      docs-requirements:
+        description: >-
+          Exact-pinned pip requirements for the docs toolchain (zensical + the mike
+          fork), relative to working-directory. Missing file fails closed (§11.3).
         required: false
         type: string
-        default: "npm run build"
-      artifact-path:
+        default: "requirements.txt"
+      docs-branch:
+        description: >-
+          Branch the versioned site is committed to. Pages serving from this branch
+          is a separate, optional operator toggle — this workflow only pushes the
+          branch and succeeds identically whether Pages is enabled or not.
         required: false
         type: string
-        default: "build"
-      environment-name:
-        required: false
-        type: string
-        default: github-pages
+        default: "gh-pages"
       gated-sha:
         description: >-
           The commit SHA the release gate validated (reusable-release-gate.yml's
@@ -69,32 +56,27 @@ on:
       docs-retention:
         description: >-
           Optional retention cap (§13.3). 0 — the default — keeps EVERY released
-          version's docs (operator decision, 2026-06); set N>0 to prune to the
-          newest N versions on each release.
+          version's docs; set N>0 to prune to the newest N versions on each release.
         required: false
         type: number
         default: 0
 
-# C12-W4 (§13.3/§1530 least privilege): permissions are PER-JOB, not workflow-wide. The build job runs
-# the consumer's install/emit/build `eval`s and holds ONLY `contents: read` (+ `actions: read` to read
-# the persisted-versions artifact) — so a compromised npm/docs generator CANNOT mint OIDC. Only the
-# separate deploy job, which runs no consumer code, holds `id-token: write` + `pages: write`.
+# C12-W4 (adapted for branch deploys): permissions are PER-JOB. The build job runs the
+# consumer's emit `eval` and holds ONLY `contents: read`; mike commits land on a LOCAL
+# branch handed off as a git bundle artifact. Only the separate push job — which runs
+# no consumer code — holds `contents: write`.
 permissions: {}
 
-# Per-alias deploy concurrency group so a slower, older-release docs deploy cannot
-# regress the published site / `latest` alias (§8.14). Queue rather than cancel.
 concurrency:
   group: pages-latest-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Build docs
+    name: Build versioned docs
     runs-on: ubuntu-latest
-    # C12-W4: the job that runs the consumer's install/emit/build evals holds NO write/OIDC scope.
     permissions:
       contents: read
-      actions: read
     outputs:
       highest: ${{ steps.guard.outputs.highest }}
     defaults:
@@ -147,56 +129,25 @@ jobs:
             exit 1
           fi
 
-      - name: Set up Node
-        uses: actions/setup-node@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
-          node-version: ${{ inputs.node-version }}
-          cache: npm
-          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+          python-version: "3.12"
 
-      - name: Harden npm install behavior
+      - name: Install docs toolchain (exact pins, §11.3)
         shell: bash
+        env:
+          DOCS_REQUIREMENTS: ${{ inputs.docs-requirements }}
         run: |
           set -euo pipefail
-          npm_version="$(npm --version)"
-          npm_major="${npm_version%%.*}"
-          npm_minor="$(printf '%s' "${npm_version}" | cut -d. -f2)"
-          # finding 13 (verified empirically against the registry): min-release-age is
-          # DEFINED from npm 11.10.0 — npm 11.0–11.9 silently IGNORE the key, leaving
-          # the §11.7 release-age cooldown inert while looking configured.
-          if ! [[ "${npm_major}" =~ ^[0-9]+$ && "${npm_minor}" =~ ^[0-9]+$ ]] || \
-             [ "${npm_major}" -lt 11 ] || { [ "${npm_major}" -eq 11 ] && [ "${npm_minor}" -lt 10 ]; }; then
-            echo "::error::npm ${npm_version} does not support min-release-age (requires npm >=11.10). Update Node/npm before running installs."
+          if [ ! -f "${DOCS_REQUIREMENTS}" ]; then
+            echo "::error::docs requirements file ${DOCS_REQUIREMENTS} is missing; refusing an unpinned toolchain install (§11.3)."
             exit 1
           fi
-          npm config set ignore-scripts true --location=user
-          npm config set engine-strict true --location=user
-          {
-            echo "NPM_CONFIG_IGNORE_SCRIPTS=true"
-            echo "NPM_CONFIG_ENGINE_STRICT=true"
-            echo "NPM_CONFIG_MIN_RELEASE_AGE=7"
-          } >> "${GITHUB_ENV}"
-          npm config set min-release-age 7 --location=user
+          python3 -m pip install --quiet -r "${DOCS_REQUIREMENTS}"
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v6
-
-      - name: Install
-        shell: bash
-        env:
-          INSTALL_COMMAND: ${{ inputs.install-command }}
-        run: eval "$INSTALL_COMMAND"
-
-      - name: Lint docs site
-        if: ${{ inputs.lint-command != '' }}
-        shell: bash
-        env:
-          LINT_COMMAND: ${{ inputs.lint-command }}
-        run: eval "$LINT_COMMAND"
-
-      # §12: emit language API/narrative docs into the docs source tree BEFORE the
-      # version cut, so the generated reference is captured in the versioned snapshot
-      # and the published build. Runs from the project root (source lives there).
+      # §12: emit language API docs BEFORE the mike deploy so the generated reference
+      # is captured in this version's snapshot. Runs with a read-only token (C12-W4).
       - name: Emit language API docs
         if: ${{ inputs.docs-emit-command != '' }}
         shell: bash
@@ -204,36 +155,6 @@ jobs:
         env:
           DOCS_EMIT_COMMAND: ${{ inputs.docs-emit-command }}
         run: eval "$DOCS_EMIT_COMMAND"
-
-      # §13.3 multi-version: restore the accumulated Docusaurus version SOURCES from the
-      # prior run's `aviato-docs-versions` artifact (read-only; no source-branch push).
-      - name: Restore persisted doc versions
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # C12-W5 (§5.14): a present-but-UNRESTORABLE persisted-versions artifact must FAIL, not
-          # silently deploy a truncated version set. Only genuine ABSENCE (first release) is tolerated;
-          # a query/download/unzip error fails closed.
-          if ! aid="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=aviato-docs-versions&per_page=1" \
-              --jq '.artifacts[0].id? // empty')"; then
-            echo "::error::could not query the persisted-versions artifact; failing closed (§5.14)." >&2
-            exit 1
-          fi
-          if [ -n "${aid}" ]; then
-            if ! gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${aid}/zip" > /tmp/versions.zip; then
-              echo "::error::persisted-versions artifact ${aid} present but could not be downloaded; refusing to deploy a truncated version set (§5.14)." >&2
-              exit 1
-            fi
-            if ! unzip -o /tmp/versions.zip -d . >/dev/null 2>&1; then
-              echo "::error::persisted-versions artifact ${aid} present but could not be unzipped; refusing to deploy a truncated version set (§5.14)." >&2
-              exit 1
-            fi
-            echo "Restored prior doc versions from artifact ${aid}."
-          else
-            echo "No persisted versions artifact yet (first release)."
-          fi
 
       # §8.14 monotonic guard (fail-closed): determine whether this release is the
       # highest. When it is NOT (or the tag listing fails), the version cut, build,
@@ -271,80 +192,95 @@ jobs:
           fi
           echo "highest=$(python3 /tmp/highest.py "${RELEASE_TAG}" < /tmp/tags.txt)" >> "${GITHUB_OUTPUT}"
 
-      - name: Cut new docs version + prune
-        if: ${{ steps.guard.outputs.highest == 'true' }}
+      - name: Deploy version onto the local docs branch (mike)
         shell: bash
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          DOCS_BRANCH: ${{ inputs.docs-branch }}
+          HIGHEST: ${{ steps.guard.outputs.highest }}
           RETENTION: ${{ inputs.docs-retention }}
         run: |
           set -euo pipefail
-          # §11.3: run ONLY the lockfile-installed docusaurus (from npm ci). A floating
-          # `npx docusaurus` fallback would fetch an unpinned latest from the registry, so
-          # if docusaurus is not in the lockfile we fail loud rather than fetch it.
-          npx --no-install docusaurus docs:version "${RELEASE_TAG}"
-          python3 - "${RETENTION}" <<'PY'
-          import json, sys, pathlib, shutil
-          cap = int(sys.argv[1])
-          # docs-retention <= 0 (the default) keeps EVERY released version (§13.3).
-          # NB: without this guard, versions[:0] would prune EVERYTHING — the exact
-          # inverse of "keep all" (finding 37 inversion hazard).
-          if cap <= 0:
-              print("docs-retention <= 0: keeping all versions")
-              raise SystemExit(0)
-          vf = pathlib.Path("versions.json")
-          if not vf.is_file():
-              raise SystemExit(0)
-          versions = json.loads(vf.read_text())  # newest-first
-          keep, prune = versions[:cap], versions[cap:]
-          for v in prune:
-              shutil.rmtree(pathlib.Path("versioned_docs") / f"version-{v}", ignore_errors=True)
-              pathlib.Path("versioned_sidebars", f"version-{v}-sidebars.json").unlink(missing_ok=True)
-          vf.write_text(json.dumps(keep, indent=2) + "\n")
-          print(f"Kept {keep}; pruned {prune}")
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Continue the existing published history when the branch exists (first deploy: absent is fine).
+          git fetch origin "+refs/heads/${DOCS_BRANCH}:refs/heads/${DOCS_BRANCH}" || true
+          # §8.14: EVERY policy-conformant release deploys its own version directory, but the
+          # `latest` alias (and default) moves ONLY when this tag is the highest release.
+          if [ "${HIGHEST}" = "true" ]; then
+            mike deploy --branch "${DOCS_BRANCH}" --update-aliases "${RELEASE_TAG}" latest
+            mike set-default --branch "${DOCS_BRANCH}" latest
+          else
+            echo "::warning::${RELEASE_TAG} is not the highest release; deploying its docs without moving latest (§8.14)."
+            mike deploy --branch "${DOCS_BRANCH}" "${RELEASE_TAG}"
+          fi
+          if [ "${RETENTION}" -gt 0 ]; then
+            python3 - "${RETENTION}" "${DOCS_BRANCH}" <<'PY'
+          import re, subprocess, sys
+          cap, branch = int(sys.argv[1]), sys.argv[2]
+          rel = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(\d+))?$")
+          rank = {None: 2, "beta": 1, "alpha": 0}
+          def key(t):
+              m = rel.match(t)
+              return (int(m[1]), int(m[2]), int(m[3]), rank[m[4]], int(m[5] or 0)) if m else None
+          out = subprocess.run(["mike", "list", "--branch", branch], check=True, capture_output=True, text=True).stdout
+          versions = [line.split()[0] for line in out.splitlines() if line.strip()]
+          keyed = sorted((v for v in versions if key(v)), key=key, reverse=True)
+          for v in keyed[cap:]:
+              subprocess.run(["mike", "delete", "--branch", branch, v], check=True)
+              print(f"pruned {v}")
           PY
+          fi
 
-      - name: Build docs
-        if: ${{ steps.guard.outputs.highest == 'true' }}
+      - name: Bundle the docs branch for the push job
         shell: bash
         env:
-          BUILD_COMMAND: ${{ inputs.build-command }}
-        run: eval "$BUILD_COMMAND"
+          DOCS_BRANCH: ${{ inputs.docs-branch }}
+        run: git bundle create /tmp/docs.bundle "refs/heads/${DOCS_BRANCH}"
 
-      # Persist the updated version SOURCES as an artifact for the next release
-      # (read back above) — keeps the source branch untouched and contents read-only.
-      - name: Persist doc versions
-        if: ${{ steps.guard.outputs.highest == 'true' && hashFiles(format('{0}/versions.json', inputs.working-directory)) != '' }}
+      - name: Hand off docs branch bundle
         uses: actions/upload-artifact@v7
         with:
-          name: aviato-docs-versions
-          path: |
-            ${{ inputs.working-directory }}/versioned_docs
-            ${{ inputs.working-directory }}/versioned_sidebars
-            ${{ inputs.working-directory }}/versions.json
-          retention-days: 90
+          name: aviato-docs-branch
+          path: /tmp/docs.bundle
+          retention-days: 1
+          if-no-files-found: error
 
-      - name: Upload Pages artifact
-        if: ${{ steps.guard.outputs.highest == 'true' }}
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
-
-  # C12-W4: a SEPARATE deploy job runs NO consumer code; it only deploys the artifact the build job
-  # uploaded. ONLY this job holds id-token:write + pages:write, so a compromised docs build cannot mint
-  # OIDC. Gated on the monotonic guard so an older release never regresses the published site (§8.14).
-  deploy:
-    name: Deploy docs
+  # C12-W4: the ONLY job with contents:write. Runs no consumer code — it verifies the
+  # bundle and fast-forward-pushes the docs branch. Enabling Pages to SERVE this branch
+  # is a separate operator toggle; this job neither reads nor mutates Pages settings.
+  push:
+    name: Push docs branch
     needs: build
-    if: ${{ needs.build.outputs.highest == 'true' }}
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
-      pages: write
-    environment:
-      name: ${{ inputs.environment-name }}
-      url: ${{ steps.deployment.outputs.page_url }}
+      contents: write
     steps:
-      - name: Deploy Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Fetch docs branch bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: aviato-docs-branch
+          path: /tmp
+
+      - name: Verify and fast-forward push
+        shell: bash
+        env:
+          DOCS_BRANCH: ${{ inputs.docs-branch }}
+        run: |
+          set -euo pipefail
+          git bundle verify /tmp/docs.bundle
+          git fetch /tmp/docs.bundle "refs/heads/${DOCS_BRANCH}:refs/remotes/bundle/${DOCS_BRANCH}"
+          if git fetch origin "+refs/heads/${DOCS_BRANCH}:refs/remotes/origin/${DOCS_BRANCH}" 2>/dev/null; then
+            # Never rewrite published history: the bundle must extend what is on origin.
+            if ! git merge-base --is-ancestor "refs/remotes/origin/${DOCS_BRANCH}" "refs/remotes/bundle/${DOCS_BRANCH}"; then
+              echo "::error::bundle does not fast-forward origin/${DOCS_BRANCH}; refusing to push (concurrent deploy or rewritten history)."
+              exit 1
+            fi
+          fi
+          git push origin "refs/remotes/bundle/${DOCS_BRANCH}:refs/heads/${DOCS_BRANCH}"
