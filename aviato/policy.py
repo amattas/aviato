@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from .paths import POLICY_DATA_ROOT
+from .repos import is_owner_repo_slug
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -50,7 +50,7 @@ def release_tag_pattern(policy: dict[str, Any]) -> str:
 def library_repository(policy: dict[str, Any]) -> str:
     """Return the canonical GitHub ``owner/repository`` identity for the Library."""
     value = get_path(policy, "library.repository")
-    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value) is None:
+    if not isinstance(value, str) or not is_owner_repo_slug(value):
         raise ValueError("library.repository must be a GitHub owner/repository slug")
     return value
 

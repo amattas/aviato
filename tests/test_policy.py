@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import re
 
-from aviato.policy import load_policy, release_tag_pattern
+import pytest
+
+from aviato.policy import library_repository, load_policy, release_tag_pattern
 
 
 def test_release_tag_examples_match_policy() -> None:
@@ -23,3 +25,27 @@ def test_required_approvals_rejects_boolean() -> None:
     with _pytest.raises(ValueError):
         default_required_approvals({"branch": {"required_approvals_default": True}})
     assert default_required_approvals({"branch": {"required_approvals_default": 2}}) == 2
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "./.",
+        "../repo",
+        "-owner/repo",
+        "owner/-repo",
+        " owner/repo",
+        "owner/repo ",
+        "owner/repo\n",
+        "owner/repo?ref=main",
+        "owner/repo#fragment",
+        "owner/repo/extra",
+    ],
+)
+def test_library_repository_rejects_noncanonical_slug(value: str) -> None:
+    with pytest.raises(ValueError, match="owner/repository"):
+        library_repository({"library": {"repository": value}})
+
+
+def test_library_repository_accepts_canonical_slug() -> None:
+    assert library_repository({"library": {"repository": "owner-name/repo.name"}}) == "owner-name/repo.name"

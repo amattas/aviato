@@ -196,10 +196,43 @@ def _check_workflow_yaml(root: Path, errors: list[str]) -> None:
                 errors.append(f"invalid YAML in {path.relative_to(root)}: {exc}")
 
 
+_REMOTE_REUSABLE_RE = re.compile(
+    r"^(?P<repository>[^/\s]+/[^/\s]+)/\.github/workflows/(?P<workflow>[^@\s]+)@(?P<ref>.+)$"
+)
+
+
+def _check_remote_reusable_reference(
+    value: str,
+    *,
+    source: str,
+    repository: str,
+    workflow_files: set[str],
+    errors: list[str],
+    reject_main: bool = False,
+) -> None:
+    """Validate every remote reusable-workflow reference, independent of expected prefix."""
+    match = _REMOTE_REUSABLE_RE.fullmatch(value)
+    if match is None:
+        return
+    actual_repository = match.group("repository")
+    workflow_file = match.group("workflow")
+    ref = match.group("ref")
+    if actual_repository != repository:
+        errors.append(
+            f"{source} references Library repository {actual_repository!r}; policy.yml requires {repository!r}"
+        )
+        return
+    if workflow_file not in workflow_files:
+        errors.append(f"{source} references missing reusable workflow {workflow_file}")
+    if not ref:
+        errors.append(f"{source} references {workflow_file} without a ref")
+    if reject_main and ref == "main":
+        errors.append(f"{source} advertises @{ref}; template examples must use a placeholder pin")
+
+
 def _check_template_references(root: Path, repository: str, errors: list[str]) -> None:
     workflow_dir = root / ".github/workflows"
     workflow_files = {path.name for path in _yaml_files(workflow_dir)}
-    reference_re = re.compile(r"^([^/]+/[^/]+)/\.github/workflows/([^@]+)@(.+)$")
 
     for path in _yaml_files(root / "templates"):
         data = load_yaml(path)
@@ -207,24 +240,14 @@ def _check_template_references(root: Path, repository: str, errors: list[str]) -
             value = job.get("uses")
             if not isinstance(value, str):
                 continue
-            match = reference_re.match(value)
-            if not match:
-                continue
-            actual_repository, workflow_file, ref = match.groups()
-            if actual_repository != repository:
-                errors.append(
-                    f"{path.relative_to(root)} references Library repository {actual_repository!r}; "
-                    f"policy.yml requires {repository!r}"
-                )
-                continue
-            if workflow_file not in workflow_files:
-                errors.append(f"{path.relative_to(root)} references missing workflow {workflow_file}")
-            if not ref:
-                errors.append(f"{path.relative_to(root)} references {workflow_file} without a ref")
-            if ref == "main":
-                errors.append(
-                    f"{path.relative_to(root)} advertises @{ref}; template examples must use a placeholder pin"
-                )
+            _check_remote_reusable_reference(
+                value,
+                source=str(path.relative_to(root)),
+                repository=repository,
+                workflow_files=workflow_files,
+                errors=errors,
+                reject_main=True,
+            )
 
 
 def _check_release_workflow_contract(root: Path, repository: str, errors: list[str]) -> None:
@@ -313,32 +336,53 @@ def _check_docs_caller_name_parity(root: Path, errors: list[str]) -> None:
 # policy.yml. Runtime code reads the policy accessor directly and is deliberately absent here.
 # A repo rename/transfer must update all of them together or the sites desync pairwise
 # (e.g. scaffolds render the new prefix while the pin-exemption still matches the old).
-_REPOSITORY_COPY_SITES = [
-    ("aviato/library/zizmor.yml", "{slug}/*: ref-pin"),
-    (".github/workflows/reusable-consumer-automation.yml", "git+https://github.com/{slug}@"),
-    (".github/workflows/reusable-common-lint.yml", "git+https://github.com/{slug}@"),
-    (".github/workflows/reusable-release.yml", "git+https://github.com/{slug}@"),
-]
+_INSTALL_URL_COPY_COUNTS = {
+    ".github/workflows/reusable-consumer-automation.yml": 1,
+    ".github/workflows/reusable-common-lint.yml": 1,
+    ".github/workflows/reusable-release.yml": 2,
+}
+_GITHUB_VCS_INSTALL_RE = re.compile(r"git\+https://github\.com/(?P<repository>[^@\s\"']+)@")
+_ZIZMOR_REPOSITORY_POLICY_RE = re.compile(r"^(?P<repository>[^/\s]+/[^/\s]+)/\*$")
 
 
 def _check_library_repository_copies(root: Path, policy: dict[str, Any], repository: str, errors: list[str]) -> None:
     """Every static and derived Library-repository binding must match policy.yml."""
-    for rel_path, template in _REPOSITORY_COPY_SITES:
-        expected = template.format(slug=repository)
+    for rel_path, expected_count in _INSTALL_URL_COPY_COUNTS.items():
         path = root / rel_path
         if not path.is_file():
-            errors.append(f"{rel_path} missing; cannot verify its Library-slug copy (finding 41)")
+            errors.append(f"{rel_path} missing; cannot verify its Library repository copies (finding 41)")
             continue
-        if expected not in path.read_text(encoding="utf-8", errors="replace"):
+        actual = _GITHUB_VCS_INSTALL_RE.findall(path.read_text(encoding="utf-8", errors="replace"))
+        if len(actual) != expected_count or any(value != repository for value in actual):
             errors.append(
-                f"{rel_path} does not carry policy Library repository site {expected!r}; "
-                f"every copy must match library.repository (finding 41)"
+                f"{rel_path} Library install repositories {actual!r} do not equal {expected_count} "
+                f"copies of policy library.repository {repository!r} (finding 41)"
             )
 
+    zizmor_path = root / "aviato/library/zizmor.yml"
+    if not zizmor_path.is_file():
+        errors.append("aviato/library/zizmor.yml missing; cannot verify its Library repository policy (finding 41)")
+    else:
+        try:
+            zizmor = load_yaml(zizmor_path)
+            policies = zizmor["rules"]["unpinned-uses"]["config"]["policies"]
+            actual_zizmor = [
+                match.group("repository")
+                for key in policies
+                if isinstance(key, str) and (match := _ZIZMOR_REPOSITORY_POLICY_RE.fullmatch(key)) is not None
+            ]
+        except (KeyError, TypeError) as exc:
+            errors.append(f"aviato/library/zizmor.yml repository policies cannot be read: {exc} (finding 41)")
+        else:
+            if actual_zizmor != [repository]:
+                errors.append(
+                    "aviato/library/zizmor.yml repository ref-pin policies "
+                    f"{actual_zizmor!r} must be exactly [{repository!r}] (finding 41)"
+                )
+
     contributing = root / "aviato/library/scaffold/files/contributing.md.txt"
-    if contributing.is_file() and "https://github.com/{{ aviato-library-repository }}" not in contributing.read_text(
-        encoding="utf-8"
-    ):
+    contributing_binding = "https://github.com/{{ aviato-library-repository }}"
+    if contributing.is_file() and contributing.read_text(encoding="utf-8").count(contributing_binding) != 1:
         errors.append(
             "aviato/library/scaffold/files/contributing.md.txt must derive its GitHub link from "
             "aviato-library-repository (finding 41)"
@@ -575,8 +619,6 @@ def _check_scaffold_workflow_yaml(root: Path, repository: str, errors: list[str]
     # reusable-workflow ref in a rendered caller resolves to a workflow that actually exists, so a
     # renamed/deleted reusable workflow can't ship a broken caller to consumers undetected.
     workflow_files = {path.name for path in _yaml_files(root / ".github/workflows")}
-    reference_re = re.compile(rf"^{re.escape(repository)}/\.github/workflows/([^@]+)@(.+)$")
-
     registry = Registry(root / "aviato" / "library")
     for profile, example_vars in _TEMPLATE_EXAMPLE_VARS.items():
         for docs in (False, True):
@@ -600,11 +642,13 @@ def _check_scaffold_workflow_yaml(root: Path, repository: str, errors: list[str]
                     continue
                 for job in _walk_jobs(doc if isinstance(doc, dict) else {}):
                     uses = job.get("uses")
-                    match = reference_re.match(uses) if isinstance(uses, str) else None
-                    if match and match.group(1) not in workflow_files:
-                        errors.append(
-                            f"rendered scaffold workflow {artifact.output} ({profile!r}, docs={docs}) "
-                            f"references missing reusable workflow {match.group(1)}"
+                    if isinstance(uses, str):
+                        _check_remote_reusable_reference(
+                            uses,
+                            source=f"rendered scaffold workflow {artifact.output} ({profile!r}, docs={docs})",
+                            repository=repository,
+                            workflow_files=workflow_files,
+                            errors=errors,
                         )
 
 

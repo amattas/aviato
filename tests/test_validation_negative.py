@@ -342,6 +342,44 @@ def test_scaffold_reference_to_missing_reusable_workflow_is_detected(repo_copy: 
     assert any("references missing reusable workflow reusable-missing-ci.yml" in e for e in errors)
 
 
+def test_rendered_scaffold_wrong_repository_is_detected_with_placeholder_ref(repo_copy: Path) -> None:
+    body = repo_copy / "aviato/library/scaffold/files/wf-python-library.yml"
+    text = body.read_text(encoding="utf-8")
+    drifted = text.replace(
+        "{{ aviato-workflow-prefix }}reusable-python-ci.yml{{ aviato-workflow-suffix }}",
+        "wrong/repository/.github/workflows/reusable-python-ci.yml@{{ aviato-ref }}",
+        1,
+    )
+    assert drifted != text, "fixture did not contain the rendered reusable-workflow reference"
+    body.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any(
+        "rendered scaffold workflow" in error and "wrong/repository" in error and "amattas/aviato" in error
+        for error in errors
+    )
+
+
+def test_documented_template_wrong_repository_is_detected(repo_copy: Path) -> None:
+    template = repo_copy / "templates/profile-python-library.yml"
+    text = template.read_text(encoding="utf-8")
+    drifted = text.replace(
+        "amattas/aviato/.github/workflows/reusable-python-ci.yml@EXAMPLE_PIN",
+        "wrong/repository/.github/workflows/reusable-python-ci.yml@EXAMPLE_PIN",
+        1,
+    )
+    assert drifted != text, "fixture did not contain the documented reusable-workflow reference"
+    template.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any(
+        "templates/profile-python-library.yml" in error and "wrong/repository" in error and "amattas/aviato" in error
+        for error in errors
+    )
+
+
 def test_docs_caller_grep_pattern_drift_is_detected(repo_copy: Path) -> None:
     # finding 39 — pattern-agnostic: reads the policy literal from the copy at test
     # time, so a future policy change does not rewrite this fixture.
@@ -426,6 +464,34 @@ def test_library_slug_copy_drift_is_detected(repo_copy: Path) -> None:
     assert drifted != text, "fixture did not contain the zizmor slug exemption"
     z.write_text(drifted, encoding="utf-8")
     assert any("finding 41" in e for e in validate(repo_copy))
+
+
+def test_every_release_install_url_copy_must_match_policy(repo_copy: Path) -> None:
+    workflow = repo_copy / ".github/workflows/reusable-release.yml"
+    text = workflow.read_text(encoding="utf-8")
+    drifted = text.replace(
+        "git+https://github.com/amattas/aviato@${AVIATO_REF}",
+        "git+https://github.com/wrong/repository@${AVIATO_REF}",
+        1,
+    )
+    assert drifted != text
+    assert "git+https://github.com/amattas/aviato@${AVIATO_REF}" in drifted
+    workflow.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("reusable-release.yml" in error and "wrong/repository" in error for error in errors)
+
+
+def test_every_zizmor_repository_policy_copy_must_match(repo_copy: Path) -> None:
+    config = repo_copy / "aviato/library/zizmor.yml"
+    text = config.read_text(encoding="utf-8")
+    text += "\n        wrong/repository/*: ref-pin\n"
+    config.write_text(text, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("zizmor.yml" in error and "wrong/repository" in error for error in errors)
 
 
 def test_library_repository_policy_mutation_binds_validation_and_remote(repo_copy: Path) -> None:
