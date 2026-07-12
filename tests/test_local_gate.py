@@ -58,3 +58,10 @@ def test_wheel_package_data_is_asserted() -> None:
     # The build block must verify aviato/library/** actually ships in the wheel,
     # not merely that the build exits zero (finding 45).
     assert "aviato/library/policy.yml" in _VALIDATE
+
+
+def test_wheel_runtime_version_parity_is_asserted() -> None:
+    assert "METADATA" in _VALIDATE
+    assert "from aviato import __version__" in _VALIDATE
+    assert 'find_spec("pip")' in _VALIDATE
+    assert 'shutil.which("uv")' in _VALIDATE

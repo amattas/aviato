@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +70,38 @@ RELEASE_WORKFLOWS = [
 # template-reference and release-workflow-contract checks); it is the Library's own
 # repository identity, not consumer data, so a single constant is the source of truth.
 LIBRARY_SLUG = "amattas/aviato"
+
+
+def _check_project_version_parity(root: Path, errors: list[str]) -> None:
+    pyproject = root / "pyproject.toml"
+    try:
+        project = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("project")
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        errors.append(f"could not read project version from pyproject.toml: {exc}")
+        return
+    project_version = project.get("version") if isinstance(project, dict) else None
+    if not isinstance(project_version, str):
+        errors.append("pyproject.toml does not define project.version")
+        return
+
+    try:
+        runtime_metadata_version = metadata.version("aviato")
+    except metadata.PackageNotFoundError:
+        errors.append("installed Aviato distribution metadata is unavailable; cannot verify runtime version parity")
+        return
+
+    from . import __version__
+
+    if project_version != runtime_metadata_version:
+        errors.append(
+            f"project version {project_version!r} differs from runtime distribution metadata "
+            f"{runtime_metadata_version!r}"
+        )
+    if __version__ != runtime_metadata_version:
+        errors.append(
+            f"runtime __version__ {__version__!r} differs from runtime distribution metadata "
+            f"{runtime_metadata_version!r}"
+        )
 
 
 def _check_policy_examples(policy: dict[str, Any], errors: list[str]) -> None:
@@ -723,6 +757,8 @@ def _check_monotonic_alias_parity(root: Path, errors: list[str]) -> None:
 
 def validate(root: Path = REPO_ROOT) -> list[str]:
     errors: list[str] = []
+
+    _check_project_version_parity(root, errors)
 
     for rel_path in REQUIRED_FILES:
         if not (root / rel_path).exists():

@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import io
+import shutil
+import subprocess
+import sys
+import venv
+import zipfile
+from email.parser import Parser
 from functools import partial
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 
 import pytest
 
+import aviato
 from aviato import __version__
 from aviato.cli import _version_pin_error, main
 from aviato.core.declaration import Declaration
@@ -16,6 +24,84 @@ ExpectedArtifact = partial(_ExpectedArtifact, input_hash="0" * 64)
 
 def _managed(profile: str, version: str) -> str:
     return f"# aviato:managed profile={profile} version={version} hash=abc123\nline-length = 120\n"
+
+
+def test_runtime_version_matches_distribution_metadata() -> None:
+    assert __version__ == distribution_version("aviato")
+
+
+def test_source_version_fallback_reads_root_pyproject(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    package = tmp_path / "aviato"
+    package.mkdir()
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "1.2.3-beta4"\n', encoding="utf-8")
+    monkeypatch.setattr(aviato, "__file__", str(package / "__init__.py"))
+
+    assert aviato._source_version() == "1.2.3-beta4"
+
+
+def test_source_version_fallback_rejects_malformed_semver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    package = tmp_path / "aviato"
+    package.mkdir()
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "01.2.3"\n', encoding="utf-8")
+    monkeypatch.setattr(aviato, "__file__", str(package / "__init__.py"))
+
+    with pytest.raises(RuntimeError, match="not valid SemVer"):
+        aviato._source_version()
+
+
+def test_runtime_version_does_not_swallow_metadata_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(_: str) -> str:
+        raise RuntimeError("malformed distribution metadata")
+
+    monkeypatch.setattr(aviato.metadata, "version", fail)
+
+    with pytest.raises(RuntimeError, match="malformed distribution metadata"):
+        aviato._runtime_version()
+
+
+def test_runtime_version_falls_back_only_when_distribution_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing(_: str) -> str:
+        raise aviato.metadata.PackageNotFoundError("aviato")
+
+    monkeypatch.setattr(aviato.metadata, "version", missing)
+    monkeypatch.setattr(aviato, "_source_version", lambda: "2.3.4")
+
+    assert aviato._runtime_version() == "2.3.4"
+
+
+def test_built_wheel_runtime_version_matches_metadata(tmp_path: Path) -> None:
+    wheel_dir = tmp_path / "wheel"
+    subprocess.run(
+        [sys.executable, "-m", "build", "--wheel", "--no-isolation", "--outdir", str(wheel_dir)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    wheel = next(wheel_dir.glob("*.whl"))
+    with zipfile.ZipFile(wheel) as archive:
+        metadata_name = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
+        metadata = Parser().parsestr(archive.read(metadata_name).decode("utf-8"))
+
+    environment = tmp_path / "venv"
+    uv = shutil.which("uv")
+    if uv is not None:
+        subprocess.run([uv, "venv", "--python", sys.executable, str(environment)], check=True, capture_output=True)
+    else:
+        venv.EnvBuilder(with_pip=True).create(environment)
+    python = environment / "bin" / "python"
+    if uv is not None:
+        install = [uv, "pip", "install", "--python", str(python), "--no-deps", str(wheel)]
+    else:
+        install = [str(python), "-m", "pip", "install", "--no-deps", str(wheel)]
+    subprocess.run(install, check=True, capture_output=True, text=True)
+    installed_version = subprocess.run(
+        [str(python), "-c", "from aviato import __version__; print(__version__)"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    assert installed_version == metadata["Version"]
 
 
 def test_next_version_from_commit_flags(capsys: pytest.CaptureFixture[str]) -> None:
@@ -70,9 +156,7 @@ def test_bump_version_rewrites_pyproject(tmp_path: Path, capsys: pytest.CaptureF
     assert 'version = "0.2.0"' in (tmp_path / "pyproject.toml").read_text()
 
 
-def test_bump_version_rejects_symlinked_version_source_leaf(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_bump_version_rejects_symlinked_version_source_leaf(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     github = tmp_path / ".github"
     github.mkdir()
     (github / "aviato.yaml").write_text("profile: python-library\nversion: 0\n", encoding="utf-8")

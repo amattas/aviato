@@ -43,6 +43,18 @@ def test_clean_copy_validates(repo_copy: Path) -> None:
     assert validate(repo_copy) == []
 
 
+def test_project_version_drift_from_runtime_metadata_is_detected(repo_copy: Path) -> None:
+    pyproject = repo_copy / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+    drifted = text.replace('version = "0.3.0"', 'version = "9.9.9"', 1)
+    assert drifted != text, "fixture did not contain the expected project version"
+    pyproject.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("project version" in error and "runtime" in error for error in errors)
+
+
 def test_tag_pattern_drift_in_release_workflow_is_detected(repo_copy: Path) -> None:
     wf = repo_copy / RELEASE_WORKFLOWS[0]
     text = wf.read_text(encoding="utf-8")
