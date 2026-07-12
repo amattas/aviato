@@ -246,3 +246,52 @@ def test_onboard_open_pr_profile_migration_requires_flag_and_renders_requested_p
     assert "profile-identity: aviato-profile/node-service/v1" in declaration
     assert "eslint.config.mjs" in captured["files"]
     assert "tsconfig.json" in captured["files"]
+
+
+def test_onboard_open_pr_profile_migration_does_not_propose_over_protected_target(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    proposal_called = False
+
+    def fake_run(cmd, **__):
+        if cmd[:3] == ["gh", "repo", "clone"]:
+            dest = Path(cmd[4])
+            (dest / ".github").mkdir(parents=True)
+            (dest / ".github" / "aviato.yaml").write_text(
+                "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
+                "version: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
+                encoding="utf-8",
+            )
+            (dest / ".editorconfig").write_text("operator-owned\n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def fake_proposal(*_args, **_kwargs):
+        nonlocal proposal_called
+        proposal_called = True
+        return "branch"
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli.GitHubPlatform, "open_or_update_proposal", fake_proposal)
+    rc = main(
+        [
+            "onboard",
+            "acme/widget",
+            "--open-pr",
+            "--profile",
+            "node-service",
+            "--pin",
+            "0",
+            "--allow-unresolved-pin",
+            "--migrate-profile",
+            "--var",
+            "project-name=widget",
+            "--var",
+            "language-variant=typescript",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert ".editorconfig" in captured.err
+    assert "unmanaged" in captured.err.lower()
+    assert proposal_called is False

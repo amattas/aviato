@@ -39,6 +39,12 @@ class SeedIntegrityPreflight:
     unknown: bool
 
 
+@dataclass(frozen=True)
+class MigrationProtection:
+    output: str
+    reason: str
+
+
 @dataclass
 class ScaffoldResult:
     written: list[str] = field(default_factory=list)
@@ -52,6 +58,50 @@ class ScaffoldResult:
     seeded: list[str] = field(default_factory=list)
     baselined: list[str] = field(default_factory=list)
     seed_integrity_unknown: bool = False
+    migration_protections: list[MigrationProtection] = field(default_factory=list)
+
+
+def classify_migration_targets(
+    root: Path, items: list[ScaffoldItem], *, migrating_from: str
+) -> list[MigrationProtection]:
+    """Return managed target paths an authorized profile migration must not replace.
+
+    Only a clean, known-version marker owned by ``migrating_from`` may transition to
+    the requested profile. Seed-once targets remain operator-owned and are never
+    overwritten, so they are outside this managed-target classification.
+    """
+    protections: list[MigrationProtection] = []
+    for item in items:
+        if item.seed_once:
+            continue
+        target = confined_target(root, item.output, operation="classify profile migration target")
+        if not target.exists():
+            continue
+        try:
+            target = confined_target(root, item.output, operation="classify profile migration target")
+            existing = target.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            protections.append(MigrationProtection(item.output, "target is unreadable"))
+            continue
+        marker = parse_marker_from_text(existing)
+        if marker is None:
+            kind = "malformed managed marker" if "aviato:managed" in existing else "unmanaged target"
+            protections.append(MigrationProtection(item.output, kind))
+            continue
+        if marker.profile != migrating_from:
+            protections.append(
+                MigrationProtection(
+                    item.output,
+                    f"marker profile {marker.profile!r} does not match existing profile {migrating_from!r}",
+                )
+            )
+            continue
+        if not is_known_version_pin(marker.version):
+            protections.append(MigrationProtection(item.output, f"marker records unknown version {marker.version!r}"))
+            continue
+        if content_hash(strip_marker_from_text(existing)) != marker.hash:
+            protections.append(MigrationProtection(item.output, "managed target is hand-edited"))
+    return protections
 
 
 def atomic_write(root: Path, relative: str, text: str | None = None, *, operation: str = "write file") -> None:
@@ -222,6 +272,7 @@ def scaffold(
     baseline_existing_seeds: bool = False,
     allow_fresh_seed_initialization: bool = True,
     allow_seed_set_expansion: bool = False,
+    migrating_from: str | None = None,
 ) -> ScaffoldResult:
     """Materialize managed and seed-once artifacts (§5.3, §6.3).
 
@@ -242,6 +293,13 @@ def scaffold(
     # managed artifact made the requested scaffold unsafe.
     for output in overlay:
         confined_target(root, output, operation="write scaffold output")
+
+    if migrating_from is not None:
+        result.migration_protections = classify_migration_targets(
+            root, list(overlay.values()), migrating_from=migrating_from
+        )
+        if result.migration_protections:
+            return result
 
     preflight = preflight_seed_integrity(
         root,
@@ -296,7 +354,7 @@ def scaffold(
                     result.skipped_unmanaged.append(output)
                     continue
             else:
-                if not force and marker.profile != profile:
+                if not force and marker.profile != profile and marker.profile != migrating_from:
                     # Marker stamped for a DIFFERENT profile (one profile per repo, §3): not a
                     # trustworthy managed artifact under this declaration. Mirror diagnosis
                     # dirty-drift — never silently regenerate; require human review or --force

@@ -271,6 +271,137 @@ def test_onboard_write_explicit_profile_migration_persists_new_identity_and_arti
     assert declaration["profile-identity"] == "aviato-profile/node-service/v1"
     assert (tmp_path / "eslint.config.mjs").exists()
     assert (tmp_path / "tsconfig.json").exists()
+    assert (tmp_path / ".editorconfig").read_text().startswith("# aviato:managed profile=node-service version=0")
+
+
+@pytest.mark.parametrize(
+    ("target_state", "reason"),
+    [
+        ("unmanaged", "unmanaged"),
+        ("malformed", "malformed"),
+        ("unrelated-profile", "does not match"),
+        ("unknown-version", "unknown version"),
+        ("hand-edited", "hand-edited"),
+    ],
+)
+def test_onboard_write_profile_migration_protects_target_and_mutates_nothing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    target_state: str,
+    reason: str,
+) -> None:
+    assert (
+        main(
+            [
+                "onboard",
+                str(tmp_path),
+                "--profile",
+                "python-library",
+                "--write",
+                "--allow-dirty",
+                "--pin",
+                "0",
+                "--allow-unresolved-pin",
+                "--var",
+                "distribution-name=acme",
+                "--var",
+                "import-name=acme",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    target = tmp_path / ".editorconfig"
+    managed = target.read_text(encoding="utf-8")
+    marker, body = managed.split("\n", 1)
+    replacements = {
+        "unmanaged": "operator-owned\n",
+        "malformed": f"# aviato:managed malformed\n{body}",
+        "unrelated-profile": f"{marker.replace('profile=python-library', 'profile=swift-app')}\n{body}",
+        "unknown-version": f"{marker.replace('version=0', 'version=unknown')}\n{body}",
+        "hand-edited": managed + "\n# operator edit\n",
+    }
+    target.write_text(replacements[target_state], encoding="utf-8")
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+
+    rc = main(
+        [
+            "onboard",
+            str(tmp_path),
+            "--profile",
+            "node-service",
+            "--write",
+            "--allow-dirty",
+            "--pin",
+            "0",
+            "--allow-unresolved-pin",
+            "--migrate-profile",
+            "--var",
+            "project-name=widget",
+            "--var",
+            "language-variant=typescript",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    after = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    assert rc == 2
+    assert ".editorconfig" in captured.err
+    assert reason in captured.err.lower()
+    assert after == before
+
+
+def test_onboard_write_profile_migration_scaffold_rechecks_before_mutation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert (
+        main(
+            [
+                "onboard",
+                str(tmp_path),
+                "--profile",
+                "python-library",
+                "--write",
+                "--allow-dirty",
+                "--pin",
+                "0",
+                "--allow-unresolved-pin",
+                "--var",
+                "distribution-name=acme",
+                "--var",
+                "import-name=acme",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    (tmp_path / ".editorconfig").write_text("operator-owned\n", encoding="utf-8")
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    monkeypatch.setattr(cli, "classify_migration_targets", lambda *args, **kwargs: [])
+
+    rc = main(
+        [
+            "onboard",
+            str(tmp_path),
+            "--profile",
+            "node-service",
+            "--write",
+            "--allow-dirty",
+            "--pin",
+            "0",
+            "--allow-unresolved-pin",
+            "--migrate-profile",
+            "--var",
+            "project-name=widget",
+            "--var",
+            "language-variant=typescript",
+        ]
+    )
+
+    after = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    assert rc == 2
+    assert ".editorconfig" in capsys.readouterr().err
+    assert after == before
 
 
 def test_onboard_write_refuses_dirty_tree_without_override(tmp_path: Path) -> None:

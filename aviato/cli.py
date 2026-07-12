@@ -34,7 +34,9 @@ from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.repin import plan_repin
 from .core.scaffold import (
+    MigrationProtection,
     ScaffoldItem,
+    classify_migration_targets,
     preflight_seed_integrity,
     read_sidecar,
     render_managed,
@@ -73,6 +75,12 @@ def _print_seed_integrity_error() -> None:
         "and run `aviato sync <path> --rebaseline-seeds`",
         file=sys.stderr,
     )
+
+
+def _print_migration_protections(protections: Iterable[MigrationProtection]) -> None:
+    print("profile migration blocked by protected target(s):", file=sys.stderr)
+    for protection in protections:
+        print(f"- {protection.output}: {protection.reason}", file=sys.stderr)
 
 
 def _consumer_declaration_target(root: Path, *, operation: str) -> Path:
@@ -633,7 +641,12 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         overrides=declaration.overrides,
     )
     fresh_onboarding = existing is None
-    migrating_profile = existing is not None and existing.profile != args.profile
+    migrating_from = existing.profile if existing is not None and existing.profile != args.profile else None
+    if migrating_from is not None:
+        protections = classify_migration_targets(target, items, migrating_from=migrating_from)
+        if protections:
+            _print_migration_protections(protections)
+            return 2
     if fresh_onboarding:
         baselined = [
             item.output
@@ -648,13 +661,16 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         items,
         profile=args.profile,
         version=args.pin,
-        force=migrating_profile,
         baseline_existing_seeds=fresh_onboarding,
         allow_fresh_seed_initialization=fresh_onboarding,
-        allow_seed_set_expansion=migrating_profile,
+        allow_seed_set_expansion=migrating_from is not None,
+        migrating_from=migrating_from,
     )
     if result.seed_integrity_unknown:
         _print_seed_integrity_error()
+        return 2
+    if result.migration_protections:
+        _print_migration_protections(result.migration_protections)
         return 2
 
     _dump_consumer_declaration(declaration, target)
@@ -719,6 +735,7 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
     # files are left untouched and enumerated (§5.2).
     files: dict[str, str] = {".github/aviato.yaml": declaration_to_yaml(declaration)}
     untouched: list[str] = []
+    managed_items: list[ScaffoldItem] = []
     # Use the RESOLVED declaration.docs (preserved from the clone's existing declaration), so the
     # proposed docs artifacts match the declaration written above — never the raw args.docs (§13.3).
     for artifact in resolved_artifacts(
@@ -743,7 +760,15 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
                 comment=artifact.comment,
                 input_hash=artifact.input_hash,
             )
+            managed_items.append(item)
             files[artifact.output] = render_managed(item, profile=args.profile, version=args.pin)
+
+    migrating_from = existing.profile if existing is not None and existing.profile != args.profile else None
+    if migrating_from is not None:
+        protections = classify_migration_targets(clone, managed_items, migrating_from=migrating_from)
+        if protections:
+            _print_migration_protections(protections)
+            return 2
 
     body_lines = [
         "Aviato onboarding proposal (§5.2 adopt-existing).",
