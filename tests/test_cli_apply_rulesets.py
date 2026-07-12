@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from aviato import cli
+from aviato.core.ports import RulesetApplyResult
 from aviato.github import GitHubAPIError
 
 
@@ -190,3 +191,35 @@ def test_apply_rulesets_renders_eagerly_at_call_not_on_iteration(monkeypatch: py
     monkeypatch.setattr(rulesets, "render_all_rulesets", boom)
     with pytest.raises(ValueError):
         rulesets.apply_rulesets(["o/r"], apply=False)  # raises at call, before any iteration
+
+
+def test_apply_rulesets_prints_loud_degraded_warning_only_after_successful_fallback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "apply_rulesets",
+        lambda *_, **__: iter([RulesetApplyResult("Created Common: release tag format on o/r", ("tag_name_pattern",))]),
+    )
+
+    assert cli.main(["apply-rulesets", "o/r", "--apply"]) == 0
+    captured = capsys.readouterr()
+    assert "Created Common: release tag format on o/r" in captured.out
+    assert "DEGRADED" in captured.err
+    assert "o/r" in captured.err
+    assert "tag_name_pattern" in captured.err
+
+
+def test_apply_rulesets_reports_earlier_success_before_later_failure_with_structured_result(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def stream(*_: object, **__: object):
+        yield RulesetApplyResult("Created first on o/a", ())
+        raise GitHubAPIError("repos/o/b/rulesets", 1, "boom")
+
+    monkeypatch.setattr(cli, "apply_rulesets", stream)
+    assert cli.main(["apply-rulesets", "o/a", "--repo", "o/b", "--apply"]) == 1
+    captured = capsys.readouterr()
+    assert "Created first on o/a" in captured.out
+    assert "GitHub API error" in captured.err
+    assert "transaction" not in (captured.out + captured.err).lower()

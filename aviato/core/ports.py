@@ -20,6 +20,14 @@ class Issue:
     ambiguous: bool = False
 
 
+@dataclass(frozen=True)
+class RulesetApplyResult:
+    """Outcome of one ruleset upsert, including any unsupported rules omitted."""
+
+    message: str
+    degraded_rules: tuple[str, ...] = ()
+
+
 @runtime_checkable
 class Platform(Protocol):
     """The §2.14 hosting-platform binding interface.

@@ -19,6 +19,7 @@ from typing import Any, cast
 # through `settingsdrift._classify_value_change` (deliberately NOT done because the manifest is the
 # single source of truth in the operator-direct path).
 from . import github
+from .core.ports import RulesetApplyResult
 from .paths import POLICY_DATA_ROOT
 from .policy import default_required_approvals, get_path, load_policy, load_ruleset_manifest
 
@@ -206,7 +207,7 @@ def apply_rulesets(
     apply: bool,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,
-) -> Iterator[str]:
+) -> Iterator[RulesetApplyResult]:
     """Yield a confirmation per upserted ruleset (R2-4-6).
 
     Returns a GENERATOR that yields each upsert's message as it succeeds, so the caller prints it
@@ -220,7 +221,7 @@ def apply_rulesets(
     """
     payloads = render_all_rulesets(required_approvals=required_approvals, extra_status_checks=extra_status_checks)
 
-    def _stream() -> Iterator[str]:
+    def _stream() -> Iterator[RulesetApplyResult]:
         for slug in slugs:
             for payload in payloads:
                 yield github.upsert_ruleset(slug, payload, apply=apply)

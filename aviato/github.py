@@ -7,6 +7,7 @@ import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -14,6 +15,7 @@ from urllib.parse import quote
 # Explicit re-export (`as run`): github_platform (and test monkeypatches) access this
 # helper as a real `aviato.github.run` module attribute.
 from .command import run as run
+from .core.ports import RulesetApplyResult
 
 # §5.5 (finding 30): rate-limit responses are tolerated and RETRIED (bounded), so a
 # scheduled fleet run doesn't fail outright on the first 403/429 throttle; a
@@ -357,7 +359,53 @@ def codeql_merge_protection_present(slug: str) -> bool:
     return False
 
 
-def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> str:
+def _unsupported_tag_metadata_rule(stderr: str) -> bool:
+    """Recognize only GitHub's explicit unsupported tag metadata-rule rejection."""
+
+    lowered = stderr.lower()
+    identifies_unsupported_rule = (
+        ("unsupported" in lowered and "rule" in lowered)
+        or ("not supported" in lowered and "rule" in lowered)
+        or ("not a supported" in lowered and "rule" in lowered)
+        or "not a valid repository rule type" in lowered
+        or "invalid repository rule type" in lowered
+        or "not a permitted repository rule type" in lowered
+    )
+    return "http 422" in lowered and "tag_name_pattern" in lowered and identifies_unsupported_rule
+
+
+def _without_tag_name_pattern(payload: dict[str, Any]) -> dict[str, Any] | None:
+    degraded = deepcopy(payload)
+    rules = degraded.get("rules")
+    if not isinstance(rules, list):
+        return None
+    kept = [rule for rule in rules if not (isinstance(rule, dict) and rule.get("type") == "tag_name_pattern")]
+    if len(kept) == len(rules):
+        return None
+    degraded["rules"] = kept
+    return degraded
+
+
+def _submit_ruleset(endpoint: str, method: str, payload: dict[str, Any]) -> None:
+    """Submit one private temporary payload and always remove it."""
+
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:
+        os.chmod(handle.name, 0o600)
+        json.dump(payload, handle)
+        handle.write("\n")
+        payload_path = Path(handle.name)
+    try:
+        result = run(
+            ["gh", "api", "--method", method, endpoint, "--input", str(payload_path)],
+            check=False,
+        )
+    finally:
+        payload_path.unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise GitHubAPIError(endpoint, result.returncode, result.stderr)
+
+
+def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> RulesetApplyResult:
     name = payload.get("name")
     if not isinstance(name, str) or not name:
         raise ValueError("ruleset payload must include a non-empty name")
@@ -385,19 +433,21 @@ def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> str:
 
     if not apply:
         if existing_id:
-            return f"DRY RUN: would update {name} on {slug} (ruleset {existing_id})"
-        return f"DRY RUN: would create {name} on {slug}"
+            message = f"DRY RUN: would update full ruleset {name} on {slug} (ruleset {existing_id})"
+        else:
+            message = f"DRY RUN: would create full ruleset {name} on {slug}"
+        return RulesetApplyResult(message)
 
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:
-        json.dump(payload, handle)
-        handle.write("\n")
-        payload_path = Path(handle.name)
-
+    method = "PUT" if existing_id else "POST"
+    endpoint = f"repos/{slug}/rulesets/{existing_id}" if existing_id else f"repos/{slug}/rulesets"
     try:
-        if existing_id:
-            run(["gh", "api", "--method", "PUT", f"repos/{slug}/rulesets/{existing_id}", "--input", str(payload_path)])
-            return f"Updated {name} on {slug}"
-        run(["gh", "api", "--method", "POST", f"repos/{slug}/rulesets", "--input", str(payload_path)])
-        return f"Created {name} on {slug}"
-    finally:
-        payload_path.unlink(missing_ok=True)
+        _submit_ruleset(endpoint, method, payload)
+    except GitHubAPIError as exc:
+        degraded = _without_tag_name_pattern(payload)
+        if degraded is None or not _unsupported_tag_metadata_rule(exc.stderr):
+            raise
+        _submit_ruleset(endpoint, method, degraded)
+        verb = "Updated" if existing_id else "Created"
+        return RulesetApplyResult(f"{verb} {name} on {slug}", ("tag_name_pattern",))
+    verb = "Updated" if existing_id else "Created"
+    return RulesetApplyResult(f"{verb} {name} on {slug}")

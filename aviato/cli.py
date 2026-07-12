@@ -226,7 +226,18 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
             required_approvals=required_approvals,
             extra_status_checks=extra_checks,
         ):
-            print(message)
+            # Structured results keep a capability fallback visible to operators. Preserve string
+            # adapters used by integrations while they migrate to RulesetApplyResult.
+            if hasattr(message, "message") and hasattr(message, "degraded_rules"):
+                print(message.message)
+                if message.degraded_rules:
+                    print(
+                        f"DEGRADED: {message.message}; missing unsupported rule(s) "
+                        f"{list(message.degraded_rules)}; settings drift remains non-clean.",
+                        file=sys.stderr,
+                    )
+            else:
+                print(message)
         return 0
     except (GitHubAPIError, CommandError) as exc:
         # R3-2: the apply WRITE (upsert_ruleset PUT/POST) raises CommandError, not GitHubAPIError;
@@ -927,6 +938,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         environments = tuple(sorted({p.environment for p in resolved.pipeline_modules if p.environment}))
         effective_variables = resolve_declared_variables(resolved.variables, declaration.variables)
         serve_pages = effective_variables.get("serve-pages") is True
+        default_branch_settings = resolved.settings.get("default_branch", {})
+        desired_rulesets = tuple(
+            render_all_rulesets(
+                required_approvals=default_branch_settings.get("required_reviews"),
+                extra_status_checks=list(default_branch_settings.get("required_status_checks", [])),
+            )
+        )
         (
             report.issue_channel_available,
             report.scan_heartbeat_present,
@@ -938,6 +956,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             # findings 30/31/32: API-state probes — drift caller enabled + last-run
             # conclusion, and code-scanning enablement (§2.13/§17 "probeable").
             drift_workflow_path=DRIFT_CALLER_PATH,
+            desired_rulesets=desired_rulesets,
         )
 
     print(f"doctor: {declaration.profile} @ {declaration.version} ({root})")

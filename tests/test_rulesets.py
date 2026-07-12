@@ -284,3 +284,13 @@ def test_render_rejects_unknown_patch_key() -> None:
         render_ruleset(
             {"file": "rulesets/release-tag-format.json", "target": "tag", "patch": {"tag_naem_pattern": "x"}}
         )
+
+
+def test_missing_tag_metadata_rule_is_non_clean_drift() -> None:
+    from aviato.rulesets import drifted_ruleset_names
+
+    desired = next(payload for payload in render_all_rulesets() if payload["target"] == "tag")
+    degraded = copy.deepcopy(desired)
+    degraded["rules"] = [rule for rule in degraded["rules"] if rule["type"] != "tag_name_pattern"]
+
+    assert drifted_ruleset_names([desired], [degraded]) == [desired["name"]]

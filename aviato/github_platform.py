@@ -584,6 +584,7 @@ class GitHubPlatform:
         environments: tuple[str, ...] = (),
         probe_pages_build_type: bool = False,
         drift_workflow_path: str | None = None,
+        desired_rulesets: tuple[dict[str, Any], ...] = (),
     ) -> tuple[bool | None, bool | None, dict[str, bool | None]]:
         """Probe issue-channel availability, scan-heartbeat presence, and §17 remote prereqs.
 
@@ -600,6 +601,19 @@ class GitHubPlatform:
         issue_channel: bool | None = None
         heartbeat: bool | None = None
         remote: dict[str, bool | None] = {}
+        if desired_rulesets:
+            # Doctor must not call a capability-degraded apply fully protected. Compare the live
+            # payload to the same complete desired payload settings drift uses; an unreadable
+            # admin surface is unknown, and an omitted tag metadata rule is explicitly non-clean.
+            from .rulesets import drifted_ruleset_names
+
+            try:
+                live_rulesets = self.read_rulesets(repo)
+                remote["ruleset_protection_full"] = not bool(
+                    drifted_ruleset_names(list(desired_rulesets), live_rulesets)
+                )
+            except github.SettingsReadError:
+                remote["ruleset_protection_full"] = None
         try:
             repo_data = github.gh_json_optional(f"repos/{repo}", default=None)
             if isinstance(repo_data, dict) and "has_issues" in repo_data:

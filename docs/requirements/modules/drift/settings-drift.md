@@ -30,6 +30,10 @@ removed rule) is reported on the same tracking issue. The live ruleset is compar
 **rendered desired payload** (the GitHub-specific comparison lives in the binding, not the
 agnostic flow); GitHub-added metadata and benign live additions are ignored (no false drift),
 the ref-name scope is conservatively not compared (the platform may normalize `~DEFAULT_BRANCH`).
+An apply that had to omit unsupported `tag_name_pattern` is deliberately not clean:
+the complete desired payload remains the comparison baseline, so both doctor and
+settings drift report the missing metadata restriction until the platform can
+accept it. Capability degradation never becomes an implicit policy exception.
 **Ruleset remediation is the operator-direct `apply-rulesets` path, NOT the §5.7 consent gate**
 (see §5.7) — so the report directs the operator to `apply-rulesets … --apply --profile <p>`.
 **additive vs destructive (normative):** a change is **destructive** if it

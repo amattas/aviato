@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from aviato import github
+from aviato.rulesets import render_all_rulesets
+
+
+def _tag_ruleset_payload() -> dict:
+    return next(payload for payload in render_all_rulesets() if payload["target"] == "tag")
+
+
+def _capture_payload(cmd: list[str]) -> dict:
+    return json.loads(Path(cmd[cmd.index("--input") + 1]).read_text(encoding="utf-8"))
 
 
 def test_gh_json_raises_on_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,7 +125,7 @@ def test_upsert_ruleset_posts_when_absent(monkeypatch: pytest.MonkeyPatch) -> No
         github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
     )
     result = github.upsert_ruleset("o/r", {"name": "Common: protect default branch"}, apply=True)
-    assert "Created" in result
+    assert "Created" in result.message
     method = calls[0][calls[0].index("--method") + 1]
     assert method == "POST"
     assert "repos/o/r/rulesets" in calls[0]
@@ -131,7 +142,7 @@ def test_upsert_ruleset_puts_to_existing_id_when_present(monkeypatch: pytest.Mon
         github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
     )
     result = github.upsert_ruleset("o/r", {"name": "Common: protect default branch"}, apply=True)
-    assert "Updated" in result
+    assert "Updated" in result.message
     method = calls[0][calls[0].index("--method") + 1]
     assert method == "PUT"
     assert "repos/o/r/rulesets/4242" in calls[0]
@@ -146,13 +157,13 @@ def test_upsert_ruleset_matches_by_name_and_target_not_name_alone(monkeypatch: p
     )
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"name": "Protect", "target": "tag", "id": 99}])
     result = github.upsert_ruleset("o/r", {"name": "Protect", "target": "branch"}, apply=True)
-    assert "Created" in result
+    assert "Created" in result.message
     assert calls[0][calls[0].index("--method") + 1] == "POST"
     # Same (name, target) → update the matching one.
     calls.clear()
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"name": "Protect", "target": "branch", "id": 7}])
     result2 = github.upsert_ruleset("o/r", {"name": "Protect", "target": "branch"}, apply=True)
-    assert "Updated" in result2 and "repos/o/r/rulesets/7" in calls[0]
+    assert "Updated" in result2.message and "repos/o/r/rulesets/7" in calls[0]
 
 
 def test_upsert_ruleset_dry_run_does_not_mutate(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -161,12 +172,100 @@ def test_upsert_ruleset_dry_run_does_not_mutate(monkeypatch: pytest.MonkeyPatch)
         github, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not call gh on dry run"))
     )
     msg = github.upsert_ruleset("o/r", {"name": "X"}, apply=False)
-    assert msg.startswith("DRY RUN")
+    assert msg.message.startswith("DRY RUN")
 
 
 def test_upsert_ruleset_requires_name(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError):
         github.upsert_ruleset("o/r", {}, apply=True)
+
+
+@pytest.mark.parametrize("existing", [[], [{"name": "Common: release tag format", "target": "tag", "id": 42}]])
+def test_upsert_ruleset_retries_precise_unsupported_tag_metadata_422_once(
+    monkeypatch: pytest.MonkeyPatch, existing: list[dict]
+) -> None:
+    payload = _tag_ruleset_payload()
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: existing)
+    calls: list[list[str]] = []
+    submitted: list[dict] = []
+    payload_paths: list[Path] = []
+    payload_modes: list[int] = []
+
+    def fake_run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        submitted.append(_capture_payload(cmd))
+        path = Path(cmd[cmd.index("--input") + 1])
+        payload_paths.append(path)
+        payload_modes.append(path.stat().st_mode & 0o777)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                "",
+                "gh: Validation Failed: tag_name_pattern is not a supported repository rule type (HTTP 422)",
+            )
+        return subprocess.CompletedProcess(cmd, 0, "{}", "")
+
+    monkeypatch.setattr(github, "run", fake_run)
+    result = github.upsert_ruleset("o/r", payload, apply=True)
+
+    assert result.degraded_rules == ("tag_name_pattern",)
+    assert len(calls) == 2
+    assert [cmd[cmd.index("--method") + 1] for cmd in calls] == (["PUT", "PUT"] if existing else ["POST", "POST"])
+    assert submitted[0] == payload
+    assert submitted[1] == {**payload, "rules": [r for r in payload["rules"] if r["type"] != "tag_name_pattern"]}
+    assert payload_modes == [0o600, 0o600]
+    assert not any(path.exists() for path in payload_paths)
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "gh: Validation Failed: bad conditions (HTTP 422)",
+        "gh: tag_name_pattern validation failed for another reason (HTTP 422)",
+        "gh: forbidden (HTTP 403)",
+        "gh: server unavailable (HTTP 500)",
+        "connection reset by peer",
+        "gh: malformed response",
+    ],
+)
+def test_upsert_ruleset_does_not_retry_other_failures(monkeypatch: pytest.MonkeyPatch, stderr: str) -> None:
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [])
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 1, "", stderr)
+
+    monkeypatch.setattr(github, "run", fake_run)
+    with pytest.raises(github.GitHubAPIError) as exc:
+        github.upsert_ruleset("o/r", _tag_ruleset_payload(), apply=True)
+    assert exc.value.stderr == stderr
+    assert len(calls) == 1
+
+
+def test_upsert_ruleset_propagates_degraded_retry_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [])
+    errors = iter(
+        [
+            "tag_name_pattern is not a supported repository rule type (HTTP 422)",
+            "service unavailable (HTTP 503)",
+        ]
+    )
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda cmd, **_: subprocess.CompletedProcess(cmd, 1, "", next(errors)),
+    )
+    with pytest.raises(github.GitHubAPIError, match="503"):
+        github.upsert_ruleset("o/r", _tag_ruleset_payload(), apply=True)
+
+
+def test_upsert_ruleset_dry_run_promises_full_payload_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [])
+    result = github.upsert_ruleset("o/r", _tag_ruleset_payload(), apply=False)
+    assert result.degraded_rules == ()
+    assert "full ruleset" in result.message.lower()
 
 
 def test_repository_rulesets_follows_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -242,7 +341,7 @@ def test_upsert_ruleset_matches_when_list_omits_target(monkeypatch: pytest.Monke
     # only be THIS ruleset, so upsert must UPDATE it (not POST a duplicate / 422).
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"id": 7, "name": "protect"}])
     msg = github.upsert_ruleset("o/r", {"name": "protect", "target": "branch"}, apply=False)
-    assert "would update" in msg and "7" in msg
+    assert "would update" in msg.message and "7" in msg.message
     # A same-name ruleset on a DIFFERENT, explicit target must NOT match (would create the missing one).
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"id": 9, "name": "protect", "target": "tag"}])
-    assert "would create" in github.upsert_ruleset("o/r", {"name": "protect", "target": "branch"}, apply=False)
+    assert "would create" in github.upsert_ruleset("o/r", {"name": "protect", "target": "branch"}, apply=False).message

@@ -51,12 +51,13 @@ def test_doctor_probes_pages_only_for_docs_and_serve_pages(
 
     def probe(self, repo, **kwargs):
         seen.append(kwargs["probe_pages_build_type"])
-        return None, None, {}
+        assert kwargs["desired_rulesets"]
+        return None, None, {"ruleset_protection_full": False}
 
     monkeypatch.setattr(cli.GitHubPlatform, "probe_health", probe)
     assert main(["doctor", str(tmp_path)]) == 0
     assert seen == [expected_probe]
-    capsys.readouterr()
+    assert "ruleset_protection_full: no" in capsys.readouterr().out
 
 
 def test_onboard_secret_value_never_prints_in_doctor_facing_plan(tmp_path, monkeypatch, capsys) -> None:

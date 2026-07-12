@@ -1270,6 +1270,37 @@ def test_read_rulesets_returns_full_payloads(monkeypatch: pytest.MonkeyPatch) ->
     assert payloads == [{"id": 7, "name": "X", "rules": []}]  # the id-less summary is skipped
 
 
+def test_read_rulesets_preserves_degraded_payload_for_non_clean_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    degraded = {
+        "id": 7,
+        "name": "Common: release tag format",
+        "target": "tag",
+        "enforcement": "active",
+        "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}},
+        "bypass_actors": [],
+        "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
+    }
+    monkeypatch.setattr(github, "repository_rulesets", lambda repo: [{"id": 7}])
+    monkeypatch.setattr(github, "repository_ruleset", lambda repo, rid: degraded)
+
+    assert GitHubPlatform().read_rulesets("o/r") == [degraded]
+
+
+def test_probe_health_reports_degraded_ruleset_as_non_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aviato.rulesets import render_all_rulesets
+
+    desired = next(payload for payload in render_all_rulesets() if payload["target"] == "tag")
+    degraded = json.loads(json.dumps(desired))
+    degraded["rules"] = [rule for rule in degraded["rules"] if rule["type"] != "tag_name_pattern"]
+    monkeypatch.setattr(GitHubPlatform, "read_rulesets", lambda self, repo: [degraded])
+    monkeypatch.setattr(github, "gh_json_optional", lambda *args, **kwargs: None)
+    monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
+
+    _, _, remote = GitHubPlatform().probe_health("o/r", desired_rulesets=(desired,))
+
+    assert remote["ruleset_protection_full"] is False
+
+
 def test_is_feature_unavailable_requires_security_context() -> None:
     # review #15: the predicate must NOT swallow an availability phrase that lacks a security
     # context — otherwise a genuine apply failure ("Branch protection is not enabled") would be
