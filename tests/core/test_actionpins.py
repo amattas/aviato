@@ -180,6 +180,24 @@ def test_pyproject_extras_scanner_covers_inline_arrays_and_single_quotes():
     assert unpinned_pyproject_extra_lines(text) == ["black>=24.1.0", "ruff>=0.8.0", "sphinx>=7"]
 
 
+def test_root_pyproject_extras_are_scanned_but_build_system_floor_is_not(tmp_path, monkeypatch):
+    from aviato.plugins import actionpins
+
+    (tmp_path / ".github/workflows").mkdir(parents=True)
+    (tmp_path / "aviato/library/scaffold/files").mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text(
+        '[build-system]\nrequires = ["setuptools>=69", "pytest>=9"]\n'
+        '[project.optional-dependencies]\ndev = ["setuptools>=69", "pytest>=9", "ruff==1.0"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch_target = __import__("aviato.plugins.zizmor_scan", fromlist=["zizmor_uses_image_violations"])
+    monkeypatch.setattr(monkeypatch_target, "zizmor_uses_image_violations", lambda _d: [])
+    violations = actionpins.action_pin_violations(tmp_path)
+
+    assert any("pyproject.toml" in item and "pytest>=9" in item for item in violations)
+    assert not any("setuptools>=69" in item for item in violations)
+
+
 _MIKE_SHA = "2d4ad799442f4592db8ad53b179bfb33db8c69ac"
 
 

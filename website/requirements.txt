@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=ffe969e245651f2fdd0c97cae26496810fc01f94fab190e45c9ecceb2ac534c2 inputs=8d84e9eca0fb633c0a59990180868f8e60f753626eeead4030e43c3faaa6ee5d
-# Aviato-managed docs toolchain (§13.3). Exact pins only (§11.3); Dependabot bumps zensical.
+# aviato:managed profile=aviato-library version=0 hash=f6ad939f4c425f7e1810e384e15e9eaad217b5bf2d82a502ece034a1a7a3f2f7 inputs=8d84e9eca0fb633c0a59990180868f8e60f753626eeead4030e43c3faaa6ee5d
+# Aviato-managed docs toolchain (§13.3). Exact pins only (§11.3); update docs-toolchain.yaml.
 zensical==0.0.50
 mike @ git+https://github.com/squidfunk/mike.git@2d4ad799442f4592db8ad53b179bfb33db8c69ac

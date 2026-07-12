@@ -275,25 +275,36 @@ def _check_docs_caller_name_parity(root: Path, errors: list[str]) -> None:
     silently kill every consumer's docs deploys (the trigger simply never fires — no
     error anywhere). Pin each pair together.
     """
-    scaffold_dir = root / "aviato" / "library" / "scaffold" / "files"
-    for docs_body in sorted(scaffold_dir.glob("wf-docs-*.yml")):
-        profile = docs_body.name[len("wf-docs-") : -len(".yml")]
-        ci_body = scaffold_dir / f"wf-{profile}.yml"
-        if not ci_body.exists():
-            errors.append(f"{docs_body.name} has no sibling CI caller wf-{profile}.yml (finding 40)")
-            continue
+
+    def compare(docs_rel: str, ci_rel: str) -> None:
+        docs_body = root / docs_rel
+        ci_body = root / ci_rel
+        missing = [rel for rel, path in ((docs_rel, docs_body), (ci_rel, ci_body)) if not path.is_file()]
+        if missing:
+            errors.append(
+                f"docs caller name parity sources missing for {docs_rel}/{ci_rel}: {', '.join(missing)} (finding 40)"
+            )
+            return
         ci_name = re.search(r"^name:\s*(.+?)\s*$", ci_body.read_text(encoding="utf-8"), re.MULTILINE)
         trigger = re.search(r'workflows:\s*\[\s*"([^"]+)"\s*\]', docs_body.read_text(encoding="utf-8"))
         if ci_name is None or trigger is None:
-            errors.append(
-                f"{docs_body.name}/{ci_body.name}: could not extract workflow_run trigger or name (finding 40)"
-            )
-            continue
+            errors.append(f"{docs_rel}/{ci_rel}: could not extract workflow_run trigger or name (finding 40)")
+            return
         if trigger.group(1) != ci_name.group(1):
             errors.append(
-                f"{docs_body.name} workflow_run trigger {trigger.group(1)!r} != {ci_body.name} "
+                f"{docs_rel} workflow_run trigger {trigger.group(1)!r} != {ci_rel} "
                 f"display name {ci_name.group(1)!r} — a rename silently kills docs deploys (finding 40)"
             )
+
+    scaffold = "aviato/library/scaffold/files"
+    for profile in _PROFILE_TEMPLATE_FILES:
+        docs_rel = f"{scaffold}/wf-docs-{profile}.yml"
+        compare(docs_rel, f"{scaffold}/wf-{profile}.yml")
+        compare(docs_rel, _PROFILE_TEMPLATE_FILES[profile])
+
+    # The Library is also a rendered consumer of its own scaffold. Keep the live
+    # workflow_run coupling checked rather than assuming marker/template parity catches it.
+    compare(".github/workflows/aviato-docs.yml", ".github/workflows/aviato-ci.yml")
 
 
 # finding 41: every site that names the Library's own slug, anchored on LIBRARY_SLUG.
@@ -370,22 +381,43 @@ def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
             "byte-identical across docs callers (finding 43)"
         )
 
-    docs_pin_sources = [
-        root / "aviato" / "library" / "scaffold" / "files" / "docs-requirements.txt.txt",
-        root / "website" / "requirements.txt",
-        root / "starter" / "docs-site" / "requirements.txt",
-    ]
-    pin_sets = {
-        str(p.relative_to(root)): sorted(
-            line.split("#", 1)[0].strip()
-            for line in p.read_text(encoding="utf-8").splitlines()
-            if line.split("#", 1)[0].strip()
-        )
-        for p in docs_pin_sources
-        if p.is_file()
-    }
-    if len(set(map(tuple, pin_sets.values()))) > 1:
-        errors.append(f"docs toolchain pins differ across requirements sources: {pin_sets} (finding 43)")
+    toolchain_path = root / "aviato/library/docs-toolchain.yaml"
+    if not toolchain_path.is_file():
+        errors.append("missing docs toolchain pin source: aviato/library/docs-toolchain.yaml")
+    else:
+        try:
+            toolchain = load_yaml(toolchain_path)
+            pydoc_pin = str(toolchain["pydoc-markdown"])
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"invalid docs toolchain pin source: {exc}")
+        else:
+            pins = _values("wf-docs-*.yml", r"pydoc-markdown==([0-9.]+)")
+            actual = {pin for values in pins.values() for pin in values}
+            if actual != {pydoc_pin}:
+                errors.append(
+                    f"pydoc-markdown pins across docs callers {pins} differ from docs-toolchain.yaml "
+                    f"({pydoc_pin!r}) (finding 43)"
+                )
+            expected_requirements = [f"zensical=={toolchain['zensical']}", f"mike @ {toolchain['mike']}"]
+            for rel_path in (
+                "website/requirements.txt",
+                "starter/docs-site/requirements.txt",
+                "aviato/library/scaffold/files/docs-requirements.txt.txt",
+            ):
+                path = root / rel_path
+                if not path.is_file():
+                    errors.append(f"missing docs toolchain generated output: {rel_path}")
+                    continue
+                requirements = [
+                    line.split("#", 1)[0].strip()
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.split("#", 1)[0].strip()
+                ]
+                if requirements != expected_requirements:
+                    errors.append(
+                        f"docs toolchain pins differ in {rel_path} from aviato/library/docs-toolchain.yaml: "
+                        f"actual={requirements}, expected={expected_requirements} (finding 43)"
+                    )
 
 
 def _check_baseline_settings_keys(root: Path, errors: list[str]) -> None:
@@ -530,7 +562,11 @@ def _check_template_scaffold_parity(root: Path, errors: list[str]) -> None:
         path = root / rel_path
         if not path.exists():
             continue  # absence is already reported by the REQUIRED_FILES check
-        expected = _rendered_caller(root, profile, output)
+        try:
+            expected = _rendered_caller(root, profile, output)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{rel_path}: scaffold caller could not be rendered: {exc}")
+            continue
         if expected is None:
             errors.append(f"{rel_path}: profile {profile!r} no longer produces {output}")
         elif path.read_text(encoding="utf-8") != expected:
@@ -781,12 +817,20 @@ def _check_monotonic_alias_parity(root: Path, errors: list[str]) -> None:
             )
             continue
         for candidate, existing in _MONOTONIC_CASES:
-            result = subprocess.run(
-                [sys.executable, "-c", snippet, candidate],
-                input="\n".join(existing),
-                capture_output=True,
-                text=True,
-            )
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-c", snippet, candidate],
+                    input="\n".join(existing),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            except subprocess.TimeoutExpired:
+                errors.append(
+                    f"{rel_path}: monotonic-alias parity snippet timed out after 5 seconds; "
+                    "inspect the inline highest.py guard for blocking or non-terminating code."
+                )
+                break
             inline = result.stdout.strip()
             expected = "true" if is_highest(candidate, existing) else "false"
             if inline != expected:
@@ -815,7 +859,11 @@ def _check_pypi_privilege_split(root: Path, errors: list[str]) -> None:
     union_declared = set(module.get("privileges") or ())
     reusable = load_yaml(root / ".github" / "workflows" / "reusable-pypi-publish.yml")
     reusable_actual = _permission_set(reusable.get("permissions"))
-    caller_body = _rendered_caller(root, "python-library", ".github/workflows/aviato-ci.yml")
+    try:
+        caller_body = _rendered_caller(root, "python-library", ".github/workflows/aviato-ci.yml")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"PyPI rendered consumer publisher caller could not be validated: {exc}")
+        return
     caller = yaml.safe_load(caller_body) if caller_body is not None else {}
     publish_job = (caller.get("jobs") or {}).get("pypi-publish") if isinstance(caller, dict) else None
     publisher_actual = _permission_set(publish_job.get("permissions") if isinstance(publish_job, dict) else None)

@@ -10,6 +10,8 @@ SKIPPED=()
 
 python3 -m compileall aviato >/dev/null
 python3 -m aviato.cli validate
+python3 scripts/sync-docs-toolchain-pins.py --check
+python3 scripts/regen-templates.py --check
 
 if command -v ruff >/dev/null 2>&1; then
   ruff check .
@@ -30,7 +32,7 @@ else
   SKIPPED+=("pytest (test suite)")
 fi
 
-if python3 -c "import build" >/dev/null 2>&1; then
+if python3 -c "from importlib.metadata import version; version('build')" >/dev/null 2>&1; then
   rm -rf _wheelout
   # --no-isolation: the local gate must work offline (no pip fetch of setuptools);
   # the ambient env carries the build backend via the [dev] install.

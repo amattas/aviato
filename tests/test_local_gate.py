@@ -9,7 +9,13 @@ rather than on real regressions.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
 
 import yaml
 
@@ -65,3 +71,61 @@ def test_wheel_runtime_version_parity_is_asserted() -> None:
     assert "from aviato import __version__" in _VALIDATE
     assert 'find_spec("pip")' in _VALIDATE
     assert 'shutil.which("uv")' in _VALIDATE
+
+
+def test_build_probe_uses_distribution_metadata_and_ignores_shadow_directory(tmp_path: Path) -> None:
+    """A local ``build/`` package cannot make the wheel gate look installed."""
+    shadow = tmp_path / "shadow"
+    (shadow / "build").mkdir(parents=True)
+    wrapper_dir = tmp_path / "bin"
+    wrapper_dir.mkdir()
+    wrapper = wrapper_dir / "python3"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        '  *"importlib.metadata"*"version(\'build\')"*) exit 1 ;;\n'
+        "esac\n"
+        f'exec "{sys.executable}" "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    zizmor = shutil.which("zizmor")
+    assert zizmor is not None
+    (wrapper_dir / "zizmor").symlink_to(zizmor)
+    env = os.environ.copy()
+    env["PATH"] = f"{wrapper_dir}:/usr/bin:/bin"
+    env["PYTHONPATH"] = str(shadow)
+    env.pop("AVIATO_STRICT_TOOLS", None)
+
+    result = subprocess.run(
+        ["bash", "scripts/validate.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "build (wheel packaging + package-data)" in output
+    assert "LOCAL GATE INCOMPLETE" in output
+    assert "No module named build" not in output
+
+
+def test_wheel_build_uses_modern_license_metadata_without_setuptools_warning(tmp_path: Path) -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["project"]["license"] == "MIT"
+    assert pyproject["project"]["license-files"] == ["LICENSE"]
+
+    result = subprocess.run(
+        [sys.executable, "-m", "build", "--wheel", "--no-isolation", "--outdir", str(tmp_path / "wheel")],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "SetuptoolsDeprecationWarning" not in output

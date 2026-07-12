@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import tomllib
 from collections.abc import Set as AbstractSet
 from pathlib import Path
 
@@ -957,4 +958,19 @@ def action_pin_violations(root: Path) -> list[str]:
     for manifest in sorted(scaffold_dir.glob("pyproject*.toml.txt")):
         for pkg in unpinned_pyproject_extra_lines(manifest.read_text(encoding="utf-8", errors="replace")):
             violations.append(f"{manifest.name}: dev-extra requirement not pinned to an exact version: {pkg}")
+
+    # 6. The Library's own extras are installed by its CI just like the seeded manifests.
+    # Keep the build-system setuptools floor out of scope: the scanner is deliberately
+    # constrained to [project.optional-dependencies].
+    root_manifest = root / "pyproject.toml"
+    if root_manifest.is_file():
+        manifest_text = root_manifest.read_text(encoding="utf-8", errors="replace")
+        try:
+            build_requirements = set(tomllib.loads(manifest_text).get("build-system", {}).get("requires", []))
+        except (tomllib.TOMLDecodeError, AttributeError, TypeError):
+            build_requirements = set()
+        for pkg in unpinned_pyproject_extra_lines(manifest_text):
+            if pkg.startswith("setuptools") and pkg in build_requirements:
+                continue
+            violations.append(f"pyproject.toml: optional dependency not pinned to an exact version: {pkg}")
     return violations

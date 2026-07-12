@@ -6,7 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "aviato"
 version = "0.3.0"
 description = "Reusable GitHub policy, CI, release, and onboarding conventions."
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
   "PyYAML>=6.0",

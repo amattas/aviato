@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -366,6 +367,54 @@ def test_docs_caller_workflow_run_name_drift_is_detected(repo_copy: Path) -> Non
     assert drifted != text, "fixture did not contain the expected display name"
     ci.write_text(drifted, encoding="utf-8")
     assert any("finding 40" in e for e in validate(repo_copy))
+
+
+def test_rendered_library_docs_caller_name_drift_is_detected(repo_copy: Path) -> None:
+    ci = repo_copy / ".github/workflows/aviato-ci.yml"
+    text = ci.read_text(encoding="utf-8")
+    ci.write_text(text.replace("name: Aviato Python Library\n", "name: Renamed Library CI\n", 1), encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any(".github/workflows/aviato-docs.yml" in e and "Renamed Library CI" in e for e in errors)
+
+
+def test_missing_docs_name_parity_source_is_an_error(repo_copy: Path) -> None:
+    missing = repo_copy / "aviato/library/scaffold/files/wf-python-library.yml"
+    missing.unlink()
+
+    errors = validate(repo_copy)
+
+    assert any("wf-docs-python-library.yml" in e and "missing" in e and "name parity" in e for e in errors)
+
+
+def test_monotonic_alias_timeout_is_one_actionable_error(repo_copy: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import aviato.validation as validation
+
+    monkeypatch.setattr(validation, "_MONOTONIC_ALIAS_WORKFLOWS", ["starter/docs-site/docs.yml"])
+
+    def timeout(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout", 0))
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    errors: list[str] = []
+
+    validation._check_monotonic_alias_parity(repo_copy, errors)
+
+    assert len(errors) == 1
+    assert "starter/docs-site/docs.yml" in errors[0]
+    assert "timed out" in errors[0]
+    assert "monotonic-alias" in errors[0]
+
+
+def test_root_pyproject_floating_dev_extra_is_detected(repo_copy: Path) -> None:
+    manifest = repo_copy / "pyproject.toml"
+    text = manifest.read_text(encoding="utf-8")
+    manifest.write_text(text.replace('"ruff==0.15.16"', '"ruff>=0.15.16"'), encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("pyproject.toml" in e and "ruff>=0.15.16" in e and "exact version" in e for e in errors)
 
 
 def test_library_slug_copy_drift_is_detected(repo_copy: Path) -> None:
