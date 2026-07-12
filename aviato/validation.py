@@ -25,6 +25,11 @@ REQUIRED_FILES = [
     # (drops typed privileges/status-checks, disables the undeclared-pipeline check) and without
     # denylist.txt the §9b agnosticism scan can't run — yet validate() reported no missing file.
     "aviato/library/pipelines.yaml",
+    # §13.3 docs scaffold metadata: the Zensical site config (seed-once) and the
+    # managed docs toolchain requirements. Load-bearing — a missing metadata file
+    # silently drops the artifact from the docs opt-in scaffold set.
+    "aviato/library/scaffold/zensical-config.yaml",
+    "aviato/library/scaffold/docs-requirements.yaml",
     "aviato/plugins/denylist.txt",
     ".github/dependabot.yml",
     ".github/workflows/ci.yml",

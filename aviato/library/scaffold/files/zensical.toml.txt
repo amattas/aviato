@@ -1,0 +1,10 @@
+[project]
+site_name = "{{ project-name }}"
+site_url = "https://{{ owner }}.github.io/{{ repo }}/"
+repo_url = "https://github.com/{{ owner }}/{{ repo }}"
+docs_dir = "docs"
+
+[project.extra.version]
+provider = "mike"
+default = "latest"
+alias = true

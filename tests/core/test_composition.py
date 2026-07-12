@@ -8,7 +8,7 @@ import yaml
 
 from aviato.core.composition import _resolve_list, _variable_spec, resolve_profile
 from aviato.core.errors import CompositionError
-from aviato.core.model import VersionSourceModule
+from aviato.core.model import ResolvedSet, VersionSourceModule
 from aviato.core.registry import Registry
 
 
@@ -278,6 +278,25 @@ def test_docs_opt_in_adds_docs_pipeline(module_root: Path) -> None:
     with_docs = resolve_profile(reg, "child", docs=True)
     assert "docs-pages" not in without.pipelines  # default off
     assert "docs-pages" in with_docs.pipelines
+
+
+@pytest.fixture
+def resolved_python_library_docs() -> ResolvedSet:
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    return resolve_profile(Registry(MODULE_SOURCE_ROOT), "python-library", docs=True)
+
+
+def test_docs_opt_in_seeds_zensical_scaffold(resolved_python_library_docs: ResolvedSet) -> None:
+    # §13.3: docs:true seeds a Zensical site (zensical.toml + intro.md + a pinned docs
+    # requirements.txt) and never the retired Docusaurus scaffold (config / sidebars /
+    # package.json / eslint / per-site npmrc) or any algolia search config. TemplateModule
+    # carries no module name, so the scaffold set is inspected by output_path (as in
+    # test_resolve_resolves_template_refs_to_modules).
+    outputs = {t.output_path for t in resolved_python_library_docs.templates}
+    assert {"website/zensical.toml", "website/docs/intro.md", "website/requirements.txt"} <= outputs
+    retired = ("sidebars.js", "package.json", "eslint.config.mjs", "/.npmrc")
+    assert not any("docusaurus" in o or "algolia" in o or o.endswith(retired) for o in outputs)
 
 
 def test_docs_pipeline_not_duplicated_if_already_present(module_root: Path) -> None:

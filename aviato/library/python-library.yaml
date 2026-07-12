@@ -12,14 +12,6 @@ variables:
   # mypy to its package (tests pending) while consumers keep the strict-everything
   # default from reusable-python-ci.
   - {name: typecheck-command, type: string, required: false, default: "python -m mypy --strict ."}
-  # finding 20 (operator decision): Algolia DocSearch is OPT-IN. Default "false" =
-  # fresh docs scaffolds build without a search config (the old always-on block both
-  # double-loaded the theme — a hard build failure — and shipped dead placeholder
-  # credentials). Set algolia=true + the three values to enable.
-  - {name: algolia, type: string, required: false, default: "false"}
-  - {name: algolia-app-id, type: string, required: false}
-  - {name: algolia-search-api-key, type: string, required: false}
-  - {name: algolia-index-name, type: string, required: false}
   # R4-3: optional; the consumer's default branch (default `main`), templated into the
   # generated callers' trigger filters and release-gate input for non-`main` repos.
   - {name: default-branch, type: string, required: false, default: main}

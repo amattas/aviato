@@ -92,16 +92,12 @@ def test_python_service_is_a_container_service_not_a_library(registry: Registry)
     # defaults to the repo slug.
     rs = resolve_profile(registry, "python-service")
     var_names = {v.name for v in rs.variables}
-    # Only the every-profile vars — `default-branch` (R4-3), `owner` (finding 28), and
-    # the algolia opt-in set (finding 20); there is no required container-service-
-    # specific variable (no wheel/import packaging, no image-name).
+    # Only the every-profile vars — `default-branch` (R4-3) and `owner` (finding 28);
+    # there is no required container-service-specific variable (no wheel/import
+    # packaging, no image-name).
     assert var_names == {
         "default-branch",
         "owner",
-        "algolia",
-        "algolia-app-id",
-        "algolia-search-api-key",
-        "algolia-index-name",
     }, var_names
     assert "distribution-name" not in var_names and "import-name" not in var_names
     assert "image-name" not in var_names
@@ -202,29 +198,6 @@ def test_common_scaffold_ships_shared_governance_files() -> None:
     assert "* @octocat" in codeowners.body
 
 
-def test_algolia_opt_in_renders_templated_search_config() -> None:
-    # finding 20: algolia=true selects the templated variant — exactly one config
-    # renders (the same-output_path variants are mutually exclusive by `when`), the
-    # credentials are {{ }} placeholders the lenient seed-once render PRESERVES when
-    # unset, and the duplicate explicit theme entry stays gone.
-    from aviato.core.onboarding import materialize_items
-
-    reg = Registry(MODULE_SOURCE_ROOT)
-    variables = {"distribution-name": "acme", "import-name": "acme", "algolia": "true"}
-    items = materialize_items(reg, "python-library", variables, docs=True, pin="0")
-    configs = [i for i in items if i.output == "website/docusaurus.config.js"]
-    assert len(configs) == 1
-    body = configs[0].body
-    assert "algolia:" in body
-    assert "{{ algolia-app-id }}" in body, "unset optional vars must keep their placeholders"
-    assert "'@docusaurus/theme-search-algolia'" not in body
-    # ...and providing the values substitutes them.
-    variables_set = dict(variables, **{"algolia-app-id": "ABC123"})
-    items_set = materialize_items(reg, "python-library", variables_set, docs=True, pin="0")
-    body_set = next(i.body for i in items_set if i.output == "website/docusaurus.config.js")
-    assert "appId: 'ABC123'" in body_set
-
-
 def test_unset_optional_variables_never_render_as_none() -> None:
     # finding 28: resolve_variables emits None for unset optionals; the render layer
     # must omit them (placeholder preserved), never bake the literal "None".
@@ -250,9 +223,11 @@ def test_owner_variable_seeds_license() -> None:
     assert "{{ owner }}" not in license_body
 
 
-def test_docs_opt_in_scaffolds_runnable_docusaurus_site() -> None:
-    # §13.3/#4: docs:true must scaffold a *runnable* site (config + sidebars + a docs
-    # package with docusaurus deps + at least one source page), not just a config.
+def test_docs_opt_in_scaffolds_zensical_site() -> None:
+    # §13.3/#4: docs:true must scaffold a Zensical site — the site config, a source
+    # page, and a pinned docs toolchain requirements.txt — and none of it without the
+    # opt-in. Zensical consumes plain markdown, so there is no config.js / sidebars /
+    # package.json / eslint / algolia surface anymore.
     from aviato.core.onboarding import materialize_items
 
     reg = Registry(MODULE_SOURCE_ROOT)
@@ -262,42 +237,26 @@ def test_docs_opt_in_scaffolds_runnable_docusaurus_site() -> None:
     outputs_on = {i.output for i in items_on}
 
     expected = {
-        "website/docusaurus.config.js",
-        "website/sidebars.js",
-        "website/package.json",
+        "website/zensical.toml",
         "website/docs/intro.md",
+        "website/requirements.txt",
     }
     assert expected <= outputs_on
     assert not (expected & outputs_off)  # none scaffolded without the opt-in
+    # The retired Docusaurus scaffold surface is gone entirely.
+    assert not any(
+        "docusaurus" in o or "algolia" in o or o.endswith(("sidebars.js", "package.json", "eslint.config.mjs"))
+        for o in outputs_on
+    )
 
-    pkg = next(i for i in items_on if i.output == "website/package.json")
-    assert "@docusaurus/preset-classic" in pkg.body
-    assert "@docusaurus/theme-search-algolia" in pkg.body
-    assert "@docusaurus/theme-mermaid" in pkg.body
-    assert "@docusaurus/eslint-plugin" in pkg.body
-    assert '"lint": "eslint ."' in pkg.body
-    assert '"build": "docusaurus build"' in pkg.body
-    assert '"node": ">=24.0"' in pkg.body
-    assert '"npm": ">=11.10.0"' in pkg.body  # finding 13: min-release-age needs npm >=11.10
+    config = next(i for i in items_on if i.output == "website/zensical.toml")
+    assert "[project]" in config.body
+    assert 'site_name = "{{ project-name }}"' in config.body  # seed-once keeps the placeholder
+    assert 'provider = "mike"' in config.body  # multi-version docs via mike
 
-    config = next(i for i in items_on if i.output == "website/docusaurus.config.js")
-    assert "markdown: { mermaid: true }" in config.body
-    assert "'@docusaurus/theme-mermaid'" in config.body
-    # finding 20: search is OPT-IN (default algolia=false) and the explicit theme entry
-    # is gone — preset-classic auto-loads it from themeConfig.algolia, and listing it
-    # too registered the plugin twice, failing every docs build at first deploy.
-    assert "'@docusaurus/theme-search-algolia'" not in config.body
-    assert "algolia:" not in config.body
-    assert "sitemap:" in config.body
-
-    npmrc = next(i for i in items_on if i.output == "website/.npmrc")
-    assert "min-release-age=7" in npmrc.body
-    assert "ignore-scripts=true" in npmrc.body
-    assert "engine-strict=true" in npmrc.body
-
-    eslint = next(i for i in items_on if i.output == "website/eslint.config.mjs")
-    assert 'import docusaurus from "@docusaurus/eslint-plugin"' in eslint.body
-    assert "...docusaurus.configs.recommended.rules" in eslint.body
+    reqs = next(i for i in items_on if i.output == "website/requirements.txt")
+    assert "zensical==0.0.50" in reqs.body
+    assert "mike @ git+https://github.com/squidfunk/mike.git@" in reqs.body
 
 
 def test_python_profile_scaffolds_pyproject_manifest() -> None:

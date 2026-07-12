@@ -1,0 +1,7 @@
+name: docs-requirements
+output_path: website/requirements.txt
+source: files/docs-requirements.txt.txt
+comment: "#"
+seed_once: false
+when:
+  docs: "true"

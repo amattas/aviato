@@ -6,11 +6,7 @@ add:
   - wf-ci-node-service
   - wf-drift
   - wf-docs-node-service
-  - docs-npmrc
-  - docs-eslint-config
-  - docusaurus-config
-  - docusaurus-config-algolia
-  - docs-package
-  - docs-sidebars
+  - zensical-config
   - docs-intro
+  - docs-requirements
 remove: []
