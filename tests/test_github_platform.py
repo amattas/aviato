@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -932,6 +933,64 @@ def test_probe_health_heartbeat_sha_malformed_candidate_id_is_unknown(monkeypatc
         "gh_json_optional",
         _probe_optional(has_issues=True, head_sha="abc", artifacts=[artifact]),
     )
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        7,
+        {},
+        {"analyzed_ref": "refs/heads/main"},
+        {"analyzed_sha": "abc"},
+        {"analyzed_ref": 7, "analyzed_sha": "abc"},
+        {"analyzed_ref": "refs/heads/main", "analyzed_sha": None},
+    ],
+)
+def test_probe_health_heartbeat_sha_malformed_json_payload_is_unknown(
+    monkeypatch: pytest.MonkeyPatch, payload: object
+) -> None:
+    artifact = {
+        "name": "aviato-security-heartbeat-abc",
+        "expired": False,
+        "workflow_run": {"id": 70, "head_sha": "abc"},
+    }
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha="abc", artifacts=[artifact]),
+    )
+
+    def download(command, *, cwd=None, **kwargs):
+        assert cwd is not None
+        Path(cwd, "aviato-security-heartbeat.json").write_text(json.dumps(payload))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(github, "run", download)
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is None
+
+
+def test_probe_health_heartbeat_sha_invalid_utf8_payload_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    artifact = {
+        "name": "aviato-security-heartbeat-abc",
+        "expired": False,
+        "workflow_run": {"id": 70, "head_sha": "abc"},
+    }
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha="abc", artifacts=[artifact]),
+    )
+
+    def download(command, *, cwd=None, **kwargs):
+        assert cwd is not None
+        Path(cwd, "aviato-security-heartbeat.json").write_bytes(b"\xff\xfe")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(github, "run", download)
     _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
     assert heartbeat is None
 

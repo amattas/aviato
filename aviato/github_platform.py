@@ -660,14 +660,17 @@ class GitHubPlatform:
                                 )
                                 payload_path = Path(tmp) / "aviato-security-heartbeat.json"
                                 payload = json.loads(payload_path.read_text(encoding="utf-8"))
-                        except (CommandError, OSError, json.JSONDecodeError):
+                        except (CommandError, OSError, UnicodeDecodeError, json.JSONDecodeError):
                             ambiguous_candidate = True
                             continue
                         if (
-                            isinstance(payload, dict)
-                            and payload.get("analyzed_ref") == expected_ref
-                            and payload.get("analyzed_sha") == head_sha
+                            not isinstance(payload, dict)
+                            or not isinstance(payload.get("analyzed_ref"), str)
+                            or not isinstance(payload.get("analyzed_sha"), str)
                         ):
+                            ambiguous_candidate = True
+                            continue
+                        if payload["analyzed_ref"] == expected_ref and payload["analyzed_sha"] == head_sha:
                             heartbeat = True
                             break
                     if not heartbeat and ambiguous_candidate:
