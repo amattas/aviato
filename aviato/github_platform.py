@@ -612,15 +612,55 @@ class GitHubPlatform:
             head = github.gh_json_optional(f"repos/{repo}/commits/{branch}", default=None) if branch else None
             head_sha = head.get("sha") if isinstance(head, dict) else None
             if head_sha:
+                artifact_name = f"aviato-security-heartbeat-{head_sha}"
                 artifacts = github.gh_json_optional(
-                    f"repos/{repo}/actions/artifacts?name=aviato-security-heartbeat&per_page=30", default=None
+                    f"repos/{repo}/actions/artifacts?name={artifact_name}&per_page=30", default=None
                 )
                 items = (artifacts.get("artifacts") or []) if isinstance(artifacts, dict) else []
-                heartbeat = any(
-                    not item.get("expired") and (item.get("workflow_run") or {}).get("head_sha") == head_sha
+                candidates = [
+                    item
                     for item in items
                     if isinstance(item, dict)
-                )
+                    and item.get("name") == artifact_name
+                    and not item.get("expired")
+                    and (item.get("workflow_run") or {}).get("head_sha") == head_sha
+                ]
+                heartbeat = False
+                download_failed = False
+                expected_ref = f"refs/heads/{branch}"
+                for item in candidates:
+                    run_id = (item.get("workflow_run") or {}).get("id")
+                    if not isinstance(run_id, int):
+                        continue
+                    try:
+                        with tempfile.TemporaryDirectory(prefix="aviato-heartbeat-") as tmp:
+                            github.run(
+                                [
+                                    "gh",
+                                    "run",
+                                    "download",
+                                    str(run_id),
+                                    "--repo",
+                                    repo,
+                                    "--name",
+                                    artifact_name,
+                                ],
+                                cwd=tmp,
+                            )
+                            payload_path = Path(tmp) / "aviato-security-heartbeat.json"
+                            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+                    except (CommandError, OSError, json.JSONDecodeError):
+                        download_failed = True
+                        continue
+                    if (
+                        isinstance(payload, dict)
+                        and payload.get("analyzed_ref") == expected_ref
+                        and payload.get("analyzed_sha") == head_sha
+                    ):
+                        heartbeat = True
+                        break
+                if not heartbeat and download_failed:
+                    heartbeat = None
         except github.GitHubAPIError:
             pass  # ambiguous read → leave unknown (None)
         # R6-2-§17-PROBE: read the §17 remote-probeable items separately so a failure on one

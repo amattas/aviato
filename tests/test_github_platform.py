@@ -747,9 +747,27 @@ def test_probe_health_heartbeat_true_only_for_current_head(monkeypatch: pytest.M
         github,
         "gh_json_optional",
         _probe_optional(
-            has_issues=True, head_sha="abc", artifacts=[{"expired": False, "workflow_run": {"head_sha": "abc"}}]
+            has_issues=True,
+            head_sha="abc",
+            artifacts=[
+                {
+                    "id": 7,
+                    "name": "aviato-security-heartbeat-abc",
+                    "expired": False,
+                    "workflow_run": {"id": 70, "head_sha": "abc"},
+                }
+            ],
         ),
     )
+
+    def download(command, *, cwd=None, **kwargs):
+        assert cwd is not None
+        Path(cwd, "aviato-security-heartbeat.json").write_text(
+            '{"analyzed_ref":"refs/heads/main","analyzed_sha":"abc"}\n'
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(github, "run", download)
     issue_channel, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
     assert issue_channel is True
     assert heartbeat is True
@@ -783,6 +801,91 @@ def test_probe_health_heartbeat_false_when_no_artifact_or_expired(monkeypatch: p
     )
     _, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
     assert heartbeat is False  # expired heartbeat for HEAD → broken
+
+
+def test_probe_health_heartbeat_sha_rejects_mismatched_name_and_content(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifact = {
+        "id": 7,
+        "name": "aviato-security-heartbeat-oldsha",
+        "expired": False,
+        "workflow_run": {"id": 70, "head_sha": "newsha"},
+    }
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha="newsha", artifacts=[artifact]),
+    )
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("mismatched artifact name must not download")),
+    )
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is False
+
+    artifact["name"] = "aviato-security-heartbeat-newsha"
+
+    def download_bad_content(command, *, cwd=None, **kwargs):
+        assert cwd is not None
+        Path(cwd, "aviato-security-heartbeat.json").write_text(
+            '{"analyzed_ref":"refs/heads/main","analyzed_sha":"oldsha"}\n'
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(github, "run", download_bad_content)
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is False
+
+
+def test_probe_health_heartbeat_sha_accepts_exact_name_run_and_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    head_sha = "abc123"
+    artifact = {
+        "id": 7,
+        "name": f"aviato-security-heartbeat-{head_sha}",
+        "expired": False,
+        "workflow_run": {"id": 70, "head_sha": head_sha},
+    }
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha=head_sha, artifacts=[artifact]),
+    )
+
+    def download(command, *, cwd=None, **kwargs):
+        assert command[:3] == ["gh", "run", "download"]
+        assert cwd is not None
+        Path(cwd, "aviato-security-heartbeat.json").write_text(
+            f'{{"analyzed_ref":"refs/heads/main","analyzed_sha":"{head_sha}"}}\n'
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(github, "run", download)
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is True
+
+
+def test_probe_health_heartbeat_sha_download_failure_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    head_sha = "abc123"
+    artifact = {
+        "id": 7,
+        "name": f"aviato-security-heartbeat-{head_sha}",
+        "expired": False,
+        "workflow_run": {"id": 70, "head_sha": head_sha},
+    }
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha=head_sha, artifacts=[artifact]),
+    )
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(CommandError(["gh"], 1, "HTTP 503")),
+    )
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is None
 
 
 def test_read_settings_includes_security(monkeypatch: pytest.MonkeyPatch) -> None:

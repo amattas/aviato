@@ -11,6 +11,13 @@ on:
         required: false
         type: string
         default: ""
+      sha:
+        description: >-
+          Exact commit expected for ref. Empty is permitted for ordinary event-driven runs;
+          out-of-band release/docs callers must supply the gated commit SHA.
+        required: false
+        type: string
+        default: ""
       codeql-languages:
         description: Comma-separated CodeQL languages, for example python or javascript-typescript.
         required: false
@@ -41,10 +48,58 @@ permissions:
   actions: read
 
 jobs:
+  # Resolve the requested target exactly once before any scanner initializes. The checkout action
+  # performs the authenticated ref resolution (including annotated-tag peeling); every scan then
+  # checks out the emitted commit and every SARIF producer uploads against the emitted ref/SHA.
+  resolve-target:
+    name: Resolve analyzed target
+    runs-on: ubuntu-latest
+    outputs:
+      canonical-ref: ${{ steps.resolve.outputs.canonical-ref }}
+      analyzed-sha: ${{ steps.resolve.outputs.analyzed-sha }}
+    steps:
+      - name: Fetch requested ref and tags
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve canonical ref and commit
+        id: resolve
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+          REQUESTED_SHA: ${{ inputs.sha }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          canonical_ref="${REQUESTED_REF:-${EVENT_REF}}"
+          if [[ -n "${REQUESTED_REF}" && "${REQUESTED_REF}" != refs/* ]]; then
+            canonical_ref="refs/tags/${REQUESTED_REF}"
+          fi
+
+          # actions/checkout resolved REQUESTED_REF (or EVENT_REF) and fetched tags. Peeling
+          # HEAD^{commit} makes annotated and lightweight tags converge on the commit scanners use.
+          analyzed_sha="$(git rev-parse 'HEAD^{commit}')"
+          expected_sha="${REQUESTED_SHA}"
+          if [[ -z "${REQUESTED_REF}" && -z "${expected_sha}" ]]; then
+            expected_sha="${EVENT_SHA}"
+          fi
+          if [[ -n "${expected_sha}" && "${analyzed_sha}" != "${expected_sha}" ]]; then
+            echo "::error::Requested ref ${canonical_ref} resolved to ${analyzed_sha}, expected ${expected_sha}."
+            exit 1
+          fi
+          echo "canonical-ref=${canonical_ref}" >> "${GITHUB_OUTPUT}"
+          echo "analyzed-sha=${analyzed_sha}" >> "${GITHUB_OUTPUT}"
+
   # §8.16/§5.14: probe the findings-upload privilege at runtime and HARD-FAIL if a
   # caller did not grant it — a missing scope must fail loud, never pass silently.
   privilege-probe:
     name: Probe findings-upload privilege
+    needs: resolve-target
     runs-on: ubuntu-latest
     steps:
       # §5.14/§5.5: scheduled scans are jittered so a fleet of consumers on the same weekly
@@ -85,7 +140,7 @@ jobs:
 
   codeql:
     name: CodeQL
-    needs: privilege-probe
+    needs: [privilege-probe, resolve-target]
     if: ${{ inputs.run-codeql && inputs.codeql-languages != '' }}
     runs-on: ${{ inputs.codeql-runner }}
     steps:
@@ -93,7 +148,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -112,11 +167,14 @@ jobs:
       # secret scans which gate in-workflow via Trivy exit-code.
       - name: Analyze
         uses: github/codeql-action/analyze@v4
+        with:
+          ref: ${{ needs.resolve-target.outputs.canonical-ref }}
+          sha: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
   # PR-only diff-based review (richer signal on pull requests).
   dependency-review:
     name: Dependency Review
-    needs: privilege-probe
+    needs: [privilege-probe, resolve-target]
     if: ${{ inputs.run-dependency-review && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
@@ -124,7 +182,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
       - name: Dependency review
         uses: actions/dependency-review-action@v5
@@ -135,14 +193,14 @@ jobs:
   # gates high/critical and uploads SARIF to the Security surface.
   dependency-scan:
     name: Dependency vulnerability scan
-    needs: privilege-probe
+    needs: [privilege-probe, resolve-target]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
       # §2.13 report/gate split: REPORT all severities to the Security surface (no gate), then
       # GATE separately on high/critical. A single `severity: HIGH,CRITICAL` step would filter
@@ -166,6 +224,8 @@ jobs:
         with:
           sarif_file: trivy-deps.sarif
           category: aviato-dependency-scan
+          ref: ${{ needs.resolve-target.outputs.canonical-ref }}
+          sha: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
       - name: Gate on high/critical dependencies (§2.13)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -182,14 +242,14 @@ jobs:
   # protection, §2.13): any detected secret fails the pipeline; findings upload as SARIF.
   secret-scan:
     name: Secret scan
-    needs: privilege-probe
+    needs: [privilege-probe, resolve-target]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
       - name: Scan for secrets
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -207,6 +267,8 @@ jobs:
         with:
           sarif_file: trivy-secrets.sarif
           category: aviato-secret-scan
+          ref: ${{ needs.resolve-target.outputs.canonical-ref }}
+          sha: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
   # Per-run heartbeat (§5.14): emit a durable artifact (even on zero findings) so
   # diagnosis (§5.4) can distinguish "ran clean" from "never ran" by reading the
@@ -214,7 +276,7 @@ jobs:
   # secret) MUST have actually run; a skipped scan is treated as broken.
   heartbeat:
     name: Security baseline heartbeat
-    needs: [codeql, dependency-review, dependency-scan, secret-scan]
+    needs: [resolve-target, codeql, dependency-review, dependency-scan, secret-scan]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     env:
@@ -224,13 +286,15 @@ jobs:
       DEPREVIEW_RESULT: ${{ needs.dependency-review.result }}
       RUN_CODEQL: ${{ inputs.run-codeql }}
       CODEQL_LANGUAGES: ${{ inputs.codeql-languages }}
+      ANALYZED_REF: ${{ needs.resolve-target.outputs.canonical-ref }}
+      ANALYZED_SHA: ${{ needs.resolve-target.outputs.analyzed-sha }}
     steps:
       - name: Emit heartbeat
         shell: bash
         run: |
           mkdir -p heartbeat
-          printf '{"tool":"aviato-security-baseline","sast":"%s","dependency":"%s","secret":"%s","review":"%s","completed":true}\n' \
-            "${CODEQL_RESULT}" "${DEPSCAN_RESULT}" "${SECRET_RESULT}" "${DEPREVIEW_RESULT}" \
+          printf '{"tool":"aviato-security-baseline","analyzed_ref":"%s","analyzed_sha":"%s","sast":"%s","dependency":"%s","secret":"%s","review":"%s","completed":true}\n' \
+            "${ANALYZED_REF}" "${ANALYZED_SHA}" "${CODEQL_RESULT}" "${DEPSCAN_RESULT}" "${SECRET_RESULT}" "${DEPREVIEW_RESULT}" \
             > heartbeat/aviato-security-heartbeat.json
           cat heartbeat/aviato-security-heartbeat.json
 
@@ -275,6 +339,6 @@ jobs:
       - name: Upload heartbeat
         uses: actions/upload-artifact@v7
         with:
-          name: aviato-security-heartbeat
+          name: aviato-security-heartbeat-${{ needs.resolve-target.outputs.analyzed-sha }}
           path: heartbeat/aviato-security-heartbeat.json
           retention-days: 30

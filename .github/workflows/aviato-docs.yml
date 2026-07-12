@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=09aa9ec9067e5c2b9694408432f46d2c2090ce2ea9823267c51047e72f2eb4f3
+# aviato:managed profile=aviato-library version=0 hash=106c8f1b4b7e1e607b84a0542de751e14e879bfc528f1a6171e2ee9aae703b8a inputs=09b5cd787d4f3cd4015e8957d3565aed650d1be5e58743b3dd81692845056d87
 name: Aviato Docs
 
 # Multi-version Zensical docs publish (§13.3), versioned onto a docs branch by mike, opt-in via docs: true.
@@ -84,7 +84,7 @@ jobs:
       release-tag: ${{ needs.resolve.outputs.tag }}
 
   security:
-    needs: [resolve]
+    needs: [resolve, release-gate]
     if: ${{ needs.resolve.outputs.release == 'true' }}
     permissions:
       actions: read
@@ -93,7 +93,8 @@ jobs:
       security-events: write
     uses: ./.github/workflows/reusable-security-baseline.yml
     with:
-      ref: ${{ needs.resolve.outputs.tag }}
+      ref: refs/tags/${{ needs.resolve.outputs.tag }}
+      sha: ${{ needs.release-gate.outputs.gated-sha }}
       codeql-languages: "python"
 
   docs:

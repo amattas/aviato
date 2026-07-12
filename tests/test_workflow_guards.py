@@ -474,7 +474,7 @@ def test_security_baseline_jitters_scheduled_scans_at_the_chokepoint() -> None:
     for scan_job in ("codeql", "dependency-review", "dependency-scan", "secret-scan"):
         needs = jobs[scan_job].get("needs")
         message = f"{scan_job} must `needs: privilege-probe` so the jitter on that job defers it"
-        assert needs == "privilege-probe", message
+        assert "privilege-probe" in needs, message
 
     # (b) privilege-probe has a schedule-gated RANDOM sleep before it does any work.
     probe_steps = jobs["privilege-probe"]["steps"]
@@ -568,7 +568,7 @@ def test_security_baseline_retains_fail_closed_structure() -> None:
     scan_jobs = ["codeql", "dependency-review", "dependency-scan", "secret-scan"]
     for name in scan_jobs:
         assert name in jobs, f"missing scan job {name}"
-        assert jobs[name].get("needs") == "privilege-probe", f"{name} must run after the privilege probe"
+        assert "privilege-probe" in jobs[name].get("needs", []), f"{name} must run after the privilege probe"
 
     heartbeat_needs = jobs["heartbeat"].get("needs", [])
     for name in scan_jobs:
@@ -576,6 +576,67 @@ def test_security_baseline_retains_fail_closed_structure() -> None:
 
     gate_steps = [step.get("name", "") for step in jobs["heartbeat"].get("steps", []) if isinstance(step, dict)]
     assert any("Gate" in name for name in gate_steps), "missing 'Gate on required scans' step"
+
+
+def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
+    """Every source read and findings upload must bind to the same immutable commit."""
+    wf = _load("reusable-security-baseline.yml")
+    on_block = wf.get("on") or wf.get(True)
+    inputs = on_block["workflow_call"]["inputs"]
+    assert inputs["ref"]["required"] is False
+    assert inputs["sha"]["required"] is False
+
+    jobs = wf["jobs"]
+    resolver = jobs["resolve-target"]
+    assert resolver["outputs"] == {
+        "canonical-ref": "${{ steps.resolve.outputs.canonical-ref }}",
+        "analyzed-sha": "${{ steps.resolve.outputs.analyzed-sha }}",
+    }
+    resolve_script = next(step["run"] for step in resolver["steps"] if step.get("id") == "resolve")
+    assert "refs/tags/" in resolve_script
+    assert "^{commit}" in resolve_script
+    assert "inputs.sha" in str(resolver["steps"])
+
+    canonical_ref = "${{ needs.resolve-target.outputs.canonical-ref }}"
+    analyzed_sha = "${{ needs.resolve-target.outputs.analyzed-sha }}"
+    for job_name in ("codeql", "dependency-review", "dependency-scan", "secret-scan"):
+        checkout = next(step for step in jobs[job_name]["steps"] if step.get("uses") == "actions/checkout@v4")
+        assert checkout["with"]["ref"] == analyzed_sha, job_name
+
+    analyze = next(step for step in jobs["codeql"]["steps"] if step.get("uses") == "github/codeql-action/analyze@v4")
+    assert analyze["with"]["ref"] == canonical_ref
+    assert analyze["with"]["sha"] == analyzed_sha
+
+    uploads = [
+        step
+        for job_name in ("dependency-scan", "secret-scan")
+        for step in jobs[job_name]["steps"]
+        if step.get("uses") == "github/codeql-action/upload-sarif@v4"
+    ]
+    assert len(uploads) == 2
+    for upload in uploads:
+        assert upload["with"]["ref"] == canonical_ref
+        assert upload["with"]["sha"] == analyzed_sha
+
+    heartbeat = jobs["heartbeat"]
+    assert "resolve-target" in heartbeat["needs"]
+    upload = next(step for step in heartbeat["steps"] if step.get("uses") == "actions/upload-artifact@v7")
+    assert upload["with"]["name"] == "aviato-security-heartbeat-${{ needs.resolve-target.outputs.analyzed-sha }}"
+
+
+def test_docs_security_ref_uses_full_tag_and_release_gate_sha() -> None:
+    """Out-of-band docs scans must use the exact target already accepted by the release gate."""
+    local_security = _load("aviato-docs.yml")["jobs"]["security"]
+    assert "release-gate" in local_security["needs"]
+    assert local_security["with"]["ref"] == "refs/tags/${{ needs.resolve.outputs.tag }}"
+    assert local_security["with"]["sha"] == "${{ needs.release-gate.outputs.gated-sha }}"
+
+    for caller in sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml")):
+        body = caller.read_text(encoding="utf-8")
+        security_block = body[body.index("\n  security:") : body.index("\n  docs:")]
+        assert "needs: [resolve, release-gate]" in security_block, caller.name
+        assert "ref: refs/tags/${{ needs.resolve.outputs.tag }}" in security_block, caller.name
+        assert "sha: ${{ needs.release-gate.outputs.gated-sha }}" in security_block, caller.name
 
 
 def test_aviato_ref_pin_guard_present_and_regex_correct() -> None:

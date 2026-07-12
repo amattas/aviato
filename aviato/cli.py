@@ -865,9 +865,9 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     if resolved.variables:
         print("variables:")
         for variable in resolved.variables:
-            secret = ", secret" if variable.secret else ""
+            classification_marker = ", secret" if variable.secret else ""
             optional = "" if variable.required else ", optional"
-            print(f"- {variable.name} ({variable.type}{optional}{secret})")
+            print(f"- {variable.name} ({variable.type}{optional}{classification_marker})")
 
     print("settings:")
     # List the rulesets `apply-rulesets` will actually apply — the rendered MANIFEST, the single
