@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -362,16 +363,51 @@ def codeql_merge_protection_present(slug: str) -> bool:
 def _unsupported_tag_metadata_rule(stderr: str) -> bool:
     """Recognize only GitHub's explicit unsupported tag metadata-rule rejection."""
 
-    lowered = stderr.lower()
-    identifies_unsupported_rule = (
-        ("unsupported" in lowered and "rule" in lowered)
-        or ("not supported" in lowered and "rule" in lowered)
-        or ("not a supported" in lowered and "rule" in lowered)
-        or "not a valid repository rule type" in lowered
-        or "invalid repository rule type" in lowered
-        or "not a permitted repository rule type" in lowered
+    if "http 422" not in stderr.lower():
+        return False
+
+    rejection = r"(?:not\s+(?:a\s+)?(?:valid|supported|permitted)|an?\s+unsupported|unsupported|invalid)"
+    tag = r'["\']?tag_name_pattern["\']?'
+    repository_rule_type = r"repository\s+rule\s+type"
+    exact_type_rejections = (
+        re.compile(rf"{tag}[^\n;]{{0,80}}{rejection}[^\n;]{{0,40}}{repository_rule_type}", re.IGNORECASE),
+        re.compile(rf"{repository_rule_type}[^\n;]{{0,80}}{tag}[^\n;]{{0,40}}{rejection}", re.IGNORECASE),
     )
-    return "http 422" in lowered and "tag_name_pattern" in lowered and identifies_unsupported_rule
+    path_rejection = re.compile(rf"rules/\d+/type\b[^\n;]{{0,80}}{tag}[^\n;]{{0,50}}{rejection}", re.IGNORECASE)
+
+    def text_entry_matches(entry: str) -> bool:
+        return bool(path_rejection.search(entry) or any(pattern.search(entry) for pattern in exact_type_rejections))
+
+    # When GitHub returns structured errors, correlate field/value/code within each individual
+    # error object. Never scan the serialized parent object as one blob: two unrelated entries
+    # must not combine into permission for a degraded retry.
+    json_start = stderr.find("{")
+    if json_start >= 0:
+        try:
+            parsed, _ = json.JSONDecoder().raw_decode(stderr[json_start:])
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("errors"), list):
+            for error in parsed["errors"]:
+                if not isinstance(error, dict):
+                    continue
+                field = error.get("field")
+                value = error.get("value")
+                code = error.get("code")
+                if (
+                    isinstance(field, str)
+                    and re.fullmatch(r"rules/\d+/type", field, re.IGNORECASE)
+                    and value == "tag_name_pattern"
+                    and isinstance(code, str)
+                    and code.lower() in {"invalid", "unsupported", "not_supported", "not supported"}
+                ):
+                    return True
+                message = error.get("message")
+                if isinstance(message, str) and text_entry_matches(message):
+                    return True
+            return False
+
+    return any(text_entry_matches(line) for line in stderr.splitlines())
 
 
 def _without_tag_name_pattern(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -389,18 +425,21 @@ def _without_tag_name_pattern(payload: dict[str, Any]) -> dict[str, Any] | None:
 def _submit_ruleset(endpoint: str, method: str, payload: dict[str, Any]) -> None:
     """Submit one private temporary payload and always remove it."""
 
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:
-        os.chmod(handle.name, 0o600)
-        json.dump(payload, handle)
-        handle.write("\n")
-        payload_path = Path(handle.name)
+    payload_path: Path | None = None
     try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:
+            payload_path = Path(handle.name)
+            os.chmod(handle.name, 0o600)
+            json.dump(payload, handle)
+            handle.write("\n")
+        assert payload_path is not None
         result = run(
             ["gh", "api", "--method", method, endpoint, "--input", str(payload_path)],
             check=False,
         )
     finally:
-        payload_path.unlink(missing_ok=True)
+        if payload_path is not None:
+            payload_path.unlink(missing_ok=True)
     if result.returncode != 0:
         raise GitHubAPIError(endpoint, result.returncode, result.stderr)
 

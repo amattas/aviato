@@ -244,6 +244,62 @@ def test_upsert_ruleset_does_not_retry_other_failures(monkeypatch: pytest.Monkey
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        'For rules/2/type, "tag_name_pattern" is not a valid value. (HTTP 422)',
+        "Rule type tag_name_pattern is an unsupported repository rule type. (HTTP 422)",
+        '{"message":"Validation Failed","errors":['
+        '{"field":"rules/2/type","value":"tag_name_pattern","code":"invalid"}]} (HTTP 422)',
+    ],
+)
+def test_unsupported_tag_metadata_classifier_accepts_correlated_rule_type_rejections(stderr: str) -> None:
+    assert github._unsupported_tag_metadata_rule(stderr) is True
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "tag_name_pattern failed validation\nunsupported repository rule type (HTTP 422)",
+        '{"message":"Validation Failed","errors":['
+        '{"field":"rules/2/parameters/pattern","value":"tag_name_pattern","code":"invalid"},'
+        '{"field":"rules/4/type","value":"deletion","code":"unsupported"}]} (HTTP 422)',
+        'For rules/2/parameters/pattern, "tag_name_pattern" is not a valid value. (HTTP 422)',
+        'For conditions/ref_name, "tag_name_pattern" is unsupported. (HTTP 422)',
+    ],
+)
+def test_unsupported_tag_metadata_classifier_rejects_uncorrelated_or_non_type_errors(stderr: str) -> None:
+    assert github._unsupported_tag_metadata_rule(stderr) is False
+
+
+def test_upsert_ruleset_removes_temp_file_when_json_serialization_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [])
+    created: list[Path] = []
+    original = github.tempfile.NamedTemporaryFile
+
+    def tracking_tempfile(*args: object, **kwargs: object):
+        handle = original(*args, **kwargs)
+        created.append(Path(handle.name))
+        return handle
+
+    monkeypatch.setattr(github.tempfile, "NamedTemporaryFile", tracking_tempfile)
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("gh must not run after serialization failure")),
+    )
+    payload = _tag_ruleset_payload()
+    payload["not_json"] = {"a-set"}
+
+    with pytest.raises(TypeError, match="JSON serializable"):
+        github.upsert_ruleset("o/r", payload, apply=True)
+
+    assert len(created) == 1
+    assert not created[0].exists()
+
+
 def test_upsert_ruleset_propagates_degraded_retry_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: [])
     errors = iter(
