@@ -192,6 +192,7 @@ _MIKE_SHA = "2d4ad799442f4592db8ad53b179bfb33db8c69ac"
         ("git+https://github.com/squidfunk/mike.git@master", True),
         ("git+https://github.com/squidfunk/mike.git@2d4ad79", True),
         (f"mike @ git+https://github.com/squidfunk/mike.git@{_MIKE_SHA[:12]}", True),
+        ("GIT+https://github.com/squidfunk/mike.git@master", True),
     ],
 )
 def test_vcs_pip_installs_require_full_commit_sha(token: str, flagged: bool) -> None:
@@ -199,3 +200,37 @@ def test_vcs_pip_installs_require_full_commit_sha(token: str, flagged: bool) -> 
 
     result = _unpinned_pip_packages(f" {token}")
     assert bool(result) is flagged, result
+
+
+def test_bad_direct_reference_flags_exactly_once() -> None:
+    from aviato.plugins.actionpins import _unpinned_pip_packages
+
+    result = _unpinned_pip_packages(f" mike @ git+https://github.com/squidfunk/mike.git@{_MIKE_SHA[:12]}")
+    assert result == ["mike"]
+
+
+def test_bare_bad_vcs_flags_exactly_once() -> None:
+    from aviato.plugins.actionpins import _unpinned_pip_packages
+
+    token = "git+https://github.com/squidfunk/mike.git@master"
+    result = _unpinned_pip_packages(f" {token}")
+    assert result == [token]
+
+
+def test_vcs_scheme_case_insensitive_gate() -> None:
+    from aviato.plugins.actionpins import _unpinned_pip_packages
+
+    token = "GIT+https://github.com/squidfunk/mike.git@master"
+    result = _unpinned_pip_packages(f" {token}")
+    assert result == [token]
+
+
+def test_unpinned_requirements_lines_vcs_contract() -> None:
+    body = (
+        f"mike @ git+https://github.com/squidfunk/mike.git@{_MIKE_SHA}  # comment\n"
+        "git+https://github.com/squidfunk/mike.git@master\n"
+    )
+    flagged = unpinned_requirements_lines(body)
+    assert flagged.count("git+https://github.com/squidfunk/mike.git@master") == 1
+    assert "mike" not in flagged
+    assert not any("2d4ad799442f4592db8ad53b179bfb33db8c69ac" in item for item in flagged)

@@ -667,7 +667,7 @@ _NPM_EXACT_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 # §11.3 (Zensical/mike): a VCS requirement exposes no index version, so its ref MUST be an
 # immutable full commit SHA — `git+…@<40-hex>`. A branch, tag, short SHA, or missing ref is
 # a floating install and is flagged like any unpinned package.
-_VCS_URL_RE = re.compile(r"\bgit\+[A-Za-z0-9+.-]+://\S+")
+_VCS_URL_RE = re.compile(r"\b(?i:git)\+[A-Za-z0-9+.-]+://\S+")
 _VCS_FULL_SHA_RE = re.compile(r"@[0-9a-f]{40}$")
 
 
@@ -686,8 +686,8 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
 
     PEP 508 **environment markers** (``foo==1.0; python_version<'3.9'``) are NOT flagged: the
     marker fragment (a quote-bearing token) is ignored. A **direct reference**
-    (``foo @ git+…``) is likewise not a bare floating index package, but when its URL is a VCS
-    token the same full-SHA requirement applies to the URL.
+    (``foo @ git+…``) is likewise not a bare floating index package, but when its URL is a git
+    VCS requirement (``git+…``) the same full-SHA requirement applies to the URL.
 
     R8-12-PIP-WHITESPACE: PEP 440 §VersionSpecifiers permits whitespace around the operator
     (``foo == 1.2.3`` is a valid exact pin), but a plain ``rest.split()`` would emit three tokens
@@ -697,14 +697,14 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
     rest = re.sub(r"\s*(===|==|>=|<=|~=|!=|<|>)\s*", r"\1", rest)
     tokens = rest.split()
     flagged: list[str] = []
-    skip_next = False
+    skip_count = 0
     for index, token in enumerate(tokens):
-        if skip_next:
-            skip_next = False
+        if skip_count:
+            skip_count -= 1
             continue
         stripped = token.strip("'\"")
         if stripped in ("-r", "--requirement", "-c", "--constraint"):
-            skip_next = True  # the following token is a file path, not a package
+            skip_count = 1  # the following token is a file path, not a package
             continue
         if stripped.startswith("-"):  # any other flag (-e, --quiet, --upgrade, …)
             continue
@@ -725,6 +725,10 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
             url = url.split("#", 1)[0]
             if _VCS_URL_RE.search(url) and not _VCS_FULL_SHA_RE.search(url):
                 flagged.append(stripped)
+            # Consume the `@` and url tokens so they are not re-evaluated as their own tokens on
+            # subsequent iterations — otherwise a bad VCS URL is flagged twice (once here by
+            # name, once again as a bare VCS token when the loop reaches it).
+            skip_count = 2 if index + 2 < len(tokens) else 1
             continue
         # A bare VCS token (`git+…`) exposes no index version, so it must carry a full commit
         # SHA ref; a branch, tag, short SHA, or missing ref is a floating install.
