@@ -86,7 +86,7 @@ jobs:
       AVIATO_LOCAL_INSTALL: ${{ inputs.local-install }}
     steps:
       - name: Checkout (full history)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           # The derive job never pushes; do not leave the job token in .git/config
@@ -209,7 +209,7 @@ jobs:
       BUILD_NUMBER: ${{ inputs.build-number || github.run_number }}
     steps:
       - name: Checkout (full history)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           # This job pushes (release branch, tags, floating major) — credentials persist.
