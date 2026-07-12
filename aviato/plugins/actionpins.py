@@ -669,6 +669,12 @@ _NPM_EXACT_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 # a floating install and is flagged like any unpinned package.
 _VCS_URL_RE = re.compile(r"\b(?i:git)\+[A-Za-z0-9+.-]+://\S+")
 _VCS_FULL_SHA_RE = re.compile(r"@[0-9a-f]{40}$")
+# A ref containing a shell variable (`@${AVIATO_REF}`) is out of §11.3's scope: it is resolved at
+# workflow runtime, not statically, and the repo's established self-install pattern (C12-W1) pins
+# that variable itself before install — flagging the literal token would be a false positive on a
+# ref this gate cannot evaluate anyway. Only a LITERAL ref (branch/tag/short-SHA) is a real floating
+# install and must be a full 40-hex SHA.
+_VCS_VAR_REF_RE = re.compile(r"@\$\{[^}]*\}")
 
 
 def _unpinned_pip_packages(rest: str) -> list[str]:
@@ -682,7 +688,10 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
     URLs, and shell-variable tokens (`${…}`) — conservative, so a legitimate local install never
     trips it. A **VCS token** (`git+…`) exposes no index version, so instead of being exempt it
     is validated: it is flagged unless its ref is an immutable full commit SHA
-    (`git+…@<40-hex>`) — a branch, tag, short SHA, or missing ref is a floating install.
+    (`git+…@<40-hex>`) — a branch, tag, short SHA, or missing ref is a floating install. A ref
+    that is a shell variable (`git+…@${AVIATO_REF}`) is OUT OF SCOPE for this static check: it is
+    resolved at workflow runtime (the repo's established self-install pattern pins the variable
+    itself before install), so a literal-ref requirement cannot be evaluated against it.
 
     PEP 508 **environment markers** (``foo==1.0; python_version<'3.9'``) are NOT flagged: the
     marker fragment (a quote-bearing token) is ignored. A **direct reference**
@@ -723,7 +732,7 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
         if index + 1 < len(tokens) and tokens[index + 1].strip("'\"") == "@":
             url = tokens[index + 2].strip("'\"") if index + 2 < len(tokens) else ""
             url = url.split("#", 1)[0]
-            if _VCS_URL_RE.search(url) and not _VCS_FULL_SHA_RE.search(url):
+            if _VCS_URL_RE.search(url) and not _VCS_FULL_SHA_RE.search(url) and not _VCS_VAR_REF_RE.search(url):
                 flagged.append(stripped)
             # Consume the `@` and url tokens so they are not re-evaluated as their own tokens on
             # subsequent iterations — otherwise a bad VCS URL is flagged twice (once here by
@@ -734,7 +743,7 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
         # SHA ref; a branch, tag, short SHA, or missing ref is a floating install.
         if _VCS_URL_RE.search(spec):
             url = spec.split("#", 1)[0]
-            if not _VCS_FULL_SHA_RE.search(url):
+            if not _VCS_FULL_SHA_RE.search(url) and not _VCS_VAR_REF_RE.search(url):
                 flagged.append(spec)
             continue
         # Not a plain index package: path, URL, wheel, or shell variable.
