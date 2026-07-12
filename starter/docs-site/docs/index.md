@@ -5,22 +5,20 @@ sidebar_label: Overview
 title: PROJECT
 ---
 
-import Link from '@docusaurus/Link';
-
 PROJECT is ... (one-paragraph intro — what it is, who it's for, the headline
 capabilities).
 
-<div className="pd-cards">
-  <Link className="pd-card" to="/guide/getting-started">
-    <span className="pd-card-kicker">Guide</span>
-    <span className="pd-card-title">Getting started</span>
-    <span className="pd-card-desc">Installation and first steps.</span>
-  </Link>
-  <Link className="pd-card" to="/api/reference">
-    <span className="pd-card-kicker">Reference</span>
-    <span className="pd-card-title">API reference</span>
-    <span className="pd-card-desc">Generated from docstrings at build time.</span>
-  </Link>
+<div class="pd-cards" markdown>
+  <a class="pd-card" href="guide/getting-started/">
+    <span class="pd-card-kicker">Guide</span>
+    <span class="pd-card-title">Getting started</span>
+    <span class="pd-card-desc">Installation and first steps.</span>
+  </a>
+  <a class="pd-card" href="api/reference/">
+    <span class="pd-card-kicker">Reference</span>
+    <span class="pd-card-title">API reference</span>
+    <span class="pd-card-desc">Generated from docstrings at build time.</span>
+  </a>
 </div>
 
 ## Installation
@@ -29,8 +27,9 @@ capabilities).
 pip install PROJECT
 ```
 
-{/* MDX gotchas baked into this scaffold:
-    - never hand-write <p> with multi-line content (MDX nests another <p>
-      inside → invalid HTML → React hydration errors); use a div
-    - keep card spans single-line
-    - generated/plain-markdown pages need `mdx: { format: md }` front matter */}
+<!-- Zensical/Markdown gotchas baked into this scaffold:
+     - keep the raw HTML block above single-line-per-tag; Zensical needs the
+       `markdown` attribute on the wrapping div to keep processing markdown
+       inside raw HTML blocks
+     - generated/plain-markdown API reference pages need no special front
+       matter — they render like any other page -->

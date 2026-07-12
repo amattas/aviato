@@ -108,7 +108,7 @@ relevant and may be revisited post-day-zero.
 | §13 | Deployment Plug-ins | modules/deployment/README.md |
 | §13.1 | PyPI (OIDC Trusted Publishing) | modules/deployment/pypi/requirements.md |
 | §13.2 | GHCR (GitHub Container Registry) | modules/deployment/ghcr/requirements.md |
-| §13.3 | Documentation site (Docusaurus → GitHub Pages, multi-version) | modules/deployment/docs-site/requirements.md |
+| §13.3 | Documentation site (Zensical → GitHub Pages, multi-version) | modules/deployment/docs-site/requirements.md |
 | §13.4 | Apple App Store Connect | modules/deployment/apple/requirements.md |
 | §13.5 | Rollback / yank (manual, day-zero) | modules/deployment/README.md |
 | §14 | Secret & Credential Model (summary matrix) | modules/deployment/README.md |

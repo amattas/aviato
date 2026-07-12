@@ -70,7 +70,7 @@ sinks, so new executors are caught by default. The in-CI gate runs the *same* `a
 image, which zizmor pins, or pin the tag in the Dockerfile); the old shell-`docker` token checks were
 dropped with the enumeration machinery (R9-4 / R10-N2).
 For npm install paths, Aviato adds an additional supply-chain guard: Node and
-Docusaurus installs must run with npm **11 or newer**, because older npm rejects
+Node installs must run with npm **11 or newer**, because older npm rejects
 the `min-release-age` option. The reusable Node and docs workflows fail closed on
 npm <11 before any install command runs, set `ignore-scripts=true`, and set
 `engine-strict=true` and `min-release-age=7`. Managed Node and docs scaffolds

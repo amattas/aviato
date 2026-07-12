@@ -328,3 +328,15 @@ def test_scaffold_cron_drift_is_detected(repo_copy: Path) -> None:
     assert drifted != text, "fixture did not contain the shared CI cron"
     body.write_text(drifted, encoding="utf-8")
     assert any("finding 43" in e for e in validate(repo_copy))
+
+
+def test_docs_toolchain_pin_drift_is_flagged(repo_copy: Path) -> None:
+    # Change the zensical pin in ONE of the three docs requirements sources and
+    # assert validate() reports the drift (finding 43 mechanism).
+    target = repo_copy / "starter" / "docs-site" / "requirements.txt"
+    text = target.read_text()
+    drifted = text.replace("zensical==0.0.50", "zensical==0.0.49")
+    assert drifted != text, "fixture did not contain the expected zensical pin"
+    target.write_text(drifted)
+    errors = validate(repo_copy)
+    assert any("docs toolchain pins differ" in e for e in errors), errors

@@ -24,7 +24,7 @@ without the core knowing the location.
 - **Verify** (Linux): Ruff lint + `ruff format --check` + mypy `--strict` +
   pytest+coverage (lint/format/type blocking), plus the common lint (§12 intro).
 - **Docs** (only when `docs: true`, §6.1): emit API reference from docstrings as
-  **md/mdx** into the docs source tree for the Docusaurus site; the docs deploy
+  **md/mdx** into the docs source tree for the Zensical site; the docs deploy
   (§13.3) builds and publishes it. No docs step runs when `docs: false`.
 - **Release** (§5.9): SemVer from Conventional Commits; version via version-source.
 - **Deploy**: **PyPI** for `python-library`, **GHCR** for `python-service`,

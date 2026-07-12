@@ -336,6 +336,23 @@ def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
             "byte-identical across docs callers (finding 43)"
         )
 
+    docs_pin_sources = [
+        root / "aviato" / "library" / "scaffold" / "files" / "docs-requirements.txt.txt",
+        root / "website" / "requirements.txt",
+        root / "starter" / "docs-site" / "requirements.txt",
+    ]
+    pin_sets = {
+        str(p.relative_to(root)): sorted(
+            line.split("#", 1)[0].strip()
+            for line in p.read_text(encoding="utf-8").splitlines()
+            if line.split("#", 1)[0].strip()
+        )
+        for p in docs_pin_sources
+        if p.is_file()
+    }
+    if len(set(map(tuple, pin_sets.values()))) > 1:
+        errors.append(f"docs toolchain pins differ across requirements sources: {pin_sets} (finding 43)")
+
 
 def _check_baseline_settings_keys(root: Path, errors: list[str]) -> None:
     """Every baseline default-branch/security key must be one the apply path can WRITE (§5.1).

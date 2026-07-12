@@ -26,7 +26,7 @@ build/bundle suitable for a containerized service; Conventional Commits enforced
   `min-release-age=7` can be enforced; ESLint/Prettier/TypeScript are invoked
   through local package binaries (`npx --no-install`).
 - **Docs** (only when `docs: true`, §6.1): emit API reference as **md/mdx** via
-  TypeDoc (markdown output) into the docs source tree for the Docusaurus site
+  TypeDoc (markdown output) into the docs source tree for the Zensical site
   (§13.3). No docs step runs when `docs: false`.
 - **Release** (§5.9): SemVer; version via version-source.
 - **Deploy**: **GHCR** (§13.2). **No npm/library publishing.**

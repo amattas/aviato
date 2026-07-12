@@ -72,7 +72,7 @@ on arbitrary push, pull_request, or fork events.
 
 | Plug-in | Runner |
 |---|---|
-| Python, Node, PyPI, GHCR, Docusaurus docs | Linux |
+| Python, Node, PyPI, GHCR, Zensical docs | Linux |
 | Swift, App Store Connect | **macOS** |
 
 A profile composing a macOS-only plug-in requires macOS runners; this is a
@@ -131,7 +131,7 @@ Aviato-driven, operator-gated rollback flow is a candidate for a later version.
 |---|---|---|---|---|---|
 | PyPI | OIDC Trusted Publishing | **No** | `id-token: write`, `contents: read` | Linux | Yes (TestPyPI) |
 | GHCR | platform token | **No** | `packages: write`, `contents: read` | Linux | Yes (test image) |
-| Docusaurus docs (Pages) | platform token | **No** | `pages: write`, `id-token: write`, `contents: read` | Linux | Yes |
+| Zensical docs (Pages) | platform token | **No** | `pages: write`, `id-token: write`, `contents: read` | Linux | Yes |
 | App Store Connect | App Store Connect API key + signing assets | **Yes** | `contents: read` | macOS | **No — operator-verified** |
 | File-drift / report automation | platform token (ephemeral) | **No** | read scope + `issues`/`pull-requests: write` | Linux | Yes |
 | Settings-drift detection (§5.6) | operator-supplied admin **read** token | **Optional, read-only** | `administration: read` (read branch protection/rulesets) | Linux | Yes |

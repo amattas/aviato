@@ -11,7 +11,7 @@
 | **Swift** | Language | lint/format, build, test (macOS), narrative-docs emission (md/mdx) |
 | **PyPI** | Deployment | publish distributions via OIDC Trusted Publishing (no stored secret) |
 | **GHCR** | Deployment | build + push container images via the platform token (no stored secret) |
-| **Docs site (GitHub Pages / Docusaurus)** | Deployment | build a multi-version Docusaurus site from emitted md/mdx and publish to Pages on a release tag via the platform token (no stored secret); opt-in via `docs: true` |
+| **Docs site (GitHub Pages / Zensical)** | Deployment | build a multi-version Zensical site from emitted md/mdx and publish to Pages on a release tag via the platform token (no stored secret); opt-in via `docs: true` |
 | **Apple App Store Connect** | Deployment | sign + archive + upload to TestFlight/App Store (stored Apple secrets, macOS) |
 
 Out of day-zero scope: npm/library publishing for Node; **static-site Node hosting**
@@ -36,7 +36,7 @@ flowchart TD
     NS --> GHCR
     SA["swift-app"] --> SW["Swift language plug-in"]
     SA --> ASC["App Store Connect deploy"]
-    PL -. "docs=true" .-> DOCS["Docusaurus docs deploy (opt-in, multi-version)"]
+    PL -. "docs=true" .-> DOCS["Zensical docs deploy (opt-in, multi-version)"]
     PS -. "docs=true" .-> DOCS
     PC -. "docs=true" .-> DOCS
     NS -. "docs=true" .-> DOCS
@@ -64,18 +64,18 @@ profile per repo).
 
 | Profile | Language plug-in | Deploy plug-ins | Runner | Stored secrets |
 |---|---|---|---|---|
-| `python-library` | Python | PyPI (+ Docusaurus docs if `docs: true`) | Linux | none |
-| `python-service` | Python | GHCR (+ Docusaurus docs if `docs: true`) | Linux | none |
-| `python-component` | Python | none — GitHub release only (+ Docusaurus docs if `docs: true`) | Linux | none |
-| `node-service` | Node (TS/JS) | GHCR (+ Docusaurus docs if `docs: true`) | Linux | none |
-| `swift-app` | Swift | App Store Connect (+ Docusaurus docs if `docs: true`) | macOS | Apple signing/API secrets |
+| `python-library` | Python | PyPI (+ Zensical docs if `docs: true`) | Linux | none |
+| `python-service` | Python | GHCR (+ Zensical docs if `docs: true`) | Linux | none |
+| `python-component` | Python | none — GitHub release only (+ Zensical docs if `docs: true`) | Linux | none |
+| `node-service` | Node (TS/JS) | GHCR (+ Zensical docs if `docs: true`) | Linux | none |
+| `swift-app` | Swift | App Store Connect (+ Zensical docs if `docs: true`) | macOS | Apple signing/API secrets |
 
 A Consumer adopting a profile receives: that language's scaffold + verify + release
 pipelines, the deploy pipeline(s) for its target(s), **the always-on
 security-scanning baseline (§2.13)**, baseline branch protection, and the declared
 variable/secret requirements. **Documentation is opt-in** (`docs: true`, §6.1,
 §13.3): when enabled the consumer also gets the language's md/mdx docs emission and
-the multi-version Docusaurus deploy. There is no profile without the security
+the multi-version Zensical deploy. There is no profile without the security
 baseline.
 
 ---
@@ -89,13 +89,13 @@ full and is not relaxed — §9 Precedence):
    agnostic core was not edited.
 2. Its verify and release pipelines **run green in real CI** on the required runner
    (Linux, or macOS for Swift) — not mocks, not string checks. When `docs: true`,
-   the docs emission + Docusaurus build also run green. Verify includes the named
+   the docs emission + Zensical build also run green. Verify includes the named
    per-language gates **and** the common lint (actionlint/yamllint/hadolint/
    shellcheck/helm-lint), all blocking.
 3. Its deployment pipeline performs a **real publish** to a real target (TestPyPI
-   for PyPI; a test image for GHCR; a real **multi-version Docusaurus** Pages
+   for PyPI; a test image for GHCR; a real **multi-version Zensical** Pages
    publish when `docs: true` — new version reachable, `latest` alias resolves,
-   Algolia search works, Mermaid renders, and `/sitemap.xml` exists)
+   Zensical's built-in search works, Mermaid renders, and `/sitemap.xml` exists)
    with test-artifact hygiene (§11.6) — **except** App Store Connect,
    operator-verified via a real TestFlight upload (§13.4.7). A **zero-deploy
    profile** (`python-component`) has no deployment pipeline; its DoD is verify +
@@ -122,11 +122,10 @@ adoption-time warnings.
   registration is an adoption warning.**)**
 - **GHCR:** provide the container build definition (operator-owned, probed — never seeded, R5-6) **(probeable)**;
   set package visibility/permissions to link the package to the repository.
-- **Docusaurus docs (only when `docs: true`):** enable GitHub Pages for the
-  repository with the **GitHub Actions** source **(probeable)**. Configure the
-  Algolia DocSearch application ID, public search API key, and index name in the
-  scaffolded Docusaurus config, or consciously override the search integration.
-  The Docusaurus/Node build runs on the standard Linux runner with Node 24/npm 11+.
+- **Zensical docs (only when `docs: true`):** enable GitHub Pages for the
+  repository with the **GitHub Actions** source **(probeable)**. Search is
+  Zensical's built-in search — no external search service to configure.
+  The Zensical build is a Python/pip toolchain and runs on the standard Linux runner.
 - **Security baseline (§2.13):** enable code scanning, secret scanning + push
   protection, and Dependabot for the repository **(probeable)**. On private
   repositories these may require the relevant security features to be enabled at

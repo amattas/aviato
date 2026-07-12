@@ -27,8 +27,8 @@ default fails loud — consistent with the §13.4.7 operator-verified Swift DoD.
 - **Verify** (**macOS**): swift-format `--lint` + SwiftLint `--strict` + build +
   test (format/lint blocking), plus the common lint (§12 intro).
 - **Docs** (only when `docs: true`, §6.1): emit **narrative md/mdx** into the docs
-  source tree for the Docusaurus site (§13.3). DocC API-reference emission to
-  md/mdx is **deferred** (DocC produces an archive Docusaurus cannot consume); a
+  source tree for the Zensical site (§13.3). DocC API-reference emission to
+  md/mdx is **deferred** (DocC produces an archive Zensical cannot consume); a
   linked DocC archive is a possible later addition. No docs step when `docs: false`.
 - **Release** (§5.9): SemVer; marketing version + monotonic build number.
 - **Deploy**: **App Store Connect** (§13.4).

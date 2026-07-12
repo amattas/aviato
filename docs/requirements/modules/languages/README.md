@@ -34,7 +34,7 @@ by all profiles (independent of language).
 | Node (TS/JS) | containerized service | **GHCR** |
 | Swift | application | **Apple App Store Connect** |
 
-Any profile may enable the **multi-version Docusaurus docs** deploy by setting
+Any profile may enable the **multi-version Zensical docs** deploy by setting
 `docs: true` in the declaration (§6.1, §13.3). It is **opt-in** (default off); when
 enabled, the language plug-in emits md/mdx (§12) and the tag-gated docs deploy
 builds and publishes it. The docs deploy is language-agnostic — it consumes md/mdx

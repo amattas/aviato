@@ -37,7 +37,7 @@ DoD, the **core itself** is done only when: (a) the core loads and all core test
 pass with **zero plug-ins present**; (b) a static check confirms the core has **no
 import/dependency edge into the plug-in module tree** *and* its source contains
 **none of the enumerated day-zero target/tool identifiers** — the denylist
-(`python`, `node`, `swift`, `pypi`, `ghcr`, `pages`, `docusaurus`, `apple`/`app
+(`python`, `node`, `swift`, `pypi`, `ghcr`, `pages`, `zensical`, `apple`/`app
 store`, `ruff`, `eslint`, `swiftlint`, `codeql`, …), maintained alongside the
 day-zero catalog (§10), is **part of the check**, so (b) is falsifiable rather than
 depending on an unstated word list; and (c) the same unmodified core drives **at

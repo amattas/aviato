@@ -45,8 +45,8 @@
 - **Deployment authorization** — the §2.12 model: release-cut is the human gate,
   plus a protected-environment reviewer gate for secret-bearing deploys.
 - **Documentation site** — the Consumer's published docs: a **multi-version
-  Docusaurus** site (version dropdown + `latest` alias, Algolia search, Mermaid
-  rendering, sitemap, and the classic docs-first preset) built from authored
+  Zensical** site (version dropdown + `latest` alias, Zensical's built-in search,
+  Mermaid rendering, and sitemap generation) built from authored
   md/mdx plus language-emitted API md/mdx (§12) and deployed to GitHub Pages on a
   release tag (§13.3). **Opt-in** via `docs: true` (§6.1); off by default. The
   docs deploy consumes md/mdx only — language-agnostic, never inspecting source

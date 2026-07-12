@@ -64,16 +64,16 @@ are the **authoritative source**. The top-level `templates/profile-*.yml` and
 those scaffold bodies (run `python3 scripts/regen-templates.py` after editing a caller);
 `aviato validate` fails if they drift (`_check_template_scaffold_parity`).
 
-Node and docs callers now assume npm 11.10+ for install hardening. The reusable Node
-and Docusaurus workflows default to Node 24, fail closed on npm <11.10 (the
-`min-release-age` support floor), and set `ignore-scripts=true`,
-`engine-strict=true`, and `min-release-age=7`; Node/docs scaffolds also include
-managed `.npmrc` files with `engine-strict=true` and package engines requiring
-Node 24/npm >=11.10. Use `npx --no-install` for Node tool bins so missing local
-dependencies fail instead of fetching; common lint rejects unsafe plain `npx` in
-workflows. Docs scaffolding includes Docusaurus ESLint, opt-in Algolia search
-(the `algolia` profile variable; default off), Mermaid rendering, and sitemap
-configuration.
+Node callers now assume npm 11.10+ for install hardening. The reusable Node
+workflow defaults to Node 24, fails closed on npm <11.10 (the `min-release-age`
+support floor), and sets `ignore-scripts=true`, `engine-strict=true`, and
+`min-release-age=7`; Node scaffolds also include managed `.npmrc` files with
+`engine-strict=true` and package engines requiring Node 24/npm >=11.10. Use
+`npx --no-install` for Node tool bins so missing local dependencies fail
+instead of fetching; common lint rejects unsafe plain `npx` in workflows. Docs
+scaffolding is **Zensical** + a mike fork (Python/pip toolchain, no Node/npm
+involved), with Mermaid rendering, sitemap generation, and Zensical's built-in
+search (no external search service).
 
 The Library's own declaration uses the internal `aviato-library` profile with
 `bootstrap: true`. `local-install: true` is valid only on this structural Library
