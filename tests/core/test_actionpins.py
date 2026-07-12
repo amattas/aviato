@@ -194,7 +194,9 @@ _MIKE_SHA = "2d4ad799442f4592db8ad53b179bfb33db8c69ac"
         (f"mike @ git+https://github.com/squidfunk/mike.git@{_MIKE_SHA[:12]}", True),
         ("GIT+https://github.com/squidfunk/mike.git@master", True),
         ("git+https://github.com/amattas/aviato@${AVIATO_REF}", False),
-        ("mike @ git+https://github.com/squidfunk/mike.git@${REF}", False),
+        ("mike @ git+https://github.com/squidfunk/mike.git@${REF}", True),
+        ("git+https://github.com/x/y.git@${SOMEVERSION}", True),
+        ("pkg @ git+https://github.com/x/y.git@${REF}", True),
     ],
 )
 def test_vcs_pip_installs_require_full_commit_sha(token: str, flagged: bool) -> None:

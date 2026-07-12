@@ -669,12 +669,14 @@ _NPM_EXACT_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 # a floating install and is flagged like any unpinned package.
 _VCS_URL_RE = re.compile(r"\b(?i:git)\+[A-Za-z0-9+.-]+://\S+")
 _VCS_FULL_SHA_RE = re.compile(r"@[0-9a-f]{40}$")
-# A ref containing a shell variable (`@${AVIATO_REF}`) is out of §11.3's scope: it is resolved at
-# workflow runtime, not statically, and the repo's established self-install pattern (C12-W1) pins
-# that variable itself before install — flagging the literal token would be a false positive on a
-# ref this gate cannot evaluate anyway. Only a LITERAL ref (branch/tag/short-SHA) is a real floating
-# install and must be a full 40-hex SHA.
-_VCS_VAR_REF_RE = re.compile(r"@\$\{[^}]*\}")
+# Only `@${AVIATO_REF}` is exempt: it is the ONE sanctioned mutable-ref self-install (the repo's
+# established Library self-install pattern, C12-W1), and the Aviato workflows validate that
+# variable against a pin before install — so flagging the literal token would be a false positive
+# on a ref this gate cannot evaluate anyway. Any OTHER variable ref (`@${REF}`, `@${SOMEVERSION}`,
+# …) is a floating install like any other unpinned branch/tag/short-SHA and must be flagged: the
+# original regex (`@\$\{[^}]*\}`) exempted ANY variable name, which would let a consumer smuggle a
+# floating `git+...@${WHATEVER}` VCS install past §11.3 undetected.
+_VCS_VAR_REF_RE = re.compile(r"@\$\{AVIATO_REF\}")
 
 
 def _unpinned_pip_packages(rest: str) -> list[str]:
