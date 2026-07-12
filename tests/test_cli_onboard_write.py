@@ -197,10 +197,14 @@ def test_fresh_onboard_write_refuses_unpublished_pin(
     assert not (tmp_path / ".github" / "aviato.yaml").exists()
 
 
-def test_onboard_write_refuses_profile_change_without_migrate(tmp_path: Path) -> None:
+def test_onboard_write_refuses_profile_change_without_migrate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text("profile: node-service\nversion: v0\n", encoding="utf-8")
+    declaration = github / "aviato.yaml"
+    original = "profile: node-service\nprofile-identity: aviato-profile/node-service/v1\nversion: v0\n"
+    declaration.write_text(original, encoding="utf-8")
     rc = main(
         [
             "onboard",
@@ -216,6 +220,57 @@ def test_onboard_write_refuses_profile_change_without_migrate(tmp_path: Path) ->
         ]
     )
     assert rc == 2
+    assert "--migrate-profile" in capsys.readouterr().err
+    assert declaration.read_text(encoding="utf-8") == original
+
+
+def test_onboard_write_explicit_profile_migration_persists_new_identity_and_artifacts(tmp_path: Path) -> None:
+    assert (
+        main(
+            [
+                "onboard",
+                str(tmp_path),
+                "--profile",
+                "python-library",
+                "--write",
+                "--allow-dirty",
+                "--pin",
+                "0",
+                "--allow-unresolved-pin",
+                "--var",
+                "distribution-name=acme",
+                "--var",
+                "import-name=acme",
+            ]
+        )
+        == 0
+    )
+
+    rc = main(
+        [
+            "onboard",
+            str(tmp_path),
+            "--profile",
+            "node-service",
+            "--write",
+            "--allow-dirty",
+            "--pin",
+            "0",
+            "--allow-unresolved-pin",
+            "--migrate-profile",
+            "--var",
+            "project-name=widget",
+            "--var",
+            "language-variant=typescript",
+        ]
+    )
+
+    assert rc == 0
+    declaration = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
+    assert declaration["profile"] == "node-service"
+    assert declaration["profile-identity"] == "aviato-profile/node-service/v1"
+    assert (tmp_path / "eslint.config.mjs").exists()
+    assert (tmp_path / "tsconfig.json").exists()
 
 
 def test_onboard_write_refuses_dirty_tree_without_override(tmp_path: Path) -> None:

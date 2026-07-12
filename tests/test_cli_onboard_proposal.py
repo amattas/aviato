@@ -191,3 +191,58 @@ def test_reonboard_open_pr_preserves_equal_profile_identity(monkeypatch: pytest.
         == 0
     )
     assert "profile-identity: aviato-profile/python-library/v1" in captured["files"][".github/aviato.yaml"]
+
+
+@pytest.mark.parametrize("allow_migrate", [False, True])
+def test_onboard_open_pr_profile_migration_requires_flag_and_renders_requested_profile(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], allow_migrate: bool
+) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd, **__):
+        if cmd[:3] == ["gh", "repo", "clone"]:
+            dest = Path(cmd[4])
+            (dest / ".github").mkdir(parents=True)
+            (dest / ".github" / "aviato.yaml").write_text(
+                "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
+                "version: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def fake_proposal(self, repo, branch, title, files, body):  # noqa: ANN001
+        captured.update(files=files)
+        return branch
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli.GitHubPlatform, "open_or_update_proposal", fake_proposal)
+    argv = [
+        "onboard",
+        "acme/widget",
+        "--open-pr",
+        "--profile",
+        "node-service",
+        "--pin",
+        "0",
+        "--allow-unresolved-pin",
+        "--var",
+        "project-name=widget",
+        "--var",
+        "language-variant=typescript",
+    ]
+    if allow_migrate:
+        argv.append("--migrate-profile")
+
+    rc = main(argv)
+
+    if not allow_migrate:
+        assert rc == 2
+        assert "--migrate-profile" in capsys.readouterr().err
+        assert captured == {}
+        return
+    assert rc == 0
+    declaration = captured["files"][".github/aviato.yaml"]
+    assert "profile: node-service" in declaration
+    assert "profile-identity: aviato-profile/node-service/v1" in declaration
+    assert "eslint.config.mjs" in captured["files"]
+    assert "tsconfig.json" in captured["files"]

@@ -240,7 +240,7 @@ def plan_onboarding(
         if not allow_migrate:
             raise DeclarationError(
                 f"repository already declares profile {existing_declaration.profile!r}; "
-                f"pass allow_migrate to change it to {profile!r}"
+                f"pass --migrate-profile (allow_migrate) to change it to {profile!r}"
             )
         migrating_from = existing_declaration.profile
 

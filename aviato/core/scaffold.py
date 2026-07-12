@@ -147,6 +147,7 @@ def preflight_seed_integrity(
     *,
     baseline_existing_seeds: bool = False,
     allow_fresh_seed_initialization: bool = True,
+    allow_seed_set_expansion: bool = False,
 ) -> SeedIntegrityPreflight:
     """Read and validate all seed integrity state without mutating the repository."""
     root = Path(root)
@@ -178,7 +179,13 @@ def preflight_seed_integrity(
     if sidecar.status == "corrupt":
         return SeedIntegrityPreflight(sidecar, {}, True)
     if sidecar.status == "ok":
-        incomplete = any(output not in sidecar.hashes for output in seed_outputs)
+        incomplete = any(
+            output not in sidecar.hashes
+            and (
+                not allow_seed_set_expansion or confined_target(root, output, operation="read scaffold output").exists()
+            )
+            for output in seed_outputs
+        )
         return SeedIntegrityPreflight(sidecar, {}, incomplete)
 
     # A missing sidecar is safe only for a caller that has established truly fresh
@@ -214,6 +221,7 @@ def scaffold(
     force: bool = False,
     baseline_existing_seeds: bool = False,
     allow_fresh_seed_initialization: bool = True,
+    allow_seed_set_expansion: bool = False,
 ) -> ScaffoldResult:
     """Materialize managed and seed-once artifacts (§5.3, §6.3).
 
@@ -240,6 +248,7 @@ def scaffold(
         list(overlay.values()),
         baseline_existing_seeds=baseline_existing_seeds,
         allow_fresh_seed_initialization=allow_fresh_seed_initialization,
+        allow_seed_set_expansion=allow_seed_set_expansion,
     )
     if preflight.unknown:
         result.seed_integrity_unknown = True

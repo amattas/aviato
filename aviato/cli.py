@@ -540,7 +540,7 @@ def _resolve_onboard_declaration(
     that to a clean CLI error. Canonicalizes ``args.pin`` in place so the marker
     rendering downstream emits the same bare pin (§6.1)."""
     resolved_identity = registry.profile(args.profile).identity
-    if existing is not None:
+    if existing is not None and existing.profile == args.profile:
         if existing.profile_identity is None:
             raise DeclarationError(
                 "existing declaration has no profile identity; run `aviato sync <path>` first so "
@@ -633,6 +633,7 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         overrides=declaration.overrides,
     )
     fresh_onboarding = existing is None
+    migrating_profile = existing is not None and existing.profile != args.profile
     if fresh_onboarding:
         baselined = [
             item.output
@@ -647,8 +648,10 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         items,
         profile=args.profile,
         version=args.pin,
+        force=migrating_profile,
         baseline_existing_seeds=fresh_onboarding,
         allow_fresh_seed_initialization=fresh_onboarding,
+        allow_seed_set_expansion=migrating_profile,
     )
     if result.seed_integrity_unknown:
         _print_seed_integrity_error()
