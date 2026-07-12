@@ -46,6 +46,10 @@ swift-verify:
   status_check: "ci / Swift CI"
 pypi-publish:
   privileges: ["contents: read", "id-token: write", "attestations: write"]
+  # Trusted Publishing is split across two workflow identities. The reusable
+  # workflow only builds/vets; the registered consumer caller alone publishes.
+  reusable_privileges: ["contents: read"]
+  local_publisher_privileges: ["contents: read", "id-token: write", "attestations: write"]
   # finding 7: the publish job runs in a deployment environment (workflow default
   # `pypi`); doctor probes existence + reviewer protection like app-store-connect.
   environment: pypi

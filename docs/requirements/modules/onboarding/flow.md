@@ -37,6 +37,11 @@ only for intentional offline/test scaffolds and must be named as such.
 **Guards:** never change an already-declared profile to a different one without
 an explicit migrate override; enumerate files left untouched (seed-once,
 unmanaged) in the proposal.
+For `python-library`, the managed CI caller includes the consumer-local `pypi`
+environment job required by PyPI Trusted Publishing. Register that exact caller
+path and environment with PyPI/TestPyPI after onboarding. The reusable build
+workflow requires `consumer-publisher-present: true`; older callers fail loudly
+with an `aviato sync` instruction instead of completing without publishing.
 **Partially-provisioned state & recovery (normative):** between minimal and full
 protection the repo is in a defined **partially-provisioned** state. Minimal
 protection (no force-push, no deletion; no PR-required gate that would block the

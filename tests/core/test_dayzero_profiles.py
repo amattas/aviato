@@ -43,7 +43,7 @@ def test_pipelines_resolve_to_typed_modules_with_privileges(registry: Registry, 
     assert "security-events: write" in by_name["security-baseline"].privileges
 
 
-def test_pypi_pipeline_declares_oidc_privilege(registry: Registry) -> None:
+def test_pypi_pipeline_declares_local_publisher_oidc_privilege(registry: Registry) -> None:
     rs = resolve_profile(registry, "python-library")
     pypi = next(m for m in rs.pipeline_modules if m.name == "pypi-publish")
     assert "id-token: write" in pypi.privileges

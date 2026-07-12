@@ -21,6 +21,18 @@ def _load(name: str) -> dict:
     return yaml.safe_load((WORKFLOWS / name).read_text())
 
 
+def _rendered_python_library_workflow() -> dict:
+    artifacts = resolved_artifacts(
+        Registry(MODULE_SOURCE_ROOT),
+        "python-library",
+        _TEMPLATE_EXAMPLE_VARS["python-library"],
+        pin="1",
+        docs=False,
+    )
+    body = next(a.body for a in artifacts if a.output == ".github/workflows/aviato-ci.yml")
+    return yaml.safe_load(body)
+
+
 def test_serializing_workflows_declare_per_repo_concurrency() -> None:
     # review #4/#26: the scheduled drift run, the release run, and the deploy publishes must
     # SERIALIZE per repo (queue, never cancel) so concurrent runs can't race a force-push / alias
@@ -296,10 +308,61 @@ def test_docs_retention_defaults_to_keep_all() -> None:
 def test_registry_publishes_run_in_deployment_environments() -> None:
     # finding 7: PyPI/GHCR publishes get the same platform-level environment gate the
     # Pages/App Store deploys already have.
-    pypi = _load("reusable-pypi-publish.yml")
-    assert pypi["jobs"]["publish"]["environment"]["name"] == "${{ inputs.environment-name }}"
+    caller = _rendered_python_library_workflow()
+    assert caller["jobs"]["pypi-publish"]["environment"] == "pypi"
     ghcr = _load("reusable-docker-ghcr.yml")
     assert ghcr["jobs"]["docker"]["environment"]["name"] == "${{ inputs.environment-name }}"
+
+
+def test_pypi_reusable_only_builds_vetted_artifact_and_local_caller_publishes() -> None:
+    reusable = _load("reusable-pypi-publish.yml")
+    reusable_body = (WORKFLOWS / "reusable-pypi-publish.yml").read_text(encoding="utf-8")
+    assert set(reusable["jobs"]) == {"require-consumer-publisher", "build"}
+    assert "pypa/gh-action-pypi-publish" not in reusable_body
+    assert "id-token: write" not in reusable_body
+    assert "attest-build-provenance" not in reusable_body
+    assert reusable["jobs"]["build"]["permissions"] == {"contents": "read"}
+    upload = next(step for step in reusable["jobs"]["build"]["steps"] if step.get("name") == "Upload build artifacts")
+    assert upload["uses"] == "actions/upload-artifact@v7"
+    assert upload["with"]["name"] == "aviato-pypi-dist"
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["retention-days"] == 1
+
+    caller_body = (SCAFFOLD_FILES / "wf-python-library.yml").read_text(encoding="utf-8")
+    assert "consumer-publisher-present: true" in caller_body
+    assert "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b" in caller_body
+    assert "actions/download-artifact@v7" in caller_body
+    assert "environment: pypi" in caller_body
+    assert "id-token: write" in caller_body and "attestations: write" in caller_body
+    caller = _rendered_python_library_workflow()
+    assert "id-token" not in (caller.get("permissions") or {})
+    assert "attestations" not in (caller.get("permissions") or {})
+    for job_name, job in caller["jobs"].items():
+        if job_name == "pypi-publish" or not isinstance(job, dict):
+            continue
+        permissions = job.get("permissions") or {}
+        assert permissions.get("id-token") != "write", job_name
+        assert permissions.get("attestations") != "write", job_name
+    publish_body = caller_body[caller_body.index("  pypi-publish:") :]
+    assert 'git rev-parse "refs/tags/${RELEASE_TAG}^{commit}"' in publish_body
+    assert "${{ needs.release-gate.outputs.gated-sha }}" in publish_body
+    assert "eval " not in publish_body
+    assert "pip install" not in publish_body
+    assert "python -m build" not in publish_body
+
+
+def test_pypi_stale_caller_fails_before_build_with_sync_instruction() -> None:
+    reusable = _load("reusable-pypi-publish.yml")
+    on_block = reusable.get("on") or reusable.get(True)
+    marker = on_block["workflow_call"]["inputs"]["consumer-publisher-present"]
+    assert marker["required"] is False
+    assert marker["type"] == "boolean"
+    assert marker["default"] is False
+    guard = reusable["jobs"]["require-consumer-publisher"]
+    reject = guard["steps"][0]
+    assert reject["if"] == "${{ inputs.consumer-publisher-present != true }}"
+    assert "aviato sync" in reject["run"]
+    assert reusable["jobs"]["build"]["needs"] == "require-consumer-publisher"
 
 
 def test_ghcr_publishes_only_scanned_digests() -> None:
@@ -922,6 +985,7 @@ def test_pypi_publish_isolates_build_from_oidc_token() -> None:
     wf = _load("reusable-pypi-publish.yml")
     top_perms = wf.get("permissions", {}) or {}
     jobs = wf["jobs"]
+    caller_jobs = _rendered_python_library_workflow()["jobs"]
 
     def holds_token(perms: dict) -> bool:
         return perms.get("id-token") == "write" or perms.get("attestations") == "write"
@@ -939,9 +1003,12 @@ def test_pypi_publish_isolates_build_from_oidc_token() -> None:
     build_perms = jobs["build"].get("permissions")
     message = "build job must explicitly downgrade permissions to exclude id-token/attestations"
     assert build_perms is not None and not holds_token(build_perms), message
-    # The privileged publish job must depend on build (artifacts cross the boundary) and run NO eval.
-    assert jobs["publish"].get("needs") == "build" or "build" in (jobs["publish"].get("needs") or [])
-    assert "eval " not in _json.dumps(jobs["publish"].get("steps", [])), "publish job must run no build code"
+    # The privileged publish job is consumer-local, depends on the reusable builder,
+    # and runs no operator-selected build command.
+    publisher = caller_jobs["pypi-publish"]
+    assert "pypi" in publisher["needs"]
+    assert holds_token(publisher["permissions"])
+    assert "eval " not in _json.dumps(publisher.get("steps", [])), "publish job must run no build code"
 
 
 def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
@@ -952,10 +1019,8 @@ def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
     # re-roots there. The round-trip is exact IFF every uploaded path is under `<wd>` and download
     # extracts to exactly `<wd>` (a wrong download path would yield `<wd>/<wd>/...` or a missing dir).
     wf = _load("reusable-pypi-publish.yml")
-    steps = {
-        "build": wf["jobs"]["build"]["steps"],
-        "publish": wf["jobs"]["publish"]["steps"],
-    }
+    caller = _rendered_python_library_workflow()
+    steps = {"build": wf["jobs"]["build"]["steps"], "publish": caller["jobs"]["pypi-publish"]["steps"]}
 
     def _step(job: str, action_substr: str) -> dict:
         return next(s for s in steps[job] if action_substr in (s.get("uses") or ""))
@@ -964,14 +1029,17 @@ def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
     down = _step("publish", "download-artifact")["with"]
     wd = "${{ inputs.working-directory }}"
 
-    assert up["name"] == down["name"], "upload/download artifact names must match"
+    on_block = wf.get("on") or wf.get(True)
+    assert on_block["workflow_call"]["outputs"]["artifact-name"]["value"] == "${{ jobs.build.outputs.artifact-name }}"
+    assert up["name"] == "aviato-pypi-dist"
+    assert down["name"] == "${{ needs.pypi.outputs.artifact-name }}"
     # Every uploaded path is under <wd> (so the least-common-ancestor is <wd>).
     upload_paths = [p for p in str(up["path"]).splitlines() if p.strip()]
     assert upload_paths, "upload step lists no paths"
     for p in upload_paths:
         assert p.strip().startswith(f"{wd}/"), f"upload path not under working-directory: {p!r}"
-    # Download must extract to exactly <wd> so the tree reconstructs at <wd>/<packages-dir>/... .
-    assert down["path"] == wd, f"download path {down['path']!r} must be exactly {wd!r}"
+    # The caller passes working-directory ".", so extraction at its root reconstructs dist/ + SBOM.
+    assert down["path"] == "."
 
 
 def test_pypi_audit_scope_is_exactly_the_wheel_dependency_closure() -> None:

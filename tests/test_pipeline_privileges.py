@@ -23,7 +23,10 @@ PIPELINE_WORKFLOWS = {
 
 # The release module also owns the caller-side dispatch status bridge. Its token is
 # isolated to that no-code job, so this privilege does not belong on reusable-release.
-CALLER_ONLY_PRIVILEGES = {"release": {"statuses: write"}}
+CALLER_ONLY_PRIVILEGES = {
+    "release": {"statuses: write"},
+    "pypi-publish": {"id-token: write", "attestations: write"},
+}
 
 
 def _workflow_privileges(wf: dict) -> set[str]:
@@ -68,3 +71,38 @@ def test_pipeline_secrets_match_workflow_call_secrets(pipeline: str, workflow: s
     workflow_secrets = set(call_secrets)
     message = f"{pipeline} module secrets {module_secrets} != {workflow} workflow_call.secrets {workflow_secrets}"
     assert module_secrets == workflow_secrets, message
+
+
+def test_pypi_privileges_are_split_across_reusable_builder_and_local_publisher() -> None:
+    manifest = yaml.safe_load((MODULE_SOURCE_ROOT / "pipelines.yaml").read_text(encoding="utf-8"))
+    pypi = manifest["pypi-publish"]
+    reusable = _load_workflow("reusable-pypi-publish.yml")
+    caller = _load_rendered_python_library_caller()
+
+    build_privileges = set(pypi["reusable_privileges"])
+    publisher_privileges = set(pypi["local_publisher_privileges"])
+    assert build_privileges == _workflow_privileges(reusable)
+    assert publisher_privileges == _job_privileges(caller["jobs"]["pypi-publish"])
+    assert set(pypi["privileges"]) == build_privileges | publisher_privileges
+
+
+def _load_workflow(name: str) -> dict:
+    return yaml.safe_load((REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8"))
+
+
+def _load_rendered_python_library_caller() -> dict:
+    from aviato.core.onboarding import resolved_artifacts
+
+    artifacts = resolved_artifacts(
+        Registry(MODULE_SOURCE_ROOT),
+        "python-library",
+        {"distribution-name": "example", "import-name": "example"},
+        pin="1",
+        docs=False,
+    )
+    body = next(a.body for a in artifacts if a.output == ".github/workflows/aviato-ci.yml")
+    return yaml.safe_load(body)
+
+
+def _job_privileges(job: dict) -> set[str]:
+    return {f"{key}: {value}" for key, value in job["permissions"].items()}

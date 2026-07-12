@@ -797,6 +797,43 @@ def _check_monotonic_alias_parity(root: Path, errors: list[str]) -> None:
                 )
 
 
+def _permission_set(block: object) -> set[str]:
+    if not isinstance(block, dict):
+        return set()
+    return {f"{key}: {value}" for key, value in block.items()}
+
+
+def _check_pypi_privilege_split(root: Path, errors: list[str]) -> None:
+    """Keep PyPI build and trusted-publisher privileges bound to their workflow identities."""
+    manifest = load_yaml(root / "aviato" / "library" / "pipelines.yaml")
+    module = manifest.get("pypi-publish")
+    if not isinstance(module, dict):
+        return
+
+    reusable_declared = set(module.get("reusable_privileges") or ())
+    publisher_declared = set(module.get("local_publisher_privileges") or ())
+    union_declared = set(module.get("privileges") or ())
+    reusable = load_yaml(root / ".github" / "workflows" / "reusable-pypi-publish.yml")
+    reusable_actual = _permission_set(reusable.get("permissions"))
+    caller_body = _rendered_caller(root, "python-library", ".github/workflows/aviato-ci.yml")
+    caller = yaml.safe_load(caller_body) if caller_body is not None else {}
+    publish_job = (caller.get("jobs") or {}).get("pypi-publish") if isinstance(caller, dict) else None
+    publisher_actual = _permission_set(publish_job.get("permissions") if isinstance(publish_job, dict) else None)
+
+    if reusable_declared != reusable_actual:
+        errors.append(
+            "PyPI reusable build privileges do not match reusable-pypi-publish.yml "
+            f"(declared={sorted(reusable_declared)}, actual={sorted(reusable_actual)})"
+        )
+    if publisher_declared != publisher_actual:
+        errors.append(
+            "PyPI local publisher privileges do not match the rendered consumer publisher job "
+            f"(declared={sorted(publisher_declared)}, actual={sorted(publisher_actual)})"
+        )
+    if union_declared != reusable_declared | publisher_declared:
+        errors.append("PyPI pipeline privileges must equal reusable plus local publisher privileges")
+
+
 def validate(root: Path = REPO_ROOT) -> list[str]:
     errors: list[str] = []
 
@@ -836,6 +873,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_action_pins(root, errors)
     _check_template_scaffold_parity(root, errors)
     _check_status_bridge_contexts(root, errors)
+    _check_pypi_privilege_split(root, errors)
     _check_scaffold_workflow_yaml(root, errors)
     _check_library_bootstrap(root, errors)
     _check_monotonic_alias_parity(root, errors)

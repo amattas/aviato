@@ -17,15 +17,14 @@ on:
 
 # Granted to the UNION of every called reusable workflow's permissions: a caller
 # cannot elevate the token for a called workflow, so it must grant >= their needs
-# (release propose-dispatch: actions:write; GHCR/PyPI provenance: id-token+attestations:write).
+# (release propose-dispatch: actions:write). PyPI OIDC and attestation writes are
+# granted only to the consumer-local publisher job below.
 permissions:
   contents: write
   pull-requests: write
   security-events: write
   actions: write
   statuses: write
-  id-token: write
-  attestations: write
 
 jobs:
   ci:
@@ -124,3 +123,93 @@ jobs:
       packages-dir: "dist"
       release-tag: ${{ needs.release.outputs.tag }}
       gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
+      consumer-publisher-present: true
+
+  # PyPI Trusted Publishing authenticates the registered consumer workflow identity,
+  # so this job must stay local rather than move into the reusable workflow.
+  pypi-publish:
+    name: Publish Python package
+    needs: [release-gate, pypi]
+    if: ${{ always() && needs.release-gate.result == 'success' && needs.pypi.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    concurrency:
+      group: aviato-pypi-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout consumer repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.release-gate.outputs.gated-sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify tag still points at the gated commit (C12-W2)
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.pypi.outputs.resolved-tag }}
+          GATED_SHA: ${{ needs.release-gate.outputs.gated-sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
+          if [ -z "${actual}" ] || [ "${actual}" != "${GATED_SHA}" ]; then
+            echo "::error::Tag ${RELEASE_TAG} no longer points at the gated commit ${GATED_SHA} (now: ${actual:-missing}) — refusing to publish (C12-W2)."
+            exit 1
+          fi
+
+      - name: Download vetted build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ needs.pypi.outputs.artifact-name }}
+          path: .
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: "dist/*"
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@v4
+        with:
+          subject-path: "dist/*"
+          sbom-path: "sbom.cyclonedx.json"
+
+      - name: Publish distributions
+        if: ${{ vars.PYPI_REPOSITORY_URL == '' }}
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        with:
+          packages-dir: dist
+
+      - name: Publish distributions to alternate repository
+        if: ${{ vars.PYPI_REPOSITORY_URL != '' }}
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        with:
+          packages-dir: dist
+          repository-url: ${{ vars.PYPI_REPOSITORY_URL }}
+
+      - name: Confirm version resolvable
+        shell: bash
+        env:
+          INDEX_URL: ${{ vars.PYPI_REPOSITORY_URL }}
+          RESOLVED_TAG: ${{ needs.pypi.outputs.resolved-tag }}
+        run: |
+          set -euo pipefail
+          version="${RESOLVED_TAG#v}"
+          name="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["name"])')"
+          extra=()
+          if [ -n "${INDEX_URL}" ]; then extra=(--index-url "${INDEX_URL%/}/simple/"); fi
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if python -m pip download --no-deps --no-binary :all: "${extra[@]}" "${name}==${version}" -d /tmp/confirm 2>/dev/null; then
+              echo "Confirmed ${name}==${version} resolvable."
+              exit 0
+            fi
+            echo "Not yet resolvable (attempt ${attempt}/10); waiting..."
+            sleep 30
+          done
+          echo "::error::Published ${name}==${version} did not become resolvable after retries; failing the release (§13.1)." >&2
+          exit 1

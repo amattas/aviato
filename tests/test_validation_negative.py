@@ -43,6 +43,21 @@ def test_clean_copy_validates(repo_copy: Path) -> None:
     assert validate(repo_copy) == []
 
 
+def test_pypi_privilege_split_drift_is_detected(repo_copy: Path) -> None:
+    pipelines = repo_copy / "aviato" / "library" / "pipelines.yaml"
+    text = pipelines.read_text(encoding="utf-8")
+    drifted = text.replace(
+        'local_publisher_privileges: ["contents: read", "id-token: write", "attestations: write"]',
+        'local_publisher_privileges: ["contents: read"]',
+    )
+    assert drifted != text, "fixture did not contain the PyPI local publisher privilege split"
+    pipelines.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("PyPI" in error and "local publisher privileges" in error for error in errors)
+
+
 def test_status_bridge_context_drift_is_detected(repo_copy: Path) -> None:
     caller = repo_copy / "aviato" / "library" / "scaffold" / "files" / "wf-python-library.yml"
     text = caller.read_text(encoding="utf-8")
