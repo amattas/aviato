@@ -160,6 +160,58 @@ def test_swift_onboard_plan_uses_resolved_environment_name_override(
     assert "- app-store-connect:" not in output
 
 
+@pytest.mark.parametrize(
+    ("saved_environment", "cli_environment", "expected_environment"),
+    [
+        ("production", None, "production"),
+        ("production", "staging", "staging"),
+        (None, None, "app-store-connect"),
+    ],
+)
+def test_swift_reonboard_plan_uses_write_precedence_without_mutating_declaration(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    saved_environment: str | None,
+    cli_environment: str | None,
+    expected_environment: str,
+) -> None:
+    variables = {
+        "product-scheme": "Acme",
+        "workspace": "Acme.xcworkspace",
+        "bundle-identifier": "com.acme.app",
+        "team-id": "ABCDE12345",
+        "export-method": "app-store",
+    }
+    if saved_environment is not None:
+        variables["environment-name"] = saved_environment
+    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration.parent.mkdir(parents=True)
+    declaration.write_text(
+        yaml.safe_dump(
+            {
+                "profile": "swift-app",
+                "profile-identity": "aviato-profile/swift-app/v1",
+                "version": "0",
+                "variables": variables,
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    original = declaration.read_text(encoding="utf-8")
+    args = ["onboard", str(tmp_path), "--profile", "swift-app"]
+    if cli_environment is not None:
+        args += ["--var", f"environment-name={cli_environment}"]
+
+    assert main(args) == 0
+    output = capsys.readouterr().out
+
+    assert f"- {expected_environment}: must exist with at least one required reviewer before deploy" in output
+    for other in {"app-store-connect", "production", "staging"} - {expected_environment}:
+        assert f"- {other}:" not in output
+    assert declaration.read_text(encoding="utf-8") == original
+
+
 def test_reonboard_without_pin_preserves_existing(tmp_path: Path) -> None:
     # §5.12: onboarding is not a re-pin. A fresh adopt with a legacy ``v2.0.0`` is
     # canonicalized to bare on write (§6.1); re-onboarding without --pin must preserve it.

@@ -871,17 +871,24 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     # write/proposal paths use BEFORE emitting any plan, so the dry-run never prints a partial plan
     # for an invalid --var/--pin, nor a plan for an action --write would refuse (a profile change
     # without --migrate-profile).
-    known_vars = _parse_var_flags(args.var)
+    flag_vars = _parse_var_flags(args.var)
     canonical_pin = normalize_pin(args.pin) if args.pin is not None else None
     target_root = Path(args.target)
     decl_path = _consumer_declaration_target(target_root, operation="inspect declaration")
+    existing: Declaration | None = None
     if decl_path.is_file():
         existing = _load_consumer_declaration(target_root)
-        if existing.profile != args.profile and not getattr(args, "migrate_profile", False):
-            raise AviatoError(
-                f"repository already declares profile {existing.profile!r}; pass --migrate-profile "
-                f"to change it to {args.profile!r} (the plan mirrors what --write would refuse)"
-            )
+        # Resolve through the exact write-path precedence and guards, but discard the
+        # declaration value: this is a pure plan and must not mutate the target. Saved
+        # declaration values therefore beat defaults, while explicit --var values beat
+        # both, exactly as they do for --write.
+        _, known = _resolve_onboard_declaration(args, registry, resolved, existing)
+    else:
+        # A fresh plan intentionally remains usable before required variables and a pin
+        # are known. Resolve the subset available to preview conditional artifacts and
+        # configurable environments without weakening the stricter --write preflight.
+        known = {spec.name: spec.default for spec in resolved.variables if spec.default is not None}
+        known.update(flag_vars)
 
     print(f"Onboarding plan for {args.target}")
     print(f"profile: {resolved.profile}")
@@ -895,11 +902,10 @@ def cmd_onboard(args: argparse.Namespace) -> int:
 
     print("templates:")
     # Apply the §12.2/§6.1 conditional filter so the preview lists the *exact* artifacts
-    # --write would materialize — no over-reporting. The known variables are the profile's
-    # defaults plus any supplied --var (the same set --write resolves from), so a template
-    # gated on an unsupplied/unmatched variant is excluded, not shown alongside its sibling.
-    known: dict[str, Any] = {spec.name: spec.default for spec in resolved.variables if spec.default is not None}
-    known.update(known_vars)
+    # --write would materialize — no over-reporting. For an existing declaration these are
+    # the exact effective variables resolved by the write path; for a fresh preview they are
+    # the known defaults plus supplied --var values. An unsupplied/unmatched variant is
+    # excluded, not shown alongside its sibling.
     known["docs"] = "true" if args.docs else "false"
     for template in applicable_templates(resolved, known):
         kind = "seed-once" if template.seed_once else "managed"
