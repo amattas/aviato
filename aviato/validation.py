@@ -196,9 +196,7 @@ def _check_workflow_yaml(root: Path, errors: list[str]) -> None:
                 errors.append(f"invalid YAML in {path.relative_to(root)}: {exc}")
 
 
-_REMOTE_REUSABLE_RE = re.compile(
-    r"^(?P<repository>[^/\s]+/[^/\s]+)/\.github/workflows/(?P<workflow>[^@\s]+)@(?P<ref>.+)$"
-)
+_REMOTE_WORKFLOW_MARKER = "/.github/workflows/"
 
 
 def _check_remote_reusable_reference(
@@ -211,21 +209,22 @@ def _check_remote_reusable_reference(
     reject_main: bool = False,
 ) -> None:
     """Validate every remote reusable-workflow reference, independent of expected prefix."""
-    match = _REMOTE_REUSABLE_RE.fullmatch(value)
-    if match is None:
+    # Identify the workflow-shaped value BEFORE parsing `@ref`. Matching only an already-valid
+    # shape would let a missing/trailing `@` bypass every subsequent identity/file check.
+    if value.startswith("./") or _REMOTE_WORKFLOW_MARKER not in value:
         return
-    actual_repository = match.group("repository")
-    workflow_file = match.group("workflow")
-    ref = match.group("ref")
+    actual_repository, workflow_and_ref = value.split(_REMOTE_WORKFLOW_MARKER, 1)
+    workflow_file, separator, ref = workflow_and_ref.partition("@")
+    if separator != "@" or not ref.strip() or workflow_and_ref.count("@") != 1:
+        errors.append(f"{source} reference {value!r} requires exactly one nonempty @ref")
     if actual_repository != repository:
         errors.append(
             f"{source} references Library repository {actual_repository!r}; policy.yml requires {repository!r}"
         )
-        return
-    if workflow_file not in workflow_files:
+    if not workflow_file:
+        errors.append(f"{source} does not name a reusable workflow file")
+    elif workflow_file not in workflow_files:
         errors.append(f"{source} references missing reusable workflow {workflow_file}")
-    if not ref:
-        errors.append(f"{source} references {workflow_file} without a ref")
     if reject_main and ref == "main":
         errors.append(f"{source} advertises @{ref}; template examples must use a placeholder pin")
 
@@ -366,18 +365,30 @@ def _check_library_repository_copies(root: Path, policy: dict[str, Any], reposit
         try:
             zizmor = load_yaml(zizmor_path)
             policies = zizmor["rules"]["unpinned-uses"]["config"]["policies"]
-            actual_zizmor = [
-                match.group("repository")
-                for key in policies
-                if isinstance(key, str) and (match := _ZIZMOR_REPOSITORY_POLICY_RE.fullmatch(key)) is not None
-            ]
+            if not isinstance(policies, dict):
+                raise TypeError("policies must be a mapping")
+            repository_policies: list[tuple[str, object]] = []
+            for key, value in policies.items():
+                match = _ZIZMOR_REPOSITORY_POLICY_RE.fullmatch(key) if isinstance(key, str) else None
+                if match is not None:
+                    repository_policies.append((match.group("repository"), value))
         except (KeyError, TypeError) as exc:
             errors.append(f"aviato/library/zizmor.yml repository policies cannot be read: {exc} (finding 41)")
         else:
-            if actual_zizmor != [repository]:
+            expected_key = f"{repository}/*"
+            if policies.get(expected_key) != "ref-pin":
                 errors.append(
-                    "aviato/library/zizmor.yml repository ref-pin policies "
-                    f"{actual_zizmor!r} must be exactly [{repository!r}] (finding 41)"
+                    f"aviato/library/zizmor.yml policy {expected_key!r} must have value exactly 'ref-pin' (finding 41)"
+                )
+            extra_ref_pin = [
+                actual_repository
+                for actual_repository, value in repository_policies
+                if actual_repository != repository and value == "ref-pin"
+            ]
+            if extra_ref_pin:
+                errors.append(
+                    "aviato/library/zizmor.yml has extra repository-level ref-pin exemptions "
+                    f"{extra_ref_pin!r}; only {repository!r} is allowed (finding 41)"
                 )
 
     contributing = root / "aviato/library/scaffold/files/contributing.md.txt"

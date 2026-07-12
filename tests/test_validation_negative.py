@@ -361,6 +361,47 @@ def test_rendered_scaffold_wrong_repository_is_detected_with_placeholder_ref(rep
     )
 
 
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "amattas/aviato/.github/workflows/reusable-python-ci.yml",
+        "amattas/aviato/.github/workflows/reusable-python-ci.yml@",
+    ],
+)
+def test_rendered_scaffold_requires_one_nonempty_ref(repo_copy: Path, replacement: str) -> None:
+    body = repo_copy / "aviato/library/scaffold/files/wf-python-library.yml"
+    text = body.read_text(encoding="utf-8")
+    drifted = text.replace(
+        "{{ aviato-workflow-prefix }}reusable-python-ci.yml{{ aviato-workflow-suffix }}",
+        replacement,
+        1,
+    )
+    assert drifted != text
+    body.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any(
+        "rendered scaffold workflow" in error and "reusable-python-ci.yml" in error and "nonempty @ref" in error
+        for error in errors
+    )
+
+
+def test_remote_workflow_reference_accepts_placeholder_ref() -> None:
+    import aviato.validation as validation
+
+    errors: list[str] = []
+    validation._check_remote_reusable_reference(
+        "amattas/aviato/.github/workflows/reusable-python-ci.yml@{{ aviato-ref }}",
+        source="fixture",
+        repository="amattas/aviato",
+        workflow_files={"reusable-python-ci.yml"},
+        errors=errors,
+    )
+
+    assert errors == []
+
+
 def test_documented_template_wrong_repository_is_detected(repo_copy: Path) -> None:
     template = repo_copy / "templates/profile-python-library.yml"
     text = template.read_text(encoding="utf-8")
@@ -492,6 +533,19 @@ def test_every_zizmor_repository_policy_copy_must_match(repo_copy: Path) -> None
     errors = validate(repo_copy)
 
     assert any("zizmor.yml" in error and "wrong/repository" in error for error in errors)
+
+
+@pytest.mark.parametrize("replacement", ["hash-pin", "ref-pin-with-typo"])
+def test_policy_zizmor_repository_exemption_must_be_ref_pin(repo_copy: Path, replacement: str) -> None:
+    config = repo_copy / "aviato/library/zizmor.yml"
+    text = config.read_text(encoding="utf-8")
+    drifted = text.replace("amattas/aviato/*: ref-pin", f"amattas/aviato/*: {replacement}", 1)
+    assert drifted != text
+    config.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("zizmor.yml" in error and "amattas/aviato" in error and "ref-pin" in error for error in errors)
 
 
 def test_library_repository_policy_mutation_binds_validation_and_remote(repo_copy: Path) -> None:
