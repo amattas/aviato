@@ -62,6 +62,15 @@ def test_denylisted_token_detected_in_synthetic_core(tmp_path: Path) -> None:
     assert denylist_violations(fake_core, {"docusaurus"}) != []
 
 
+def test_core_may_not_name_zensical(tmp_path: Path) -> None:
+    fake_core = tmp_path / "core"
+    fake_core.mkdir()
+    (fake_core / "bad.py").write_text("ENGINE = 'zensical'\n")
+    assert denylist_violations(fake_core, {"zensical"}) != []
+    denylist = load_denylist(DENYLIST_FILE)
+    assert "zensical" in denylist
+
+
 def test_multiword_denylist_token_matches_any_whitespace(tmp_path: Path) -> None:
     # A multi-word token must match across any whitespace run, so incidental spacing/newlines
     # cannot evade it (a literal-space pattern would only match a single ASCII space).
