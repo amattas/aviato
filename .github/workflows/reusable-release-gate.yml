@@ -56,6 +56,7 @@ jobs:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
           fetch-tags: true
 
@@ -104,11 +105,23 @@ jobs:
       - name: Verify tag points at default branch
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ inputs.default-branch }}
           GATED_SHA: ${{ steps.resolve-gated-sha.outputs.gated-sha }}
         run: |
           set -euo pipefail
-          git fetch origin "${DEFAULT_BRANCH}" --tags
+          # Checkout deliberately does not persist the token. Scope authentication
+          # to this one trusted fetch through process-local git config variables.
+          if [ -n "${GH_TOKEN:-}" ]; then
+            basic_auth="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+            GIT_CONFIG_COUNT=1 \
+              GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+              GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic_auth}" \
+              git fetch origin "${DEFAULT_BRANCH}" --tags
+          else
+            # Supports the executable workflow fixture's local-file remote.
+            git fetch origin "${DEFAULT_BRANCH}" --tags
+          fi
           # The resolved tag commit must be REACHABLE FROM the default branch. The event
           # SHA may be a later descendant when this gate runs from workflow_run.
           # R6-4-DOCSGATE: the previous strict equality (gated_sha == branch_tip) caused docs deploy

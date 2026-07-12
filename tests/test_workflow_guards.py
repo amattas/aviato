@@ -356,7 +356,6 @@ def test_rendered_library_docs_caller_enables_pages_and_grants_only_call_union()
     docs = caller["jobs"]["docs"]
     assert docs["with"]["serve-pages"] is True
     assert docs["permissions"] == {
-        "actions": "read",
         "contents": "write",
         "pages": "write",
         "id-token": "write",
@@ -578,28 +577,23 @@ def test_ghcr_publishes_only_scanned_digests() -> None:
 def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
     # finding 6: the job token must not sit in .git/config while consumer/build code
     # runs. Only workflows that legitimately push (or fetch) from the checkout keep
-    # credentials: the release write job (pushes tags/branches; its derive job is
-    # pinned to false by the split test), the gate (post-checkout `git fetch origin`),
-    # the drift automation (open_or_update_proposal pushes the proposal branch from the
-    # working tree), and — C12-W4 — the docs `push` job, which fast-forward-pushes the
-    # docs branch and holds contents:write; its sibling `build` job runs consumer code
-    # and must still checkout with persist-credentials: false.
-    exempt_workflows = {"reusable-release.yml", "reusable-release-gate.yml", "reusable-consumer-automation.yml"}
-    exempt_jobs = {("reusable-docs-pages.yml", "push")}
+    # credentials. Only the exact write jobs that deliberately push a known ref may
+    # retain them: the release write job and the isolated docs-branch push job.
+    credentialed_push_jobs = {
+        ("reusable-release.yml", "release"),
+        ("reusable-docs-pages.yml", "push"),
+    }
     for path in sorted(WORKFLOWS.glob("*.yml")):
-        if path.name in exempt_workflows:
-            continue
         wf = _load(path.name)
         for job_name, job in (wf.get("jobs") or {}).items():
             if not isinstance(job, dict):
-                continue
-            if (path.name, job_name) in exempt_jobs:
                 continue
             for step in job.get("steps", []) or []:
                 if not str(step.get("uses", "")).startswith("actions/checkout"):
                     continue
                 persist = (step.get("with") or {}).get("persist-credentials")
-                assert persist is False, f"{path.name}:{job_name}: checkout must set persist-credentials: false"
+                expected = (path.name, job_name) in credentialed_push_jobs
+                assert persist is expected, f"{path.name}:{job_name}: persist-credentials must be {expected}"
 
     # The exempted docs push job legitimately persists credentials to push.
     docs_wf = _load("reusable-docs-pages.yml")
@@ -607,6 +601,89 @@ def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
         s for s in docs_wf["jobs"]["push"]["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
     )
     assert push_checkout["with"]["persist-credentials"] is True
+
+
+@pytest.mark.parametrize(
+    ("environment", "helper_result", "workflow_result"),
+    [
+        ({}, None, False),
+        ({"protection_rules": []}, False, False),
+        ({"protection_rules": [{"type": "required_reviewers"}]}, False, False),
+        ({"protection_rules": [{"type": "required_reviewers", "reviewers": None}]}, False, False),
+        ({"protection_rules": [{"type": "required_reviewers", "reviewers": []}]}, False, False),
+        (
+            {
+                "protection_rules": [
+                    {"type": "required_reviewers", "reviewers": [{"type": "User", "reviewer": {"id": 1}}]}
+                ]
+            },
+            True,
+            True,
+        ),
+    ],
+)
+def test_app_store_reviewer_gate_matches_github_helper_fixtures(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: dict,
+    helper_result: bool | None,
+    workflow_result: bool,
+) -> None:
+    from aviato import github as github_api
+
+    monkeypatch.setattr(github_api, "gh_json_optional", lambda *_args, **_kwargs: environment)
+    assert github_api.protected_environment_has_reviewers("owner/repo", "app-store-connect") is helper_result
+
+    workflow = _load("reusable-app-store-connect.yml")
+    probe = next(
+        step
+        for step in workflow["jobs"]["app-store-connect"]["steps"]
+        if "requires reviewers" in str(step.get("name", ""))
+    )
+    match = re.search(r"jq -e '([^']+)'", probe["run"])
+    assert match, "reviewer probe must use an inspectable jq predicate"
+    completed = subprocess.run(
+        ["jq", "-e", match.group(1)],
+        input=json.dumps(environment),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert (completed.returncode == 0) is workflow_result
+
+
+def test_app_store_receipt_is_persisted_by_isolated_release_evidence_job() -> None:
+    workflow = _load("reusable-app-store-connect.yml")
+    deploy = workflow["jobs"]["app-store-connect"]
+    evidence = workflow["jobs"]["release-evidence"]
+
+    assert deploy.get("permissions", {}).get("contents") != "write"
+    assert evidence["needs"] == "app-store-connect"
+    assert evidence["permissions"] == {"contents": "write"}
+
+    encoded = json.dumps(evidence)
+    assert "secrets." not in encoded
+    assert "actions/checkout" not in encoded
+    for consumer_command in ("xcodebuild", "pip install", "npm ", "eval "):
+        assert consumer_command not in encoded
+
+    steps = evidence["steps"]
+    download = next(step for step in steps if "actions/download-artifact" in str(step.get("uses", "")))
+    assert download["with"]["name"] == "app-store-connect-upload"
+    persist = next(step for step in steps if "gh release upload" in str(step.get("run", "")))
+    run = persist["run"]
+    assert "--clobber" in run, "receipt asset persistence must be rerun-safe"
+    assert "gh release edit" in run
+    assert "<!-- aviato:app-store-connect-receipt:start -->" in run
+    assert "<!-- aviato:app-store-connect-receipt:end -->" in run
+    assert "$0 == start { replacing = 1" in run
+    assert "$0 == end { replacing = 0" in run
+
+
+def test_docs_deploy_callers_do_not_grant_inert_actions_read() -> None:
+    for caller in sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml")):
+        body = caller.read_text(encoding="utf-8")
+        docs_job = body[body.index("\n  docs:") :]
+        assert "      actions: read" not in docs_job, caller.name
 
 
 def test_release_workflow_splits_derive_from_write_job() -> None:

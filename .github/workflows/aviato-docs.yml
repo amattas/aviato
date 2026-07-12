@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=28c317a2b3a472c720598cf9e66af249b0d349d4acc1550a692d4e331de014d9 inputs=8d84e9eca0fb633c0a59990180868f8e60f753626eeead4030e43c3faaa6ee5d
+# aviato:managed profile=aviato-library version=0 hash=175fc56f10245391a3611008be0784d1caca98eb50bc3c1607f1fb3443a23fbe inputs=8d84e9eca0fb633c0a59990180868f8e60f753626eeead4030e43c3faaa6ee5d
 name: Aviato Docs
 
 # Multi-version Zensical docs publish (§13.3), versioned onto a docs branch by mike, opt-in via docs: true.
@@ -101,7 +101,6 @@ jobs:
     needs: [resolve, release-gate, security]
     if: ${{ needs.resolve.outputs.release == 'true' }}
     permissions:
-      actions: read
       contents: write
       pages: write
       id-token: write

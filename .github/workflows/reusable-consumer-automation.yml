@@ -3,7 +3,8 @@ name: Reusable Consumer Automation
 # Scheduled, low-privilege consumer automation (§5.5/§5.6/§5.14): detect file and
 # settings drift and report (open proposals / file tracking issues). It performs
 # NO settings mutation — that is the operator-gated reconcile (§5.7). Privileges
-# are declared per §11.3; no stored secret (platform token only, §6.6).
+# are declared per §11.3. The optional settings-read token is confined to the
+# single settings probe; file drift uses only the platform token (§6.6/§11.2).
 
 on:
   workflow_call:
@@ -72,6 +73,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
