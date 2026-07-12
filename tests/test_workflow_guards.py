@@ -384,6 +384,22 @@ def test_docs_publish_fetches_existing_branch_authenticated_fail_closed() -> Non
     assert "GH_TOKEN" not in deploy["run"]
 
 
+def test_docs_publish_refuses_default_branch_as_docs_branch() -> None:
+    # Review finding (minor): docs-branch must never be the repository default branch —
+    # mike's history-rewriting deploy onto the default branch would clobber it.
+    wf = _load("reusable-docs-pages.yml")
+    steps = wf["jobs"]["build"]["steps"]
+    guard = next(s for s in steps if s.get("name") == "Refuse to target the default branch")
+    run = guard["run"]
+    assert guard.get("env", {}).get("DOCS_BRANCH") == "${{ inputs.docs-branch }}"
+    assert guard.get("env", {}).get("DEFAULT_BRANCH") == "${{ github.event.repository.default_branch }}"
+    assert '"${DOCS_BRANCH}" = "${DEFAULT_BRANCH}"' in run
+    assert "::error::" in run
+    assert "exit 1" in run
+    deploy = next(s for s in steps if s.get("name") == "Deploy version onto the local docs branch (mike)")
+    assert steps.index(guard) < steps.index(deploy)
+
+
 def test_common_lint_blocks_unsafe_npx_registry_fetches() -> None:
     # The npx gate runs as ONE implementation inside `aviato lint-actions` (no in-workflow
     # grep mirror to drift — R9-5); common lint must invoke it via the supply-chain step.

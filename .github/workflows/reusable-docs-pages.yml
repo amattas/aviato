@@ -213,6 +213,18 @@ jobs:
           fi
           echo "highest=$(python3 /tmp/highest.py "${RELEASE_TAG}" < /tmp/tags.txt)" >> "${GITHUB_OUTPUT}"
 
+      - name: Refuse to target the default branch
+        shell: bash
+        env:
+          DOCS_BRANCH: ${{ inputs.docs-branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ -n "${DEFAULT_BRANCH}" ] && [ "${DOCS_BRANCH}" = "${DEFAULT_BRANCH}" ]; then
+            echo "::error::docs-branch (${DOCS_BRANCH}) must not be the repository default branch."
+            exit 1
+          fi
+
       - name: Deploy version onto the local docs branch (mike)
         shell: bash
         env:
