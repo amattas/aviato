@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
 import aviato.cli as cli
 from aviato.cli import main
+from aviato.core.model import VariableSpec
 
 
 def _adopt(tmp_path: Path) -> None:
@@ -84,6 +86,42 @@ def test_repin_rejects_invalid_declared_enum_before_write(
     captured = capsys.readouterr()
     assert rc == 2
     assert "language-variant" in captured.err
+    assert declaration_path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    ("spec", "variables", "invalid_name"),
+    [
+        (
+            VariableSpec("language-variant", "enum", domain=("typescript", "javascript")),
+            {"language-variant": "ruby"},
+            "language-variant",
+        ),
+        (VariableSpec("docs-mode", "boolean"), {"docs-mode": "not-a-bool"}, "docs-mode"),
+        (VariableSpec("known", "string"), {"known-typo": "value"}, "known-typo"),
+        (VariableSpec("token", "string", secret=True), {"token": "secret"}, "token"),
+    ],
+)
+def test_repin_dry_run_rejects_invalid_declaration_before_success(
+    spec: VariableSpec,
+    variables: dict[str, object],
+    invalid_name: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    declaration_path = tmp_path / ".github" / "aviato.yaml"
+    declaration_path.parent.mkdir()
+    original = yaml.safe_dump({"profile": "python-library", "version": "0", "variables": variables})
+    declaration_path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(cli, "resolve_profile", lambda *args, **kwargs: SimpleNamespace(variables=(spec,)))
+
+    rc = main(["repin", str(tmp_path), "1"])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert invalid_name in captured.err
+    assert "dry run" not in captured.out
     assert declaration_path.read_text(encoding="utf-8") == original
 
 

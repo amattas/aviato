@@ -35,7 +35,7 @@ from .core.registry import Registry
 from .core.repin import plan_repin
 from .core.scaffold import ScaffoldItem, render_managed, scaffold
 from .core.settings_drift_flow import run_settings_drift
-from .core.variables import resolve_variables, writeback_variables
+from .core.variables import resolve_declared_variables, resolve_variables, writeback_variables
 from .core.version import is_compatible, is_known_version_pin, most_restrictive_recorded, normalize_pin
 from .core.versioning import classify_commits, is_highest, next_version
 from .github import GitHubAPIError, SettingsReadError, gh_json_paginated_optional, is_archived
@@ -989,7 +989,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 # R3-1: open_or_update_proposal's git/gh writes raise CommandError; without it in
                 # the tuple a push failure escapes to main() and aborts the whole fleet sweep.
                 print(f"  fix ERROR: {exc}", file=sys.stderr)
-                rc = 1
+                rc = max(rc, 1)
     return rc
 
 
@@ -1142,6 +1142,10 @@ def cmd_repin(args: argparse.Namespace) -> int:
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(root)
+        resolved = resolve_profile(
+            registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
+        )
+        resolve_declared_variables(resolved.variables, declaration.variables)
         plan = plan_repin(registry, declaration, args.version)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)

@@ -7,6 +7,7 @@ import pytest
 
 from aviato import cli
 from aviato.cli import _scan_has_file_drift, main
+from aviato.core.errors import AviatoError
 from aviato.core.file_drift_flow import _PROPOSABLE
 from aviato.core.scaffold import ScaffoldItem, scaffold
 
@@ -51,6 +52,33 @@ def test_scan_rejects_invalid_declared_enum_before_fix_proposal(
     captured = capsys.readouterr()
     assert rc == 2
     assert "language-variant" in captured.err
+
+
+def test_scan_fix_preserves_declaration_exit_when_later_proposal_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    invalid = tmp_path / "invalid"
+    (invalid / ".github").mkdir(parents=True)
+    (invalid / ".github" / "aviato.yaml").write_text(
+        "profile: node-service\nversion: v0\nvariables:\n"
+        "  project-name: sample\n  language-variant: ruby\n",
+        encoding="utf-8",
+    )
+    fixable = tmp_path / "fixable"
+    (fixable / ".github").mkdir(parents=True)
+    (fixable / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+
+    def fail_proposal(*args: object, **kwargs: object) -> object:
+        raise AviatoError("proposal failed")
+
+    monkeypatch.setattr(cli, "_propose_file_drift", fail_proposal)
+
+    rc = main(["scan", str(invalid), str(fixable), "--fix"])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "language-variant" in captured.err
+    assert "fix ERROR: proposal failed" in captured.err
 
 
 def test_scan_surfaces_seed_once_divergence(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
