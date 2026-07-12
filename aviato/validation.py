@@ -368,7 +368,11 @@ def _check_baseline_settings_keys(root: Path, errors: list[str]) -> None:
     from .github_platform import RECONCILABLE_SETTING_KEYS
 
     settings = load_yaml(baseline_path).get("settings", {})
-    declared = set(settings.get("default_branch", {})) | set(settings.get("security", {}))
+    declared = (
+        set(settings.get("default_branch", {}))
+        | set(settings.get("security", {}))
+        | set(settings.get("repository", {}))
+    )
     unknown = sorted(declared - set(RECONCILABLE_SETTING_KEYS))
     if unknown:
         errors.append(

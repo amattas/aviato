@@ -209,6 +209,16 @@ def repo_security_settings(slug: str) -> dict[str, Any]:
     return sa if isinstance(sa, dict) else {}
 
 
+def repo_merge_methods(slug: str) -> dict[str, Any]:
+    """Return the repo's top-level PR merge-method toggles (allow_merge_commit /
+    allow_squash_merge / allow_rebase_merge) from the repo GET, failing closed on an
+    ambiguous read (§2.7) — only keys GitHub actually reports are kept."""
+    repo = gh_json_optional(f"repos/{slug}", default={})
+    if not isinstance(repo, dict):
+        return {}
+    return {key: repo[key] for key in ("allow_merge_commit", "allow_squash_merge", "allow_rebase_merge") if key in repo}
+
+
 def protected_environment_has_reviewers(slug: str, environment: str) -> bool | None:
     """True iff a GitHub Environment exists for ``slug`` with at least one required reviewer (§17).
 

@@ -395,10 +395,41 @@ def to_security_payload(desired: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-# Every flat desired key the apply path can actually write (branch protection + repo security).
-# A desired key outside this set is unreconcilable: filtered out before the diff so a typo can't
-# masquerade as never-converging "drift", and asserted against the baseline by `aviato validate`.
-RECONCILABLE_SETTING_KEYS = frozenset(_BRANCH_PROTECTION_KEYS) | frozenset(_SECURITY_SETTING_KEYS)
+# The flat repo-level PR merge-method toggle keys this binding reconciles. Unlike the security
+# toggles (which nest under ``security_and_analysis``), GitHub returns these as TOP-LEVEL booleans
+# on GET /repos/{owner}/{repo} and accepts them 1:1 on the PATCH body — so the flat desired key IS
+# the API key. Managed for fleet consistency (operator decision 2026-07-11): all three merge methods
+# allowed everywhere. Combined into RECONCILABLE_SETTING_KEYS below.
+_REPOSITORY_SETTING_KEYS = ("allow_merge_commit", "allow_squash_merge", "allow_rebase_merge")
+
+
+def map_repository_settings(repo: dict[str, Any]) -> dict[str, Any]:
+    """Map the live repo GET's top-level merge-method fields to the flat repository settings.
+
+    Only the toggles GitHub actually reports are returned; an undeterminable one is omitted
+    (so it shows as additive "to enable", never a false destructive) — mirroring
+    :func:`map_security_settings`.
+    """
+    return {key: bool(repo[key]) for key in _REPOSITORY_SETTING_KEYS if key in repo}
+
+
+def to_repository_payload(desired: dict[str, Any]) -> dict[str, Any]:
+    """Build a ``PATCH /repos/{owner}/{repo}`` body from the flat desired settings (§2.9).
+
+    The three PR merge-method toggles map 1:1 onto the repo PATCH body as top-level booleans;
+    only keys present in ``desired`` are included (subset behavior, mirroring
+    :func:`to_security_payload`).
+    """
+    return {key: bool(desired[key]) for key in _REPOSITORY_SETTING_KEYS if key in desired}
+
+
+# Every flat desired key the apply path can actually write (branch protection + repo security +
+# repo merge methods). A desired key outside this set is unreconcilable: filtered out before the
+# diff so a typo can't masquerade as never-converging "drift", and asserted against the baseline by
+# `aviato validate`.
+RECONCILABLE_SETTING_KEYS = (
+    frozenset(_BRANCH_PROTECTION_KEYS) | frozenset(_SECURITY_SETTING_KEYS) | frozenset(_REPOSITORY_SETTING_KEYS)
+)
 
 
 def to_branch_protection_payload(desired: dict[str, Any]) -> dict[str, Any]:
@@ -462,11 +493,13 @@ class GitHubPlatform:
                 rules = github.active_branch_rules(repo, branch)
                 protection = github.classic_branch_protection(repo, branch)
                 security = map_security_settings(github.repo_security_settings(repo))
+                repository = map_repository_settings(github.repo_merge_methods(repo))
         except github.GitHubAPIError as exc:
             raise github.SettingsReadError(exc.endpoint, exc.returncode, exc.stderr) from exc
-        # Flat merge: branch-protection fields + repo security toggles, matching the
-        # flat desired map the CLI passes (so security drift is visible, §5.6/§2.13).
-        return {**map_branch_settings(rules, protection), **security}
+        # Flat merge: branch-protection fields + repo security toggles + repo PR merge-method
+        # toggles, matching the flat desired map the CLI passes (so security and merge-method
+        # drift are visible, §5.6/§2.13/§2.9).
+        return {**map_branch_settings(rules, protection), **security, **repository}
 
     def read_rulesets(self, repo: str) -> list[dict[str, Any]]:
         """Full live ruleset payloads (incl. rules), for §5.6 presence + CONTENT drift (read-only).
@@ -922,6 +955,14 @@ class GitHubPlatform:
         else:
             api_payload = to_branch_protection_payload(payload)
             self._gh_input(["--method", "PUT", f"repos/{repo}/branches/{branch}/protection"], api_payload)
+
+        # Apply the repo-level PR merge-method toggles (§2.9) when present in the desired set.
+        # These are ordinary repo settings (not a §17-gated feature), so a plain diff-bound PATCH
+        # — no feature-unavailable handling. Applied BEFORE the security block so its
+        # unavailable-feature early-return cannot skip these toggles.
+        repository_payload = to_repository_payload(payload)
+        if repository_payload:
+            self._gh_input(["--method", "PATCH", f"repos/{repo}"], repository_payload)
 
         # Apply the repo-level security toggles (§2.13) when present in the desired set.
         # These are §17 operator-prerequisite features that can be UNAVAILABLE (e.g.

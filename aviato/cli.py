@@ -300,7 +300,7 @@ def _tri(value: bool | None) -> str:
 
 
 def _desired_settings(resolved: ResolvedSet) -> dict[str, Any]:
-    """Flat reconcilable settings: branch protection + repo security toggles (§5.6/§2.13).
+    """Flat reconcilable settings: branch protection + repo security + PR merge-method toggles (§5.6/§2.13/§2.9).
 
     Rulesets are applied separately (`apply-rulesets`) and are not part of the
     branch-protection/security reconcile diff.
@@ -315,6 +315,7 @@ def _desired_settings(resolved: ResolvedSet) -> dict[str, Any]:
     flat = {
         **resolved.settings.get("default_branch", {}),
         **resolved.settings.get("security", {}),
+        **resolved.settings.get("repository", {}),
     }
     return {key: value for key, value in flat.items() if key in RECONCILABLE_SETTING_KEYS}
 
