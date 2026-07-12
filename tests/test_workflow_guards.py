@@ -205,9 +205,9 @@ def test_docs_retention_defaults_to_keep_all() -> None:
     assert on_block["workflow_call"]["inputs"]["docs-retention"]["default"] == 0
     body = (WORKFLOWS / "reusable-docs-pages.yml").read_text(encoding="utf-8")
     assert 'if [ "${RETENTION}" -gt 0 ]' in body, "prune snippet must be gated on RETENTION -gt 0"
-    assert body.index('if [ "${RETENTION}" -gt 0 ]') < body.index('"mike", "delete"'), (
-        "the -gt 0 keep-all guard must precede the prune logic"
-    )
+    guard_pos = body.index('if [ "${RETENTION}" -gt 0 ]')
+    prune_pos = body.index('"mike", "delete"')
+    assert guard_pos < prune_pos, "the -gt 0 keep-all guard must precede the prune logic"
 
 
 def test_registry_publishes_run_in_deployment_environments() -> None:
