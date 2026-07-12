@@ -679,6 +679,29 @@ def test_app_store_receipt_is_persisted_by_isolated_release_evidence_job() -> No
     assert "$0 == end { replacing = 0" in run
 
 
+def test_app_store_release_evidence_sets_explicit_repository_context() -> None:
+    workflow = _load("reusable-app-store-connect.yml")
+    evidence = workflow["jobs"]["release-evidence"]
+    persist = next(step for step in evidence["steps"] if "gh release upload" in str(step.get("run", "")))
+
+    assert persist["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert persist["env"]["GH_REPO"] == "${{ github.repository }}"
+
+
+def test_app_store_receipt_asset_and_url_share_exact_basename() -> None:
+    workflow = _load("reusable-app-store-connect.yml")
+    evidence = workflow["jobs"]["release-evidence"]
+    persist = next(step for step in evidence["steps"] if "gh release upload" in str(step.get("run", "")))
+    run = persist["run"]
+
+    assert persist["env"]["ASSET_NAME"] == "app-store-connect-upload.log"
+    assert 'asset="receipt/${ASSET_NAME}"' in run
+    assert 'cp "${downloaded_receipt}" "${asset}"' in run
+    assert 'gh release upload "${RELEASE_TAG}" "${asset}" --clobber' in run
+    assert "/${ASSET_NAME})" in run
+    assert "#app-store-connect-upload.log" not in run
+
+
 def test_docs_deploy_callers_do_not_grant_inert_actions_read() -> None:
     for caller in sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml")):
         body = caller.read_text(encoding="utf-8")

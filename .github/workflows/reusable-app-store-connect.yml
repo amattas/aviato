@@ -495,20 +495,22 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.app-store-connect.outputs.release-tag }}
+          ASSET_NAME: app-store-connect-upload.log
         run: |
           set -euo pipefail
-          receipt="receipt/app-store-upload.log"
-          if [ ! -s "${receipt}" ]; then
+          downloaded_receipt="receipt/app-store-upload.log"
+          asset="receipt/${ASSET_NAME}"
+          if [ ! -s "${downloaded_receipt}" ]; then
             echo "::error::App Store Connect upload receipt is missing or empty."
             exit 1
           fi
+          cp "${downloaded_receipt}" "${asset}"
 
           # --clobber makes reruns replace the same durable release asset instead
           # of creating duplicates or failing after an otherwise successful upload.
-          gh release upload "${RELEASE_TAG}" \
-            "${receipt}#app-store-connect-upload.log" \
-            --clobber
+          gh release upload "${RELEASE_TAG}" "${asset}" --clobber
 
           start='<!-- aviato:app-store-connect-receipt:start -->'
           end='<!-- aviato:app-store-connect-receipt:end -->'
@@ -527,7 +529,7 @@ jobs:
           ${start}
           ## App Store Connect upload receipt
 
-          [Download the durable upload receipt](https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/app-store-connect-upload.log).
+          [Download the durable upload receipt](https://github.com/${GH_REPO}/releases/download/${RELEASE_TAG}/${ASSET_NAME}).
           ${end}
           EOF
           gh release edit "${RELEASE_TAG}" --notes-file "${notes}"
