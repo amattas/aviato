@@ -621,6 +621,18 @@ def test_codeql_severity_gate_runs_after_processed_analysis_and_before_heartbeat
             [[{"number": 1, "rule": {"id": "medium", "security_severity_level": "medium"}, "html_url": "https://e/1"}]],
             0,
         ),
+        (
+            [
+                [
+                    {
+                        "number": 5,
+                        "rule": {"id": "non-security", "security_severity_level": None},
+                        "html_url": "https://e/5",
+                    }
+                ]
+            ],
+            0,
+        ),
         ([[{"number": 2, "rule": {"id": "high", "security_severity_level": "high"}, "html_url": "https://e/2"}]], 1),
         (
             [
@@ -664,7 +676,29 @@ def test_codeql_severity_gate_deterministic_alert_fixtures(
     assert "fixture-token" not in result.stdout + result.stderr
 
 
-@pytest.mark.parametrize(("response", "exit_code"), [("not-json", 0), ("[]", 0), ("", 1)])
+@pytest.mark.parametrize(
+    ("response", "exit_code"),
+    [
+        ("not-json", 0),
+        ("[]", 0),
+        ("", 1),
+        (json.dumps([[{"number": 6, "rule": {"id": "missing"}, "html_url": "https://e/6"}]]), 0),
+        (
+            json.dumps(
+                [
+                    [
+                        {
+                            "number": "7",
+                            "rule": {"id": "unsafe\nrule", "security_severity_level": "high"},
+                            "html_url": "javascript:x",
+                        }
+                    ]
+                ]
+            ),
+            0,
+        ),
+    ],
+)
 def test_codeql_severity_gate_fails_closed_on_api_or_response_ambiguity(
     tmp_path, response: str, exit_code: int
 ) -> None:

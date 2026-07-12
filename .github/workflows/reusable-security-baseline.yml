@@ -221,12 +221,32 @@ jobs:
                       print("::error::CodeQL alert response contained an invalid alert shape.")
                       raise SystemExit(1)
                   rule = alert["rule"]
+                  if "security_severity_level" not in rule:
+                      print("::error::CodeQL alert response omitted security_severity_level.")
+                      raise SystemExit(1)
                   severity = rule.get("security_severity_level")
                   if severity not in (None, "low", "medium", "high", "critical"):
                       print("::error::CodeQL alert response contained an unknown security severity.")
                       raise SystemExit(1)
+                  number = alert.get("number")
+                  rule_id = rule.get("id")
+                  url = alert.get("html_url")
+                  if (
+                      not isinstance(number, int)
+                      or isinstance(number, bool)
+                      or not isinstance(rule_id, str)
+                      or not rule_id
+                      or "\n" in rule_id
+                      or "\r" in rule_id
+                      or not isinstance(url, str)
+                      or not url.startswith(("https://", "http://"))
+                      or "\n" in url
+                      or "\r" in url
+                  ):
+                      print("::error::CodeQL alert response contained unsafe or missing display fields.")
+                      raise SystemExit(1)
                   if severity in ("high", "critical"):
-                      blocking.append((alert.get("number"), rule.get("id"), severity, alert.get("html_url")))
+                      blocking.append((number, rule_id, severity, url))
 
           for number, rule_id, severity, url in blocking:
               print(f"::error::CodeQL alert #{number}: rule={rule_id} severity={severity} url={url}")
