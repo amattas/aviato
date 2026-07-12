@@ -1,4 +1,5 @@
 name: python-service
+identity: aviato-profile/python-service/v1
 workflows: python-service-wf
 scaffold: python-service-sc
 settings: baseline

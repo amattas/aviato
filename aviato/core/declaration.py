@@ -17,6 +17,7 @@ class Declaration:
 
     profile: str
     version: str
+    profile_identity: str | None = None
     docs: bool = False
     bootstrap: bool = False
     variables: dict[str, Any] = field(default_factory=dict)
@@ -40,7 +41,9 @@ def _as_bool(value: object, field_name: str, path: Path) -> bool:
     raise DeclarationError(f"declaration field {field_name!r} must be a boolean (true/false), got {value!r}: {path}")
 
 
-_KNOWN_DECLARATION_KEYS = frozenset({"profile", "version", "docs", "bootstrap", "variables", "overrides"})
+_KNOWN_DECLARATION_KEYS = frozenset(
+    {"profile", "profile-identity", "version", "docs", "bootstrap", "variables", "overrides"}
+)
 
 
 def load_declaration(path: Path) -> Declaration:
@@ -73,6 +76,9 @@ def load_declaration(path: Path) -> Declaration:
     for required in ("profile", "version"):
         if required not in data:
             raise DeclarationError(f"declaration missing required field {required!r}: {path}")
+    raw_identity = data.get("profile-identity")
+    if raw_identity is not None and (not isinstance(raw_identity, str) or not raw_identity.strip()):
+        raise DeclarationError(f"declaration field 'profile-identity' must be a non-empty string: {path}")
     # §6.1 (review #3): an UNQUOTED `version: 1.10` is parsed by YAML as the float 1.1 — a SILENT
     # corruption (1.10 != 1.1) that would otherwise be `str()`'d and stamped into managed markers
     # and the workflow `@ref`. Reject a float outright with a quote-it hint, and require the value
@@ -100,6 +106,7 @@ def load_declaration(path: Path) -> Declaration:
     return Declaration(
         profile=str(data["profile"]),
         version=version,
+        profile_identity=raw_identity,
         docs=_as_bool(data.get("docs", False), "docs", path),
         bootstrap=_as_bool(data.get("bootstrap", False), "bootstrap", path),
         # `or {}`: a bare `variables:` / `overrides:` key (no entries) loads as None,
@@ -128,6 +135,8 @@ def declaration_to_yaml(declaration: Declaration) -> str:
         "version": _canonical_version(declaration.version),
         "docs": declaration.docs,
     }
+    if declaration.profile_identity is not None:
+        payload["profile-identity"] = declaration.profile_identity
     # Only the Library's own declaration carries bootstrap: true (§5.10); a normal Consumer
     # declaration omits it entirely so the field never appears as noise on adopted repos.
     if declaration.bootstrap:

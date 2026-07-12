@@ -16,7 +16,7 @@ def _consumer(tmp_path: Path, pin: str) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
     (github / "aviato.yaml").write_text(
-        f"profile: python-library\nversion: {pin}\nvariables:\n"
+        f"profile: python-library\nprofile-identity: aviato-profile/python-library/v1\nversion: {pin}\nvariables:\n"
         "  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",
     )

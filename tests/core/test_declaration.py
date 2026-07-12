@@ -52,10 +52,32 @@ def test_non_mapping_is_error(tmp_path: Path) -> None:
 
 
 def test_round_trip(tmp_path: Path) -> None:
-    decl = Declaration(profile="p", version="2", docs=True, variables={"a": "b"}, overrides={"settings": {}})
+    decl = Declaration(
+        profile="p",
+        version="2",
+        profile_identity="aviato-profile/p/v1",
+        docs=True,
+        variables={"a": "b"},
+        overrides={"settings": {}},
+    )
     path = tmp_path / "aviato.yaml"
     dump_declaration(decl, tmp_path, "aviato.yaml")
     assert load_declaration(path) == decl
+    assert yaml.safe_load(path.read_text())["profile-identity"] == "aviato-profile/p/v1"
+
+
+def test_profile_identity_is_optional_for_legacy_declarations(tmp_path: Path) -> None:
+    path = tmp_path / "aviato.yaml"
+    _write(path, {"profile": "p", "version": "2"})
+    assert load_declaration(path).profile_identity is None
+
+
+@pytest.mark.parametrize("identity", ["", "   ", 3])
+def test_profile_identity_must_be_a_non_empty_string_when_present(tmp_path: Path, identity: object) -> None:
+    path = tmp_path / "aviato.yaml"
+    _write(path, {"profile": "p", "profile-identity": identity, "version": "2"})
+    with pytest.raises(DeclarationError, match="profile-identity"):
+        load_declaration(path)
 
 
 def test_unquoted_float_version_is_rejected_not_silently_corrupted(tmp_path: Path) -> None:

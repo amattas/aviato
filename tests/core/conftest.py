@@ -48,6 +48,7 @@ def module_root(tmp_path: Path) -> Path:
         root / "child.yaml",
         {
             "name": "child",
+            "identity": "aviato-profile/child/v1",
             "workflows": "child-wf",
             "scaffold": "child-sc",
             "settings": "child-set",

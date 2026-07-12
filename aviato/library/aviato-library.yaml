@@ -1,4 +1,5 @@
 name: aviato-library
+identity: aviato-profile/aviato-library/v1
 workflows: python-library-wf
 scaffold: aviato-library-sc
 settings: baseline

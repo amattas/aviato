@@ -16,6 +16,7 @@ def _decl(version: str = "v1", variables=None, overrides=None) -> Declaration:
     return Declaration(
         profile="child",
         version=version,
+        profile_identity="aviato-profile/child/v1",
         variables=_DEFAULT_VARS if variables is None else variables,
         overrides=overrides or {},
     )
@@ -90,7 +91,7 @@ def test_repin_flags_pipeline_add_that_collides_at_target(module_root: Path) -> 
     assert "c" in plan.conflicting_overrides
 
 
-def test_repin_refuses_when_profile_repurposed_at_target(module_root: Path, tmp_path: Path) -> None:
+def test_repin_allows_profile_evolution_at_target(module_root: Path, tmp_path: Path) -> None:
     # §5.12/§6.5: a profile NAME is a stable public identity. If the same name maps to a
     # different composition at the target version (here: its version-source artifact kind
     # changed), it has been repurposed → refuse, like "profile no longer exists".
@@ -102,8 +103,31 @@ def test_repin_refuses_when_profile_repurposed_at_target(module_root: Path, tmp_
     shutil.copytree(module_root, target)
     child = target / "child.yaml"
     doc = yaml.safe_load(child.read_text())
-    doc["version_source"] = {"locations": ["package.json"]}  # repurposed: different artifact identity
+    doc["version_source"] = {"locations": ["package.json"]}
+    doc["variables"].append({"name": "optional", "type": "string", "required": False})
+    child.write_text(yaml.safe_dump(doc, sort_keys=False))
+
+    assert plan_repin(Registry(module_root), _decl(), "v2.0.0", target_registry=Registry(target)).ok
+
+
+def test_repin_refuses_when_profile_identity_changes_at_target(module_root: Path, tmp_path: Path) -> None:
+    import shutil
+
+    import yaml
+
+    target = tmp_path / "target-modsrc"
+    shutil.copytree(module_root, target)
+    child = target / "child.yaml"
+    doc = yaml.safe_load(child.read_text())
+    doc["identity"] = "aviato-profile/repurposed/v1"
     child.write_text(yaml.safe_dump(doc, sort_keys=False))
 
     with pytest.raises(CompositionError):
         plan_repin(Registry(module_root), _decl(), "v2.0.0", target_registry=Registry(target))
+
+
+def test_repin_legacy_declaration_requires_sync_first(module_root: Path) -> None:
+    declaration = _decl()
+    declaration.profile_identity = None
+    with pytest.raises(CompositionError, match=r"sync.*current pin"):
+        plan_repin(Registry(module_root), declaration, "2", target_registry=Registry(module_root))

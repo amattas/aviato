@@ -21,7 +21,7 @@ from .core.bootstrap import is_library
 from .core.composition import resolve_profile
 from .core.declaration import Declaration, declaration_to_yaml, dump_declaration, load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
-from .core.errors import AviatoError, CompatibilityError, DeclarationError
+from .core.errors import AviatoError, CompatibilityError, CompositionError, DeclarationError
 from .core.file_drift_flow import _PROPOSABLE, FileDriftOutcome, run_file_drift
 from .core.fleet import RepoScan, scan_fleet
 from .core.marker import parse_marker_from_text
@@ -46,6 +46,7 @@ from .core.version import is_compatible, is_known_version_pin, most_restrictive_
 from .core.versioning import classify_commits, is_highest, next_version
 from .github import GitHubAPIError, SettingsReadError, gh_json_paginated_optional, is_archived
 from .github_platform import GitHubPlatform, UnmodeledProtectionError
+from .library_source import fetch_library_registry
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from .plugins.version_formats import bump_files
 from .policy import load_policy
@@ -62,6 +63,7 @@ DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
 # data, like the markers above.
 DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
 LIBRARY_REMOTE_URL = "https://github.com/amattas/aviato.git"
+LIBRARY_REPOSITORY = "amattas/aviato"
 DECLARATION_RELATIVE_PATH = ".github/aviato.yaml"
 
 
@@ -567,6 +569,7 @@ def _resolve_onboard_declaration(
     declaration = Declaration(
         profile=args.profile,
         version=pin,
+        profile_identity=registry.profile(args.profile).identity,
         docs=docs,
         variables=persisted,
         overrides=(existing.overrides if existing else {}),
@@ -922,18 +925,48 @@ def cmd_sync(args: argparse.Namespace) -> int:
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
+    installed_registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(root)
-        items = materialize_items(
-            registry,
-            declaration.profile,
-            declaration.variables,
-            pin=declaration.version,
-            docs=declaration.docs,
-            bootstrap=declaration.bootstrap,
-            overrides=declaration.overrides,
-        )
+        backfilled: Declaration | None = None
+        if declaration.profile_identity is None:
+            with fetch_library_registry(LIBRARY_REPOSITORY, declaration.version) as pinned_registry:
+                installed_identity = installed_registry.profile(declaration.profile).identity
+                pinned_identity = pinned_registry.profile(declaration.profile).identity
+                if pinned_identity != installed_identity:
+                    raise CompositionError(
+                        f"legacy declaration profile {declaration.profile!r} has identity {pinned_identity!r} "
+                        f"at its current pin, not the installed identity {installed_identity!r}; refusing to "
+                        "backfill or mutate the repository (§6.5)"
+                    )
+                backfilled = Declaration(
+                    profile=declaration.profile,
+                    version=declaration.version,
+                    profile_identity=pinned_identity,
+                    docs=declaration.docs,
+                    bootstrap=declaration.bootstrap,
+                    variables=declaration.variables,
+                    overrides=declaration.overrides,
+                )
+                items = materialize_items(
+                    pinned_registry,
+                    backfilled.profile,
+                    backfilled.variables,
+                    pin=backfilled.version,
+                    docs=backfilled.docs,
+                    bootstrap=backfilled.bootstrap,
+                    overrides=backfilled.overrides,
+                )
+        else:
+            items = materialize_items(
+                installed_registry,
+                declaration.profile,
+                declaration.variables,
+                pin=declaration.version,
+                docs=declaration.docs,
+                bootstrap=declaration.bootstrap,
+                overrides=declaration.overrides,
+            )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -965,6 +998,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
     if result.seed_integrity_unknown:
         _print_seed_integrity_error()
         return 2
+    if backfilled is not None:
+        _dump_consumer_declaration(backfilled, root)
+        print(f"wrote profile-identity {backfilled.profile_identity} to {declaration_path.relative_to(root)}")
     for output in result.written:
         print(f"wrote {output}")
     for output in result.seeded:
@@ -1206,12 +1242,25 @@ def cmd_repin(args: argparse.Namespace) -> int:
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(root)
-        base_resolved = resolve_profile(registry, declaration.profile)
+        base_resolved = resolve_profile(Registry(MODULE_SOURCE_ROOT), declaration.profile)
         resolve_declared_variables(base_resolved.variables, declaration.variables)
-        plan = plan_repin(registry, declaration, args.version)
+        with fetch_library_registry(LIBRARY_REPOSITORY, normalize_pin(args.version)) as target_registry:
+            plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
+            items = (
+                materialize_items(
+                    target_registry,
+                    declaration.profile,
+                    declaration.variables,
+                    pin=plan.target_version,
+                    docs=declaration.docs,
+                    bootstrap=declaration.bootstrap,
+                    overrides=declaration.overrides,
+                )
+                if plan.ok and args.write
+                else None
+            )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -1243,10 +1292,13 @@ def cmd_repin(args: argparse.Namespace) -> int:
     if (gate_error := _gate_repin_target(root, plan.target_version, args)) is not None:
         print(gate_error, file=sys.stderr)
         return 2
+    if items is None:
+        raise AssertionError("writeable re-pin plan did not materialize target-registry items")
 
     updated = Declaration(
         profile=declaration.profile,
         version=plan.target_version,
+        profile_identity=declaration.profile_identity,
         docs=declaration.docs,
         bootstrap=declaration.bootstrap,
         variables=declaration.variables,
@@ -1255,15 +1307,6 @@ def cmd_repin(args: argparse.Namespace) -> int:
     # R3-4-3: render the new-pin artifacts BEFORE persisting the pin, so a render-time failure aborts
     # the re-pin without leaving the declaration moved to the new pin but the managed files still at
     # the old one (a non-transactional state that a re-run would report as `X -> X` and re-fail).
-    items = materialize_items(
-        registry,
-        updated.profile,
-        updated.variables,
-        pin=updated.version,
-        docs=updated.docs,
-        bootstrap=updated.bootstrap,
-        overrides=updated.overrides,
-    )
     if preflight_seed_integrity(root, items, allow_fresh_seed_initialization=False).unknown:
         _print_seed_integrity_error()
         return 2
@@ -1324,10 +1367,23 @@ def _repin_proposal(args: argparse.Namespace) -> int:
         print(f"no declaration at {declaration_path}; onboard first", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(clone)
-        plan = plan_repin(registry, declaration, args.version)
+        with fetch_library_registry(LIBRARY_REPOSITORY, normalize_pin(args.version)) as target_registry:
+            plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
+            items = (
+                materialize_items(
+                    target_registry,
+                    declaration.profile,
+                    declaration.variables,
+                    pin=plan.target_version,
+                    docs=declaration.docs,
+                    bootstrap=declaration.bootstrap,
+                    overrides=declaration.overrides,
+                )
+                if plan.ok
+                else None
+            )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -1338,6 +1394,8 @@ def _repin_proposal(args: argparse.Namespace) -> int:
             print(f"conflicting pipelines.add override (now bundled at the target): {name}", file=sys.stderr)
         print("re-pin blocked; resolve the above first (§5.12).", file=sys.stderr)
         return 1
+    if items is None:
+        raise AssertionError("writeable re-pin proposal did not materialize target-registry items")
     if (gate_error := _gate_repin_target(clone, plan.target_version, args)) is not None:
         print(gate_error, file=sys.stderr)
         return 2
@@ -1345,24 +1403,12 @@ def _repin_proposal(args: argparse.Namespace) -> int:
     updated = Declaration(
         profile=declaration.profile,
         version=plan.target_version,
+        profile_identity=declaration.profile_identity,
         docs=declaration.docs,
         bootstrap=declaration.bootstrap,
         variables=declaration.variables,
         overrides=declaration.overrides,
     )
-    try:
-        items = materialize_items(
-            registry,
-            updated.profile,
-            updated.variables,
-            pin=updated.version,
-            docs=updated.docs,
-            bootstrap=updated.bootstrap,
-            overrides=updated.overrides,
-        )
-    except AviatoError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
     if preflight_seed_integrity(clone, items, allow_fresh_seed_initialization=False).unknown:
         _print_seed_integrity_error()
         return 2
@@ -1615,7 +1661,13 @@ def cmd_provision(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    declaration = Declaration(profile=args.profile, version=args.pin, docs=args.docs, variables=persisted)
+    declaration = Declaration(
+        profile=args.profile,
+        version=args.pin,
+        profile_identity=registry.profile(args.profile).identity,
+        docs=args.docs,
+        variables=persisted,
+    )
     desired = _desired_settings(resolved)
     items = materialize_items(registry, args.profile, variables, pin=args.pin, docs=args.docs)
 

@@ -1,4 +1,5 @@
 name: python-component
+identity: aviato-profile/python-component/v1
 # Zero-deploy profile (§10.3): GitHub release is the only output, no deploy plug-in.
 workflows: python-component-wf
 scaffold: python-component-sc

@@ -134,8 +134,9 @@ def test_security_floor_enforced_against_profile_data_not_just_overrides(module_
     )
     (root / "nosec-prof.yaml").write_text(
         _yaml.safe_dump(
-            {
-                "name": "nosec-prof",
+                {
+                    "name": "nosec-prof",
+                    "identity": "aviato-profile/nosec-prof/v1",
                 "workflows": "python-library-wf",
                 "scaffold": "python-library-sc",
                 "settings": "nosec",
@@ -160,7 +161,13 @@ def test_settings_bundle_child_bare_list_is_rejected(module_root: Path) -> None:
     )
     (module_root / "barelist-prof.yaml").write_text(
         yaml.safe_dump(
-            {"name": "barelist-prof", "workflows": "child-wf", "scaffold": "child-sc", "settings": "child-set2"}
+            {
+                "name": "barelist-prof",
+                "identity": "aviato-profile/barelist-prof/v1",
+                "workflows": "child-wf",
+                "scaffold": "child-sc",
+                "settings": "child-set2",
+            }
         ),
         encoding="utf-8",
     )

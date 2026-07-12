@@ -100,6 +100,7 @@ class Profile:
     """A thin manifest naming one bundle of each kind; no logic (§3.2, §4.1)."""
 
     name: str
+    identity: str
     workflows: str
     scaffold: str
     settings: str

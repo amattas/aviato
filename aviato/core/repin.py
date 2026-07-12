@@ -41,24 +41,6 @@ def _is_downgrade(current: str, target: str) -> bool:
         return False
 
 
-def _profile_identity(registry: Registry, profile: str) -> tuple[tuple[str, ...], ...]:
-    """A profile's stable identity for re-pin (§6.5, R1-7): a digest of its FULL resolved
-    composition, not just the version-source locations. A profile name is a public identity;
-    if the same name resolves to a different shape at another version (different pipelines,
-    template outputs, version-source, or deploy targets) it has been repurposed, not evolved.
-    Comparing the whole composition (not only version-source) catches a repurpose that keeps the
-    same version file but changes everything else."""
-    resolved = resolve_profile(registry, profile)
-    vs = resolved.version_source
-    return (
-        tuple(sorted(resolved.pipelines)),
-        tuple(sorted(t.output_path for t in resolved.templates)),
-        tuple(sorted(vs.locations)) if vs is not None else (),
-        tuple(sorted(spec.name for spec in resolved.variables)),
-        tuple(sorted(resolved.settings.keys())),
-    )
-
-
 def plan_repin(
     registry: Registry,
     declaration: Declaration,
@@ -69,26 +51,18 @@ def plan_repin(
     """Plan moving a Consumer to a different Library version (§5.12).
 
     Confirms the profile still exists (and resolves) at the target — a profile that
-    no longer exists raises :class:`CompositionError`. When a distinct
-    ``target_registry`` is given (a genuine cross-version move), the profile's
-    identity (its version-source artifact kind, §6.5) is compared between the current
-    and target versions; a changed identity means the name has been **repurposed** and
-    is refused, exactly like "profile no longer exists". Detects newly-required
+    no longer exists raises :class:`CompositionError`. The declaration's explicit,
+    immutable profile identity is compared with the target manifest; a changed identity
+    means the name has been **repurposed** and is refused, exactly like "profile no longer
+    exists". Evolvable profile composition is deliberately not part of identity. Detects newly-required
     variables (the plan is not ``ok`` until they are supplied) and orphaned overrides
     (settings keys no longer present). A move to a lower version is allowed but carries
     an explicit backward-movement warning. This is the only sanctioned way a pin moves;
     file drift never advances it.
 
-    **Day-zero limitation (§5.12/§6.5):** the §6.5 *repurpose* check (a profile name
-    rebound to a different composition at the target version) requires resolving the
-    profile **at both versions**, i.e. a distinct ``target_registry``. The operator's
-    installed CLI carries exactly **one** Library version, so the shipped ``aviato
-    repin`` path passes ``target_registry is registry`` and the identity comparison is
-    a structural no-op — it can still confirm the profile *resolves* at the target, but
-    cannot detect a cross-version repurpose. Detecting that needs the target version's
-    definitions present (a future fetch-the-target-registry step, or running the target
-    CLI). The cross-version logic is implemented and exercised by tests that supply a
-    second registry; it is dormant in the single-installed-CLI day-zero flow.
+    The binding resolves the requested published ref to one commit and supplies that
+    commit's registry as ``target_registry``. The same registry must then drive identity,
+    migration planning, and materialization.
     """
     # Canonicalize the target to bare SemVer (§6.1): an operator may type a legacy
     # ``vX.Y.Z`` out of muscle memory, but re-pin is a *write* and must never emit a
@@ -96,15 +70,18 @@ def plan_repin(
     target_version = normalize_pin(target_version)
 
     target_registry = target_registry or registry
-    if target_registry is not registry:
-        current_identity = _profile_identity(registry, declaration.profile)
-        target_identity = _profile_identity(target_registry, declaration.profile)
-        if current_identity != target_identity:
-            raise CompositionError(
-                f"profile {declaration.profile!r} has a different identity at the target version "
-                f"(version-source {list(target_identity)} vs {list(current_identity)}): it has been "
-                f"repurposed — refusing to re-pin (§5.12/§6.5). Treat it like a profile change."
-            )
+    if declaration.profile_identity is None:
+        raise CompositionError(
+            "legacy declaration has no profile identity; run `aviato sync` using its current pin first, "
+            "then retry the re-pin (§5.12/§6.5)"
+        )
+    target_identity = target_registry.profile(declaration.profile).identity
+    if declaration.profile_identity != target_identity:
+        raise CompositionError(
+            f"profile {declaration.profile!r} has identity {target_identity!r} at the target version, "
+            f"but the declaration records {declaration.profile_identity!r}: it has been repurposed — "
+            "refusing to re-pin (§5.12/§6.5). Treat it like a profile change."
+        )
     # Resolve the BASE profile at the target (no overrides): variables, settings, and the
     # pipeline set are all override-independent here, and resolving without overrides lets
     # us REPORT orphaned overrides (§5.12) rather than crash on a §4.2 remove-of-absent that

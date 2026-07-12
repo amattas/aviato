@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,17 @@ import yaml
 import aviato.cli as cli
 from aviato.cli import main
 from aviato.core.model import VariableSpec
+from aviato.core.registry import Registry
+from aviato.paths import MODULE_SOURCE_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _published_target_registry(monkeypatch: pytest.MonkeyPatch):
+    @contextmanager
+    def fake_fetch(repository: str, pin: str):  # noqa: ARG001
+        yield Registry(MODULE_SOURCE_ROOT)
+
+    monkeypatch.setattr(cli, "fetch_library_registry", fake_fetch)
 
 
 def _adopt(tmp_path: Path) -> None:
@@ -70,13 +82,11 @@ def test_repin_dry_run_then_write(
     assert "version=0" not in (tmp_path / "ruff.toml").read_text()
 
 
-def test_repin_rejects_invalid_declared_enum_before_write(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_repin_rejects_invalid_declared_enum_before_write(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     declaration_path = tmp_path / ".github" / "aviato.yaml"
     declaration_path.parent.mkdir()
     original = (
-        "profile: node-service\nversion: v0\nvariables:\n"
+        "profile: node-service\nprofile-identity: aviato-profile/node-service/v1\nversion: v0\nvariables:\n"
         "  project-name: sample\n  language-variant: ruby\n"
     )
     declaration_path.write_text(original, encoding="utf-8")
@@ -112,7 +122,14 @@ def test_repin_dry_run_rejects_invalid_declaration_before_success(
 ) -> None:
     declaration_path = tmp_path / ".github" / "aviato.yaml"
     declaration_path.parent.mkdir()
-    original = yaml.safe_dump({"profile": "python-library", "version": "0", "variables": variables})
+    original = yaml.safe_dump(
+        {
+            "profile": "python-library",
+            "profile-identity": "aviato-profile/python-library/v1",
+            "version": "0",
+            "variables": variables,
+        }
+    )
     declaration_path.write_text(original, encoding="utf-8")
     monkeypatch.setattr(cli, "resolve_profile", lambda *args, **kwargs: SimpleNamespace(variables=(spec,)))
 
@@ -125,13 +142,11 @@ def test_repin_dry_run_rejects_invalid_declaration_before_success(
     assert declaration_path.read_text(encoding="utf-8") == original
 
 
-def test_repin_dry_run_reports_orphaned_overrides_from_plan(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_repin_dry_run_reports_orphaned_overrides_from_plan(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     declaration_path = tmp_path / ".github" / "aviato.yaml"
     declaration_path.parent.mkdir()
     declaration_path.write_text(
-        "profile: python-library\nversion: 0\nvariables:\n"
+        "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\nversion: 0\nvariables:\n"
         "  distribution-name: acme\n  import-name: acme\n"
         "overrides:\n  settings:\n    nonexistent_key: true\n"
         "  pipelines:\n    remove: [ghost-pipeline]\n",
@@ -205,21 +220,13 @@ def test_repin_write_unknown_seed_integrity_mutates_nothing(
     _adopt(tmp_path)
     monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
     (tmp_path / ".github" / "aviato.seed.json").unlink()
-    before = {
-        path.relative_to(tmp_path): path.read_bytes()
-        for path in tmp_path.rglob("*")
-        if path.is_file()
-    }
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     capsys.readouterr()
 
     rc = main(["repin", str(tmp_path), "1.0.0", "--write", "--override-version-pin"])
 
     captured = capsys.readouterr()
-    after = {
-        path.relative_to(tmp_path): path.read_bytes()
-        for path in tmp_path.rglob("*")
-        if path.is_file()
-    }
+    after = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     assert rc == 2
     assert "--rebaseline-seeds" in captured.err
     assert after == before
@@ -230,7 +237,7 @@ def test_repin_open_pr_unknown_seed_integrity_opens_no_proposal(
 ) -> None:
     clone_path: Path | None = None
     original_declaration = (
-        "profile: python-library\nversion: 0\nvariables:\n"
+        "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\nversion: 0\nvariables:\n"
         "  distribution-name: acme\n  import-name: acme\n"
     )
     proposal_called = False

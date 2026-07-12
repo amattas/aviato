@@ -1,4 +1,5 @@
 name: node-service
+identity: aviato-profile/node-service/v1
 workflows: node-service-wf
 scaffold: node-service-sc
 settings: baseline

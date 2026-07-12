@@ -13,6 +13,9 @@ surface, specified normatively below.
 - **Format:** YAML.
 - **Versioned schema** with these fields:
   - `profile` (string) — the profile name (a stable public identity, §6.5).
+  - `profile-identity` (string) — the profile manifest's immutable identity, written by
+    onboarding (for example `aviato-profile/python-library/v1`). Legacy declarations
+    without this field must sync against their own declared pin before they can re-pin.
   - `version` (string) — the Library version pin: an exact version (`X.Y.Z`) or
     a floating major reference (`X`). Bare SemVer is canonical (matching `policy.yml`
     and the CLI); a legacy leading `v` is tolerated on read but never emitted.
@@ -86,10 +89,13 @@ operator edits that make these files operator-owned. (This replaces the earlier
 
 ### 6.5 Profile name stability
 
-A profile **name** is a stable public identity. Renaming or repurposing a name to
-a different composition is a breaking change handled like "profile no longer
-exists" (§5.12 refuses), and requires an alias/deprecation path if continuity is
-desired.
+A profile manifest carries an explicit immutable `identity` of the form
+`aviato-profile/<profile-name>/v1`; onboarding persists it as `profile-identity`.
+The identifier, not a digest of the profile's evolvable composition, establishes
+continuity. Templates, variables, settings, privileges, and version sources may
+legitimately evolve while identity remains stable. Changing the identity repurposes
+the name and is a breaking change handled like "profile no longer exists" (§5.12
+refuses); an alias/deprecation path is required if continuity is desired.
 
 ### 6.6 Variable schema
 

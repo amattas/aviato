@@ -41,7 +41,9 @@ def test_pipeline_module_declares_privileges() -> None:
 
 
 def test_profile_is_frozen() -> None:
-    p = Profile(name="x", workflows="w", scaffold="s", settings="g")
+    p = Profile(
+        name="x", identity="aviato-profile/x/v1", workflows="w", scaffold="s", settings="g"
+    )
     with pytest.raises(dataclasses.FrozenInstanceError):
         p.name = "y"  # type: ignore[misc]
 

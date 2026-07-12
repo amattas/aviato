@@ -1,4 +1,5 @@
 name: swift-app
+identity: aviato-profile/swift-app/v1
 workflows: swift-app-wf
 scaffold: swift-app-sc
 settings: baseline

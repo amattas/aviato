@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import shutil
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+import aviato.cli as cli
 from aviato.cli import main
+from aviato.core.errors import AviatoError
 from aviato.core.onboarding import materialize_items
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT
@@ -14,7 +18,7 @@ def _consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
     (github / "aviato.yaml").write_text(
-        "profile: python-library\nversion: v0\nvariables:\n"
+        "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\nversion: v0\nvariables:\n"
         "  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",
     )
@@ -25,7 +29,7 @@ def _invalid_consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
     (github / "aviato.yaml").write_text(
-        "profile: node-service\nversion: v0\nvariables:\n"
+        "profile: node-service\nprofile-identity: aviato-profile/node-service/v1\nversion: v0\nvariables:\n"
         "  project-name: sample\n  language-variant: ruby\n",
         encoding="utf-8",
     )
@@ -39,6 +43,56 @@ def test_sync_materializes_managed_and_seed_once(tmp_path: Path, capsys: pytest.
     assert "wrote .editorconfig" in out
     assert "seeded LICENSE" in out
     assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library version=v0")
+
+
+def test_sync_backfills_legacy_identity_from_its_declared_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    consumer = _consumer(tmp_path)
+    declaration = consumer / ".github" / "aviato.yaml"
+    declaration.write_text(declaration.read_text().replace("profile-identity: aviato-profile/python-library/v1\n", ""))
+    fetched: list[str] = []
+
+    @contextmanager
+    def fake_fetch(repository: str, pin: str):  # noqa: ARG001
+        fetched.append(pin)
+        yield Registry(MODULE_SOURCE_ROOT)
+
+    monkeypatch.setattr(cli, "fetch_library_registry", fake_fetch)
+    rc = main(["sync", str(consumer), "--rebaseline-seeds"])
+
+    assert rc == 0
+    assert fetched == ["v0"]
+    assert "wrote profile-identity aviato-profile/python-library/v1" in capsys.readouterr().out
+    assert "profile-identity: aviato-profile/python-library/v1" in declaration.read_text()
+
+
+@pytest.mark.parametrize("failure", ["unresolved", "identity-mismatch"])
+def test_legacy_sync_fetch_failure_or_identity_mismatch_mutates_nothing(
+    failure: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    consumer = _consumer(tmp_path)
+    declaration = consumer / ".github" / "aviato.yaml"
+    declaration.write_text(declaration.read_text().replace("profile-identity: aviato-profile/python-library/v1\n", ""))
+    target = tmp_path / "target-library"
+    shutil.copytree(MODULE_SOURCE_ROOT, target)
+    if failure == "identity-mismatch":
+        profile = target / "python-library.yaml"
+        profile.write_text(
+            profile.read_text().replace("aviato-profile/python-library/v1", "aviato-profile/repurposed/v1")
+        )
+
+    @contextmanager
+    def fake_fetch(repository: str, pin: str):  # noqa: ARG001
+        if failure == "unresolved":
+            raise AviatoError("pin does not resolve")
+        yield Registry(target)
+
+    monkeypatch.setattr(cli, "fetch_library_registry", fake_fetch)
+    before = {p.relative_to(consumer): p.read_bytes() for p in consumer.rglob("*") if p.is_file()}
+    assert main(["sync", str(consumer), "--rebaseline-seeds"]) == 2
+    after = {p.relative_to(consumer): p.read_bytes() for p in consumer.rglob("*") if p.is_file()}
+    assert after == before
 
 
 def test_sync_is_idempotent(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

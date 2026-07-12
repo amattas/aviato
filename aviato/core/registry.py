@@ -91,8 +91,12 @@ class Registry:
     def profile(self, name: str) -> Profile:
         doc = self.profile_doc(name)
         try:
+            identity = doc["identity"]
+            if not isinstance(identity, str) or not identity.strip():
+                raise CompositionError(f"profile {name!r} identity must be a non-empty string")
             return Profile(
                 name=doc["name"],
+                identity=identity,
                 workflows=doc["workflows"],
                 scaffold=doc["scaffold"],
                 settings=doc["settings"],
