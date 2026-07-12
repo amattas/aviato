@@ -24,6 +24,12 @@ from aviato.github_platform import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _codeql_merge_protection_probe_is_unknown_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unrelated platform tests isolated from the new remote ruleset read."""
+    monkeypatch.setattr(github, "codeql_merge_protection_present", lambda repo: None)
+
+
 def test_apply_settings_fails_closed_on_unresolved_default_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     # default_branch() returns "" on an ambiguous/transient API read. apply_settings must
     # NOT proceed with an empty branch: the resulting `branches//protection` URL would 404
@@ -1373,8 +1379,10 @@ def test_probe_health_reports_code_scanning_and_drift_state(monkeypatch: pytest.
     monkeypatch.setattr(github, "gh_json_optional", fake_optional)
     monkeypatch.setattr(github, "gh_json_paginated_optional", fake_paginated_optional)
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
+    monkeypatch.setattr(github, "codeql_merge_protection_present", lambda repo: True)
     _, _, remote = GitHubPlatform().probe_health("o/r", drift_workflow_path=".github/workflows/aviato-drift.yml")
     assert remote["code_scanning"] is True
+    assert remote["codeql_merge_protection"] is True
     assert remote["drift_automation_enabled"] is False  # disabled in the UI ⇒ flagged
     assert remote["drift_automation_last_run_ok"] is False  # last run failed ⇒ flagged
 
@@ -1395,7 +1403,9 @@ def test_probe_health_drift_workflow_absent_reads_disabled(monkeypatch: pytest.M
     monkeypatch.setattr(github, "gh_json_optional", fake_optional)
     monkeypatch.setattr(github, "gh_json_paginated_optional", fake_paginated_optional)
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
+    monkeypatch.setattr(github, "codeql_merge_protection_present", lambda repo: False)
     _, _, remote = GitHubPlatform().probe_health("o/r", drift_workflow_path=".github/workflows/aviato-drift.yml")
     assert remote["code_scanning"] is False
+    assert remote["codeql_merge_protection"] is False
     assert remote["drift_automation_enabled"] is False
     assert remote["drift_automation_last_run_ok"] is None

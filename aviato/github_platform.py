@@ -215,7 +215,9 @@ def current_consent(events: list[dict[str, Any]]) -> ConsentGrant | None:
 # Branch-ruleset rule types the desired settings model represents (§5.6). A live
 # rule of any OTHER type is unmodeled protection the reconcile must not silently
 # shadow (see apply_settings fail-closed guard).
-_MODELED_RULE_TYPES = frozenset({"pull_request", "non_fast_forward", "deletion", "required_status_checks"})
+_MODELED_RULE_TYPES = frozenset(
+    {"pull_request", "non_fast_forward", "deletion", "required_status_checks", "code_scanning"}
+)
 
 # Classic-protection toggles the wholesale branch-protection PUT (to_branch_protection_payload)
 # does NOT carry, so if any is ENABLED live it would be silently dropped (§2.4/§2.9). Each is a
@@ -714,6 +716,10 @@ class GitHubPlatform:
             remote["code_scanning"] = not isinstance(analyses, tuple)
         except github.GitHubAPIError:
             remote["code_scanning"] = None
+        try:
+            remote["codeql_merge_protection"] = github.codeql_merge_protection_present(repo)
+        except github.GitHubAPIError:
+            remote["codeql_merge_protection"] = None
         # findings 31/30: the drift automation's API state — a workflow disabled in the
         # GitHub UI (or persistently failing, e.g. silently throttled) previously read
         # "present: yes" from the local file alone, the exact state §5.4's probe exists

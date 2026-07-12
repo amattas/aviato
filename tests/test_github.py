@@ -26,6 +26,28 @@ def test_gh_json_can_allow_error(monkeypatch: pytest.MonkeyPatch) -> None:
     assert github.gh_json("repos/amattas/aviato/rulesets", default=[], allow_error=True) == []
 
 
+def test_codeql_merge_protection_requires_exact_active_branch_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"id": 7}, {"id": 8}])
+    payloads = {
+        7: {"target": "branch", "enforcement": "active", "rules": []},
+        8: {
+            "target": "branch",
+            "enforcement": "active",
+            "rules": [
+                {
+                    "type": "code_scanning",
+                    "parameters": {"code_scanning_tools": [dict(github.EXPECTED_CODEQL_RULE)]},
+                }
+            ],
+        },
+    }
+    monkeypatch.setattr(github, "repository_ruleset", lambda slug, rid: payloads[rid])
+    assert github.codeql_merge_protection_present("o/r") is True
+
+    payloads[8]["rules"][0]["parameters"]["code_scanning_tools"][0]["security_alerts_threshold"] = "critical"
+    assert github.codeql_merge_protection_present("o/r") is False
+
+
 def test_gh_json_optional_raises_on_non_404_containing_not_found_text(monkeypatch: pytest.MonkeyPatch) -> None:
     # A 403/auth/5xx whose stderr merely CONTAINS "not found"/"no such" must RAISE, not be
     # read as an empty 404 — keying off the bare phrase re-opens the §2.7 fail-OPEN read

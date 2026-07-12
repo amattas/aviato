@@ -9,6 +9,11 @@ security-baseline:
   privileges: ["contents: read", "pull-requests: read", "security-events: write", "actions: read"]
   runner: linux
   status_check: "security / Security baseline heartbeat"
+  # Kept in parity with the branch ruleset and GitHub doctor's live threshold probe.
+  code_scanning_tool:
+    tool: CodeQL
+    alerts_threshold: none
+    security_alerts_threshold: high_or_higher
 release-gate:
   privileges: ["actions: read", "contents: read", "pull-requests: read"]
   runner: linux

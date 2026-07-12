@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+
+import pytest
 import yaml
 
 from aviato.paths import REPO_ROOT
@@ -576,6 +581,111 @@ def test_security_baseline_retains_fail_closed_structure() -> None:
 
     gate_steps = [step.get("name", "") for step in jobs["heartbeat"].get("steps", []) if isinstance(step, dict)]
     assert any("Gate" in name for name in gate_steps), "missing 'Gate on required scans' step"
+
+
+def _codeql_severity_gate() -> tuple[dict, dict]:
+    wf = _load("reusable-security-baseline.yml")
+    job = wf["jobs"]["codeql"]
+    step = next(s for s in job["steps"] if s.get("name") == "Gate CodeQL high/critical alerts")
+    return job, step
+
+
+def test_codeql_severity_gate_runs_after_processed_analysis_and_before_heartbeat() -> None:
+    job, gate = _codeql_severity_gate()
+    analyze_index = next(
+        i for i, step in enumerate(job["steps"]) if step.get("uses") == "github/codeql-action/analyze@v4"
+    )
+    gate_index = job["steps"].index(gate)
+
+    assert job["steps"][analyze_index]["with"]["wait-for-processing"] is True
+    assert analyze_index < gate_index
+    assert gate["env"]["ANALYZED_REF"] == "${{ needs.resolve-target.outputs.canonical-ref }}"
+    assert gate["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert all("GH_TOKEN" not in step.get("env", {}) for step in job["steps"] if step is not gate)
+
+    run = gate["run"]
+    assert "--paginate" in run and "--slurp" in run
+    assert "state=open" in run and "tool_name=CodeQL" in run and "ref=" in run
+    assert "security_severity_level" in run
+    assert 'alert.get("number")' in run and "most_recent_instance" not in run
+
+    heartbeat = _load("reusable-security-baseline.yml")["jobs"]["heartbeat"]
+    assert "codeql" in heartbeat["needs"]
+
+
+@pytest.mark.parametrize(
+    ("pages", "expected_returncode"),
+    [
+        ([[]], 0),
+        (
+            [[{"number": 1, "rule": {"id": "medium", "security_severity_level": "medium"}, "html_url": "https://e/1"}]],
+            0,
+        ),
+        ([[{"number": 2, "rule": {"id": "high", "security_severity_level": "high"}, "html_url": "https://e/2"}]], 1),
+        (
+            [
+                [
+                    {
+                        "number": 3,
+                        "rule": {"id": "critical", "security_severity_level": "critical"},
+                        "html_url": "https://e/3",
+                    }
+                ]
+            ],
+            1,
+        ),
+        (
+            [
+                [],
+                [{"number": 4, "rule": {"id": "later", "security_severity_level": "high"}, "html_url": "https://e/4"}],
+            ],
+            1,
+        ),
+    ],
+)
+def test_codeql_severity_gate_deterministic_alert_fixtures(
+    tmp_path, pages: list[list[dict]], expected_returncode: int
+) -> None:
+    """Exercise the operative gate with deterministic alert pages (the local SARIF canary)."""
+    _, gate = _codeql_severity_gate()
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text('#!/bin/sh\nprintf "%s\\n" "$GH_RESPONSE"\n', encoding="utf-8")
+    fake_gh.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "GH_RESPONSE": json.dumps(pages),
+        "GH_TOKEN": "fixture-token",
+        "GITHUB_REPOSITORY": "o/r",
+        "ANALYZED_REF": "refs/heads/canary",
+    }
+    result = subprocess.run(["bash", "-c", gate["run"]], env=env, text=True, capture_output=True, check=False)
+    assert result.returncode == expected_returncode, result.stdout + result.stderr
+    assert "fixture-token" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(("response", "exit_code"), [("not-json", 0), ("[]", 0), ("", 1)])
+def test_codeql_severity_gate_fails_closed_on_api_or_response_ambiguity(
+    tmp_path, response: str, exit_code: int
+) -> None:
+    _, gate = _codeql_severity_gate()
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$GH_RESPONSE"\nexit "$GH_EXIT"\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "GH_RESPONSE": response,
+        "GH_EXIT": str(exit_code),
+        "GH_TOKEN": "fixture-token",
+        "GITHUB_REPOSITORY": "o/r",
+        "ANALYZED_REF": "refs/heads/canary",
+    }
+    result = subprocess.run(["bash", "-c", gate["run"]], env=env, text=True, capture_output=True, check=False)
+    assert result.returncode != 0, result.stdout + result.stderr
 
 
 def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:

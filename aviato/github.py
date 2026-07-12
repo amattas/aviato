@@ -52,6 +52,14 @@ def _branch_seg(branch: str) -> str:
 # performs no mutation; apply is the separate §5.7 operator-gated path).
 SETTINGS_READ_TOKEN_ENV = "AVIATO_SETTINGS_READ_TOKEN"
 
+# Canonical GitHub CodeQL merge threshold, mirrored by pipelines.yaml and the rendered
+# branch-ruleset payload. Tests bind those data surfaces to this live probe contract.
+EXPECTED_CODEQL_RULE: dict[str, str] = {
+    "tool": "CodeQL",
+    "alerts_threshold": "none",
+    "security_alerts_threshold": "high_or_higher",
+}
+
 
 @contextmanager
 def settings_read_token_scope() -> Iterator[None]:
@@ -309,6 +317,32 @@ def repository_rulesets(slug: str) -> list[dict[str, Any]]:
     # name here, so a match on a later page must not be hidden (else it POSTs a duplicate).
     response = gh_json_paginated(f"repos/{slug}/rulesets", default=[])
     return response if isinstance(response, list) else []
+
+
+def codeql_merge_protection_present(slug: str) -> bool:
+    """Whether an active branch ruleset carries the exact required CodeQL threshold.
+
+    Reads every paginated ruleset summary and then its full payload because the list
+    endpoint omits rules. API ambiguity raises through the normal fail-closed helpers;
+    callers such as doctor map that to unknown rather than absent.
+    """
+    for summary in repository_rulesets(slug):
+        ruleset_id = summary.get("id") if isinstance(summary, dict) else None
+        if ruleset_id is None:
+            raise GitHubAPIError(f"repos/{slug}/rulesets", 0, "ruleset summary omitted id")
+        payload = repository_ruleset(slug, ruleset_id)
+        if payload.get("target") != "branch" or payload.get("enforcement") != "active":
+            continue
+        for rule in payload.get("rules") or []:
+            if not isinstance(rule, dict) or rule.get("type") != "code_scanning":
+                continue
+            tools = (rule.get("parameters") or {}).get("code_scanning_tools") or []
+            if any(
+                isinstance(tool, dict) and all(tool.get(key) == value for key, value in EXPECTED_CODEQL_RULE.items())
+                for tool in tools
+            ):
+                return True
+    return False
 
 
 def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> str:

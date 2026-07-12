@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import copy
+
+import yaml
+
+from aviato import github
+from aviato.paths import POLICY_DATA_ROOT
 from aviato.policy import load_policy, release_tag_pattern
-from aviato.rulesets import render_all_rulesets
+from aviato.rulesets import render_all_rulesets, ruleset_content_drift
 
 
 def test_rendered_tag_ruleset_uses_policy_pattern() -> None:
@@ -66,6 +72,33 @@ def test_ruleset_with_profile_injects_language_verify_check() -> None:
     rule = next(r for p in payloads for r in p.get("rules", []) if r.get("type") == "required_status_checks")
     common = [c for c in rule["parameters"]["required_status_checks"] if c["context"] == "common-lint / Common lint"]
     assert len(common) == 1
+
+
+def test_every_rendered_branch_ruleset_has_exact_codeql_merge_gate() -> None:
+    pipeline = yaml.safe_load((POLICY_DATA_ROOT / "pipelines.yaml").read_text(encoding="utf-8"))["security-baseline"]
+    expected_tool = pipeline["code_scanning_tool"]
+    assert expected_tool == github.EXPECTED_CODEQL_RULE
+    payloads = render_all_rulesets()
+    branches = [payload for payload in payloads if payload["target"] == "branch"]
+    assert branches
+    for branch in branches:
+        rules = [rule for rule in branch["rules"] if rule["type"] == "code_scanning"]
+        assert len(rules) == 1
+        assert rules[0]["parameters"]["code_scanning_tools"] == [expected_tool]
+
+
+def test_codeql_ruleset_threshold_removal_or_weakening_is_drift() -> None:
+    branch = next(payload for payload in render_all_rulesets() if payload["target"] == "branch")
+    assert ruleset_content_drift(branch, copy.deepcopy(branch)) is False
+
+    missing = copy.deepcopy(branch)
+    missing["rules"] = [rule for rule in missing["rules"] if rule["type"] != "code_scanning"]
+    assert ruleset_content_drift(branch, missing) is True
+
+    weakened = copy.deepcopy(branch)
+    codeql = next(rule for rule in weakened["rules"] if rule["type"] == "code_scanning")
+    codeql["parameters"]["code_scanning_tools"][0]["security_alerts_threshold"] = "critical"
+    assert ruleset_content_drift(branch, weakened) is True
 
 
 def _approval_counts(payloads: list) -> list[int]:

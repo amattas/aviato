@@ -12,10 +12,14 @@ secret** (§2.13).
 **Steps:** **probe the required findings-upload privilege at runtime — hard-fail if
 absent** (a caller that did not grant it fails loudly, never silently passes;
 §8.9/§8.16) → run each category's engine (supplied by the language/deploy plug-in,
-§12/§13) → emit a **per-run heartbeat** (tool identity + completion marker) **even
-on zero findings**, so §5.4 can distinguish *ran-clean* from *never-ran* → upload
-findings as **SARIF to the platform Security surface** → apply the §2.13 gate:
-**fail verify / gate deploy on high+critical**, report medium/low. Secret-scanning
+§12/§13) → upload findings as **SARIF to the platform Security surface** → apply the
+§2.13 gate: **fail verify / gate deploy on high+critical**, report medium/low → after
+every gate passes, emit and upload a **per-run heartbeat** (tool identity + completion
+marker) **even on zero findings**, so §5.4 can distinguish *ran-clean* from
+*never-ran*. For CodeQL, the workflow paginates open alerts for the exact analyzed ref
+and tool after processing and the branch ruleset independently enforces
+`security_alerts_threshold=high_or_higher`; API or response ambiguity fails closed.
+Secret-scanning
 **push protection** blocks at push regardless.
 **Failure handling:** a scan that **cannot run** is a **failure surfaced in §5.4
 diagnosis**, never a silent skip — a repo must not read "clean" while its
@@ -27,11 +31,11 @@ flowchart TD
     A["PR · scheduled (jittered) · release-ref pre-deploy · deploy-time"] --> Priv{"Required findings-upload privilege present?"}
     Priv -- no --> Pf["HARD FAIL (never silent pass; §8.9/§8.16)"]
     Priv -- yes --> B["Run baseline scans:<br/>SAST · secret · dependency · (deploy) image+SBOM+provenance"]
-    B --> HB["Emit per-run heartbeat (tool id + completion), even on zero findings"]
-    HB --> C["Upload findings (SARIF) to platform Security surface"]
+    B --> C["Upload findings (SARIF) to platform Security surface"]
     C --> D{"High/critical finding?"}
     D -- yes --> E["FAIL verify / GATE deploy"]
     D -- no --> F["Report medium/low (no block)"]
+    F --> HB["Emit/upload clean heartbeat only after every gate passes"]
     G["Secret push-protection blocks at push, any severity"] -.-> B
     H["No heartbeat = broken (not clean) → §5.4 surfaces it"] -.-> HB
 ```

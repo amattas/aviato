@@ -168,18 +168,73 @@ jobs:
       - name: Autobuild
         uses: github/codeql-action/autobuild@v4
 
-      # §2.13 SAST gate (note): `analyze` uploads SARIF and SUCCEEDS even with high/critical
-      # alerts — CodeQL has no in-workflow fail-on-severity input. The high/critical SAST gate
-      # is therefore realized by the platform's **code-scanning check** (configured to fail PR
-      # checks at the high/critical threshold), a §17 operator prerequisite ("enable code
-      # scanning", probeable by §5.4). The heartbeat gate below only proves CodeQL RAN (not that
-      # it found nothing); severity gating for SAST is the platform check, unlike the dependency/
-      # secret scans which gate in-workflow via Trivy exit-code.
       - name: Analyze
         uses: github/codeql-action/analyze@v4
         with:
           ref: ${{ needs.resolve-target.outputs.canonical-ref }}
           sha: ${{ needs.resolve-target.outputs.analyzed-sha }}
+          wait-for-processing: true
+
+      # Defense in depth with the branch ruleset's CodeQL threshold: analyze has finished
+      # processing before this exact-ref/tool query runs. The API response is paginated and
+      # validated before an empty result is accepted; auth, rate-limit, schema, or JSON ambiguity
+      # fails closed. Do not print alert bodies or source-bearing instances.
+      - name: Gate CodeQL high/critical alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANALYZED_REF: ${{ needs.resolve-target.outputs.canonical-ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="$(python - <<'PY'
+          import os
+          from urllib.parse import quote
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          ref = quote(os.environ["ANALYZED_REF"], safe="")
+          print(f"repos/{repo}/code-scanning/alerts?state=open&ref={ref}&tool_name=CodeQL&per_page=100")
+          PY
+          )"
+          response="$(mktemp)"
+          trap 'rm -f "${response}"' EXIT
+          if ! gh api --paginate --slurp "${endpoint}" > "${response}"; then
+            echo "::error::CodeQL alert query failed; refusing to treat an ambiguous result as clean."
+            exit 1
+          fi
+          python - "${response}" <<'PY'
+          import json
+          import sys
+
+          try:
+              pages = json.load(open(sys.argv[1], encoding="utf-8"))
+          except (OSError, json.JSONDecodeError) as exc:
+              print(f"::error::CodeQL alert response was unreadable: {exc}")
+              raise SystemExit(1) from exc
+          if not pages or not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+              print("::error::CodeQL alert response did not contain an unambiguous paginated result.")
+              raise SystemExit(1)
+
+          blocking = []
+          for page in pages:
+              for alert in page:
+                  if not isinstance(alert, dict) or not isinstance(alert.get("rule"), dict):
+                      print("::error::CodeQL alert response contained an invalid alert shape.")
+                      raise SystemExit(1)
+                  rule = alert["rule"]
+                  severity = rule.get("security_severity_level")
+                  if severity not in (None, "low", "medium", "high", "critical"):
+                      print("::error::CodeQL alert response contained an unknown security severity.")
+                      raise SystemExit(1)
+                  if severity in ("high", "critical"):
+                      blocking.append((alert.get("number"), rule.get("id"), severity, alert.get("html_url")))
+
+          for number, rule_id, severity, url in blocking:
+              print(f"::error::CodeQL alert #{number}: rule={rule_id} severity={severity} url={url}")
+          if blocking:
+              print(f"::error::{len(blocking)} open high/critical CodeQL alert(s) block this ref.")
+              raise SystemExit(1)
+          print("No open high/critical CodeQL alerts for the analyzed ref and CodeQL tool.")
+          PY
 
   # PR-only diff-based review (richer signal on pull requests).
   dependency-review:
