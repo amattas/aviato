@@ -399,8 +399,9 @@ def to_security_payload(desired: dict[str, Any]) -> dict[str, Any]:
 # toggles (which nest under ``security_and_analysis``), GitHub returns these as TOP-LEVEL booleans
 # on GET /repos/{owner}/{repo} and accepts them 1:1 on the PATCH body — so the flat desired key IS
 # the API key. Managed for fleet consistency (operator decision 2026-07-11): all three merge methods
-# allowed everywhere. Combined into RECONCILABLE_SETTING_KEYS below.
-_REPOSITORY_SETTING_KEYS = ("allow_merge_commit", "allow_squash_merge", "allow_rebase_merge")
+# allowed everywhere. Combined into RECONCILABLE_SETTING_KEYS below. The key tuple is canonical in
+# github.MERGE_METHOD_KEYS (the read helper uses the same one) — a single copy, no drift.
+_REPOSITORY_SETTING_KEYS = github.MERGE_METHOD_KEYS
 
 
 def map_repository_settings(repo: dict[str, Any]) -> dict[str, Any]:
