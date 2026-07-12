@@ -178,9 +178,9 @@ jobs:
         run: eval "$DOCS_EMIT_COMMAND"
 
       # §8.14 monotonic guard (fail-closed): determine whether this release is the
-      # highest. When it is NOT (or the tag listing fails), the version cut, build,
-      # AND deploy are ALL skipped — so an older release cannot regress the published
-      # site / `latest` alias. Mirrors aviato.core.versioning.is_highest, and
+      # highest. When it is NOT (or the tag listing fails), the version STILL deploys,
+      # but the `latest` alias/set-default do not move — so an older release cannot
+      # regress the published site / `latest` alias. Mirrors aviato.core.versioning.is_highest, and
       # `aviato validate` (_check_monotonic_alias_parity) fails if this inline copy
       # drifts from it.
       - name: Monotonic guard
@@ -294,7 +294,7 @@ jobs:
           fetch-depth: 1
 
       - name: Fetch docs branch bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: aviato-docs-branch
           path: /tmp
