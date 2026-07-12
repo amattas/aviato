@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from aviato.core.declaration import Declaration
+from aviato.core.declaration import Declaration, load_declaration
 from aviato.core.errors import CompositionError, DeclarationError
 from aviato.core.model import TemplateModule
 from aviato.core.onboarding import (
@@ -153,6 +153,36 @@ def test_materialize_builds_scaffold_items_from_resolved_set() -> None:
     assert ".editorconfig" in by_output
     assert by_output[".editorconfig"].seed_once is False
     assert by_output["LICENSE"].seed_once is True  # non-annotatable, seed-once
+
+
+def test_yaml_date_scalar_materializes_with_deterministic_input_hash(tmp_path: Path) -> None:
+    declaration_path = tmp_path / "aviato.yaml"
+    declaration_path.write_text(
+        "profile: python-library\n"
+        "version: 1\n"
+        "variables:\n"
+        "  distribution-name: 2026-07-12\n"
+        "  import-name: acme\n",
+        encoding="utf-8",
+    )
+    declaration = load_declaration(declaration_path)
+    registry = Registry(MODULE_SOURCE_ROOT)
+
+    from_yaml = materialize_items(
+        registry,
+        declaration.profile,
+        declaration.variables,
+        pin=declaration.version,
+    )
+    from_string = materialize_items(
+        registry,
+        declaration.profile,
+        {"distribution-name": "2026-07-12", "import-name": "acme"},
+        pin=declaration.version,
+    )
+
+    assert {item.input_hash for item in from_yaml} == {item.input_hash for item in from_string}
+    assert [item.body for item in from_yaml] == [item.body for item in from_string]
 
 
 def test_materialize_renders_into_scaffold_then_writes(tmp_path: Path) -> None:

@@ -86,6 +86,29 @@ def test_scan_reports_malformed_declaration_as_error_not_crash(tmp_path: Path) -
     assert scans[0].error is not None  # malformed YAML reported, not raised
 
 
+def test_scan_contains_unserializable_variable_to_one_repository(tmp_path: Path) -> None:
+    bad = tmp_path / "bad-variable"
+    (bad / ".github").mkdir(parents=True)
+    (bad / ".github" / "aviato.yaml").write_text(
+        "profile: python-library\n"
+        "version: 1\n"
+        "variables:\n"
+        "  distribution-name: !!set {not-a-scalar: null}\n"
+        "  import-name: acme\n",
+        encoding="utf-8",
+    )
+    good = tmp_path / "good-variable"
+    _make_consumer(good, scaffold_all=False)
+
+    scans = scan_fleet([bad, good], Registry(MODULE_SOURCE_ROOT))
+
+    assert len(scans) == 2
+    assert scans[0].invalid_declaration is True
+    assert scans[0].error is not None and "distribution-name" in scans[0].error
+    assert scans[1].error is None
+    assert scans[1].statuses
+
+
 def test_scan_is_read_only(tmp_path: Path) -> None:
     consumer = tmp_path / "c"
     _make_consumer(consumer, scaffold_all=False)

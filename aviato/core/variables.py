@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import date, datetime
 from typing import Any
 
 from .errors import DeclarationError
@@ -8,6 +9,17 @@ from .model import VariableSpec
 
 _TRUE = {"true", "1", "yes", "on"}
 _FALSE = {"false", "0", "no", "off"}
+_YAML_SCALAR_TYPES = (str, bool, int, float, date, datetime, bytes)
+
+
+def _string_scalar(spec: VariableSpec, value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, _YAML_SCALAR_TYPES):
+        raise DeclarationError(
+            f"variable {spec.name!r} must be a scalar value, got {type(value).__name__}"
+        )
+    return str(value)
 
 
 def _coerce(spec: VariableSpec, value: Any) -> Any:
@@ -22,9 +34,11 @@ def _coerce(spec: VariableSpec, value: Any) -> Any:
         raise DeclarationError(f"variable {spec.name!r} is not a boolean: {value!r}")
     if spec.type == "enum":
         domain = spec.domain or ()
-        if value not in domain:
-            raise DeclarationError(f"variable {spec.name!r} value {value!r} not in domain {list(domain)}")
-    return value
+        canonical = _string_scalar(spec, value)
+        if canonical not in domain:
+            raise DeclarationError(f"variable {spec.name!r} value {canonical!r} not in domain {list(domain)}")
+        return canonical
+    return _string_scalar(spec, value)
 
 
 def resolve_variables(

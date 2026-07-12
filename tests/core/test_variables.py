@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from aviato.core import variables as variables_module
@@ -50,6 +52,32 @@ def test_boolean_coercion() -> None:
     specs = (VariableSpec("flag", "boolean"),)
     resolved = resolve_variables(specs, flags={"flag": "true"}, declaration={}, env={}, autodetect={})
     assert resolved["flag"] is True
+
+
+@pytest.mark.parametrize("value", [42, 3.5, True, date(2026, 7, 12)])
+def test_string_variables_canonicalize_non_none_yaml_scalars(value: object) -> None:
+    specs = (VariableSpec("name", "string"),)
+    resolved = resolve_variables(specs, flags={"name": value}, declaration={}, env={}, autodetect={})
+    assert resolved["name"] == str(value)
+
+
+def test_string_variables_preserve_explicit_none_as_unset() -> None:
+    specs = (VariableSpec("name", "string", required=False),)
+    resolved = resolve_variables(specs, flags={"name": None}, declaration={}, env={}, autodetect={})
+    assert resolved["name"] is None
+
+
+def test_enum_canonicalizes_scalar_before_string_domain_check() -> None:
+    specs = (VariableSpec("choice", "enum", domain=("1", "2")),)
+    resolved = resolve_variables(specs, flags={"choice": 1}, declaration={}, env={}, autodetect={})
+    assert resolved["choice"] == "1"
+
+
+@pytest.mark.parametrize("value", [["nested"], {"nested": "value"}, {"nested"}])
+def test_string_variables_reject_non_scalar_values(value: object) -> None:
+    specs = (VariableSpec("name", "string"),)
+    with pytest.raises(DeclarationError, match="name.*scalar"):
+        resolve_variables(specs, flags={"name": value}, declaration={}, env={}, autodetect={})
 
 
 def test_missing_required_variable_fails_closed_listing_name() -> None:
