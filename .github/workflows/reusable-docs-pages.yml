@@ -146,6 +146,27 @@ jobs:
           fi
           python3 -m pip install --quiet -r "${DOCS_REQUIREMENTS}"
 
+      - name: Fetch existing docs branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCS_BRANCH: ${{ inputs.docs-branch }}
+        run: |
+          set -euo pipefail
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          set +e
+          git ls-remote --exit-code --heads "${remote}" "refs/heads/${DOCS_BRANCH}" >/dev/null
+          status=$?
+          set -e
+          if [ "${status}" -eq 0 ]; then
+            git fetch "${remote}" "+refs/heads/${DOCS_BRANCH}:refs/heads/${DOCS_BRANCH}"
+          elif [ "${status}" -eq 2 ]; then
+            echo "No existing ${DOCS_BRANCH} branch (first docs deploy)."
+          else
+            echo "::error::could not query origin for ${DOCS_BRANCH} (exit ${status}); refusing to build an orphan docs branch (fail closed)."
+            exit 1
+          fi
+
       # §12: emit language API docs BEFORE the mike deploy so the generated reference
       # is captured in this version's snapshot. Runs with a read-only token (C12-W4).
       - name: Emit language API docs
@@ -203,8 +224,6 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # Continue the existing published history when the branch exists (first deploy: absent is fine).
-          git fetch origin "+refs/heads/${DOCS_BRANCH}:refs/heads/${DOCS_BRANCH}" || true
           # §8.14: EVERY policy-conformant release deploys its own version directory, but the
           # `latest` alias (and default) moves ONLY when this tag is the highest release.
           if [ "${HIGHEST}" = "true" ]; then

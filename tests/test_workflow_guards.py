@@ -354,6 +354,36 @@ def test_docs_publish_installs_pinned_toolchain_fail_closed() -> None:
     assert wf["jobs"]["push"]["permissions"] == {"contents": "write"}
 
 
+def test_docs_publish_fetches_existing_branch_authenticated_fail_closed() -> None:
+    # Review finding: the old "fetch existing docs branch" line used an unauthenticated
+    # ambient `git fetch origin ... || true`, which fails silently on private repos
+    # (checkout uses persist-credentials: false) — mike then builds an orphan branch and
+    # the push job's fast-forward check rejects it, breaking publishing permanently after
+    # the first release. The fetch must be a separate, step-scoped-token, fail-closed step.
+    wf = _load("reusable-docs-pages.yml")
+    build = wf["jobs"]["build"]
+    steps = build["steps"]
+    fetch = next(s for s in steps if s.get("name") == "Fetch existing docs branch")
+    run = fetch["run"]
+    assert fetch.get("env", {}).get("GH_TOKEN") == "${{ github.token }}"
+    assert "refusing to build an orphan docs branch" in run
+    assert "git ls-remote --exit-code --heads" in run
+    assert '"${status}" -eq 2' in run, "a missing branch (first deploy) must not fail closed"
+    assert "|| true" not in run
+
+    deploy = next(s for s in steps if s.get("name") == "Deploy version onto the local docs branch (mike)")
+    assert "git fetch origin" not in deploy["run"], "the old unauthenticated ambient fetch must be removed"
+    assert steps.index(fetch) < steps.index(deploy)
+
+    # C12-W4: the job token stays step-scoped — it must not leak into the consumer eval
+    # step or the mike deploy step's environment or command text.
+    emit = next(s for s in steps if s.get("name") == "Emit language API docs")
+    assert "GH_TOKEN" not in (emit.get("env") or {})
+    assert "GH_TOKEN" not in emit.get("run", "")
+    assert "GH_TOKEN" not in (deploy.get("env") or {})
+    assert "GH_TOKEN" not in deploy["run"]
+
+
 def test_common_lint_blocks_unsafe_npx_registry_fetches() -> None:
     # The npx gate runs as ONE implementation inside `aviato lint-actions` (no in-workflow
     # grep mirror to drift — R9-5); common lint must invoke it via the supply-chain step.
