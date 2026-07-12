@@ -376,6 +376,25 @@ def _desired_settings(resolved: ResolvedSet) -> dict[str, Any]:
     return {key: value for key, value in flat.items() if key in RECONCILABLE_SETTING_KEYS}
 
 
+def _deployment_environments(resolved: ResolvedSet, render_inputs: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return protected environments selected by the resolved pipeline render inputs.
+
+    Most deploy pipelines declare a fixed environment. A pipeline may instead bind
+    that default to a profile variable; in that case the same effective input rendered
+    into the caller workflow is authoritative for onboarding and remote health probes.
+    """
+    environments: set[str] = set()
+    for module in getattr(resolved, "pipeline_modules", ()):
+        environment = module.environment
+        if module.environment_input is not None:
+            selected = render_inputs.get(module.environment_input)
+            if selected is not None:
+                environment = str(selected)
+        if environment:
+            environments.add(environment)
+    return tuple(sorted(environments))
+
+
 def _drifted_rulesets(
     slug: str,
     platform: GitHubPlatform,
@@ -902,9 +921,7 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     for payload in render_all_rulesets(extra_status_checks=_profile_status_checks(args.profile)):
         print(f"- ruleset: {payload['name']}")
 
-    environments = sorted(
-        {module.environment for module in getattr(resolved, "pipeline_modules", ()) if module.environment}
-    )
+    environments = _deployment_environments(resolved, known)
     if environments:
         print("protected deployment environments:")
         for environment in environments:
@@ -952,12 +969,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     # per-run scan heartbeat. Best-effort — populated only if a repo slug resolves.
     slug = normalize_slug(remote_url(root))
     if slug and not args.no_remote_probe:
-        # R7-3-APPSTORE-ENV: derive the list of environments to probe from the resolved profile's
-        # pipelines (plug-in DATA, §9b — the binding/core stay agnostic to which capability requires
-        # which env name). Today only app-store-connect declares one; future deploy pipelines that
-        # require a protected environment can add the field without code changes here.
-        environments = tuple(sorted({p.environment for p in resolved.pipeline_modules if p.environment}))
+        # R7-3-APPSTORE-ENV: derive the environments from resolved pipeline DATA and the same
+        # effective variable inputs rendered into configurable callers. The binding remains
+        # agnostic to both capability and environment names, while fixed environments remain fixed.
         effective_variables = resolve_declared_variables(resolved.variables, declaration.variables)
+        environments = _deployment_environments(resolved, effective_variables)
         serve_pages = effective_variables.get("serve-pages") is True
         default_branch_settings = resolved.settings.get("default_branch", {})
         desired_rulesets = tuple(

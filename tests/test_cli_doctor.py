@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from aviato import cli, rulesets
 from aviato.cli import main
@@ -65,6 +66,90 @@ def test_doctor_probes_pages_only_for_docs_and_serve_pages(
     expected_inputs = cli._diagnosis_probe_inputs(cli.Registry(cli.MODULE_SOURCE_ROOT), "python-service")
     assert {key: diagnosis_calls[0][key] for key in expected_inputs} == expected_inputs
     assert "ruleset_protection_full: no" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("declared_environment", "expected_environment"),
+    [(None, "app-store-connect"), ("production", "production")],
+)
+def test_doctor_probes_swift_resolved_deployment_environment(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    declared_environment: str | None,
+    expected_environment: str,
+) -> None:
+    variable_lines = [
+        "  product-scheme: Acme",
+        "  workspace: Acme.xcworkspace",
+        "  bundle-identifier: com.acme.app",
+        "  team-id: ABCDE12345",
+        "  export-method: app-store",
+    ]
+    if declared_environment is not None:
+        variable_lines.append(f"  environment-name: {declared_environment}")
+    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration.parent.mkdir(parents=True)
+    declaration.write_text(
+        "profile: swift-app\nversion: '0'\nvariables:\n" + "\n".join(variable_lines) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "_expected_artifacts", lambda *args, **kwargs: ())
+    monkeypatch.setattr(
+        cli,
+        "diagnose",
+        lambda *args, **kwargs: DiagnosisReport(drift_automation_present=True),
+    )
+    monkeypatch.setattr(cli, "remote_url", lambda root: "https://github.com/o/r.git")
+    seen: list[tuple[str, ...]] = []
+
+    def probe(self, repo, **kwargs):
+        seen.append(kwargs["environments"])
+        return None, None, {"drift_automation_enabled": True}
+
+    monkeypatch.setattr(cli.GitHubPlatform, "probe_health", probe)
+
+    assert main(["doctor", str(tmp_path)]) == 0
+    assert seen == [(expected_environment,)]
+
+
+@pytest.mark.parametrize(
+    ("profile", "variables", "expected_environment"),
+    [
+        ("python-library", {"distribution-name": "acme", "import-name": "acme"}, "pypi"),
+        ("python-component", {"distribution-name": "acme", "import-name": "acme"}, None),
+    ],
+)
+def test_doctor_preserves_static_or_absent_deployment_environments(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    profile: str,
+    variables: dict[str, str],
+    expected_environment: str | None,
+) -> None:
+    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration.parent.mkdir(parents=True)
+    declaration.write_text(
+        yaml.safe_dump({"profile": profile, "version": "0", "variables": variables}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "_expected_artifacts", lambda *args, **kwargs: ())
+    monkeypatch.setattr(
+        cli,
+        "diagnose",
+        lambda *args, **kwargs: DiagnosisReport(drift_automation_present=True),
+    )
+    monkeypatch.setattr(cli, "remote_url", lambda root: "https://github.com/o/r.git")
+    seen: list[tuple[str, ...]] = []
+
+    def probe(self, repo, **kwargs):
+        seen.append(kwargs["environments"])
+        return None, None, {"drift_automation_enabled": True}
+
+    monkeypatch.setattr(cli.GitHubPlatform, "probe_health", probe)
+
+    assert main(["doctor", str(tmp_path)]) == 0
+    expected = () if expected_environment is None else (expected_environment,)
+    assert seen == [expected]
 
 
 def test_onboard_secret_value_never_prints_in_doctor_facing_plan(tmp_path, monkeypatch, capsys) -> None:

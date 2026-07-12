@@ -55,6 +55,10 @@ class PipelineModule:
     # plug-in data and the binding probes the environment's existence + required-reviewer settings.
     # The core just relays the per-pipeline string (None = no environment prerequisite).
     environment: str | None = None
+    # Optional resolved profile variable that overrides ``environment``. This keeps the
+    # binding data-driven while allowing a caller workflow's rendered environment input
+    # to select the actual protected environment (for example a production deploy).
+    environment_input: str | None = None
 
 
 @dataclass(frozen=True)

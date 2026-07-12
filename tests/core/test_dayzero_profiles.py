@@ -56,6 +56,8 @@ def test_app_store_pipeline_declares_secrets_and_macos(registry: Registry) -> No
     asc = next(m for m in rs.pipeline_modules if m.name == "app-store-connect")
     assert "APP_STORE_CONNECT_KEY_ID" in asc.secrets
     assert asc.runner == "macos"
+    assert asc.environment == "app-store-connect"
+    assert asc.environment_input == "environment-name"
 
 
 @pytest.mark.parametrize("name", DAYZERO)

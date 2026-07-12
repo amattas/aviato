@@ -138,6 +138,28 @@ def test_onboard_plan_lists_protected_deployment_environment_requirements(
         assert f"- {expected_environment}: must exist with at least one required reviewer before deploy" in output
 
 
+def test_swift_onboard_plan_uses_resolved_environment_name_override(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert (
+        main(
+            [
+                "onboard",
+                "owner/repo",
+                "--profile",
+                "swift-app",
+                "--var",
+                "environment-name=production",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+
+    assert "- production: must exist with at least one required reviewer before deploy" in output
+    assert "- app-store-connect:" not in output
+
+
 def test_reonboard_without_pin_preserves_existing(tmp_path: Path) -> None:
     # §5.12: onboarding is not a re-pin. A fresh adopt with a legacy ``v2.0.0`` is
     # canonicalized to bare on write (§6.1); re-onboarding without --pin must preserve it.

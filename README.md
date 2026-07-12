@@ -189,7 +189,8 @@ use the literal `EXAMPLE_PIN` placeholder instead of a production ref. Use
 `aviato onboard TARGET --profile PROFILE` to list the exact artifacts, secrets,
 rulesets, and protected deployment environments for a repository. The Python
 library plan requires `pypi`, container profiles require `ghcr`, and the Swift
-app plan requires `app-store-connect`; each named environment must exist with at
+app plan requires the configured `environment-name` (`app-store-connect` by
+default); each named environment must exist with at
 least one required reviewer before deployment. Zero-deploy profiles explicitly
 report that none are required. The common scaffold also seeds `CONTRIBUTING.md`,
 `.github/CODEOWNERS`, and issue/PR templates (seed-once; the consumer owns them

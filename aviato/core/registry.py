@@ -163,6 +163,7 @@ class Registry:
             status_check=doc.get("status_check"),
             always_on=bool(doc.get("always_on", False)),
             environment=doc.get("environment"),
+            environment_input=doc.get("environment_input"),
         )
 
     def always_on_pipelines(self) -> tuple[str, ...]:

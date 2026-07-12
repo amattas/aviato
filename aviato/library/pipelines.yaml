@@ -72,6 +72,9 @@ app-store-connect:
   # least one required reviewer. The environment name is plug-in DATA (not core knowledge); doctor
   # reads it from the resolved pipeline modules to probe existence + reviewer count.
   environment: app-store-connect
+  # The Swift caller renders this profile variable into the reusable workflow input;
+  # onboarding and doctor must protect/probe that effective name, not only the default.
+  environment_input: environment-name
   secrets:
     - APP_STORE_CONNECT_ISSUER_ID
     - APP_STORE_CONNECT_KEY_ID
