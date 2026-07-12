@@ -2,6 +2,8 @@ from pathlib import Path
 
 import yaml
 
+from aviato import policy
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -16,5 +18,6 @@ def test_bundled_zizmor_config_encodes_the_pin_policy() -> None:
     policies = cfg["rules"]["unpinned-uses"]["config"]["policies"]
     assert policies["actions/*"] == "ref-pin"
     assert policies["github/*"] == "ref-pin"
-    assert policies["amattas/aviato/*"] == "ref-pin"  # the one sanctioned mutable Library self-ref
+    repository = policy.library_repository(policy.load_policy())
+    assert policies[f"{repository}/*"] == "ref-pin"  # the one sanctioned mutable Library self-ref
     assert policies["*"] == "hash-pin"  # everything else SHA-required

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,14 @@ def release_tag_pattern(policy: dict[str, Any]) -> str:
     value = get_path(policy, "release.tag_pattern")
     if not isinstance(value, str) or not value:
         raise ValueError("release.tag_pattern must be a non-empty string")
+    return value
+
+
+def library_repository(policy: dict[str, Any]) -> str:
+    """Return the canonical GitHub ``owner/repository`` identity for the Library."""
+    value = get_path(policy, "library.repository")
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value) is None:
+        raise ValueError("library.repository must be a GitHub owner/repository slug")
     return value
 
 

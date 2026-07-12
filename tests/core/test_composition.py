@@ -320,7 +320,7 @@ def test_scaffold_placeholders_have_a_render_source() -> None:
     from aviato.paths import MODULE_SOURCE_ROOT
 
     placeholder = re.compile(r"\{\{\s*(\w[\w-]*)\s*\}\}")
-    render_provided = set(render_variables({}, pin="0", docs=True).keys())
+    render_provided = set(render_variables({}, pin="0", docs=True, library_repository="example/library").keys())
     reg = Registry(MODULE_SOURCE_ROOT)
     profiles = (
         "python-library",

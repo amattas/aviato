@@ -1,6 +1,6 @@
 # Contributing
 
-This repository is managed by [Aviato](https://github.com/amattas/aviato)
+This repository is managed by [Aviato](https://github.com/{{ aviato-library-repository }})
 conventions; CI, releases, and protections are automated.
 
 - **Commits follow [Conventional Commits](https://www.conventionalcommits.org/)**

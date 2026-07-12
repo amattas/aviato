@@ -118,6 +118,7 @@ jobs:
             fi
             python -m pip install -e .
           else
+            # library.repository copy; aviato validate binds this URL to packaged policy.yml.
             python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
           fi
 

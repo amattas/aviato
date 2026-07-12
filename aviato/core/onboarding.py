@@ -40,6 +40,7 @@ def render_variables(
     pin: str,
     docs: bool = False,
     bootstrap: bool = False,
+    library_repository: str | None = None,
     derived_rules: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Augment the resolved variables with derived render values.
@@ -55,12 +56,15 @@ def render_variables(
     """
     derived = dict(variables)
     derived["aviato-ref"] = pin
+    if library_repository is None:
+        raise CompositionError("library_repository is required for Library rendering")
+    derived["aviato-library-repository"] = library_repository
     if bootstrap:
         derived["aviato-workflow-prefix"] = "./.github/workflows/"
         derived["aviato-workflow-suffix"] = ""
         derived["aviato-local-install"] = "true"
     else:
-        derived["aviato-workflow-prefix"] = "amattas/aviato/.github/workflows/"
+        derived["aviato-workflow-prefix"] = f"{library_repository}/.github/workflows/"
         derived["aviato-workflow-suffix"] = f"@{pin}"
         derived["aviato-local-install"] = "false"
     derived["docs"] = "true" if docs else "false"
@@ -168,7 +172,12 @@ def resolved_artifacts(
         name: value for name, value in effective_variables.items() if value is not None and name not in secret_names
     }
     render_vars = render_variables(
-        effective_variables, pin=pin, docs=docs, bootstrap=bootstrap, derived_rules=derived_rules
+        effective_variables,
+        pin=pin,
+        docs=docs,
+        bootstrap=bootstrap,
+        library_repository=registry.library_repository(),
+        derived_rules=derived_rules,
     )
     applicable = applicable_templates(resolved, render_vars)
     check_output_collisions(applicable)

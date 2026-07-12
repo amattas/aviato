@@ -5,6 +5,7 @@ from typing import Any
 
 import yaml
 
+from ..policy import library_repository, load_policy
 from .errors import CompositionError
 from .model import (
     PipelineModule,
@@ -84,6 +85,10 @@ class Registry:
 
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
+
+    def library_repository(self) -> str:
+        """The neutral Library repository identity supplied by packaged policy data."""
+        return library_repository(load_policy(self.root))
 
     def profile_doc(self, name: str) -> dict[str, Any]:
         return _load_doc(self.root, f"{name}.yaml")

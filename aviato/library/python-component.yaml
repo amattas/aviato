@@ -25,6 +25,7 @@ variables:
   # Same strict-mypy default as python-library; a consumer can disable without
   # hand-editing the managed caller (review finding 49).
   - {name: run-typecheck, type: string, required: false, default: "true"}
+  - {name: typecheck-command, type: string, required: false, default: "python -m mypy --strict ."}
 version_source:
   locations: [pyproject.toml]
 toolchain:

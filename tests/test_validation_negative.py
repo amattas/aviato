@@ -428,6 +428,29 @@ def test_library_slug_copy_drift_is_detected(repo_copy: Path) -> None:
     assert any("finding 41" in e for e in validate(repo_copy))
 
 
+def test_library_repository_policy_mutation_binds_validation_and_remote(repo_copy: Path) -> None:
+    from aviato import cli
+    from aviato.policy import library_repository, load_policy
+
+    policy_path = repo_copy / "aviato/library/policy.yml"
+    text = policy_path.read_text(encoding="utf-8")
+    policy_path.write_text(
+        text.replace(
+            "library:\n  repository: amattas/aviato",
+            "library:\n  repository: example/library",
+        ),
+        encoding="utf-8",
+    )
+    policy = load_policy(repo_copy / "aviato/library")
+
+    assert library_repository(policy) == "example/library"
+    assert cli._library_remote_url(policy) == "https://github.com/example/library.git"
+    errors = validate(repo_copy)
+    assert any("reusable-release.yml" in error and "example/library" in error for error in errors)
+    assert any("zizmor.yml" in error and "example/library" in error for error in errors)
+    assert any("templates/profile-python-library.yml" in error and "example/library" in error for error in errors)
+
+
 def test_scaffold_cron_drift_is_detected(repo_copy: Path) -> None:
     # finding 43: hand-duplicated CI schedules must stay in lockstep across callers.
     body = repo_copy / "aviato/library/scaffold/files/wf-python-service.yml"

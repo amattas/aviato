@@ -83,6 +83,37 @@ def test_python_component_has_no_deploy(registry: Registry) -> None:
     assert "ghcr-publish" not in pipelines
 
 
+def test_python_scaffold_requires_supported_runtime_and_ruff_target(registry: Registry) -> None:
+    from aviato.core.onboarding import resolved_artifacts
+
+    artifacts = resolved_artifacts(
+        registry,
+        "python-component",
+        {"distribution-name": "acme", "import-name": "acme"},
+        pin="1.2.3",
+    )
+    bodies = {artifact.output: artifact.body for artifact in artifacts}
+    assert 'requires-python = ">=3.12"' in bodies["pyproject.toml"]
+    assert 'target-version = "py312"' in bodies["ruff.toml"]
+
+
+def test_python_component_custom_typecheck_command_is_rendered(registry: Registry) -> None:
+    from aviato.core.onboarding import resolved_artifacts
+
+    artifacts = resolved_artifacts(
+        registry,
+        "python-component",
+        {
+            "distribution-name": "acme",
+            "import-name": "acme",
+            "typecheck-command": "python -m mypy --strict src/acme",
+        },
+        pin="1.2.3",
+    )
+    ci = next(artifact.body for artifact in artifacts if artifact.output == ".github/workflows/aviato-ci.yml")
+    assert 'typecheck-command: "python -m mypy --strict src/acme"' in ci
+
+
 def test_services_deploy_ghcr(registry: Registry) -> None:
     assert "ghcr-publish" in resolve_profile(registry, "python-service").pipelines
     assert "ghcr-publish" in resolve_profile(registry, "node-service").pipelines

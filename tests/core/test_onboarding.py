@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import shutil
 from pathlib import Path
 
 import pytest
@@ -62,6 +64,44 @@ def test_pin_is_stamped_into_generated_workflows() -> None:
     assert "aviato-ref: v1.2.3" in drift
 
 
+def test_library_repository_policy_drives_rendered_references(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    shutil.copytree(MODULE_SOURCE_ROOT, library)
+    policy = library / "policy.yml"
+    policy.write_text(
+        policy.read_text(encoding="utf-8").replace(
+            "library:\n  repository: amattas/aviato",
+            "library:\n  repository: example/library",
+        ),
+        encoding="utf-8",
+    )
+
+    items = {
+        item.output: item
+        for item in materialize_items(
+            Registry(library),
+            "python-library",
+            PYTHON_VARIABLES,
+            pin="1.2.3",
+        )
+    }
+
+    assert "uses: example/library/.github/workflows/" in items[".github/workflows/aviato-ci.yml"].body
+    assert "https://github.com/example/library" in items["CONTRIBUTING.md"].body
+    assert "amattas/aviato" not in items[".github/workflows/aviato-ci.yml"].body
+
+
+def test_core_does_not_name_the_library_repository() -> None:
+    core = Path(__file__).resolve().parents[2] / "aviato" / "core"
+    string_literals = {
+        node.value
+        for path in core.rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert not any("amattas/aviato" in value for value in string_literals)
+
+
 def test_bootstrap_uses_local_workflow_refs_and_local_install() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     items = {
@@ -105,9 +145,23 @@ def test_javascript_variant_omits_tsconfig_and_disables_typecheck() -> None:
     # (no language literal in core); apply it the same way resolved_artifacts does.
     rules = reg.profile_doc("node-service")["derived_variables"]
     assert (
-        render_variables({"language-variant": "javascript"}, pin="0", derived_rules=rules)["run-typecheck"] == "false"
+        render_variables(
+            {"language-variant": "javascript"},
+            pin="0",
+            library_repository="example/library",
+            derived_rules=rules,
+        )["run-typecheck"]
+        == "false"
     )
-    assert render_variables({"language-variant": "typescript"}, pin="0", derived_rules=rules)["run-typecheck"] == "true"
+    assert (
+        render_variables(
+            {"language-variant": "typescript"},
+            pin="0",
+            library_repository="example/library",
+            derived_rules=rules,
+        )["run-typecheck"]
+        == "true"
+    )
 
 
 @pytest.mark.parametrize("value", ["ruby", "", 1, True])

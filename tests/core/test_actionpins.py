@@ -26,6 +26,14 @@ def test_first_party_and_library_self_ref_exempt():
     assert unpinned_third_party_uses("      - uses: amattas/aviato/.github/workflows/x.yml@v1\n") == []
 
 
+def test_library_self_ref_exemption_accepts_policy_repository() -> None:
+    text = "      - uses: example/library/.github/workflows/x.yml@v1\n"
+    assert unpinned_third_party_uses(text, library_repository="example/library") == []
+    assert unpinned_third_party_uses(text, library_repository="someone/else") == [
+        "example/library/.github/workflows/x.yml@v1"
+    ]
+
+
 def test_uses_with_space_before_colon_still_checked():
     assert unpinned_third_party_uses("      - uses : third/action@main\n") == ["third/action@main"]
 

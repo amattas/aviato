@@ -51,7 +51,7 @@ from .github_platform import GitHubPlatform, UnmodeledProtectionError
 from .library_source import fetch_library_registry
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from .plugins.version_formats import bump_files
-from .policy import load_policy
+from .policy import library_repository, load_policy
 from .repos import git_root, is_owner_repo_slug, normalize_slug, remote_url, working_tree_clean
 from .rulesets import apply_rulesets, render_all_rulesets
 from .validation import validate
@@ -64,9 +64,17 @@ DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
 # last scheduled-run conclusion). A Library artifact name — passed to the binding as
 # data, like the markers above.
 DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
-LIBRARY_REMOTE_URL = "https://github.com/amattas/aviato.git"
-LIBRARY_REPOSITORY = "amattas/aviato"
 DECLARATION_RELATIVE_PATH = ".github/aviato.yaml"
+
+
+def _library_repository(policy: dict[str, Any] | None = None) -> str:
+    """Return the policy-owned Library slug at the GitHub binding boundary."""
+    return library_repository(load_policy() if policy is None else policy)
+
+
+def _library_remote_url(policy: dict[str, Any] | None = None) -> str:
+    """Format the Library's GitHub remote URL outside the agnostic core."""
+    return f"https://github.com/{_library_repository(policy)}.git"
 
 
 def _print_seed_integrity_error() -> None:
@@ -479,7 +487,7 @@ def _published_library_ref_exists(pin: str) -> bool:
     refs = [f"refs/tags/{pin}", f"refs/heads/{pin}"]
     try:
         result = subprocess.run(
-            ["git", "ls-remote", "--exit-code", LIBRARY_REMOTE_URL, *refs],
+            ["git", "ls-remote", "--exit-code", _library_remote_url(), *refs],
             capture_output=True,
             check=False,
             text=True,
@@ -494,8 +502,9 @@ def _require_published_pin(pin: str, *, allow_unresolved: bool) -> None:
     """Fail closed before writing consumer refs that GitHub cannot resolve (§2.6/§6.1)."""
     if allow_unresolved or _published_library_ref_exists(pin):
         return
+    remote_url = _library_remote_url()
     raise DeclarationError(
-        f"Library pin {pin!r} does not resolve to a published Aviato branch or tag at {LIBRARY_REMOTE_URL}; "
+        f"Library pin {pin!r} does not resolve to a published Aviato branch or tag at {remote_url}; "
         "refusing to write consumer workflows that would call a missing reusable workflow ref. "
         "Publish the ref first, or pass --allow-unresolved-pin only for an intentional offline/test scaffold."
     )
@@ -1041,7 +1050,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         declaration = _load_consumer_declaration(root)
         backfilled: Declaration | None = None
         if declaration.profile_identity is None:
-            with fetch_library_registry(LIBRARY_REPOSITORY, declaration.version) as pinned_registry:
+            with fetch_library_registry(_library_repository(), declaration.version) as pinned_registry:
                 installed_identity = installed_registry.profile(declaration.profile).identity
                 pinned_identity = pinned_registry.profile(declaration.profile).identity
                 if pinned_identity != installed_identity:
@@ -1358,7 +1367,7 @@ def cmd_repin(args: argparse.Namespace) -> int:
         declaration = _load_consumer_declaration(root)
         base_resolved = resolve_profile(Registry(MODULE_SOURCE_ROOT), declaration.profile)
         resolve_declared_variables(base_resolved.variables, declaration.variables)
-        with fetch_library_registry(LIBRARY_REPOSITORY, normalize_pin(args.version)) as target_registry:
+        with fetch_library_registry(_library_repository(), normalize_pin(args.version)) as target_registry:
             plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
             items = (
                 materialize_items(
@@ -1481,7 +1490,7 @@ def _repin_proposal(args: argparse.Namespace) -> int:
 
     try:
         declaration = _load_consumer_declaration(clone)
-        with fetch_library_registry(LIBRARY_REPOSITORY, normalize_pin(args.version)) as target_registry:
+        with fetch_library_registry(_library_repository(), normalize_pin(args.version)) as target_registry:
             plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
             items = (
                 materialize_items(
