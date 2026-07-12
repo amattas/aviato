@@ -1,7 +1,7 @@
-# aviato:managed profile=aviato-library version=0 hash=e8a8669d6f82656a6f0931fc68ed9bcba491499b4148f72fa1fcd1f728834789
+# aviato:managed profile=aviato-library version=0 hash=09aa9ec9067e5c2b9694408432f46d2c2090ce2ea9823267c51047e72f2eb4f3
 name: Aviato Docs
 
-# Multi-version Docusaurus docs publish (§13.3), opt-in via docs: true.
+# Multi-version Zensical docs publish (§13.3), versioned onto a docs branch by mike, opt-in via docs: true.
 #
 # Triggered by workflow_run on the main CI workflow completing on the default
 # branch — NOT by a tag push. The release job tags with GITHUB_TOKEN, which does
@@ -101,9 +101,7 @@ jobs:
     if: ${{ needs.resolve.outputs.release == 'true' }}
     permissions:
       actions: read
-      contents: read
-      id-token: write
-      pages: write
+      contents: write
     uses: ./.github/workflows/reusable-docs-pages.yml
     with:
       working-directory: website

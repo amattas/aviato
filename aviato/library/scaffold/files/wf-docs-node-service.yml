@@ -1,6 +1,6 @@
 name: Aviato Docs
 
-# Multi-version Docusaurus docs publish (§13.3), opt-in via docs: true.
+# Multi-version Zensical docs publish (§13.3), versioned onto a docs branch by mike, opt-in via docs: true.
 #
 # Triggered by workflow_run on the main CI workflow completing on the default
 # branch — NOT by a tag push. The release job tags with GITHUB_TOKEN, which does
@@ -100,9 +100,7 @@ jobs:
     if: ${{ needs.resolve.outputs.release == 'true' }}
     permissions:
       actions: read
-      contents: read
-      id-token: write
-      pages: write
+      contents: write
     uses: {{ aviato-workflow-prefix }}reusable-docs-pages.yml{{ aviato-workflow-suffix }}
     with:
       working-directory: website
