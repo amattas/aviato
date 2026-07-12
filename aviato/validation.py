@@ -564,6 +564,10 @@ def _check_library_bootstrap(root: Path, errors: list[str]) -> None:
 _MONOTONIC_ALIAS_WORKFLOWS = [
     ".github/workflows/reusable-docker-ghcr.yml",
     ".github/workflows/reusable-docs-pages.yml",
+    # The starter kit's copyable docs caller embeds the same hand-copied comparator (as a
+    # `<<'PY'` heredoc), so it joins the parity battery — a drifted kit copy would let an
+    # older release move the `latest` alias backward just as a workflow copy would.
+    "starter/docs-site/docs.yml",
 ]
 
 # (candidate, existing tags). Expected results are computed from is_highest itself, so the check

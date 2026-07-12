@@ -57,7 +57,10 @@ jobs:
             if [[ ! "${TAG}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$ ]]; then
               echo "not a release tag (${TAG}); skipping docs"; exit 0
             fi
-            HIGHEST="$(git tag --list | python3 -c '
+            # §8.14 monotonic guard: `latest` moves only for the highest release. This inline
+            # comparator mirrors aviato.core.versioning.is_highest and is held to parity by
+            # `aviato validate` (_check_monotonic_alias_parity) — keep the two in lockstep.
+            cat > /tmp/highest.py <<'PY'
           import sys, re
           rel = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(\d+))?$")
           rank = {None: 2, "beta": 1, "alpha": 0}
@@ -67,7 +70,8 @@ jobs:
           cand = sys.argv[1]; ck = key(cand)
           keys = [k for k in map(key, sys.stdin) if k]
           print("true" if ck and max(keys + [ck]) == ck else "false")
-          ' "${TAG}")"
+          PY
+            HIGHEST="$(git tag --list | python3 /tmp/highest.py "${TAG}")"
             if [ "${HIGHEST}" = "true" ]; then
               mike deploy --push --update-aliases "${TAG}" latest
               mike set-default --push latest

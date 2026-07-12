@@ -197,6 +197,11 @@ _MIKE_SHA = "2d4ad799442f4592db8ad53b179bfb33db8c69ac"
         ("mike @ git+https://github.com/squidfunk/mike.git@${REF}", True),
         ("git+https://github.com/x/y.git@${SOMEVERSION}", True),
         ("pkg @ git+https://github.com/x/y.git@${REF}", True),
+        # The AVIATO_REF exemption is right-anchored: it applies only when the var IS the
+        # ref at the END of the URL. A var mid-path or with trailing garbage is a floating
+        # install and must still be flagged (§11.3).
+        ("git+https://host/@${AVIATO_REF}/pkg.git@master", True),
+        ("git+https://github.com/x/y.git@${AVIATO_REF}x", True),
     ],
 )
 def test_vcs_pip_installs_require_full_commit_sha(token: str, flagged: bool) -> None:

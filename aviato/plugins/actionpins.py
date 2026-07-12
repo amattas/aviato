@@ -676,7 +676,7 @@ _VCS_FULL_SHA_RE = re.compile(r"@[0-9a-f]{40}$")
 # …) is a floating install like any other unpinned branch/tag/short-SHA and must be flagged: the
 # original regex (`@\$\{[^}]*\}`) exempted ANY variable name, which would let a consumer smuggle a
 # floating `git+...@${WHATEVER}` VCS install past §11.3 undetected.
-_VCS_VAR_REF_RE = re.compile(r"@\$\{AVIATO_REF\}")
+_VCS_VAR_REF_RE = re.compile(r"@\$\{AVIATO_REF\}$")
 
 
 def _unpinned_pip_packages(rest: str) -> list[str]:
