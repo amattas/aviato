@@ -138,11 +138,21 @@ def test_drift_report_file_only_skips_settings(
     fake = FakePlatform(settings={"required_reviews": 1})
     monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
     monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:owner/repo.git")
+    original_diagnose = cli.diagnose
+    diagnosis_calls: list[dict[str, object]] = []
+
+    def capture_diagnose(*args, **kwargs):
+        diagnosis_calls.append(kwargs)
+        return original_diagnose(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "diagnose", capture_diagnose)
     rc = cli.main(["drift-report", str(consumer), "--file-only"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "open_or_update_proposal" in fake.call_names()  # file drift ran
     assert "settings drift" not in out  # settings never attempted
+    expected_inputs = cli._diagnosis_probe_inputs(cli.Registry(cli.MODULE_SOURCE_ROOT), "python-library")
+    assert {key: diagnosis_calls[0][key] for key in expected_inputs} == expected_inputs
 
 
 def test_drift_report_settings_only_skips_file_drift(

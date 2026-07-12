@@ -5,8 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from aviato.core.diagnosis import ExpectedArtifact as _ExpectedArtifact
-from aviato.core.diagnosis import diagnose
+from aviato.core.diagnosis import (
+    DiagnosisReport,
+    diagnose,
+)
+from aviato.core.diagnosis import (
+    ExpectedArtifact as _ExpectedArtifact,
+)
 from aviato.core.errors import BootstrapError, PathConfinementError
 from aviato.core.onboarding import materialize_items
 from aviato.core.registry import Registry
@@ -332,6 +337,27 @@ def test_platform_probes_default_unknown(tmp_path: Path) -> None:
     report = diagnose(tmp_path, [])
     assert report.issue_channel_available is None
     assert report.scan_heartbeat_present is None
+
+
+@pytest.mark.parametrize(
+    ("local_present", "remote_enabled", "healthy"),
+    [
+        (True, True, True),
+        (True, False, False),
+        (False, True, False),
+        (True, None, False),
+        (False, None, False),
+    ],
+)
+def test_drift_automation_health_requires_local_and_remote(
+    local_present: bool, remote_enabled: bool | None, healthy: bool
+) -> None:
+    report = DiagnosisReport(
+        drift_automation_present=local_present,
+        drift_automation_enabled=remote_enabled,
+    )
+
+    assert report.drift_automation_healthy is healthy
 
 
 def test_non_utf8_managed_file_classifies_dirty_drift_without_crashing(tmp_path: Path) -> None:

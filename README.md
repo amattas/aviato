@@ -187,7 +187,11 @@ and `python3 scripts/regen-templates.py` regenerates them. Prefer materializing 
 real workflows with `aviato sync` / `aviato onboard --write`; committed examples
 use the literal `EXAMPLE_PIN` placeholder instead of a production ref. Use
 `aviato onboard TARGET --profile PROFILE` to list the exact artifacts, secrets,
-and rulesets for a repository. The common scaffold also seeds `CONTRIBUTING.md`,
+rulesets, and protected deployment environments for a repository. The Python
+library plan requires `pypi`, container profiles require `ghcr`, and the Swift
+app plan requires `app-store-connect`; each named environment must exist with at
+least one required reviewer before deployment. Zero-deploy profiles explicitly
+report that none are required. The common scaffold also seeds `CONTRIBUTING.md`,
 `.github/CODEOWNERS`, and issue/PR templates (seed-once; the consumer owns them
 after seeding).
 

@@ -32,6 +32,7 @@ class DiagnosisReport:
     # are left None here and populated by the GitHub binding when it has API access
     # — and absence reads as broken, never clean (§5.14).
     drift_automation_present: bool = False
+    drift_automation_enabled: bool | None = None
     prerequisites: dict[str, bool] = field(default_factory=dict)
     issue_channel_available: bool | None = None
     scan_heartbeat_present: bool | None = None
@@ -41,6 +42,11 @@ class DiagnosisReport:
     # "unable to determine"; the doctor report surfaces both so the operator can act (§5.4 —
     # absence reads as broken, never clean).
     prerequisites_remote: dict[str, bool | None] = field(default_factory=dict)
+
+    @property
+    def drift_automation_healthy(self) -> bool:
+        """True only when local presence and remote enablement are both proven."""
+        return self.drift_automation_present and self.drift_automation_enabled is True
 
 
 def _has_drift_automation(root: Path, markers: Sequence[str]) -> bool:

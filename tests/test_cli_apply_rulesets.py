@@ -100,6 +100,23 @@ def test_apply_rulesets_rejects_malformed_slug(capsys: pytest.CaptureFixture[str
     assert "OWNER/REPO" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "slug",
+    ["a/b/c", "a/b?x", "a/b#x", " a/b", "a/b ", "-a/b", "a/-b", "a\\b", "a/b\n", "a/", "/b"],
+)
+def test_apply_rulesets_rejects_unsafe_slug_before_api(slug: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "apply_rulesets",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("API helper must not run")),
+    )
+
+    argv = ["apply-rulesets", "--apply"]
+    if slug.startswith("-"):
+        argv.append("--")
+    assert cli.main([*argv, slug]) == 2
+
+
 def test_apply_rulesets_missing_repos_file_is_clean_error(tmp_path, capsys: pytest.CaptureFixture[str]) -> None:
     # R3-13: a missing --repos-file is a clean operator error (exit 2 via main()), not a traceback.
     rc = cli.main(["apply-rulesets", "--repos-file", str(tmp_path / "nope.txt"), "--apply"])

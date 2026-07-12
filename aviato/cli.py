@@ -9,9 +9,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 from urllib.parse import quote
 
 from . import __version__
@@ -174,7 +174,7 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
 
     # R3-5: validate each slug is a clean OWNER/REPO locally (like cmd_provision / the proposals),
     # so a malformed token fails loud here instead of as a confusing 404 after an API round-trip.
-    bad = [s for s in slugs if s.count("/") != 1 or not all(part for part in s.split("/"))]
+    bad = [slug for slug in slugs if not is_owner_repo_slug(slug)]
     if bad:
         print(f"invalid repository slug(s) {bad}; expected OWNER/REPO", file=sys.stderr)
         return 2
@@ -549,6 +549,19 @@ def _owner_repo_vars(slug: str) -> dict[str, str]:
     return {"owner": owner, "repo": repo}
 
 
+class _DiagnosisProbeInputs(TypedDict):
+    prerequisite_paths: Mapping[str, Sequence[str]]
+    drift_automation_markers: Sequence[str]
+
+
+def _diagnosis_probe_inputs(registry: Registry, profile: str) -> _DiagnosisProbeInputs:
+    """Profile-derived local health inputs shared by every diagnosis entrypoint."""
+    return {
+        "prerequisite_paths": registry.profile_doc(profile).get("prerequisites", {}),
+        "drift_automation_markers": DRIFT_AUTOMATION_MARKERS,
+    }
+
+
 def _resolve_onboard_declaration(
     args: argparse.Namespace, registry: Registry, resolved: ResolvedSet, existing: Declaration | None
 ) -> tuple[Declaration, dict[str, Any]]:
@@ -889,6 +902,16 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     for payload in render_all_rulesets(extra_status_checks=_profile_status_checks(args.profile)):
         print(f"- ruleset: {payload['name']}")
 
+    environments = sorted(
+        {module.environment for module in getattr(resolved, "pipeline_modules", ()) if module.environment}
+    )
+    if environments:
+        print("protected deployment environments:")
+        for environment in environments:
+            print(f"- {environment}: must exist with at least one required reviewer before deploy")
+    else:
+        print("protected deployment environments: none")
+
     print("next command:")
     print(f"aviato apply-rulesets {args.target} --apply --profile {args.profile}")
     return 0
@@ -909,7 +932,6 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         )
         expected = _expected_artifacts(registry, declaration)
         secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
-        prerequisite_paths = registry.profile_doc(declaration.profile).get("prerequisites", {})
         # diagnose() rejects a bootstrap declaration in a non-Library repo (§5.4/§5.10); keep it
         # inside the handler so that rejection surfaces as a clean operator error, not a traceback.
         report = diagnose(
@@ -917,8 +939,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             expected,
             declaration_variables=declaration.variables,
             secret_var_names=secret_names,
-            prerequisite_paths=prerequisite_paths,
-            drift_automation_markers=DRIFT_AUTOMATION_MARKERS,
+            **_diagnosis_probe_inputs(registry, declaration.profile),
             profile=declaration.profile,
             is_library=is_library(root),
             bootstrap_declared=declaration.bootstrap,
@@ -948,7 +969,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         (
             report.issue_channel_available,
             report.scan_heartbeat_present,
-            report.prerequisites_remote,
+            remote_health,
         ) = GitHubPlatform().probe_health(
             slug,
             environments=environments,
@@ -958,6 +979,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             drift_workflow_path=DRIFT_CALLER_PATH,
             desired_rulesets=desired_rulesets,
         )
+        report.prerequisites_remote = dict(remote_health)
+        report.drift_automation_enabled = report.prerequisites_remote.pop("drift_automation_enabled", None)
 
     print(f"doctor: {declaration.profile} @ {declaration.version} ({root})")
     for output_path, status in sorted(report.statuses.items()):
@@ -968,7 +991,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print(f"- {path}")
     if report.secret_in_declaration:
         print("WARNING: secret-typed variable present in declaration (§6.6/§8.15)")
-    print(f"drift automation present: {'yes' if report.drift_automation_present else 'no'}")
+    print(f"drift automation present locally: {'yes' if report.drift_automation_present else 'no'}")
+    print(f"drift automation enabled remotely: {_tri(report.drift_automation_enabled)}")
     print("prerequisites:")
     for name, ok in sorted(report.prerequisites.items()):
         print(f"- {name}: {'ok' if ok else 'missing'}")
@@ -980,7 +1004,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print("remote prerequisites (§17):")
         for name, value in sorted(report.prerequisites_remote.items()):
             print(f"- {name}: {_tri(value)}")
-    return 0
+    return 0 if report.drift_automation_healthy else 1
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
@@ -1212,6 +1236,7 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
         expected,
         declaration_variables=declaration.variables,
         secret_var_names=secret_names,
+        **_diagnosis_probe_inputs(registry, declaration.profile),
         profile=declaration.profile,
         is_library=is_library(root),
         bootstrap_declared=declaration.bootstrap,
@@ -1698,7 +1723,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
     the idempotent `complete-protection` recovery (§8.7). Operator-DIRECT (§2.3).
     """
     slug = args.slug
-    if "/" not in slug:
+    if not is_owner_repo_slug(slug):
         print("provide the new repository as OWNER/REPO", file=sys.stderr)
         return 2
 
@@ -1885,6 +1910,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
                 expected,
                 declaration_variables=declaration.variables,
                 secret_var_names=secret_names,
+                **_diagnosis_probe_inputs(registry, declaration.profile),
                 profile=declaration.profile,
                 is_library=is_library(root),
                 bootstrap_declared=declaration.bootstrap,

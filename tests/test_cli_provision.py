@@ -71,6 +71,28 @@ def test_provision_rejects_bad_slug() -> None:
     assert main(["provision", "no-slash", "--profile", "python-library"]) == 2
 
 
+@pytest.mark.parametrize(
+    "slug",
+    ["a/b/c", "a/b?x", "a/b#x", " a/b", "a/b ", "-a/b", "a/-b", "a\\b", "a/b\n", "a/", "/b"],
+)
+def test_provision_rejects_unsafe_slug_before_platform_calls(slug: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "provision_repo",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("provision must not run")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_published_library_ref_exists",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("pin probe must not run")),
+    )
+
+    argv = ["provision", "--profile", "python-library", "--pin", "0"]
+    if slug.startswith("-"):
+        argv.append("--")
+    assert main([*argv, slug]) == 2
+
+
 def test_provision_requires_explicit_pin(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(
         [

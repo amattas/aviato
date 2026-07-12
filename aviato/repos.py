@@ -22,7 +22,7 @@ def is_owner_repo_slug(value: str) -> bool:
     The same rule ``normalize_slug`` enforces on remotes — exported so explicit slug
     ARGUMENTS (proposal paths) are validated identically instead of flowing raw into
     ``gh repo clone``."""
-    return bool(_OWNER_REPO_RE.match(value))
+    return _OWNER_REPO_RE.fullmatch(value) is not None
 
 
 def normalize_slug(remote_url: str) -> str:
@@ -47,7 +47,7 @@ def normalize_slug(remote_url: str) -> str:
     if path is None:
         return ""
     path = path.strip("/")
-    return path if _OWNER_REPO_RE.match(path) else ""
+    return path if is_owner_repo_slug(path) else ""
 
 
 def git_root(path: Path) -> Path | None:

@@ -146,6 +146,14 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
 
     monkeypatch.setattr(cli, "_version_pin_error", lambda *a, **k: None)  # not under test here
     monkeypatch.setattr(cli, "remote_url", lambda root: "https://github.com/o/r.git")
+    original_diagnose = cli.diagnose
+    diagnosis_calls: list[dict[str, object]] = []
+
+    def capture_diagnose(*args, **kwargs):
+        diagnosis_calls.append(kwargs)
+        return original_diagnose(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "diagnose", capture_diagnose)
 
     def fake_run(cmd, **kwargs):
         assert "clone" in cmd, f"scan --fix ran an unexpected command in/near the operator tree: {cmd}"
@@ -166,6 +174,8 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
     # The proposal platform's workdir is the temp clone, NOT the operator's repo.
     assert captured["workdir"] != str(consumer)
     assert "aviato-scanfix-" in captured["workdir"]
+    expected_inputs = cli._diagnosis_probe_inputs(cli.Registry(cli.MODULE_SOURCE_ROOT), "python-library")
+    assert {key: diagnosis_calls[-1][key] for key in expected_inputs} == expected_inputs
 
 
 def test_scan_fix_blocks_incompatible_version_pin(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

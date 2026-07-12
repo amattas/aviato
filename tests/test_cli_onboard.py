@@ -116,6 +116,28 @@ def test_onboard_plan_does_not_list_conflicting_variant_templates(capsys: pytest
     assert len(pkg_lines) <= 1, pkg_lines
 
 
+@pytest.mark.parametrize(
+    ("profile", "expected_environment"),
+    [
+        ("python-library", "pypi"),
+        ("node-service", "ghcr"),
+        ("swift-app", "app-store-connect"),
+        ("python-component", None),
+    ],
+)
+def test_onboard_plan_lists_protected_deployment_environment_requirements(
+    profile: str, expected_environment: str | None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["onboard", "owner/repo", "--profile", profile]) == 0
+    output = capsys.readouterr().out
+
+    if expected_environment is None:
+        assert "protected deployment environments: none" in output
+    else:
+        assert "protected deployment environments:" in output
+        assert f"- {expected_environment}: must exist with at least one required reviewer before deploy" in output
+
+
 def test_reonboard_without_pin_preserves_existing(tmp_path: Path) -> None:
     # §5.12: onboarding is not a re-pin. A fresh adopt with a legacy ``v2.0.0`` is
     # canonicalized to bare on write (§6.1); re-onboarding without --pin must preserve it.
@@ -169,10 +191,11 @@ def test_doctor_reports_clean_and_missing(tmp_path: Path, capsys: pytest.Capture
 
     rc = main(["doctor", str(tmp_path)])
     out = capsys.readouterr().out
-    assert rc == 0
+    assert rc == 1  # remote automation state is unknown without a GitHub remote (§5.14)
     assert ".editorconfig" in out
     assert "clean" in out
     assert "missing" in out  # other managed files are absent
+    assert "drift automation enabled remotely: unknown" in out
 
 
 def test_doctor_rejects_bootstrap_declaration_in_non_library(

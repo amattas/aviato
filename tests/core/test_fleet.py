@@ -64,6 +64,27 @@ def test_scan_aggregates_per_repo_status(tmp_path: Path) -> None:
     assert any(status == "missing" for status in by_path["b"].statuses.values())
 
 
+def test_fleet_passes_profile_derived_health_inputs(tmp_path: Path, monkeypatch) -> None:
+    from aviato.core import fleet
+
+    consumer = tmp_path / "consumer"
+    _make_consumer(consumer, scaffold_all=False)
+    original_diagnose = fleet.diagnose
+    calls: list[dict[str, object]] = []
+
+    def capture(*args, **kwargs):
+        calls.append(kwargs)
+        return original_diagnose(*args, **kwargs)
+
+    monkeypatch.setattr(fleet, "diagnose", capture)
+    markers = ("reusable-consumer-automation",)
+    registry = Registry(MODULE_SOURCE_ROOT)
+    scan_fleet([consumer], registry, drift_automation_markers=markers)
+
+    assert calls[0]["prerequisite_paths"] == registry.profile_doc("python-library").get("prerequisites", {})
+    assert calls[0]["drift_automation_markers"] == markers
+
+
 def test_scan_reports_repo_without_declaration(tmp_path: Path) -> None:
     plain = tmp_path / "plain"
     plain.mkdir()
