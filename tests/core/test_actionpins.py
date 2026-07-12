@@ -1,3 +1,5 @@
+import pytest
+
 from aviato.plugins.actionpins import (
     action_pin_violations,
     unpinned_requirements_lines,
@@ -41,7 +43,14 @@ def test_exact_pip_pin_is_ok():
 
 
 def test_pip_local_vcs_wheel_requirements_skipped():
-    text = "          pip install . -e ./pkg -r reqs.txt git+https://x dist/a.whl\n"
+    # §11.3: local paths, -r requirements files, and wheels stay exempt. A VCS token now
+    # requires a full commit SHA (see test_vcs_pip_installs_require_full_commit_sha below),
+    # so the VCS token here is pinned to a 40-hex SHA rather than the old bare `git+https://x`.
+    text = (
+        "          pip install . -e ./pkg -r reqs.txt "
+        "git+https://github.com/squidfunk/mike.git@2d4ad799442f4592db8ad53b179bfb33db8c69ac "
+        "dist/a.whl\n"
+    )
     assert unpinned_tool_invocations(text) == []
 
 
@@ -169,3 +178,24 @@ def test_pyproject_extras_scanner_covers_inline_arrays_and_single_quotes():
         'y = ["quoted-but-outside>=1"]\n'
     )
     assert unpinned_pyproject_extra_lines(text) == ["black>=24.1.0", "ruff>=0.8.0", "sphinx>=7"]
+
+
+_MIKE_SHA = "2d4ad799442f4592db8ad53b179bfb33db8c69ac"
+
+
+@pytest.mark.parametrize(
+    ("token", "flagged"),
+    [
+        (f"git+https://github.com/squidfunk/mike.git@{_MIKE_SHA}", False),
+        (f"mike @ git+https://github.com/squidfunk/mike.git@{_MIKE_SHA}", False),
+        ("git+https://github.com/squidfunk/mike.git", True),
+        ("git+https://github.com/squidfunk/mike.git@master", True),
+        ("git+https://github.com/squidfunk/mike.git@2d4ad79", True),
+        (f"mike @ git+https://github.com/squidfunk/mike.git@{_MIKE_SHA[:12]}", True),
+    ],
+)
+def test_vcs_pip_installs_require_full_commit_sha(token: str, flagged: bool) -> None:
+    from aviato.plugins.actionpins import _unpinned_pip_packages
+
+    result = _unpinned_pip_packages(f" {token}")
+    assert bool(result) is flagged, result

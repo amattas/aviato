@@ -664,6 +664,11 @@ _PIP_PKG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]*(?:\[[A-Za-z0-9_,.-]+\])?$")
 _PIP_VERSION_OP_RE = re.compile(r"(===|==|>=|<=|~=|!=|<|>)")
 _NPX_RE = re.compile(r"(?<![\w-])npx(?![\w-])")
 _NPM_EXACT_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+# §11.3 (Zensical/mike): a VCS requirement exposes no index version, so its ref MUST be an
+# immutable full commit SHA — `git+…@<40-hex>`. A branch, tag, short SHA, or missing ref is
+# a floating install and is flagged like any unpinned package.
+_VCS_URL_RE = re.compile(r"\bgit\+[A-Za-z0-9+.-]+://\S+")
+_VCS_FULL_SHA_RE = re.compile(r"@[0-9a-f]{40}$")
 
 
 def _unpinned_pip_packages(rest: str) -> list[str]:
@@ -673,14 +678,16 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
     name (`build`) AND a non-exact specifier (`foo>=1.0`, `foo~=1.0`, the wildcard `foo==1.*`)
     are all flagged; only a concrete `==`/`===` pin with no wildcard is accepted. Excludes
     things that are not a plain index package: option flags, the local project
-    (`.`/`.[extra]`/`-e <path>`), requirements/constraints files, VCS (`git+…`), built wheels
-    (`*.whl`), URLs, and shell-variable tokens (`${…}`) — conservative, so a legitimate
-    local/VCS install never trips it.
+    (`.`/`.[extra]`/`-e <path>`), requirements/constraints files, built wheels (`*.whl`), plain
+    URLs, and shell-variable tokens (`${…}`) — conservative, so a legitimate local install never
+    trips it. A **VCS token** (`git+…`) exposes no index version, so instead of being exempt it
+    is validated: it is flagged unless its ref is an immutable full commit SHA
+    (`git+…@<40-hex>`) — a branch, tag, short SHA, or missing ref is a floating install.
 
-    PEP 508 **environment markers** (``foo==1.0; python_version<'3.9'``) and **direct
-    references** (``foo @ git+…``) are NOT flagged: the marker fragment (a quote-bearing token)
-    is ignored, and a name immediately followed by ``@`` is a direct reference, not a floating
-    index package — both would otherwise be false positives.
+    PEP 508 **environment markers** (``foo==1.0; python_version<'3.9'``) are NOT flagged: the
+    marker fragment (a quote-bearing token) is ignored. A **direct reference**
+    (``foo @ git+…``) is likewise not a bare floating index package, but when its URL is a VCS
+    token the same full-SHA requirement applies to the URL.
 
     R8-12-PIP-WHITESPACE: PEP 440 §VersionSpecifiers permits whitespace around the operator
     (``foo == 1.2.3`` is a valid exact pin), but a plain ``rest.split()`` would emit three tokens
@@ -710,11 +717,23 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
         # carries an inner quote that survives the outer-quote strip — not a package. Skip it.
         if "'" in spec or '"' in spec:
             continue
-        # A PEP 508 direct reference `name @ url`: the next token is `@`. Not a floating index
-        # package (the URL/VCS ref pins it), so don't flag the bare name.
+        # A PEP 508 direct reference `name @ url`: the next token is `@`. The URL pins the
+        # package UNLESS it is itself a VCS token missing a full commit SHA ref — then it's a
+        # floating install, flagged just like a bare unpinned name (§11.3).
         if index + 1 < len(tokens) and tokens[index + 1].strip("'\"") == "@":
+            url = tokens[index + 2].strip("'\"") if index + 2 < len(tokens) else ""
+            url = url.split("#", 1)[0]
+            if _VCS_URL_RE.search(url) and not _VCS_FULL_SHA_RE.search(url):
+                flagged.append(stripped)
             continue
-        # Not a plain index package: path, VCS/URL, wheel, or shell variable.
+        # A bare VCS token (`git+…`) exposes no index version, so it must carry a full commit
+        # SHA ref; a branch, tag, short SHA, or missing ref is a floating install.
+        if _VCS_URL_RE.search(spec):
+            url = spec.split("#", 1)[0]
+            if not _VCS_FULL_SHA_RE.search(url):
+                flagged.append(spec)
+            continue
+        # Not a plain index package: path, URL, wheel, or shell variable.
         if any(marker in spec for marker in ("@", "/", "$", ":")) or spec.endswith(".whl"):
             continue
         if spec in (".", "") or spec.startswith("."):
