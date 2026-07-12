@@ -21,6 +21,10 @@ PIPELINE_WORKFLOWS = {
     "app-store-connect": "reusable-app-store-connect.yml",
 }
 
+# The release module also owns the caller-side dispatch status bridge. Its token is
+# isolated to that no-code job, so this privilege does not belong on reusable-release.
+CALLER_ONLY_PRIVILEGES = {"release": {"statuses: write"}}
+
 
 def _workflow_privileges(wf: dict) -> set[str]:
     """The UNION of a workflow's top-level + per-job ``permissions`` (§8.9). A workflow may scope
@@ -44,7 +48,7 @@ def test_pipeline_privileges_match_workflow_permissions(pipeline: str, workflow:
     assert module is not None
 
     wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / workflow).read_text())
-    workflow_privs = _workflow_privileges(wf)
+    workflow_privs = _workflow_privileges(wf) | CALLER_ONLY_PRIVILEGES.get(pipeline, set())
     message = f"{pipeline} module privileges {set(module.privileges)} != {workflow} permissions {workflow_privs}"
     assert set(module.privileges) == workflow_privs, message
 

@@ -23,6 +23,7 @@ permissions:
   pull-requests: write
   security-events: write
   actions: write
+  statuses: write
   id-token: write
   attestations: write
 
@@ -53,6 +54,46 @@ jobs:
     with:
       aviato-ref: EXAMPLE_PIN
       local-install: false
+
+  status-bridge:
+    if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+    needs: [ci, security, common-lint]
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Publish Python CI status
+        env:
+          STATUS_CONTEXT: "ci / Python CI"
+          STATUS_STATE: ${{ needs.ci.result == 'success' && 'success' || 'failure' }}
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="${STATUS_STATE}" \
+            -f context="${STATUS_CONTEXT}"
+      - name: Publish security baseline status
+        env:
+          STATUS_CONTEXT: "security / Security baseline heartbeat"
+          STATUS_STATE: ${{ needs.security.result == 'success' && 'success' || 'failure' }}
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="${STATUS_STATE}" \
+            -f context="${STATUS_CONTEXT}"
+      - name: Publish common lint status
+        env:
+          STATUS_CONTEXT: "common-lint / Common lint"
+          STATUS_STATE: ${{ needs.common-lint.result == 'success' && 'success' || 'failure' }}
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="${STATUS_STATE}" \
+            -f context="${STATUS_CONTEXT}"
 
   release:
     if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}

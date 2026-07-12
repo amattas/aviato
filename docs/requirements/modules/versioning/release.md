@@ -38,6 +38,14 @@ adopted the dispatch trigger fails soft: the dispatch step warns, the PR's
 checks stay visibly pending, and the operator remediates by re-syncing the
 caller (§5.3).
 
+Because dispatch-run checks are not themselves attached to the release PR, every
+managed caller also runs a dispatch-only, no-checkout status bridge after its
+verify, security, and common-lint jobs. The bridge has only `statuses: write` and
+publishes success or failure for the profile's resolved required-check contexts
+to the dispatched `github.sha`; skipped, cancelled, and failed dependencies all
+publish failure. Context names are validated against pipeline-module
+`status_check` data so caller text and branch protection cannot drift apart.
+
 ```mermaid
 flowchart TD
     A["Changes merged to mainline"] --> B["Read Conventional Commit history"]

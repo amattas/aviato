@@ -28,8 +28,9 @@ release:
   # (actions: write — workflow_dispatch is exempt from GITHUB_TOKEN event
   # suppression). Mirrors reusable-release.yml, which is privilege-SPLIT (C12-W1):
   # derive runs under contents:read, only the propose/tag job holds the writes —
-  # the union across jobs is declared here.
-  privileges: ["contents: read", "contents: write", "pull-requests: write", "actions: write"]
+  # the union across jobs is declared here. statuses:write belongs only to the
+  # caller's no-code dispatch status bridge, not to reusable-release itself.
+  privileges: ["contents: read", "contents: write", "pull-requests: write", "actions: write", "statuses: write"]
   runner: linux
 python-verify:
   privileges: ["contents: read"]

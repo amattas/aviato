@@ -43,6 +43,20 @@ def test_clean_copy_validates(repo_copy: Path) -> None:
     assert validate(repo_copy) == []
 
 
+def test_status_bridge_context_drift_is_detected(repo_copy: Path) -> None:
+    caller = repo_copy / "aviato" / "library" / "scaffold" / "files" / "wf-python-library.yml"
+    text = caller.read_text(encoding="utf-8")
+    drifted = text.replace("ci / Python CI", "ci / Drifted Python CI", 1)
+    assert drifted != text, "fixture did not contain the expected Python verify context"
+    caller.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any(
+        "wf-python-library.yml" in error and "ci / Python CI" in error and "status bridge" in error for error in errors
+    )
+
+
 def test_project_version_drift_from_runtime_metadata_is_detected(repo_copy: Path) -> None:
     pyproject = repo_copy / "pyproject.toml"
     text = pyproject.read_text(encoding="utf-8")

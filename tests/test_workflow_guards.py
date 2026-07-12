@@ -7,7 +7,11 @@ import subprocess
 import pytest
 import yaml
 
-from aviato.paths import REPO_ROOT
+from aviato.core.composition import resolve_profile
+from aviato.core.onboarding import resolved_artifacts
+from aviato.core.registry import Registry
+from aviato.paths import MODULE_SOURCE_ROOT, REPO_ROOT
+from aviato.validation import _TEMPLATE_EXAMPLE_VARS
 
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 SCAFFOLD_FILES = REPO_ROOT / "aviato" / "library" / "scaffold" / "files"
@@ -1024,6 +1028,42 @@ def test_ci_callers_enable_release_pr_check_dispatch() -> None:
         body = caller.read_text(encoding="utf-8")
         assert "workflow_dispatch:" in body, f"{caller.name}: release-branch check dispatch needs the trigger"
         assert "actions: write" in body, f"{caller.name}: caller ceiling must cover the release job's actions: write"
+
+
+def test_ci_callers_publish_dispatch_status_bridge_from_resolved_pipeline_contexts() -> None:
+    """Dispatch verification must report the profile's real required contexts on the PR SHA."""
+    registry = Registry(MODULE_SOURCE_ROOT)
+    for profile, variables in _TEMPLATE_EXAMPLE_VARS.items():
+        workflow_body = next(
+            artifact.body
+            for artifact in resolved_artifacts(registry, profile, variables, pin="EXAMPLE_PIN", docs=False)
+            if artifact.output == ".github/workflows/aviato-ci.yml"
+        )
+        workflow = yaml.safe_load(workflow_body)
+        bridge = workflow["jobs"]["status-bridge"]
+
+        resolved = resolve_profile(registry, profile)
+        expected_contexts = {
+            module.status_check for module in resolved.pipeline_modules if module.status_check is not None
+        }
+        steps = bridge["steps"]
+        actual_contexts = {step["env"]["STATUS_CONTEXT"] for step in steps}
+
+        assert bridge["if"] == "${{ always() && github.event_name == 'workflow_dispatch' }}", profile
+        assert set(bridge["needs"]) == {"ci", "security", "common-lint"}, profile
+        assert bridge["runs-on"] == "ubuntu-latest", profile
+        assert bridge["permissions"] == {"statuses": "write"}, profile
+        assert bridge["env"] == {"GH_TOKEN": "${{ github.token }}"}, profile
+        assert actual_contexts == expected_contexts, profile
+        assert len(steps) == len(expected_contexts), profile
+        for step in steps:
+            assert "uses" not in step, f"{profile}: status bridge must not check out or install code"
+            assert step["env"]["STATUS_STATE"].endswith("&& 'success' || 'failure' }}")
+            run = step["run"]
+            assert "gh api" in run and "statuses/${GITHUB_SHA}" in run
+            assert '-f state="${STATUS_STATE}"' in run
+            assert '-f context="${STATUS_CONTEXT}"' in run
+            assert "checkout" not in run.lower() and "install" not in run.lower()
 
 
 def test_release_propose_tolerates_preseeded_version_source() -> None:

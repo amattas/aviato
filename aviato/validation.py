@@ -540,6 +540,48 @@ def _check_template_scaffold_parity(root: Path, errors: list[str]) -> None:
             )
 
 
+def _check_status_bridge_contexts(root: Path, errors: list[str]) -> None:
+    """Keep caller bridge contexts derived from composed pipeline module data.
+
+    Release-branch CI is started with ``workflow_dispatch``. GitHub reports those
+    checks against the workflow run rather than the release PR, so each caller has a
+    no-code bridge that publishes the same required contexts to ``github.sha``. The
+    contexts must come from ``PipelineModule.status_check``; a copied string in one
+    caller must never silently diverge from branch protection.
+    """
+    from .core.composition import resolve_profile
+    from .core.registry import Registry
+
+    registry = Registry(root / "aviato" / "library")
+    for profile in _PROFILE_TEMPLATE_FILES:
+        source = f"aviato/library/scaffold/files/wf-{profile}.yml"
+        try:
+            expected = {
+                module.status_check
+                for module in resolve_profile(registry, profile).pipeline_modules
+                if module.status_check is not None
+            }
+            rendered = _rendered_caller(root, profile, ".github/workflows/aviato-ci.yml")
+            document = yaml.safe_load(rendered) if rendered is not None else None
+            bridge = document["jobs"]["status-bridge"] if isinstance(document, dict) else None
+            steps = bridge.get("steps", []) if isinstance(bridge, dict) else []
+            actual = [
+                context
+                for step in steps
+                if isinstance(step, dict)
+                and isinstance(step.get("env"), dict)
+                and isinstance((context := step["env"].get("STATUS_CONTEXT")), str)
+            ]
+        except Exception as exc:  # noqa: BLE001 - validation reports malformed source data
+            errors.append(f"{source} status bridge could not be validated: {exc}")
+            continue
+        if set(actual) != expected or len(actual) != len(expected):
+            errors.append(
+                f"{source} status bridge contexts {sorted(actual)} do not match resolved "
+                f"PipelineModule.status_check contexts; expected {sorted(expected)}"
+            )
+
+
 def _check_library_bootstrap(root: Path, errors: list[str]) -> None:
     """The Library's own managed artifacts must bootstrap through local workflow refs (§5.10)."""
     from .core.declaration import load_declaration
@@ -793,6 +835,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
     _check_action_pins(root, errors)
     _check_template_scaffold_parity(root, errors)
+    _check_status_bridge_contexts(root, errors)
     _check_scaffold_workflow_yaml(root, errors)
     _check_library_bootstrap(root, errors)
     _check_monotonic_alias_parity(root, errors)
