@@ -98,15 +98,18 @@ def test_consumer_and_module_boundaries_do_not_reintroduce_direct_joins() -> Non
         "aviato/core/registry.py": ("self.root /",),
         "aviato/github_platform.py": ("self.workdir / output_path",),
         "aviato/plugins/version_formats.py": ("Path(root) / location",),
-        "aviato/cli.py": ("root / artifact.output_path", "clone / artifact.output", "root / loc"),
+        "aviato/cli.py": (
+            "root / artifact.output_path",
+            "clone / artifact.output",
+            "root / loc",
+        ),
     }
     for relative_file, forbidden in guarded_modules.items():
         tree = ast.parse((REPO_ROOT / relative_file).read_text(encoding="utf-8"))
         direct_joins = [ast.unparse(node) for node in ast.walk(tree) if isinstance(node, ast.BinOp)]
         for expression in forbidden:
-            assert all(expression not in direct_join for direct_join in direct_joins), (
-                f"{relative_file} reintroduced unguarded path join {expression!r}"
-            )
+            path_join_is_guarded = all(expression not in direct_join for direct_join in direct_joins)
+            assert path_join_is_guarded, f"{relative_file} reintroduced unguarded path join {expression!r}"
 
     declaration_tree = ast.parse((REPO_ROOT / "aviato/core/declaration.py").read_text(encoding="utf-8"))
     declaration_calls = [node for node in ast.walk(declaration_tree) if isinstance(node, ast.Call)]

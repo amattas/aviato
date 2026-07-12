@@ -16,8 +16,7 @@ from aviato.core.scaffold import scaffold
 ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 
 PYTHON_DECLARATION = (
-    "profile: python-library\nversion: v1\nvariables:\n"
-    "  distribution-name: acme\n  import-name: acme\n"
+    "profile: python-library\nversion: v1\nvariables:\n  distribution-name: acme\n  import-name: acme\n"
 )
 
 
@@ -45,8 +44,7 @@ def test_scan_rejects_invalid_declared_enum_before_fix_proposal(
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
     (consumer / ".github" / "aviato.yaml").write_text(
-        "profile: node-service\nversion: v0\nvariables:\n"
-        "  project-name: sample\n  language-variant: ruby\n",
+        "profile: node-service\nversion: v0\nvariables:\n  project-name: sample\n  language-variant: ruby\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(cli, "_propose_file_drift", lambda *args, **kwargs: pytest.fail("opened proposal"))
@@ -64,8 +62,7 @@ def test_scan_fix_preserves_declaration_exit_when_later_proposal_fails(
     invalid = tmp_path / "invalid"
     (invalid / ".github").mkdir(parents=True)
     (invalid / ".github" / "aviato.yaml").write_text(
-        "profile: node-service\nversion: v0\nvariables:\n"
-        "  project-name: sample\n  language-variant: ruby\n",
+        "profile: node-service\nversion: v0\nvariables:\n  project-name: sample\n  language-variant: ruby\n",
         encoding="utf-8",
     )
     fixable = tmp_path / "fixable"

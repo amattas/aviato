@@ -153,8 +153,7 @@ def test_doctor_reports_clean_and_missing(tmp_path: Path, capsys: pytest.Capture
     github = tmp_path / ".github"
     github.mkdir()
     (github / "aviato.yaml").write_text(
-        "profile: python-library\nversion: v1\nvariables:\n"
-        "  distribution-name: acme\n  import-name: acme\n",
+        "profile: python-library\nversion: v1\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",
     )
     # scaffold the editorconfig body exactly as the resolved set expects

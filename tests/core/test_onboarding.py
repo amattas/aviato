@@ -158,11 +158,7 @@ def test_materialize_builds_scaffold_items_from_resolved_set() -> None:
 def test_yaml_date_scalar_materializes_with_deterministic_input_hash(tmp_path: Path) -> None:
     declaration_path = tmp_path / "aviato.yaml"
     declaration_path.write_text(
-        "profile: python-library\n"
-        "version: 1\n"
-        "variables:\n"
-        "  distribution-name: 2026-07-12\n"
-        "  import-name: acme\n",
+        "profile: python-library\nversion: 1\nvariables:\n  distribution-name: 2026-07-12\n  import-name: acme\n",
         encoding="utf-8",
     )
     declaration = load_declaration(declaration_path)
@@ -214,9 +210,7 @@ def test_plan_onboarding_refuses_profile_change_without_migrate() -> None:
 def test_plan_onboarding_allows_same_profile_reonboard() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     existing = Declaration(profile="python-library", version="v1")
-    plan = plan_onboarding(
-        reg, profile="python-library", existing_declaration=existing, variables=PYTHON_VARIABLES
-    )
+    plan = plan_onboarding(reg, profile="python-library", existing_declaration=existing, variables=PYTHON_VARIABLES)
     assert plan.profile == "python-library"
 
 

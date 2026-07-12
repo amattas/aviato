@@ -134,9 +134,9 @@ def test_security_floor_enforced_against_profile_data_not_just_overrides(module_
     )
     (root / "nosec-prof.yaml").write_text(
         _yaml.safe_dump(
-                {
-                    "name": "nosec-prof",
-                    "identity": "aviato-profile/nosec-prof/v1",
+            {
+                "name": "nosec-prof",
+                "identity": "aviato-profile/nosec-prof/v1",
                 "workflows": "python-library-wf",
                 "scaffold": "python-library-sc",
                 "settings": "nosec",

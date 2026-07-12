@@ -182,9 +182,7 @@ class Registry:
         if not path.is_file():
             return None  # absent → None (distinct from an empty manifest); see docstring
         return {
-            name
-            for name, doc in _load_optional_manifest(self.root, "pipelines.yaml").items()
-            if isinstance(doc, dict)
+            name for name, doc in _load_optional_manifest(self.root, "pipelines.yaml").items() if isinstance(doc, dict)
         }
 
     def template_module(self, name: str) -> TemplateModule:

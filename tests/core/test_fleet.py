@@ -13,8 +13,7 @@ def _make_consumer(root: Path, *, scaffold_all: bool) -> None:
     github = root / ".github"
     github.mkdir(parents=True)
     (github / "aviato.yaml").write_text(
-        "profile: python-library\nversion: v1\nvariables:\n"
-        "  distribution-name: acme\n  import-name: acme\n",
+        "profile: python-library\nversion: v1\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",
     )
     if scaffold_all:

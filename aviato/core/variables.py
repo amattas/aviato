@@ -16,9 +16,7 @@ def _string_scalar(spec: VariableSpec, value: Any) -> str | None:
     if value is None:
         return None
     if not isinstance(value, _YAML_SCALAR_TYPES):
-        raise DeclarationError(
-            f"variable {spec.name!r} must be a scalar value, got {type(value).__name__}"
-        )
+        raise DeclarationError(f"variable {spec.name!r} must be a scalar value, got {type(value).__name__}")
     return str(value)
 
 
@@ -74,9 +72,7 @@ def resolve_variables(
     return resolved
 
 
-def resolve_declared_variables(
-    specs: Sequence[VariableSpec], values: Mapping[str, Any]
-) -> dict[str, Any]:
+def resolve_declared_variables(specs: Sequence[VariableSpec], values: Mapping[str, Any]) -> dict[str, Any]:
     """Validate and resolve the declaration tier through the trusted resolver.
 
     Declaration mappings are closed over the profile's variable specifications:
