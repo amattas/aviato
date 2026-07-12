@@ -888,6 +888,54 @@ def test_probe_health_heartbeat_sha_download_failure_is_unknown(monkeypatch: pyt
     assert heartbeat is None
 
 
+@pytest.mark.parametrize(
+    "artifacts_payload",
+    [None, {"artifacts": None}, {"artifacts": {"bad": "shape"}}, {"artifacts": ["bad-item"]}],
+)
+def test_probe_health_heartbeat_sha_malformed_artifact_listing_is_unknown(
+    monkeypatch: pytest.MonkeyPatch, artifacts_payload: object
+) -> None:
+    def optional(endpoint: str, **__: object) -> object:
+        if endpoint == "repos/o/r":
+            return {"has_issues": True, "default_branch": "main"}
+        if endpoint == "repos/o/r/commits/main":
+            return {"sha": "abc"}
+        if endpoint.startswith("repos/o/r/actions/artifacts"):
+            return artifacts_payload
+        return None
+
+    monkeypatch.setattr(github, "gh_json_optional", optional)
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is None
+
+
+def test_probe_health_heartbeat_sha_valid_empty_artifact_listing_is_unhealthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha="abc", artifacts=[]),
+    )
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is False
+
+
+def test_probe_health_heartbeat_sha_malformed_candidate_id_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    artifact = {
+        "name": "aviato-security-heartbeat-abc",
+        "expired": False,
+        "workflow_run": {"head_sha": "abc"},
+    }
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha="abc", artifacts=[artifact]),
+    )
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is None
+
+
 def test_read_settings_includes_security(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
     monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])

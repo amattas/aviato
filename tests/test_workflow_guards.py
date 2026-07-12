@@ -589,11 +589,17 @@ def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
     jobs = wf["jobs"]
     resolver = jobs["resolve-target"]
     assert resolver["outputs"] == {
-        "canonical-ref": "${{ steps.resolve.outputs.canonical-ref }}",
+        "canonical-ref": "${{ steps.canonicalize.outputs.canonical-ref }}",
         "analyzed-sha": "${{ steps.resolve.outputs.analyzed-sha }}",
     }
+    steps = resolver["steps"]
+    canonicalize_index = next(i for i, step in enumerate(steps) if step.get("id") == "canonicalize")
+    checkout_index = next(i for i, step in enumerate(steps) if step.get("uses") == "actions/checkout@v4")
+    assert canonicalize_index < checkout_index, "bare tags must be canonicalized before checkout resolves them"
+    canonicalize_script = steps[canonicalize_index]["run"]
+    assert 'canonical_ref="refs/tags/${REQUESTED_REF}"' in canonicalize_script
+    assert steps[checkout_index]["with"]["ref"] == "${{ steps.canonicalize.outputs.canonical-ref }}"
     resolve_script = next(step["run"] for step in resolver["steps"] if step.get("id") == "resolve")
-    assert "refs/tags/" in resolve_script
     assert "^{commit}" in resolve_script
     assert "inputs.sha" in str(resolver["steps"])
 

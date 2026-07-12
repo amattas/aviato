@@ -55,14 +55,30 @@ jobs:
     name: Resolve analyzed target
     runs-on: ubuntu-latest
     outputs:
-      canonical-ref: ${{ steps.resolve.outputs.canonical-ref }}
+      canonical-ref: ${{ steps.canonicalize.outputs.canonical-ref }}
       analyzed-sha: ${{ steps.resolve.outputs.analyzed-sha }}
     steps:
+      # Canonicalize BEFORE checkout. Passing a bare release tag directly to checkout lets a
+      # same-named branch win Git's ambiguous DWIM resolution while later evidence claims a tag.
+      - name: Canonicalize requested ref
+        id: canonicalize
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          canonical_ref="${REQUESTED_REF:-${EVENT_REF}}"
+          if [[ -n "${REQUESTED_REF}" && "${REQUESTED_REF}" != refs/* ]]; then
+            canonical_ref="refs/tags/${REQUESTED_REF}"
+          fi
+          echo "canonical-ref=${canonical_ref}" >> "${GITHUB_OUTPUT}"
+
       - name: Fetch requested ref and tags
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ steps.canonicalize.outputs.canonical-ref }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -70,29 +86,23 @@ jobs:
         id: resolve
         shell: bash
         env:
-          REQUESTED_REF: ${{ inputs.ref }}
           REQUESTED_SHA: ${{ inputs.sha }}
-          EVENT_REF: ${{ github.ref }}
           EVENT_SHA: ${{ github.sha }}
+          CUSTOM_REF: ${{ inputs.ref }}
+          CANONICAL_REF: ${{ steps.canonicalize.outputs.canonical-ref }}
         run: |
           set -euo pipefail
-          canonical_ref="${REQUESTED_REF:-${EVENT_REF}}"
-          if [[ -n "${REQUESTED_REF}" && "${REQUESTED_REF}" != refs/* ]]; then
-            canonical_ref="refs/tags/${REQUESTED_REF}"
-          fi
-
-          # actions/checkout resolved REQUESTED_REF (or EVENT_REF) and fetched tags. Peeling
+          # actions/checkout resolved CANONICAL_REF and fetched tags. Peeling
           # HEAD^{commit} makes annotated and lightweight tags converge on the commit scanners use.
           analyzed_sha="$(git rev-parse 'HEAD^{commit}')"
           expected_sha="${REQUESTED_SHA}"
-          if [[ -z "${REQUESTED_REF}" && -z "${expected_sha}" ]]; then
+          if [[ -z "${CUSTOM_REF}" && -z "${expected_sha}" ]]; then
             expected_sha="${EVENT_SHA}"
           fi
           if [[ -n "${expected_sha}" && "${analyzed_sha}" != "${expected_sha}" ]]; then
-            echo "::error::Requested ref ${canonical_ref} resolved to ${analyzed_sha}, expected ${expected_sha}."
+            echo "::error::Requested ref ${CANONICAL_REF} resolved to ${analyzed_sha}, expected ${expected_sha}."
             exit 1
           fi
-          echo "canonical-ref=${canonical_ref}" >> "${GITHUB_OUTPUT}"
           echo "analyzed-sha=${analyzed_sha}" >> "${GITHUB_OUTPUT}"
 
   # §8.16/§5.14: probe the findings-upload privilege at runtime and HARD-FAIL if a
