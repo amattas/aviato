@@ -144,6 +144,58 @@ def test_declared_variables_reject_non_none_secret_value() -> None:
         variables_module.resolve_declared_variables(specs, {"token": "secret"})
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [
+        VariableSpec("secret-flag", "boolean", secret=True, required=False),
+        VariableSpec("secret-choice", "enum", secret=True, required=False, domain=("allowed",)),
+    ],
+)
+def test_declared_secret_rejection_never_contains_raw_value(spec: VariableSpec) -> None:
+    sentinel = "TOP-SECRET-SENTINEL"
+    with pytest.raises(DeclarationError) as raised:
+        variables_module.resolve_declared_variables((spec,), {spec.name: sentinel})
+    assert spec.name in str(raised.value)
+    assert sentinel not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("spec", "source"),
+    [
+        (VariableSpec("secret-flag", "boolean", secret=True), "flags"),
+        (VariableSpec("secret-choice", "enum", secret=True, domain=("allowed",)), "env"),
+    ],
+)
+def test_non_declaration_secret_coercion_errors_are_redacted(spec: VariableSpec, source: str) -> None:
+    sentinel = "TOP-SECRET-SENTINEL"
+    sources: dict[str, dict[str, object]] = {
+        "flags": {},
+        "declaration": {},
+        "env": {},
+        "autodetect": {},
+    }
+    sources[source][spec.name] = sentinel
+    with pytest.raises(DeclarationError) as raised:
+        resolve_variables((spec,), **sources)
+    assert spec.name in str(raised.value)
+    assert sentinel not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        VariableSpec("visible-flag", "boolean"),
+        VariableSpec("visible-choice", "enum", domain=("allowed",)),
+    ],
+)
+def test_non_secret_coercion_errors_preserve_invalid_value_detail(spec: VariableSpec) -> None:
+    invalid = "VISIBLE-INVALID-VALUE"
+    with pytest.raises(DeclarationError) as raised:
+        resolve_variables((spec,), flags={spec.name: invalid}, declaration={}, env={}, autodetect={})
+    assert spec.name in str(raised.value)
+    assert invalid in str(raised.value)
+
+
 def test_declared_variables_allow_unset_optional_secret() -> None:
     specs = (VariableSpec("token", "string", secret=True, required=False),)
     assert variables_module.resolve_declared_variables(specs, {"token": None}) == {"token": None}

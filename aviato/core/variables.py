@@ -31,11 +31,15 @@ def _coerce(spec: VariableSpec, value: Any) -> Any:
             return True
         if text in _FALSE:
             return False
+        if spec.secret:
+            raise DeclarationError(f"variable {spec.name!r} has an invalid secret boolean value")
         raise DeclarationError(f"variable {spec.name!r} is not a boolean: {value!r}")
     if spec.type == "enum":
         domain = spec.domain or ()
         canonical = _string_scalar(spec, value)
         if canonical not in domain:
+            if spec.secret:
+                raise DeclarationError(f"variable {spec.name!r} has a secret value outside its declared domain")
             raise DeclarationError(f"variable {spec.name!r} value {canonical!r} not in domain {list(domain)}")
         return canonical
     return _string_scalar(spec, value)
@@ -87,6 +91,16 @@ def resolve_declared_variables(
     if unknown_names:
         raise DeclarationError(f"unknown declaration variable(s): {sorted(unknown_names)}")
 
+    # Refuse concrete declaration secrets before type coercion can embed their raw
+    # values in a boolean/enum diagnostic. The established refusal names only the
+    # offending variable(s), never their values (§8.15).
+    raw_secret_names = {spec.name for spec in specs if spec.secret}
+    raw_offending = {name for name in raw_secret_names if values.get(name) is not None}
+    if raw_offending:
+        raise DeclarationError(
+            f"secret-typed variable(s) may not be set in the declaration: {sorted(raw_offending)} (§8.15)"
+        )
+
     # Validate explicitly supplied values before checking unrelated required values.
     # This keeps the operator-facing failure anchored to the malformed declaration
     # entry while still delegating all coercion/default/required logic to one resolver.
@@ -94,7 +108,7 @@ def resolve_declared_variables(
         spec for spec in specs if spec.name not in values
     )
     resolved = resolve_variables(ordered_specs, flags={}, declaration=values, env={}, autodetect={})
-    secret_names = {spec.name for spec in specs if spec.secret}
+    secret_names = raw_secret_names
     offending = {name for name in secret_names if resolved.get(name) is not None}
     if offending:
         raise DeclarationError(
