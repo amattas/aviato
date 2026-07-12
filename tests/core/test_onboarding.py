@@ -15,6 +15,8 @@ from aviato.core.onboarding import (
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT
 
+PYTHON_VARIABLES = {"distribution-name": "acme", "import-name": "acme"}
+
 
 def test_output_collision_among_applicable_templates_is_error() -> None:
     # §4.2: two applicable templates writing the same path is a tie, not a silent pick.
@@ -52,7 +54,7 @@ def test_docs_true_scaffolds_gated_docs_workflow() -> None:
 
 def test_pin_is_stamped_into_generated_workflows() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = {i.output: i for i in materialize_items(reg, "python-library", {}, pin="v1.2.3")}
+    items = {i.output: i for i in materialize_items(reg, "python-library", PYTHON_VARIABLES, pin="v1.2.3")}
     ci = items[".github/workflows/aviato-ci.yml"].body
     assert "@v1.2.3" in ci  # reusable workflow refs pinned (§2.6/§6.1)
     assert "@main" not in ci
@@ -85,8 +87,18 @@ def test_javascript_variant_omits_tsconfig_and_disables_typecheck() -> None:
     from aviato.core.onboarding import render_variables
 
     reg = Registry(MODULE_SOURCE_ROOT)
-    ts_items = {i.output for i in materialize_items(reg, "node-service", {"language-variant": "typescript"}, pin="0")}
-    js_items = {i.output for i in materialize_items(reg, "node-service", {"language-variant": "javascript"}, pin="0")}
+    ts_items = {
+        i.output
+        for i in materialize_items(
+            reg, "node-service", {"project-name": "acme", "language-variant": "typescript"}, pin="0"
+        )
+    }
+    js_items = {
+        i.output
+        for i in materialize_items(
+            reg, "node-service", {"project-name": "acme", "language-variant": "javascript"}, pin="0"
+        )
+    }
     assert "tsconfig.json" in ts_items
     assert "tsconfig.json" not in js_items  # §12.2: JS omits TypeScript config
     # run-typecheck is derived from the profile's data-driven derived_variables rule
@@ -96,6 +108,27 @@ def test_javascript_variant_omits_tsconfig_and_disables_typecheck() -> None:
         render_variables({"language-variant": "javascript"}, pin="0", derived_rules=rules)["run-typecheck"] == "false"
     )
     assert render_variables({"language-variant": "typescript"}, pin="0", derived_rules=rules)["run-typecheck"] == "true"
+
+
+@pytest.mark.parametrize("value", ["ruby", "", 1, True])
+def test_materialize_rejects_invalid_enum(value: object) -> None:
+    with pytest.raises(DeclarationError, match="language-variant"):
+        materialize_items(
+            Registry(MODULE_SOURCE_ROOT),
+            "node-service",
+            {"language-variant": value},
+            pin="0",
+        )
+
+
+def test_materialize_rejects_unknown_variable() -> None:
+    with pytest.raises(DeclarationError, match="language-varaint"):
+        materialize_items(
+            Registry(MODULE_SOURCE_ROOT),
+            "node-service",
+            {"language-varaint": "typescript"},
+            pin="0",
+        )
 
 
 def test_template_applies_canonicalizes_booleans() -> None:
@@ -115,7 +148,7 @@ def test_template_applies_canonicalizes_booleans() -> None:
 
 def test_materialize_builds_scaffold_items_from_resolved_set() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "python-library", variables={}, pin="0")
+    items = materialize_items(reg, "python-library", variables=PYTHON_VARIABLES, pin="0")
     by_output = {item.output: item for item in items}
     assert ".editorconfig" in by_output
     assert by_output[".editorconfig"].seed_once is False
@@ -126,7 +159,7 @@ def test_materialize_renders_into_scaffold_then_writes(tmp_path: Path) -> None:
     from aviato.core.scaffold import scaffold
 
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "python-library", variables={}, pin="0")
+    items = materialize_items(reg, "python-library", variables=PYTHON_VARIABLES, pin="0")
     result = scaffold(tmp_path, items, profile="python-library", version="v1")
     assert ".editorconfig" in result.written
     assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library")
@@ -136,7 +169,7 @@ def test_materialize_renders_into_scaffold_then_writes(tmp_path: Path) -> None:
 
 def test_plan_onboarding_adopt_clean(tmp_path: Path) -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
-    plan = plan_onboarding(reg, profile="python-library", existing_declaration=None, variables={})
+    plan = plan_onboarding(reg, profile="python-library", existing_declaration=None, variables=PYTHON_VARIABLES)
     assert plan.profile == "python-library"
     assert plan.outputs  # lists the files it would materialize
 
@@ -151,7 +184,9 @@ def test_plan_onboarding_refuses_profile_change_without_migrate() -> None:
 def test_plan_onboarding_allows_same_profile_reonboard() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     existing = Declaration(profile="python-library", version="v1")
-    plan = plan_onboarding(reg, profile="python-library", existing_declaration=existing, variables={})
+    plan = plan_onboarding(
+        reg, profile="python-library", existing_declaration=existing, variables=PYTHON_VARIABLES
+    )
     assert plan.profile == "python-library"
 
 
@@ -159,6 +194,10 @@ def test_plan_onboarding_allows_profile_change_with_migrate() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     existing = Declaration(profile="node-service", version="v1")
     plan = plan_onboarding(
-        reg, profile="python-library", existing_declaration=existing, variables={}, allow_migrate=True
+        reg,
+        profile="python-library",
+        existing_declaration=existing,
+        variables=PYTHON_VARIABLES,
+        allow_migrate=True,
     )
     assert plan.profile == "python-library"

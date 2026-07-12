@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from aviato.core import variables as variables_module
 from aviato.core.errors import DeclarationError
 from aviato.core.model import VariableSpec
 from aviato.core.variables import resolve_variables, writeback_variables
@@ -83,3 +84,38 @@ def test_writeback_allows_unset_optional_secret() -> None:
     # a secret variable hard-errors even when no secret value exists.
     specs = (VariableSpec("token", "string", secret=True, required=False),)
     assert writeback_variables(specs, {"token": None, "dist": "x"}) == {"dist": "x"}
+
+
+def test_declared_variables_reject_unknown_name_before_resolution() -> None:
+    specs = (VariableSpec("language-variant", "enum", domain=("typescript", "javascript")),)
+    with pytest.raises(DeclarationError, match="language-varaint"):
+        variables_module.resolve_declared_variables(specs, {"language-varaint": "typescript"})
+
+
+def test_declared_variables_coerce_boolean_through_shared_resolver() -> None:
+    specs = (VariableSpec("docs-mode", "boolean", required=False, default=False),)
+    resolved = variables_module.resolve_declared_variables(specs, {"docs-mode": "true"})
+    assert resolved == {"docs-mode": True}
+
+
+def test_declared_variables_reject_invalid_boolean() -> None:
+    specs = (VariableSpec("docs-mode", "boolean", required=False, default=False),)
+    with pytest.raises(DeclarationError, match="docs-mode"):
+        variables_module.resolve_declared_variables(specs, {"docs-mode": "not-a-bool"})
+
+
+def test_declared_variables_reject_missing_required_value() -> None:
+    specs = (VariableSpec("required-name", "string"),)
+    with pytest.raises(DeclarationError, match="required-name"):
+        variables_module.resolve_declared_variables(specs, {})
+
+
+def test_declared_variables_reject_non_none_secret_value() -> None:
+    specs = (VariableSpec("token", "string", secret=True, required=False),)
+    with pytest.raises(DeclarationError, match="token"):
+        variables_module.resolve_declared_variables(specs, {"token": "secret"})
+
+
+def test_declared_variables_allow_unset_optional_secret() -> None:
+    specs = (VariableSpec("token", "string", secret=True, required=False),)
+    assert variables_module.resolve_declared_variables(specs, {"token": None}) == {"token": None}

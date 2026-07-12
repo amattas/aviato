@@ -212,7 +212,7 @@ def diagnose(
         )
 
     declaration_variables = declaration_variables or {}
-    report.secret_in_declaration = any(name in declaration_variables for name in secret_var_names)
+    report.secret_in_declaration = any(declaration_variables.get(name) is not None for name in secret_var_names)
 
     report.drift_automation_present = _has_drift_automation(root, drift_automation_markers)
     report.prerequisites = _probe_prerequisites(root, prerequisite_paths or {})

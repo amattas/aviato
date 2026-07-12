@@ -148,6 +148,11 @@ def test_no_secret_flag_when_clean(tmp_path: Path) -> None:
     assert report.secret_in_declaration is False
 
 
+def test_unset_secret_typed_var_in_declaration_is_not_flagged(tmp_path: Path) -> None:
+    report = diagnose(tmp_path, [], declaration_variables={"token": None}, secret_var_names=("token",))
+    assert report.secret_in_declaration is False
+
+
 def test_seed_once_integrity_divergence_is_reported_not_overwritten(tmp_path: Path) -> None:
     scaffold(tmp_path, [ScaffoldItem("Dockerfile", "FROM x\n", "#", True)], profile="p", version="v1")
     (tmp_path / "Dockerfile").write_text("FROM tampered\n")

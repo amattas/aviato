@@ -143,12 +143,16 @@ def test_node_ci_workflow_renders_typecheck_from_variant() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     js = next(
         i
-        for i in materialize_items(reg, "node-service", {"language-variant": "javascript"}, pin="0")
+        for i in materialize_items(
+            reg, "node-service", {"project-name": "acme", "language-variant": "javascript"}, pin="0"
+        )
         if i.output == ".github/workflows/aviato-ci.yml"
     )
     ts = next(
         i
-        for i in materialize_items(reg, "node-service", {"language-variant": "typescript"}, pin="0")
+        for i in materialize_items(
+            reg, "node-service", {"project-name": "acme", "language-variant": "typescript"}, pin="0"
+        )
         if i.output == ".github/workflows/aviato-ci.yml"
     )
     assert "run-typecheck: false" in js.body

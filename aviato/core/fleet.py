@@ -8,7 +8,7 @@ from .bootstrap import is_library
 from .composition import resolve_profile
 from .declaration import Declaration, load_declaration
 from .diagnosis import ExpectedArtifact, diagnose
-from .errors import AviatoError
+from .errors import AviatoError, DeclarationError
 from .onboarding import resolved_artifacts
 from .registry import Registry
 
@@ -26,6 +26,7 @@ class RepoScan:
     prerequisites: dict[str, bool] = field(default_factory=dict)
     drift_automation_present: bool | None = None
     error: str | None = None
+    invalid_declaration: bool = False
     # True when the repo was skipped because it is archived and --include-archived was not
     # passed (§5.11). Distinct from ``error`` (it is a deliberate skip, not a failure).
     skipped_archived: bool = False
@@ -100,6 +101,9 @@ def scan_fleet(
                 is_library=is_library(root),
                 bootstrap_declared=declaration.bootstrap,
             )
+        except DeclarationError as exc:
+            scans.append(RepoScan(path=str(root), error=str(exc), invalid_declaration=True))
+            continue
         except AviatoError as exc:
             scans.append(RepoScan(path=str(root), error=str(exc)))
             continue

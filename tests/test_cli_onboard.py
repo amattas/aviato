@@ -148,7 +148,11 @@ def test_doctor_reports_clean_and_missing(tmp_path: Path, capsys: pytest.Capture
     # A consumer repo declaring python-library with one matching managed file present.
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text(
+        "profile: python-library\nversion: v1\nvariables:\n"
+        "  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
     # scaffold the editorconfig body exactly as the resolved set expects
     from aviato.core.composition import resolve_profile
     from aviato.core.registry import Registry
@@ -177,7 +181,11 @@ def test_doctor_rejects_bootstrap_declaration_in_non_library(
     # tmp_path repo has no aviato/library structure, so is_library(root) is False.
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\nbootstrap: true\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text(
+        "profile: python-library\nversion: v1\nbootstrap: true\nvariables:\n"
+        "  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
     rc = main(["doctor", str(tmp_path)])
     err = capsys.readouterr().err
     assert rc == 2

@@ -12,6 +12,7 @@ from .model import ResolvedSet, TemplateModule
 from .registry import Registry
 from .render import render
 from .scaffold import ScaffoldItem
+from .variables import resolve_declared_variables
 
 
 def _canon(value: Any) -> str:
@@ -145,8 +146,7 @@ def resolved_artifacts(
     """
     resolved = resolve_profile(registry, profile, overrides=dict(overrides or {}), docs=docs)
     derived_rules = registry.profile_doc(profile).get("derived_variables", [])
-    effective_variables = {spec.name: spec.default for spec in resolved.variables if spec.default is not None}
-    effective_variables.update(variables)
+    effective_variables = resolve_declared_variables(resolved.variables, variables)
     validate_variable_constraints(registry, profile, effective_variables)
     # finding 28: resolve_variables emits None for unset OPTIONAL variables; render()
     # substitutes str(value) for any present key, so a None entry would bake the

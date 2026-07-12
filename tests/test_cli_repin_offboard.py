@@ -68,6 +68,25 @@ def test_repin_dry_run_then_write(
     assert "version=0" not in (tmp_path / "ruff.toml").read_text()
 
 
+def test_repin_rejects_invalid_declared_enum_before_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    declaration_path = tmp_path / ".github" / "aviato.yaml"
+    declaration_path.parent.mkdir()
+    original = (
+        "profile: node-service\nversion: v0\nvariables:\n"
+        "  project-name: sample\n  language-variant: ruby\n"
+    )
+    declaration_path.write_text(original, encoding="utf-8")
+
+    rc = main(["repin", str(tmp_path), "0", "--write", "--override-version-pin"])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "language-variant" in captured.err
+    assert declaration_path.read_text(encoding="utf-8") == original
+
+
 def test_repin_reports_skipped_hand_edited_files(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

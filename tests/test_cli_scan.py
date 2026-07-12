@@ -10,11 +10,16 @@ from aviato.cli import _scan_has_file_drift, main
 from aviato.core.file_drift_flow import _PROPOSABLE
 from aviato.core.scaffold import ScaffoldItem, scaffold
 
+PYTHON_DECLARATION = (
+    "profile: python-library\nversion: v1\nvariables:\n"
+    "  distribution-name: acme\n  import-name: acme\n"
+)
+
 
 def test_scan_prints_per_repo_lines(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
     plain = tmp_path / "plain"
     plain.mkdir()
 
@@ -29,11 +34,30 @@ def test_scan_prints_per_repo_lines(tmp_path: Path, capsys: pytest.CaptureFixtur
     assert "ERROR" not in captured.out
 
 
+def test_scan_rejects_invalid_declared_enum_before_fix_proposal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    consumer = tmp_path / "c"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github" / "aviato.yaml").write_text(
+        "profile: node-service\nversion: v0\nvariables:\n"
+        "  project-name: sample\n  language-variant: ruby\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "_propose_file_drift", lambda *args, **kwargs: pytest.fail("opened proposal"))
+
+    rc = main(["scan", str(consumer), "--fix"])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "language-variant" in captured.err
+
+
 def test_scan_surfaces_seed_once_divergence(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # review #2: the fleet sweep must surface §6.3 seed-once tamper/deletion (not only `doctor`).
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
     # Seed LICENSE (records its hash in the report-only sidecar), then TAMPER it.
     license_item = [ScaffoldItem("LICENSE", "MIT v1\n", "#", seed_once=True)]
     scaffold(consumer, license_item, profile="python-library", version="v1")
@@ -79,7 +103,7 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
     # tree would clobber uncommitted work and race a second scan.
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
     # Make .editorconfig mergeable-drift: correct body, stale marker hash → proposable via --fix.
     from aviato.core.composition import resolve_profile
     from aviato.core.registry import Registry
@@ -121,7 +145,9 @@ def test_scan_fix_blocks_incompatible_version_pin(tmp_path: Path, capsys: pytest
     # 0.x tool can never satisfy, and assert --fix reports the mismatch (and does not crash).
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text("profile: python-library\nversion: 2.0.0\n", encoding="utf-8")
+    (consumer / ".github" / "aviato.yaml").write_text(
+        PYTHON_DECLARATION.replace("version: v1", "version: 2.0.0"), encoding="utf-8"
+    )
     rc = main(["scan", str(consumer), "--fix"])
     err = capsys.readouterr().err
     assert rc == 1
@@ -133,7 +159,7 @@ def test_scan_surfaces_missing_drift_automation(tmp_path: Path, capsys: pytest.C
     # scheduled drift caller must be flagged, not read as healthy at scale.
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
 
     rc = main(["scan", str(consumer)])
     err = capsys.readouterr().err
@@ -148,7 +174,7 @@ def test_scan_audit_lists_open_drift_issues(
     # issues — ephemeral output, no stored inventory (§2.2).
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
     monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:o/r.git")
     monkeypatch.setattr(
         cli,

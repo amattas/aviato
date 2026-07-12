@@ -50,8 +50,33 @@ class FakePlatform:
 def _consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text("profile: python-library\nversion: v0\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text(
+        "profile: python-library\nversion: v0\nvariables:\n"
+        "  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
     return tmp_path
+
+
+def test_drift_report_rejects_invalid_declared_enum_before_proposal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    consumer = _consumer(tmp_path)
+    (consumer / ".github" / "aviato.yaml").write_text(
+        "profile: node-service\nversion: v0\nvariables:\n"
+        "  project-name: sample\n  language-variant: ruby\n",
+        encoding="utf-8",
+    )
+    fake = FakePlatform()
+    monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
+    monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:owner/repo.git")
+
+    rc = cli.main(["drift-report", str(consumer)])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "language-variant" in captured.err
+    assert fake.calls == []
 
 
 def test_drift_report_proposes_missing_files_and_reports_settings(

@@ -56,6 +56,39 @@ def resolve_variables(
     return resolved
 
 
+def resolve_declared_variables(
+    specs: Sequence[VariableSpec], values: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Validate and resolve the declaration tier through the trusted resolver.
+
+    Declaration mappings are closed over the profile's variable specifications:
+    unknown names are rejected before any value resolution. The existing
+    :func:`resolve_variables` path remains the single implementation of defaulting,
+    required-value checks, and type coercion. Secret-typed declarations may be
+    present only with an unset (``None``) value; concrete secret values must never
+    enter materialization or diagnosis.
+    """
+    known_names = {spec.name for spec in specs}
+    unknown_names = set(values) - known_names
+    if unknown_names:
+        raise DeclarationError(f"unknown declaration variable(s): {sorted(unknown_names)}")
+
+    # Validate explicitly supplied values before checking unrelated required values.
+    # This keeps the operator-facing failure anchored to the malformed declaration
+    # entry while still delegating all coercion/default/required logic to one resolver.
+    ordered_specs = tuple(spec for spec in specs if spec.name in values) + tuple(
+        spec for spec in specs if spec.name not in values
+    )
+    resolved = resolve_variables(ordered_specs, flags={}, declaration=values, env={}, autodetect={})
+    secret_names = {spec.name for spec in specs if spec.secret}
+    offending = {name for name in secret_names if resolved.get(name) is not None}
+    if offending:
+        raise DeclarationError(
+            f"secret-typed variable(s) may not be set in the declaration: {sorted(offending)} (§8.15)"
+        )
+    return resolved
+
+
 def writeback_variables(specs: Sequence[VariableSpec], resolved: Mapping[str, Any]) -> dict[str, Any]:
     """Return the subset of ``resolved`` persistable to the declaration (§5.2, §6.6).
 

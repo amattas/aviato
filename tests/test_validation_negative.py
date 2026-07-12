@@ -149,6 +149,7 @@ def test_library_bootstrap_profile_mismatch_is_detected(repo_copy: Path) -> None
     # expected managed files instead of checking only the two workflow callers.
     decl = repo_copy / ".github" / "aviato.yaml"
     text = decl.read_text(encoding="utf-8").replace("profile: aviato-library", "profile: python-library")
+    text = text.replace("variables:\n", "variables:\n  distribution-name: aviato\n")
     decl.write_text(text, encoding="utf-8")
     errors = validate(repo_copy)
     assert any("missing Library bootstrap managed artifact" in e for e in errors)

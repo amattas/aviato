@@ -963,7 +963,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
             # `aviato scan` over a fleet, and an all-errors run reporting success would mask a
             # broken fleet. Error rows go to stderr so the stdout TSV stays machine-parseable.
             print(f"{scan.path}\tERROR: {scan.error}", file=sys.stderr)
-            rc = 1
+            rc = max(rc, 2 if scan.invalid_declaration else 1)
             continue
         summary = ", ".join(f"{output}={status}" for output, status in sorted(scan.statuses.items())) or "—"
         flags = " [secret-in-declaration]" if scan.secret_in_declaration else ""

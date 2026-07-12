@@ -24,7 +24,11 @@ class _FakePlatform:
 def _consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text(f"profile: python-library\nversion: {__version__}\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text(
+        f"profile: python-library\nversion: {__version__}\nvariables:\n"
+        "  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
     return tmp_path
 
 

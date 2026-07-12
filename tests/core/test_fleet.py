@@ -12,12 +12,21 @@ from aviato.paths import MODULE_SOURCE_ROOT
 def _make_consumer(root: Path, *, scaffold_all: bool) -> None:
     github = root / ".github"
     github.mkdir(parents=True)
-    (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text(
+        "profile: python-library\nversion: v1\nvariables:\n"
+        "  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
     if scaffold_all:
         reg = Registry(MODULE_SOURCE_ROOT)
         # Scaffold with the same pin the declaration records, so the embedded
         # workflow refs match what fleet expects (parity, §5.11).
-        items = materialize_items(reg, "python-library", variables={}, pin="v1")
+        items = materialize_items(
+            reg,
+            "python-library",
+            variables={"distribution-name": "acme", "import-name": "acme"},
+            pin="v1",
+        )
         scaffold(root, items, profile="python-library", version="v1")
 
 
