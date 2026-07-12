@@ -23,6 +23,7 @@ class ScaffoldItem:
     body: str
     comment: str
     seed_once: bool = False
+    input_hash: str = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,7 @@ def read_sidecar(root: Path) -> SeedSidecar:
     # never crash diagnosis/scaffold — and thus never abort a whole fleet scan (the per-repo
     # guard in scan_fleet catches only AviatoError, so a raw JSONDecodeError would escape).
     try:
+
         def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             result: dict[str, Any] = {}
             for key, value in pairs:
@@ -117,9 +119,7 @@ def read_sidecar(root: Path) -> SeedSidecar:
     except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError):
         return SeedSidecar("corrupt", {})
     if not isinstance(data, dict) or not all(
-        isinstance(key, str)
-        and isinstance(value, str)
-        and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+        isinstance(key, str) and isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
         for key, value in data.items()
     ):
         return SeedSidecar("corrupt", {})
@@ -195,7 +195,13 @@ def render_managed(item: ScaffoldItem, *, profile: str, version: str) -> str:
     that uses it produces a merge that diagnosis classifies clean (not dirty for a
     missing marker).
     """
-    marker = render_marker(profile=profile, version=version, body=item.body, comment=item.comment)
+    marker = render_marker(
+        profile=profile,
+        version=version,
+        body=item.body,
+        comment=item.comment,
+        input_hash=item.input_hash,
+    )
     return f"{marker}\n{item.body}"
 
 
@@ -308,6 +314,7 @@ def scaffold(
                     and marker.hash == expected_hash
                     and marker.profile == profile
                     and marker.version == version
+                    and marker.input_hash == item.input_hash
                 ):
                     result.unchanged.append(output)
                     continue

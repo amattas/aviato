@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 import pytest
 
 from aviato.core.errors import PathConfinementError
 from aviato.core.offboarding import offboard
-from aviato.core.scaffold import ScaffoldItem, scaffold
+from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
+from aviato.core.scaffold import scaffold
+
+ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 
 
 def _setup_consumer(root: Path) -> None:

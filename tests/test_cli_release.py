@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,9 @@ import pytest
 from aviato import __version__
 from aviato.cli import _version_pin_error, main
 from aviato.core.declaration import Declaration
-from aviato.core.diagnosis import ExpectedArtifact
+from aviato.core.diagnosis import ExpectedArtifact as _ExpectedArtifact
+
+ExpectedArtifact = partial(_ExpectedArtifact, input_hash="0" * 64)
 
 
 def _managed(profile: str, version: str) -> str:

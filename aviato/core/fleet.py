@@ -37,7 +37,12 @@ def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[Ex
     # onboarding/doctor — so the fleet scan doesn't report false drift for
     # variant-excluded consumers or miss docs-enabled artifacts (§5.11 parity).
     return [
-        ExpectedArtifact(a.output, a.body if not a.seed_once else "", a.seed_once)
+        ExpectedArtifact(
+            a.output,
+            a.body if not a.seed_once else "",
+            a.seed_once,
+            input_hash=a.input_hash,
+        )
         for a in resolved_artifacts(
             registry,
             declaration.profile,

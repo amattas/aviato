@@ -8,6 +8,7 @@ from typing import Any
 from .composition import resolve_profile
 from .declaration import Declaration
 from .errors import CompositionError, DeclarationError
+from .marker import canonical_input_hash
 from .model import ResolvedSet, TemplateModule
 from .registry import Registry
 from .render import render
@@ -125,6 +126,7 @@ class ResolvedArtifact:
     body: str  # rendered, without the managed marker
     comment: str
     seed_once: bool
+    input_hash: str
 
 
 def resolved_artifacts(
@@ -159,6 +161,9 @@ def resolved_artifacts(
     # template referencing it fails strict render (managed) or keeps the
     # placeholder (seed-once) instead of leaking the value.
     secret_names = {spec.name for spec in resolved.variables if spec.secret}
+    input_values = {name: value for name, value in effective_variables.items() if name not in secret_names}
+    input_values["docs"] = docs
+    input_hash = canonical_input_hash(input_values)
     effective_variables = {
         name: value for name, value in effective_variables.items() if value is not None and name not in secret_names
     }
@@ -173,7 +178,9 @@ def resolved_artifacts(
         # Seed-once starter files are rendered once (leniently — the developer owns
         # and completes them); managed files are re-rendered strictly every sync.
         rendered = render(body, render_vars, strict=not template.seed_once)
-        artifacts.append(ResolvedArtifact(template.output_path, rendered, template.comment or "#", template.seed_once))
+        artifacts.append(
+            ResolvedArtifact(template.output_path, rendered, template.comment or "#", template.seed_once, input_hash)
+        )
     return artifacts
 
 
@@ -193,7 +200,13 @@ def materialize_items(
     so the materialized set matches what diagnosis/drift expect for the same repo.
     """
     return [
-        ScaffoldItem(output=a.output, body=a.body, comment=a.comment, seed_once=a.seed_once)
+        ScaffoldItem(
+            output=a.output,
+            body=a.body,
+            comment=a.comment,
+            seed_once=a.seed_once,
+            input_hash=a.input_hash,
+        )
         for a in resolved_artifacts(
             registry, profile, variables, pin=pin, docs=docs, bootstrap=bootstrap, overrides=overrides
         )

@@ -390,7 +390,12 @@ def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[Ex
     drift expect exactly what sync would write.
     """
     return [
-        ExpectedArtifact(a.output, a.body if not a.seed_once else "", a.seed_once)
+        ExpectedArtifact(
+            a.output,
+            a.body if not a.seed_once else "",
+            a.seed_once,
+            input_hash=a.input_hash,
+        )
         for a in resolved_artifacts(
             registry,
             declaration.profile,
@@ -613,8 +618,7 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         baselined = [
             item.output
             for item in items
-            if item.seed_once
-            and confined_target(target, item.output, operation="inspect seed baseline").exists()
+            if item.seed_once and confined_target(target, item.output, operation="inspect seed baseline").exists()
         ]
         for output in baselined:
             print(f"baselined {output}")
@@ -711,7 +715,12 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
                 continue
             files[artifact.output] = artifact.body
         else:
-            item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+            item = ScaffoldItem(
+                output=artifact.output,
+                body=artifact.body,
+                comment=artifact.comment,
+                input_hash=artifact.input_hash,
+            )
             files[artifact.output] = render_managed(item, profile=args.profile, version=args.pin)
 
     body_lines = [
@@ -929,7 +938,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    expected = [ExpectedArtifact(i.output, i.body, i.seed_once) for i in items]
+    expected = [ExpectedArtifact(i.output, i.body, i.seed_once, input_hash=i.input_hash) for i in items]
     pin_error = _version_pin_error(root, declaration, expected, args.override_version_pin)
     if pin_error:
         print(pin_error, file=sys.stderr)
@@ -1119,7 +1128,12 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
     ):
         if artifact.seed_once:
             continue
-        item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+        item = ScaffoldItem(
+            output=artifact.output,
+            body=artifact.body,
+            comment=artifact.comment,
+            input_hash=artifact.input_hash,
+        )
         managed_bodies[artifact.output] = render_managed(item, profile=declaration.profile, version=declaration.version)
 
     # review #5: drift is DIAGNOSED against the operator's local tree (above), but the proposal
@@ -1250,9 +1264,7 @@ def cmd_repin(args: argparse.Namespace) -> int:
         bootstrap=updated.bootstrap,
         overrides=updated.overrides,
     )
-    if preflight_seed_integrity(
-        root, items, allow_fresh_seed_initialization=False
-    ).unknown:
+    if preflight_seed_integrity(root, items, allow_fresh_seed_initialization=False).unknown:
         _print_seed_integrity_error()
         return 2
     _dump_consumer_declaration(updated, root)
@@ -1351,9 +1363,7 @@ def _repin_proposal(args: argparse.Namespace) -> int:
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    if preflight_seed_integrity(
-        clone, items, allow_fresh_seed_initialization=False
-    ).unknown:
+    if preflight_seed_integrity(clone, items, allow_fresh_seed_initialization=False).unknown:
         _print_seed_integrity_error()
         return 2
     _dump_consumer_declaration(updated, clone)
@@ -1777,7 +1787,12 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         ):
             if artifact.seed_once:
                 continue
-            item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+            item = ScaffoldItem(
+                output=artifact.output,
+                body=artifact.body,
+                comment=artifact.comment,
+                input_hash=artifact.input_hash,
+            )
             managed_bodies[artifact.output] = render_managed(
                 item, profile=declaration.profile, version=declaration.version
             )
@@ -1954,9 +1969,7 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
     if not locations:
         print("profile declares no version-source locations", file=sys.stderr)
         return 2
-    present = [
-        loc for loc in locations if confined_target(root, loc, operation="probe version source").is_file()
-    ]
+    present = [loc for loc in locations if confined_target(root, loc, operation="probe version source").is_file()]
     try:
         changed = bump_files(root, locations, args.version, args.build_number)
     except AviatoError as exc:

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 import pytest
 import yaml
 
 from aviato.cli import main
-from aviato.core.scaffold import ScaffoldItem, scaffold
+from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
+from aviato.core.scaffold import scaffold
+
+ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 
 
 def _adopt(tmp_path: Path, *extra: str) -> int:

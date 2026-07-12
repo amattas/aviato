@@ -547,7 +547,12 @@ def _check_library_bootstrap(root: Path, errors: list[str]) -> None:
         if artifact.seed_once:
             expected_seeds.add(artifact.output)
             continue
-        item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+        item = ScaffoldItem(
+            output=artifact.output,
+            body=artifact.body,
+            comment=artifact.comment,
+            input_hash=artifact.input_hash,
+        )
         expected[artifact.output] = render_managed(item, profile=declaration.profile, version=declaration.version)
     if not expected:
         errors.append("Library bootstrap declaration resolves no managed artifacts (§5.10)")
@@ -559,6 +564,27 @@ def _check_library_bootstrap(root: Path, errors: list[str]) -> None:
             continue
         text = path.read_text(encoding="utf-8")
         if text != body:
+            # A pristine legacy marker is intentionally one safe sync away from the
+            # current marker grammar. Do not make the Library's own validation gate
+            # impossible to run during that migration, but accept only the legacy
+            # marker case: body/profile/version/hash safety must all still agree.
+            from .core.marker import content_hash, parse_marker_from_text, strip_marker_from_text
+
+            live_marker = parse_marker_from_text(text)
+            expected_marker = parse_marker_from_text(body)
+            live_body = strip_marker_from_text(text)
+            clean_legacy = (
+                live_marker is not None
+                and expected_marker is not None
+                and live_marker.input_hash is None
+                and live_marker.profile == expected_marker.profile
+                and live_marker.version == expected_marker.version
+                and live_marker.hash == content_hash(live_body)
+                and live_body == strip_marker_from_text(body)
+            )
+        else:
+            clean_legacy = True
+        if not clean_legacy:
             errors.append(f"{rel_path} is stale: it does not match the rendered Library bootstrap artifact (§5.10)")
         if f"{LIBRARY_SLUG}/.github/workflows/" in text:
             errors.append(f"{rel_path} uses a released Aviato ref in bootstrap; use local workflow refs (§5.10)")

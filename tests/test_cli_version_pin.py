@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 import pytest
 
 from aviato.cli import _recorded_versions, main
-from aviato.core.diagnosis import ExpectedArtifact
+from aviato.core.diagnosis import ExpectedArtifact as _ExpectedArtifact
 from aviato.core.errors import PathConfinementError
+
+ExpectedArtifact = partial(_ExpectedArtifact, input_hash="0" * 64)
 
 
 def _consumer(tmp_path: Path, pin: str) -> Path:

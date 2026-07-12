@@ -19,6 +19,7 @@ class ExpectedArtifact:
     output_path: str
     body: str
     seed_once: bool = False
+    input_hash: str = field(kw_only=True)
 
 
 @dataclass
@@ -105,7 +106,12 @@ def _live_body(text: str) -> str:
 
 
 def _classify_managed(
-    root: Path, relative: str, expected_body: str, *, profile: str | None = None
+    root: Path,
+    relative: str,
+    expected_body: str,
+    input_hash: str,
+    *,
+    profile: str | None = None,
 ) -> ArtifactStatus:
     target = confined_target(root, relative, operation="diagnose artifact")
     if not target.exists():
@@ -142,7 +148,7 @@ def _classify_managed(
     # diagnosis and scaffold agree on the same file (a stale marker is regenerable,
     # not clean). The marker version is excluded (§5.5), so a version-only move stays
     # clean.
-    if live == expected and marker.hash == live:
+    if live == expected and marker.hash == live and marker.input_hash == input_hash:
         return "clean"
     # The marker records the hash of the body Aviato last wrote. If the live body
     # still matches it (template/variable moved) OR already matches expected (only the
@@ -210,7 +216,7 @@ def diagnose(
                 report.seed_divergence.append(artifact.output_path)
             continue
         report.statuses[artifact.output_path] = _classify_managed(
-            root, artifact.output_path, artifact.body, profile=profile
+            root, artifact.output_path, artifact.body, artifact.input_hash, profile=profile
         )
 
     declaration_variables = declaration_variables or {}

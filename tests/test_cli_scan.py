@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,7 +10,10 @@ from aviato import cli
 from aviato.cli import _scan_has_file_drift, main
 from aviato.core.errors import AviatoError
 from aviato.core.file_drift_flow import _PROPOSABLE
-from aviato.core.scaffold import ScaffoldItem, scaffold
+from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
+from aviato.core.scaffold import scaffold
+
+ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 
 PYTHON_DECLARATION = (
     "profile: python-library\nversion: v1\nvariables:\n"

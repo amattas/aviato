@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 import pytest
 
+from aviato.core.diagnosis import ExpectedArtifact, diagnose
 from aviato.core.errors import PathConfinementError
-from aviato.core.marker import content_hash
-from aviato.core.scaffold import ScaffoldItem, SeedSidecar, read_sidecar, scaffold
+from aviato.core.marker import content_hash, parse_marker_from_text
+from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
+from aviato.core.scaffold import SeedSidecar, read_sidecar, scaffold
+
+INPUT_HASH = "a" * 64
+ScaffoldItem = partial(_ScaffoldItem, input_hash=INPUT_HASH)
 
 
 def test_scaffold_rejects_symlinked_parent(tmp_path: Path) -> None:
@@ -24,12 +30,31 @@ def test_scaffold_rejects_symlinked_parent(tmp_path: Path) -> None:
 
 
 def test_writes_managed_file_with_marker_atomically(tmp_path: Path) -> None:
-    plan = [ScaffoldItem(output="cfg.py", body="X = 1\n", comment="#", seed_once=False)]
+    plan = [ScaffoldItem(output="cfg.py", body="X = 1\n", comment="#", seed_once=False, input_hash=INPUT_HASH)]
     result = scaffold(tmp_path, plan, profile="p", version="v1")
     text = (tmp_path / "cfg.py").read_text()
     assert text.startswith("# aviato:managed profile=p version=v1 hash=")
     assert "X = 1" in text
     assert result.written == ["cfg.py"]
+
+
+def test_clean_legacy_marker_is_restamped_once_without_changing_body(tmp_path: Path) -> None:
+    body = "X = 1\n"
+    (tmp_path / "cfg.py").write_text(
+        f"# aviato:managed profile=p version=v1 hash={content_hash(body)}\n{body}", encoding="utf-8"
+    )
+    item = ScaffoldItem("cfg.py", body, "#", False, input_hash=INPUT_HASH)
+    expected = ExpectedArtifact("cfg.py", body, False, input_hash=INPUT_HASH)
+
+    assert diagnose(tmp_path, [expected], profile="p").statuses["cfg.py"] == "mergeable-drift"
+    result = scaffold(tmp_path, [item], profile="p", version="v1")
+
+    assert result.written == ["cfg.py"]
+    text = (tmp_path / "cfg.py").read_text(encoding="utf-8")
+    assert text.endswith(body)
+    marker = parse_marker_from_text(text)
+    assert marker is not None and marker.input_hash == INPUT_HASH
+    assert diagnose(tmp_path, [expected], profile="p").statuses["cfg.py"] == "clean"
 
 
 def test_creates_parent_directories(tmp_path: Path) -> None:
@@ -207,9 +232,7 @@ def test_corrupt_sidecar_fails_closed_before_any_managed_write(tmp_path: Path) -
 
 def test_sidecar_with_invalid_hash_record_is_corrupt(tmp_path: Path) -> None:
     (tmp_path / ".github").mkdir()
-    (tmp_path / ".github" / "aviato.seed.json").write_text(
-        '{"Dockerfile": "not-a-sha256"}\n', encoding="utf-8"
-    )
+    (tmp_path / ".github" / "aviato.seed.json").write_text('{"Dockerfile": "not-a-sha256"}\n', encoding="utf-8")
 
     assert read_sidecar(tmp_path) == SeedSidecar("corrupt", {})
 
@@ -242,9 +265,7 @@ def test_incomplete_sidecar_fails_closed_before_any_write(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize("sidecar_body", ["{ corrupt", "{}\n"])
-def test_unknown_sidecar_with_absent_expected_seed_fails_closed(
-    tmp_path: Path, sidecar_body: str
-) -> None:
+def test_unknown_sidecar_with_absent_expected_seed_fails_closed(tmp_path: Path, sidecar_body: str) -> None:
     (tmp_path / ".github").mkdir()
     (tmp_path / ".github" / "aviato.seed.json").write_text(sidecar_body, encoding="utf-8")
 
@@ -287,9 +308,7 @@ def test_explicit_rebaseline_replaces_obsolete_records_with_current_seed_set(tmp
     )
 
     assert result.baselined == ["Dockerfile"]
-    assert read_sidecar(tmp_path) == SeedSidecar(
-        "ok", {"Dockerfile": content_hash("FROM operator\n")}
-    )
+    assert read_sidecar(tmp_path) == SeedSidecar("ok", {"Dockerfile": content_hash("FROM operator\n")})
 
 
 def test_non_utf8_managed_file_is_skipped_not_crashed(tmp_path: Path) -> None:
