@@ -61,7 +61,7 @@ ghcr-publish:
   runner: linux
 docs-pages:
   # Read-only build + isolated branch push + optional no-consumer-code Pages deploy.
-  privileges: ["contents: read", "contents: write", "pages: write", "id-token: write"]
+  privileges: ["contents: read", "contents: write", "pages: read", "pages: write", "id-token: write"]
   runner: linux
 app-store-connect:
   # actions: read — the §11.4 environment-reviewer probe reads environment protection rules.

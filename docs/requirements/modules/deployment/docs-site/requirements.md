@@ -47,7 +47,8 @@ prune via `mike delete` when `docs-retention` > 0 → bundle the local docs bran
 git-bundle artifact → materialize the exact `refs/heads/<docs-branch>` tree and
 reject escaping symlinks → handoff to the push job, which fast-forward-pushes it.
 **Auth (C12-W4, adapted for branch deploys):** permissions are per-job — the build
-job runs the consumer's emit command and holds only `contents: read`; only the
+job runs the consumer's emit command and holds only read scopes (`contents: read`
+plus the `pages: read` required by `configure-pages`); only the
 separate push job, which runs **no consumer code**, holds `contents: write` and
 verifies the bundle fast-forwards before pushing (refuses on concurrent-deploy or
 rewritten-history mismatch). When `serve-pages=true`, the read-only build configures

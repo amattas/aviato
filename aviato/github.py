@@ -274,9 +274,11 @@ def pages_build_type_is_workflow(slug: str) -> bool | None:
     if not isinstance(pages, dict):
         return None  # 404 (ambiguous: off vs no-perms vs invisible) or non-dict response
     build_type = pages.get("build_type")
-    if build_type is None:
-        return None  # field absent — unknown, never a determinate "no"
-    return bool(build_type == "workflow")
+    if build_type == "workflow":
+        return True
+    if build_type == "legacy":
+        return False
+    return None  # missing, malformed, or a new enum value is unknown, never a determinate "no"
 
 
 def active_branch_rules(slug: str, branch: str) -> list[dict[str, Any]]:

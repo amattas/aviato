@@ -229,6 +229,14 @@ def test_pages_build_type_workflow_resolves_workflow_vs_legacy(monkeypatch) -> N
     assert gh.pages_build_type_is_workflow("o/r") is False
 
 
+@pytest.mark.parametrize("build_type", [True, 1, [], {}, "actions", "branch", "WORKFLOW", ""])
+def test_pages_build_type_workflow_returns_none_for_malformed_or_unknown_enum(monkeypatch, build_type) -> None:
+    from aviato import github as gh
+
+    monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: {"build_type": build_type})
+    assert gh.pages_build_type_is_workflow("o/r") is None
+
+
 def test_upsert_ruleset_matches_when_list_omits_target(monkeypatch: pytest.MonkeyPatch) -> None:
     # C12-2: GitHub's ruleset LIST summary may omit `target`. A same-name candidate with no target can
     # only be THIS ruleset, so upsert must UPDATE it (not POST a duplicate / 422).

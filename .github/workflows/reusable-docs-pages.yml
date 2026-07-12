@@ -68,7 +68,8 @@ on:
         default: 0
 
 # C12-W4 (adapted for branch deploys): permissions are PER-JOB. The build job runs the
-# consumer's emit `eval` and holds ONLY `contents: read`; mike commits land on a LOCAL
+# consumer's emit `eval` and holds only read scopes (`contents` and Pages configuration);
+# mike commits land on a LOCAL
 # branch handed off as a git bundle artifact. Only the separate push job — which runs
 # no consumer code — holds `contents: write`.
 permissions: {}
@@ -83,6 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pages: read
     outputs:
       highest: ${{ steps.guard.outputs.highest }}
     defaults:

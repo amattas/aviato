@@ -317,8 +317,9 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
     build = wf["jobs"]["build"]
     push = wf["jobs"]["push"]
     deploy = wf["jobs"]["deploy"]
-    assert build["permissions"] == {"contents": "read"}
+    assert build["permissions"] == {"contents": "read", "pages": "read"}
     assert push["permissions"] == {"contents": "write"}
+    assert "if" not in push, "serve-pages=false must still push the canonical docs branch"
     assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
     assert set(deploy["needs"]) == {"build", "push"}
     assert "inputs.serve-pages" in str(deploy["if"])
@@ -367,7 +368,7 @@ def test_starter_docs_deploys_exact_branch_artifact_after_push() -> None:
     assert starter["permissions"] == {}
     assert starter["concurrency"]["cancel-in-progress"] is False
     assert "${{ github.repository }}" in starter["concurrency"]["group"]
-    assert starter["jobs"]["build"]["permissions"] == {"contents": "read"}
+    assert starter["jobs"]["build"]["permissions"] == {"contents": "read", "pages": "read"}
     assert starter["jobs"]["push"]["permissions"] == {"contents": "write"}
     deploy = starter["jobs"]["deploy"]
     assert set(deploy["needs"]) == {"build", "push"}
@@ -377,6 +378,49 @@ def test_starter_docs_deploys_exact_branch_artifact_after_push() -> None:
     assert 'git archive "refs/heads/${DOCS_BRANCH}"' in body
     assert "refusing escaping symlink" in body
     assert "actions/upload-pages-artifact@" in body
+
+
+def test_starter_invalid_tag_skips_every_publish_stage(tmp_path) -> None:
+    starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
+    build = starter["jobs"]["build"]
+    assert build["outputs"]["publish"] == "${{ steps.release.outputs.publish }}"
+    steps = build["steps"]
+    release_index = next(i for i, step in enumerate(steps) if step.get("id") == "release")
+    release = steps[release_index]
+    for step in steps[release_index + 1 :]:
+        assert "steps.release.outputs.publish == 'true'" in str(step.get("if", "")), step
+    assert "needs.build.outputs.publish == 'true'" in str(starter["jobs"]["push"]["if"])
+    deploy_if = str(starter["jobs"]["deploy"]["if"])
+    assert "needs.build.outputs.publish == 'true'" in deploy_if
+    assert "needs.push.result == 'success'" in deploy_if
+
+    output = tmp_path / "github-output"
+    env = os.environ | {
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_REF_TYPE": "tag",
+        "GITHUB_REF_NAME": "1foo.2bar.3baz",
+    }
+    result = subprocess.run(["bash", "-c", release["run"]], env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == ["publish=false"]
+
+
+@pytest.mark.parametrize(
+    ("ref_type", "ref_name", "expected"),
+    [("tag", "1.2.3", ["publish=true", "tag=1.2.3"]), ("branch", "main", ["publish=true", "tag="])],
+)
+def test_starter_valid_refs_publish(ref_type: str, ref_name: str, expected: list[str], tmp_path) -> None:
+    starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
+    release = next(step for step in starter["jobs"]["build"]["steps"] if step.get("id") == "release")
+    output = tmp_path / "github-output"
+    env = os.environ | {
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_REF_TYPE": ref_type,
+        "GITHUB_REF_NAME": ref_name,
+    }
+    result = subprocess.run(["bash", "-c", release["run"]], env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == expected
 
 
 def test_registry_publishes_run_in_deployment_environments() -> None:
@@ -646,9 +690,9 @@ def test_docs_publish_installs_pinned_toolchain_fail_closed() -> None:
     assert "exit 1" in run
     assert 'python3 -m pip install --quiet -r "${DOCS_REQUIREMENTS}"' in run
 
-    # C12-W4: the consumer-eval emit step runs in `build`, which holds only contents:read;
-    # contents:write appears ONLY in the separate `push` job.
-    assert build["permissions"] == {"contents": "read"}
+    # C12-W4: consumer code runs under read-only scopes. configure-pages requires
+    # pages:read; contents:write appears ONLY in the separate push job.
+    assert build["permissions"] == {"contents": "read", "pages": "read"}
     emit = next(s for s in steps if s.get("name") == "Emit language API docs")
     assert steps.index(install) < steps.index(emit)
     assert wf["jobs"]["push"]["permissions"] == {"contents": "write"}

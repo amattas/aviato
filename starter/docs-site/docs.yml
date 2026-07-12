@@ -30,18 +30,43 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pages: read
+    outputs:
+      publish: ${{ steps.release.outputs.publish }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
           fetch-depth: 0
           fetch-tags: true
+      - name: Validate publish ref
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          publish=true
+          tag=""
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+            if [[ ! "${tag}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$ ]]; then
+              echo "::warning::not a policy release tag (${tag}); skipping every docs publish stage"
+              publish=false
+              tag=""
+            fi
+          fi
+          echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
+          if [ "${publish}" = "true" ]; then
+            echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          fi
       - uses: actions/setup-python@v6
+        if: ${{ steps.release.outputs.publish == 'true' }}
         with:
           python-version: "3.12"
       - name: Install docs toolchain (exact pins)
+        if: ${{ steps.release.outputs.publish == 'true' }}
         run: python -m pip install --quiet -r "${DOCS_DIR}/requirements.txt"
       - name: Fetch existing docs branch
+        if: ${{ steps.release.outputs.publish == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -66,16 +91,14 @@ jobs:
       #     mkdir -p ${DOCS_DIR}/docs/api
       #     pydoc-markdown -I src -p PACKAGE > ${DOCS_DIR}/docs/api/reference.md
       - name: Build versioned docs branch
+        if: ${{ steps.release.outputs.publish == 'true' }}
         working-directory: ${{ env.DOCS_DIR }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            TAG="${GITHUB_REF_NAME}"
-            if [[ ! "${TAG}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$ ]]; then
-              echo "not a release tag (${TAG}); skipping docs"; exit 0
-            fi
+            TAG="${{ steps.release.outputs.tag }}"
             # §8.14 monotonic guard: this comparator is held to parity with core by validation.
             cat > /tmp/highest.py <<'PY'
           import sys, re
@@ -100,14 +123,17 @@ jobs:
             mike deploy --branch "${DOCS_BRANCH}" dev
           fi
       - name: Bundle docs branch
+        if: ${{ steps.release.outputs.publish == 'true' }}
         run: git bundle create /tmp/docs.bundle "refs/heads/${DOCS_BRANCH}"
       - uses: actions/upload-artifact@v7
+        if: ${{ steps.release.outputs.publish == 'true' }}
         with:
           name: starter-docs-branch
           path: /tmp/docs.bundle
           retention-days: 1
           if-no-files-found: error
       - name: Materialize exact docs branch tree
+        if: ${{ steps.release.outputs.publish == 'true' }}
         env:
           PAGES_ROOT: /tmp/aviato-pages-site
         run: |
@@ -129,12 +155,15 @@ jobs:
                   raise SystemExit(f"refusing escaping symlink in Pages tree: {path.relative_to(root)}")
           PY
       - uses: actions/configure-pages@v5
+        if: ${{ steps.release.outputs.publish == 'true' }}
       - uses: actions/upload-pages-artifact@v3
+        if: ${{ steps.release.outputs.publish == 'true' }}
         with:
           path: /tmp/aviato-pages-site
 
   push:
     needs: build
+    if: ${{ needs.build.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -161,7 +190,11 @@ jobs:
 
   deploy:
     needs: [build, push]
-    if: ${{ success() }}
+    if: >-
+      ${{ always()
+      && needs.build.outputs.publish == 'true'
+      && needs.build.result == 'success'
+      && needs.push.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       pages: write

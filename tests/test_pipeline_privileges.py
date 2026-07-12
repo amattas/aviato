@@ -35,6 +35,7 @@ def test_docs_pages_privilege_union_includes_isolated_pages_deployer() -> None:
     assert set(module.privileges) == {
         "contents: read",
         "contents: write",
+        "pages: read",
         "pages: write",
         "id-token: write",
     }
