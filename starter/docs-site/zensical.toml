@@ -1,0 +1,10 @@
+[project]
+site_name = "PROJECT"
+site_url = "https://OWNER.github.io/REPO/"
+repo_url = "https://github.com/OWNER/REPO"
+docs_dir = "docs"
+
+[project.extra.version]
+provider = "mike"
+default = "latest"
+alias = true
