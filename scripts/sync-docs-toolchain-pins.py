@@ -10,8 +10,10 @@ from pathlib import Path
 import yaml
 
 from aviato.core.marker import content_hash
+from aviato.core.pathguard import confined_target
 from aviato.paths import REPO_ROOT
 
+_SOURCE = Path("aviato/library/docs-toolchain.yaml")
 _OUTPUTS = (
     Path("website/requirements.txt"),
     Path("starter/docs-site/requirements.txt"),
@@ -29,8 +31,15 @@ def _requirements(pins: dict[str, str], *, starter: bool) -> str:
     return f"{comment}\nzensical=={pins['zensical']}\nmike @ {pins['mike']}\n"
 
 
-def render_outputs(root: Path = REPO_ROOT) -> dict[Path, str]:
-    source = root / "aviato/library/docs-toolchain.yaml"
+def _preflight_outputs(root: Path) -> dict[Path, Path]:
+    """Confine the complete output set before any generator content I/O."""
+    return {
+        rel_path: confined_target(root, rel_path.as_posix(), operation="synchronize docs toolchain output")
+        for rel_path in _OUTPUTS
+    }
+
+
+def _render_outputs(source: Path) -> dict[Path, str]:
     raw = yaml.safe_load(source.read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or set(raw) != {"zensical", "mike", "pydoc-markdown"}:
         raise ValueError("docs-toolchain.yaml must define exactly zensical, mike, and pydoc-markdown")
@@ -54,10 +63,19 @@ def render_outputs(root: Path = REPO_ROOT) -> dict[Path, str]:
     }
 
 
+def render_outputs(root: Path = REPO_ROOT) -> dict[Path, str]:
+    _preflight_outputs(root)
+    source = confined_target(root, _SOURCE.as_posix(), operation="read docs toolchain pin source")
+    return _render_outputs(source)
+
+
 def sync(root: Path = REPO_ROOT, *, check: bool = False) -> list[Path]:
+    targets = _preflight_outputs(root)
+    source = confined_target(root, _SOURCE.as_posix(), operation="read docs toolchain pin source")
+    rendered = _render_outputs(source)
     drifted: list[Path] = []
-    for rel_path, body in render_outputs(root).items():
-        path = root / rel_path
+    for rel_path, body in rendered.items():
+        path = targets[rel_path]
         if not path.is_file() or path.read_bytes() != body.encode("utf-8"):
             drifted.append(rel_path)
             if not check:

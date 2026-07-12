@@ -16,6 +16,7 @@ import argparse
 from pathlib import Path
 
 from aviato.core.onboarding import resolved_artifacts
+from aviato.core.pathguard import confined_target
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from aviato.validation import _PROFILE_TEMPLATE_FILES, _TEMPLATE_EXAMPLE_VARS, TEMPLATE_EXAMPLE_PIN
@@ -28,7 +29,18 @@ def _body(registry: Registry, profile: str, output: str) -> str:
     return next(a.body for a in artifacts if a.output == output)
 
 
-def render_templates() -> dict[Path, str]:
+_OUTPUTS = tuple(Path(path) for path in _PROFILE_TEMPLATE_FILES.values()) + (Path("templates/consumer-automation.yml"),)
+
+
+def _preflight_outputs(root: Path) -> dict[Path, Path]:
+    """Confine the complete output set before rendering reads any source body."""
+    return {
+        rel_path: confined_target(root, rel_path.as_posix(), operation="regenerate documented template")
+        for rel_path in _OUTPUTS
+    }
+
+
+def _render_templates() -> dict[Path, str]:
     registry = Registry(MODULE_SOURCE_ROOT)
     rendered: dict[Path, str] = {}
     for profile, rel_path in _PROFILE_TEMPLATE_FILES.items():
@@ -39,10 +51,17 @@ def render_templates() -> dict[Path, str]:
     return rendered
 
 
+def render_templates(root: Path = REPO_ROOT) -> dict[Path, str]:
+    _preflight_outputs(root)
+    return _render_templates()
+
+
 def regenerate(root: Path = REPO_ROOT, *, check: bool = False) -> list[Path]:
+    targets = _preflight_outputs(root)
+    rendered = _render_templates()
     drifted: list[Path] = []
-    for rel_path, body in render_templates().items():
-        path = root / rel_path
+    for rel_path, body in rendered.items():
+        path = targets[rel_path]
         if not path.is_file() or path.read_bytes() != body.encode("utf-8"):
             drifted.append(rel_path)
             if not check:

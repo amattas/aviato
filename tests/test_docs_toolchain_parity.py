@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from aviato.core.errors import PathConfinementError
 from aviato.paths import REPO_ROOT
 
 
@@ -86,3 +87,113 @@ def test_regen_templates_check_lists_every_drift(tmp_path: Path) -> None:
         path.write_text(body + "# drift\n", encoding="utf-8")
 
     assert regen.regenerate(root, check=True) == list(expected)
+
+
+@pytest.mark.parametrize("check", [False, True])
+def test_docs_sync_rejects_symlink_source_without_touching_external_file(tmp_path: Path, check: bool) -> None:
+    sync = _load_script("sync-docs-toolchain-pins.py")
+    root = tmp_path / "repo"
+    source = root / "aviato/library/docs-toolchain.yaml"
+    source.parent.mkdir(parents=True)
+    sentinel = tmp_path / "outside-source.yaml"
+    sentinel.write_text("outside sentinel\n", encoding="utf-8")
+    source.symlink_to(sentinel)
+
+    with pytest.raises(PathConfinementError):
+        sync.sync(root, check=check)
+
+    assert sentinel.read_text(encoding="utf-8") == "outside sentinel\n"
+
+
+@pytest.mark.parametrize("generator", ["sync", "regen"])
+@pytest.mark.parametrize("check", [False, True])
+def test_generators_reject_symlink_output_leaf(tmp_path: Path, generator: str, check: bool) -> None:
+    sync = _load_script("sync-docs-toolchain-pins.py")
+    regen = _load_script("regen-templates.py")
+    root = tmp_path / "repo"
+    if generator == "sync":
+        source = root / "aviato/library/docs-toolchain.yaml"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            (REPO_ROOT / "aviato/library/docs-toolchain.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        outputs = sync.render_outputs(root)
+    else:
+        outputs = regen.render_templates()
+    target = root / list(outputs)[-1]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    sentinel = tmp_path / f"outside-{generator}.txt"
+    sentinel.write_text("outside sentinel\n", encoding="utf-8")
+    target.symlink_to(sentinel)
+
+    with pytest.raises(PathConfinementError):
+        if generator == "sync":
+            sync.sync(root, check=check)
+        else:
+            regen.regenerate(root, check=check)
+
+    assert sentinel.read_text(encoding="utf-8") == "outside sentinel\n"
+
+
+@pytest.mark.parametrize("generator", ["sync", "regen"])
+@pytest.mark.parametrize("check", [False, True])
+def test_generators_reject_symlink_output_parent(tmp_path: Path, generator: str, check: bool) -> None:
+    sync = _load_script("sync-docs-toolchain-pins.py")
+    regen = _load_script("regen-templates.py")
+    root = tmp_path / "repo"
+    outside = tmp_path / f"outside-{generator}"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("outside sentinel\n", encoding="utf-8")
+    if generator == "sync":
+        source = root / "aviato/library/docs-toolchain.yaml"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            (REPO_ROOT / "aviato/library/docs-toolchain.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        (root / "aviato/library/scaffold").symlink_to(outside, target_is_directory=True)
+    else:
+        root.mkdir(parents=True)
+        (root / "templates").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(PathConfinementError):
+        if generator == "sync":
+            sync.sync(root, check=check)
+        else:
+            regen.regenerate(root, check=check)
+
+    assert sentinel.read_text(encoding="utf-8") == "outside sentinel\n"
+
+
+@pytest.mark.parametrize("generator", ["sync", "regen"])
+def test_generator_preflights_all_outputs_before_mutating_any(tmp_path: Path, generator: str) -> None:
+    sync = _load_script("sync-docs-toolchain-pins.py")
+    regen = _load_script("regen-templates.py")
+    root = tmp_path / "repo"
+    if generator == "sync":
+        source = root / "aviato/library/docs-toolchain.yaml"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            (REPO_ROOT / "aviato/library/docs-toolchain.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        outputs = sync.render_outputs(root)
+    else:
+        outputs = regen.render_templates()
+    first = root / list(outputs)[0]
+    first.parent.mkdir(parents=True, exist_ok=True)
+    original = "earlier output must remain unchanged\n"
+    first.write_text(original, encoding="utf-8")
+    unsafe = root / list(outputs)[-1]
+    unsafe.parent.mkdir(parents=True, exist_ok=True)
+    sentinel = tmp_path / f"outside-atomic-{generator}.txt"
+    sentinel.write_text("outside sentinel\n", encoding="utf-8")
+    unsafe.symlink_to(sentinel)
+
+    with pytest.raises(PathConfinementError):
+        if generator == "sync":
+            sync.sync(root)
+        else:
+            regen.regenerate(root)
+
+    assert first.read_text(encoding="utf-8") == original
+    assert sentinel.read_text(encoding="utf-8") == "outside sentinel\n"
