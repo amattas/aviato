@@ -199,6 +199,69 @@ def test_repin_write_refuses_cross_major_without_override(
     assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "0"
 
 
+def test_repin_write_unknown_seed_integrity_mutates_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _adopt(tmp_path)
+    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
+    (tmp_path / ".github" / "aviato.seed.json").unlink()
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    capsys.readouterr()
+
+    rc = main(["repin", str(tmp_path), "1.0.0", "--write", "--override-version-pin"])
+
+    captured = capsys.readouterr()
+    after = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert rc == 2
+    assert "--rebaseline-seeds" in captured.err
+    assert after == before
+
+
+def test_repin_open_pr_unknown_seed_integrity_opens_no_proposal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clone_path: Path | None = None
+    original_declaration = (
+        "profile: python-library\nversion: 0\nvariables:\n"
+        "  distribution-name: acme\n  import-name: acme\n"
+    )
+    proposal_called = False
+
+    def fake_run(cmd, **__):
+        nonlocal clone_path
+        if cmd[:3] == ["gh", "repo", "clone"]:
+            clone_path = Path(cmd[4])
+            (clone_path / ".github").mkdir(parents=True)
+            (clone_path / ".github" / "aviato.yaml").write_text(original_declaration, encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def fake_proposal(*_args, **_kwargs):
+        nonlocal proposal_called
+        proposal_called = True
+        return "branch"
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
+    monkeypatch.setattr(cli.GitHubPlatform, "open_worktree_proposal", fake_proposal)
+
+    rc = main(["repin", "acme/widget", "1.0.0", "--open-pr", "--override-version-pin"])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "--rebaseline-seeds" in captured.err
+    assert proposal_called is False
+    assert clone_path is not None
+    assert (clone_path / ".github" / "aviato.yaml").read_text(encoding="utf-8") == original_declaration
+
+
 def test_offboard_dry_run_then_write(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _adopt(tmp_path)
     capsys.readouterr()

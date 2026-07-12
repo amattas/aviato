@@ -33,7 +33,7 @@ def _invalid_consumer(tmp_path: Path) -> Path:
 
 
 def test_sync_materializes_managed_and_seed_once(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    rc = main(["sync", str(_consumer(tmp_path))])
+    rc = main(["sync", str(_consumer(tmp_path)), "--rebaseline-seeds"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "wrote .editorconfig" in out
@@ -43,7 +43,7 @@ def test_sync_materializes_managed_and_seed_once(tmp_path: Path, capsys: pytest.
 
 def test_sync_is_idempotent(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     consumer = _consumer(tmp_path)
-    main(["sync", str(consumer)])
+    main(["sync", str(consumer), "--rebaseline-seeds"])
     capsys.readouterr()
     rc = main(["sync", str(consumer)])
     out = capsys.readouterr().out

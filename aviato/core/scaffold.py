@@ -31,6 +31,13 @@ class SeedSidecar:
     hashes: dict[str, str]
 
 
+@dataclass(frozen=True)
+class SeedIntegrityPreflight:
+    sidecar: SeedSidecar
+    existing_hashes: dict[str, str]
+    unknown: bool
+
+
 @dataclass
 class ScaffoldResult:
     written: list[str] = field(default_factory=list)
@@ -134,6 +141,53 @@ def _write_sidecar(root: Path, data: dict[str, str]) -> None:
     )
 
 
+def preflight_seed_integrity(
+    root: Path,
+    items: list[ScaffoldItem],
+    *,
+    baseline_existing_seeds: bool = False,
+    allow_fresh_seed_initialization: bool = True,
+) -> SeedIntegrityPreflight:
+    """Read and validate all seed integrity state without mutating the repository."""
+    root = Path(root)
+    overlay = {item.output: item for item in items}
+    for output in overlay:
+        confined_target(root, output, operation="preflight scaffold output")
+
+    sidecar = read_sidecar(root)
+    seed_outputs = [output for output, item in overlay.items() if item.seed_once]
+    if not seed_outputs:
+        return SeedIntegrityPreflight(sidecar, {}, False)
+
+    existing_hashes: dict[str, str] = {}
+    existing_outputs: set[str] = set()
+    for output in seed_outputs:
+        target = confined_target(root, output, operation="read scaffold output")
+        if not target.exists():
+            continue
+        existing_outputs.add(output)
+        if baseline_existing_seeds:
+            try:
+                target = confined_target(root, output, operation="read scaffold output")
+                existing_hashes[output] = content_hash(target.read_text(encoding="utf-8"))
+            except (UnicodeDecodeError, OSError):
+                return SeedIntegrityPreflight(sidecar, {}, True)
+
+    if baseline_existing_seeds:
+        return SeedIntegrityPreflight(sidecar, existing_hashes, False)
+    if sidecar.status == "corrupt":
+        return SeedIntegrityPreflight(sidecar, {}, True)
+    if sidecar.status == "ok":
+        incomplete = any(output not in sidecar.hashes for output in seed_outputs)
+        return SeedIntegrityPreflight(sidecar, {}, incomplete)
+
+    # A missing sidecar is safe only for a caller that has established truly fresh
+    # state and only while every resolved seed is absent, so its initial record can
+    # be created together with the file.
+    unknown = bool(existing_outputs) or not allow_fresh_seed_initialization
+    return SeedIntegrityPreflight(sidecar, {}, unknown)
+
+
 def render_managed(item: ScaffoldItem, *, profile: str, version: str) -> str:
     """Render a managed file's full content: the §6.2 marker line followed by the body.
 
@@ -153,6 +207,7 @@ def scaffold(
     version: str,
     force: bool = False,
     baseline_existing_seeds: bool = False,
+    allow_fresh_seed_initialization: bool = True,
 ) -> ScaffoldResult:
     """Materialize managed and seed-once artifacts (§5.3, §6.3).
 
@@ -174,32 +229,22 @@ def scaffold(
     for output in overlay:
         confined_target(root, output, operation="write scaffold output")
 
-    sidecar_state = read_sidecar(root)
-    seed_items = {output: item for output, item in overlay.items() if item.seed_once}
-    existing_seed_hashes: dict[str, str] = {}
-    for output in seed_items:
-        target = confined_target(root, output, operation="read scaffold output")
-        if not target.exists():
-            continue
-        if not baseline_existing_seeds and (
-            sidecar_state.status != "ok" or output not in sidecar_state.hashes
-        ):
-            result.seed_integrity_unknown = True
-            return result
-        if baseline_existing_seeds:
-            try:
-                target = confined_target(root, output, operation="read scaffold output")
-                existing_seed_hashes[output] = content_hash(target.read_text(encoding="utf-8"))
-            except (UnicodeDecodeError, OSError):
-                result.seed_integrity_unknown = True
-                return result
+    preflight = preflight_seed_integrity(
+        root,
+        list(overlay.values()),
+        baseline_existing_seeds=baseline_existing_seeds,
+        allow_fresh_seed_initialization=allow_fresh_seed_initialization,
+    )
+    if preflight.unknown:
+        result.seed_integrity_unknown = True
+        return result
 
     # Explicit rebaseline is a reviewed replacement, not a merge: obsolete records
     # must disappear and the resulting sidecar must describe exactly this resolved set.
-    sidecar = {} if baseline_existing_seeds else dict(sidecar_state.hashes)
+    sidecar = {} if baseline_existing_seeds else dict(preflight.sidecar.hashes)
     if baseline_existing_seeds:
-        sidecar.update(existing_seed_hashes)
-        result.baselined.extend(existing_seed_hashes)
+        sidecar.update(preflight.existing_hashes)
+        result.baselined.extend(preflight.existing_hashes)
     sidecar_changed = False
 
     for output, item in overlay.items():

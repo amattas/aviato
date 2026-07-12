@@ -33,7 +33,13 @@ from .core.provision import provision_repo
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.repin import plan_repin
-from .core.scaffold import ScaffoldItem, render_managed, scaffold
+from .core.scaffold import (
+    ScaffoldItem,
+    preflight_seed_integrity,
+    read_sidecar,
+    render_managed,
+    scaffold,
+)
 from .core.settings_drift_flow import run_settings_drift
 from .core.variables import resolve_declared_variables, resolve_variables, writeback_variables
 from .core.version import is_compatible, is_known_version_pin, most_restrictive_recorded, normalize_pin
@@ -57,6 +63,14 @@ DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
 DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
 LIBRARY_REMOTE_URL = "https://github.com/amattas/aviato.git"
 DECLARATION_RELATIVE_PATH = ".github/aviato.yaml"
+
+
+def _print_seed_integrity_error() -> None:
+    print(
+        "seed-once integrity state is missing, corrupt, or incomplete; review current seed files "
+        "and run `aviato sync <path> --rebaseline-seeds`",
+        file=sys.stderr,
+    )
 
 
 def _consumer_declaration_target(root: Path, *, operation: str) -> Path:
@@ -573,6 +587,9 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
 
     declaration_path = _consumer_declaration_target(target, operation="inspect declaration")
     existing = _load_consumer_declaration(target) if declaration_path.is_file() else None
+    if existing is None and read_sidecar(target).status != "missing":
+        _print_seed_integrity_error()
+        return 2
 
     try:
         declaration, variables = _resolve_onboard_declaration(args, registry, resolved, existing)
@@ -608,13 +625,10 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         profile=args.profile,
         version=args.pin,
         baseline_existing_seeds=fresh_onboarding,
+        allow_fresh_seed_initialization=fresh_onboarding,
     )
     if result.seed_integrity_unknown:
-        print(
-            "seed-once integrity state is missing, corrupt, or incomplete; "
-            "an adopted repository must use `aviato sync PATH --rebaseline-seeds`",
-            file=sys.stderr,
-        )
+        _print_seed_integrity_error()
         return 2
 
     _dump_consumer_declaration(declaration, target)
@@ -937,13 +951,10 @@ def cmd_sync(args: argparse.Namespace) -> int:
         version=declaration.version,
         force=args.force,
         baseline_existing_seeds=args.rebaseline_seeds,
+        allow_fresh_seed_initialization=False,
     )
     if result.seed_integrity_unknown:
-        print(
-            "seed-once integrity state is missing, corrupt, or incomplete; "
-            "review current seed files and run `aviato sync PATH --rebaseline-seeds`",
-            file=sys.stderr,
-        )
+        _print_seed_integrity_error()
         return 2
     for output in result.written:
         print(f"wrote {output}")
@@ -1239,9 +1250,23 @@ def cmd_repin(args: argparse.Namespace) -> int:
         bootstrap=updated.bootstrap,
         overrides=updated.overrides,
     )
+    if preflight_seed_integrity(
+        root, items, allow_fresh_seed_initialization=False
+    ).unknown:
+        _print_seed_integrity_error()
+        return 2
     _dump_consumer_declaration(updated, root)
     print(f"wrote pin {plan.target_version} to {declaration_path.relative_to(root)}")
-    result = scaffold(root, items, profile=updated.profile, version=updated.version)
+    result = scaffold(
+        root,
+        items,
+        profile=updated.profile,
+        version=updated.version,
+        allow_fresh_seed_initialization=False,
+    )
+    if result.seed_integrity_unknown:
+        _print_seed_integrity_error()
+        return 2
     for output in result.written:
         print(f"rewrote {output}")
     # §5.12: surface files the no-clobber guard left at the OLD pin so the operator
@@ -1326,8 +1351,22 @@ def _repin_proposal(args: argparse.Namespace) -> int:
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    if preflight_seed_integrity(
+        clone, items, allow_fresh_seed_initialization=False
+    ).unknown:
+        _print_seed_integrity_error()
+        return 2
     _dump_consumer_declaration(updated, clone)
-    result = scaffold(clone, items, profile=updated.profile, version=updated.version)
+    result = scaffold(
+        clone,
+        items,
+        profile=updated.profile,
+        version=updated.version,
+        allow_fresh_seed_initialization=False,
+    )
+    if result.seed_integrity_unknown:
+        _print_seed_integrity_error()
+        return 2
 
     body_lines = [
         f"Aviato re-pin proposal (§5.12): {declaration.version} -> {plan.target_version}.",

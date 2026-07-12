@@ -47,6 +47,43 @@ def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureF
     assert "wrote .github/aviato.yaml" in out
 
 
+@pytest.mark.parametrize("sidecar_body", ["{}\n", "{ corrupt"])
+def test_onboard_write_does_not_treat_lost_declaration_as_fresh(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], sidecar_body: str
+) -> None:
+    github = tmp_path / ".github"
+    github.mkdir()
+    sidecar = github / "aviato.seed.json"
+    sidecar.write_text(sidecar_body, encoding="utf-8")
+    (tmp_path / "LICENSE").write_text("operator license\n", encoding="utf-8")
+
+    rc = main(
+        [
+            "onboard",
+            str(tmp_path),
+            "--profile",
+            "python-library",
+            "--write",
+            "--allow-dirty",
+            "--pin",
+            "0",
+            "--allow-unresolved-pin",
+            "--var",
+            "distribution-name=acme",
+            "--var",
+            "import-name=acme",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "--rebaseline-seeds" in captured.err
+    assert not (github / "aviato.yaml").exists()
+    assert not (tmp_path / "ruff.toml").exists()
+    assert sidecar.read_text(encoding="utf-8") == sidecar_body
+    assert (tmp_path / "LICENSE").read_text(encoding="utf-8") == "operator license\n"
+
+
 def test_reonboard_preserves_docs_opt_in(tmp_path: Path) -> None:
     # §5.2/§6.1 (M-D): re-onboarding an adopted docs:true repo WITHOUT --docs must NOT silently
     # flip docs back to false. --docs only enables; a re-run preserves the existing choice.
@@ -76,25 +113,28 @@ def test_reonboard_docs_true_also_scaffolds_docs_workflow(tmp_path: Path) -> Non
     # §5.2/§6.1/§13.3 (FIX-1): a docs:true declaration re-onboarded WITHOUT --docs must keep
     # docs:true AND scaffold the docs workflow — the artifacts must match the declaration, not
     # silently omit docs (the partial-fix bug where scaffold used args.docs).
-    (tmp_path / ".github").mkdir()
-    (tmp_path / ".github" / "aviato.yaml").write_text(
-        "profile: python-library\nversion: '0'\ndocs: true\nvariables:\n  distribution-name: a\n  import-name: a\n",
-        encoding="utf-8",
-    )
-    rc = main(
-        [
-            "onboard",
-            str(tmp_path),
-            "--profile",
-            "python-library",
-            "--write",
-            "--allow-dirty",
-            "--var",
-            "distribution-name=a",
-            "--var",
-            "import-name=a",
-        ]  # NO --docs
-    )
+    base = [
+        "onboard",
+        str(tmp_path),
+        "--profile",
+        "python-library",
+        "--write",
+        "--allow-dirty",
+        "--pin",
+        "0",
+        "--allow-unresolved-pin",
+        "--var",
+        "distribution-name=a",
+        "--var",
+        "import-name=a",
+    ]
+    assert main(base + ["--docs"]) == 0
+    docs_workflows = list((tmp_path / ".github" / "workflows").glob("*docs*"))
+    assert docs_workflows
+    for path in docs_workflows:
+        path.unlink()
+
+    rc = main(base)  # NO --docs on the re-onboard
     assert rc == 0
     assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["docs"] is True
     assert list((tmp_path / ".github" / "workflows").glob("*docs*")), "docs:true must scaffold the docs workflow"

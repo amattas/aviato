@@ -241,6 +241,26 @@ def test_incomplete_sidecar_fails_closed_before_any_write(tmp_path: Path) -> Non
     assert read_sidecar(tmp_path) == SeedSidecar("ok", {})
 
 
+@pytest.mark.parametrize("sidecar_body", ["{ corrupt", "{}\n"])
+def test_unknown_sidecar_with_absent_expected_seed_fails_closed(
+    tmp_path: Path, sidecar_body: str
+) -> None:
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "aviato.seed.json").write_text(sidecar_body, encoding="utf-8")
+
+    result = scaffold(
+        tmp_path,
+        [ScaffoldItem("managed.txt", "managed\n", "#"), ScaffoldItem("Dockerfile", "FROM x\n", "#", True)],
+        profile="p",
+        version="v1",
+    )
+
+    assert result.seed_integrity_unknown is True
+    assert not (tmp_path / "managed.txt").exists()
+    assert not (tmp_path / "Dockerfile").exists()
+    assert (tmp_path / ".github" / "aviato.seed.json").read_text(encoding="utf-8") == sidecar_body
+
+
 def test_missing_sidecar_with_absent_seed_creates_seed_and_initial_record(tmp_path: Path) -> None:
     result = scaffold(
         tmp_path,
