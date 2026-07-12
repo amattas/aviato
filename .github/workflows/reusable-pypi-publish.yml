@@ -9,6 +9,12 @@ on:
       artifact-name:
         description: Fixed name of the vetted distribution and SBOM artifact.
         value: ${{ jobs.build.outputs.artifact-name }}
+      distribution-name:
+        description: Distribution name read from every built archive's core metadata.
+        value: ${{ jobs.build.outputs.distribution-name }}
+      package-version:
+        description: Package version proven to match the release tag.
+        value: ${{ jobs.build.outputs.package-version }}
     inputs:
       aviato-ref:
         description: Deprecated. Release validation is embedded in this pinned workflow.
@@ -109,6 +115,8 @@ jobs:
     outputs:
       resolved-tag: ${{ steps.tag.outputs.resolved-tag }}
       artifact-name: aviato-pypi-dist
+      distribution-name: ${{ steps.metadata.outputs.distribution-name }}
+      package-version: ${{ steps.metadata.outputs.package-version }}
     steps:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
@@ -176,6 +184,63 @@ jobs:
         env:
           BUILD_COMMAND: ${{ inputs.build-command }}
         run: eval "$BUILD_COMMAND"
+
+      - name: Verify archive name and version contract
+        id: metadata
+        shell: bash
+        env:
+          PACKAGES_DIR: ${{ inputs.packages-dir }}
+          RELEASE_TAG: ${{ steps.tag.outputs.resolved-tag }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import email.parser
+          import os
+          import pathlib
+          import re
+          import tarfile
+          import zipfile
+
+          dist = pathlib.Path(os.environ["PACKAGES_DIR"])
+          archives = sorted(path for path in dist.iterdir() if path.is_file())
+          if not archives:
+              raise SystemExit("no distribution archives were built")
+
+          def core_metadata(path: pathlib.Path) -> bytes:
+              if path.suffix == ".whl" or path.suffix == ".zip":
+                  with zipfile.ZipFile(path) as archive:
+                      candidates = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA") or (name.endswith("/PKG-INFO") and name.count("/") == 1)]
+                      if len(candidates) != 1:
+                          raise SystemExit(f"{path.name}: expected exactly one core metadata file")
+                      return archive.read(candidates[0])
+              if path.name.endswith((".tar.gz", ".tar.bz2", ".tar.xz")):
+                  with tarfile.open(path, "r:*") as archive:
+                      candidates = [member for member in archive.getmembers() if member.isfile() and member.name.endswith("/PKG-INFO") and member.name.count("/") == 1]
+                      if len(candidates) != 1:
+                          raise SystemExit(f"{path.name}: expected exactly one PKG-INFO")
+                      handle = archive.extractfile(candidates[0])
+                      if handle is None:
+                          raise SystemExit(f"{path.name}: could not read PKG-INFO")
+                      return handle.read()
+              raise SystemExit(f"unsupported distribution archive: {path.name}")
+
+          expected_version = re.sub(r"-(alpha|beta)([0-9]+)$", lambda m: {"alpha": "a", "beta": "b"}[m.group(1)] + m.group(2), os.environ["RELEASE_TAG"])
+          identities = set()
+          for path in archives:
+              metadata = email.parser.BytesParser().parsebytes(core_metadata(path))
+              name, version = metadata.get("Name"), metadata.get("Version")
+              if not name or not version:
+                  raise SystemExit(f"{path.name}: core metadata is missing Name or Version")
+              identities.add((name, version))
+          if len(identities) != 1:
+              raise SystemExit(f"distribution archives disagree on name/version: {sorted(identities)}")
+          name, version = identities.pop()
+          if version != expected_version:
+              raise SystemExit(f"package version {version!r} does not match release tag {os.environ['RELEASE_TAG']!r} (expected {expected_version!r})")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"distribution-name={name}", file=output)
+              print(f"package-version={version}", file=output)
+          PY
 
       # §13.1: verify metadata + scan dependencies (gate on high/critical) + generate the SBOM
       # before the artifacts ever leave this job. The attestation/publish (which need the OIDC

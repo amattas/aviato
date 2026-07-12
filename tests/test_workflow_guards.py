@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 
 import pytest
@@ -344,7 +345,7 @@ def test_pypi_reusable_only_builds_vetted_artifact_and_local_caller_publishes() 
         assert permissions.get("id-token") != "write", job_name
         assert permissions.get("attestations") != "write", job_name
     publish_body = caller_body[caller_body.index("  pypi-publish:") :]
-    assert 'git rev-parse "refs/tags/${RELEASE_TAG}^{commit}"' in publish_body
+    assert '"repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}"' in publish_body
     assert "${{ needs.release-gate.outputs.gated-sha }}" in publish_body
     assert "eval " not in publish_body
     assert "pip install" not in publish_body
@@ -363,6 +364,86 @@ def test_pypi_stale_caller_fails_before_build_with_sync_instruction() -> None:
     assert reject["if"] == "${{ inputs.consumer-publisher-present != true }}"
     assert "aviato sync" in reject["run"]
     assert reusable["jobs"]["build"]["needs"] == "require-consumer-publisher"
+
+
+def _single_python_heredoc(run: str) -> str:
+    match = re.search(r"<<'PY'\n(?P<body>.*?)\nPY", run, flags=re.DOTALL)
+    assert match is not None, "step does not contain a quoted Python heredoc"
+    return match.group("body")
+
+
+def test_pypi_simple_index_endpoint_mapping_is_validated_and_testpypi_safe() -> None:
+    caller = _rendered_python_library_workflow()
+    steps = caller["jobs"]["pypi-publish"]["steps"]
+    resolver = next(step for step in steps if step.get("name") == "Resolve simple index endpoint")
+    script = _single_python_heredoc(resolver["run"])
+
+    testpypi = subprocess.run(
+        ["python", "-c", script, "https://test.pypi.org/legacy/", ""],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert testpypi.stdout.strip() == "https://test.pypi.org/simple/"
+
+    for upload, simple in (
+        ("http://test.pypi.org/legacy/", ""),
+        ("https://user:secret@test.pypi.org/legacy/", ""),
+        ("https://test.pypi.org/unsupported/", ""),
+        ("", "https://test.pypi.org/not-simple/"),
+    ):
+        result = subprocess.run(["python", "-c", script, upload, simple], text=True, capture_output=True)
+        assert result.returncode != 0, (upload, simple)
+
+
+def test_pypi_publisher_uses_pep691_hash_confirmation_without_package_execution() -> None:
+    caller = _rendered_python_library_workflow()
+    publisher = caller["jobs"]["pypi-publish"]
+    shell = "\n".join(str(step.get("run", "")) for step in publisher["steps"])
+    for forbidden in (
+        "python -m pip",
+        "pip download",
+        "pip install",
+        "python -m build",
+        "setup.py",
+        "pyproject.toml",
+        "eval ",
+        " uv ",
+        "poetry ",
+        "npm ",
+        "yarn ",
+        "pnpm ",
+    ):
+        assert forbidden not in shell, f"publisher shell executes forbidden command/content: {forbidden!r}"
+    confirm = next(step for step in publisher["steps"] if step.get("name") == "Confirm published artifacts")
+    run = confirm["run"]
+    assert "application/vnd.pypi.simple.v1+json" in run
+    assert "urllib.request" in run
+    assert "hashlib.sha256" in run
+    assert "files" in run and "filename" in run and "hashes" in run
+    assert "EXPECTED_VERSION" in confirm["env"]
+    assert "DISTRIBUTION_NAME" in confirm["env"]
+
+
+def test_pypi_publisher_rechecks_fresh_remote_tag_after_download_and_before_publish() -> None:
+    caller = _rendered_python_library_workflow()
+    steps = caller["jobs"]["pypi-publish"]["steps"]
+    names = [step["name"] for step in steps]
+    download = names.index("Download vetted build artifacts")
+    first = names.index("Verify fresh remote tag after artifact download")
+    attest = names.index("Attest build provenance")
+    final = names.index("Final fresh remote tag verification")
+    publish = names.index("Publish distributions")
+    alternate = names.index("Publish distributions to alternate repository")
+    assert download < first < attest < final < publish < alternate
+    assert final + 1 == publish
+    for index in (first, final):
+        step = steps[index]
+        assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+        assert "gh api" in step["run"]
+        assert "/git/ref/tags/" in step["run"]
+        assert "/git/tags/" in step["run"], "annotated tags must be peeled"
+        assert "git rev-parse" not in step["run"]
 
 
 def test_ghcr_publishes_only_scanned_digests() -> None:
