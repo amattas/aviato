@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from aviato.core.errors import AviatoError
+from aviato.core.pathguard import confined_target
 from aviato.core.scaffold import atomic_write
 
 # Per-format version-source rewriters (§3.3). Each rewriter names a concrete
@@ -186,18 +187,22 @@ def bump_files(root: Path, locations: list[str], new_version: str, build_number:
             seen.add(loc)
             deduped.append(loc)
     locations = deduped
-    pending: list[tuple[Path, str, str]] = []
     for location in locations:
-        path = Path(root) / location
+        confined_target(root, location, operation="preflight version source")
+    pending: list[tuple[str, str]] = []
+    for location in locations:
+        path = confined_target(root, location, operation="probe version source")
         # C12-R3-3 (§2.5 never-half-apply): distinguish ABSENT (skippable — a profile may list optional
         # locations) from PRESENT-BUT-BROKEN. A configured location that exists but is a directory /
         # symlink / non-regular file is a real misconfiguration: skipping it the same as absent lets the
         # bump half-apply (other locations written) and exit success. Fail closed BEFORE any write.
         if not path.exists():
             continue
+        path = confined_target(root, location, operation="probe version source")
         if not path.is_file():
             raise AviatoError(f"version-source location exists but is not a regular file, cannot bump: {location}")
         try:
+            path = confined_target(root, location, operation="read version source")
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
             # R3-4-2/R4-2-BUMP: a non-UTF-8 version-source is not a rewritable text manifest. FAIL
@@ -210,9 +215,9 @@ def bump_files(root: Path, locations: list[str], new_version: str, build_number:
             raise AviatoError(f"version-source file cannot be read, cannot bump: {location}: {exc}") from exc
         bumped = bump_text(location, text, new_version, build_number)  # may raise AviatoError (bad manifest)
         if bumped != text:
-            pending.append((path, bumped, location))
+            pending.append((location, bumped))
     changed: list[str] = []
-    for path, bumped, location in pending:
-        atomic_write(path, bumped)
+    for location, bumped in pending:
+        atomic_write(root, location, bumped, operation="write version source")
         changed.append(location)
     return changed

@@ -156,6 +156,26 @@ def test_seed_once_integrity_divergence_is_reported_not_overwritten(tmp_path: Pa
     assert (tmp_path / "Dockerfile").read_text() == "FROM tampered\n"  # never overwritten
 
 
+def test_seed_once_rechecks_confinement_at_read_and_final_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import aviato.core.diagnosis as diagnosis_module
+
+    scaffold(tmp_path, [ScaffoldItem("Dockerfile", "FROM x\n", "#", True)], profile="p", version="v1")
+    original_guard = diagnosis_module.confined_target
+    calls: list[str] = []
+
+    def tracking_guard(root: Path, relative: str, *, operation: str) -> Path:
+        if relative == "Dockerfile":
+            calls.append(operation)
+        return original_guard(root, relative, operation=operation)
+
+    monkeypatch.setattr(diagnosis_module, "confined_target", tracking_guard)
+    diagnose(tmp_path, [ExpectedArtifact("Dockerfile", "", seed_once=True)])
+
+    assert calls == ["diagnose artifact", "diagnose seed artifact", "diagnose seed artifact"]
+
+
 def test_seed_once_deletion_is_reported_as_divergence(tmp_path: Path) -> None:
     # §6.3 (L-B): a recorded seed-once file that is later DELETED (e.g. a removed Dockerfile) is a
     # divergence too — tamper visibility, not just a hash change. Reported, never re-created.

@@ -59,3 +59,49 @@ def test_onboard_open_pr_builds_proposal(tmp_path: Path, monkeypatch: pytest.Mon
     # the pre-existing seed-once LICENSE is NOT overwritten and is enumerated as untouched
     assert "LICENSE" not in files
     assert "LICENSE" in captured["body"]
+
+
+def test_onboard_open_pr_rejects_symlinked_artifact_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    outside = tmp_path / "outside-license"
+    original = b"outside license\n"
+    outside.write_bytes(original)
+    proposal_called = False
+
+    def fake_run(cmd, **__):
+        if cmd[:3] == ["gh", "repo", "clone"]:
+            dest = Path(cmd[4])
+            (dest / ".github").mkdir(parents=True, exist_ok=True)
+            (dest / "LICENSE").symlink_to(outside)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def fake_proposal(*_args, **_kwargs):
+        nonlocal proposal_called
+        proposal_called = True
+        return "branch"
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli.GitHubPlatform, "open_or_update_proposal", fake_proposal)
+
+    rc = main(
+        [
+            "onboard",
+            "acme-org/widget",
+            "--open-pr",
+            "--profile",
+            "python-library",
+            "--pin",
+            "v0",
+            "--allow-unresolved-pin",
+            "--var",
+            "distribution-name=acme",
+            "--var",
+            "import-name=acme",
+        ]
+    )
+
+    assert rc != 0
+    assert "LICENSE" in capsys.readouterr().err
+    assert outside.read_bytes() == original
+    assert proposal_called is False

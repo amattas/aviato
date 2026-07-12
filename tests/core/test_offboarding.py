@@ -62,6 +62,34 @@ def test_keep_files_strips_markers_and_deletes_declaration(tmp_path: Path) -> No
     assert not (tmp_path / ".github" / "aviato.yaml").exists()
 
 
+def test_offboard_rechecks_static_targets_before_metadata_and_unlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import aviato.core.offboarding as offboarding_module
+
+    _setup_consumer(tmp_path)
+    original_guard = offboarding_module.confined_target
+    calls: dict[str, list[str]] = {".github/aviato.yaml": [], ".github/aviato.seed.json": []}
+
+    def tracking_guard(root: Path, relative: str, *, operation: str) -> Path:
+        if relative in calls:
+            calls[relative].append(operation)
+        return original_guard(root, relative, operation=operation)
+
+    monkeypatch.setattr(offboarding_module, "confined_target", tracking_guard)
+    offboard(tmp_path, [], keep_files=True)
+
+    assert calls[".github/aviato.yaml"] == [
+        "preflight offboard declaration",
+        "inspect offboard declaration",
+        "delete offboard declaration",
+    ]
+    assert calls[".github/aviato.seed.json"] == [
+        "preflight offboard sidecar",
+        "inspect offboard sidecar",
+    ]
+
+
 def test_remove_files_deletes_managed_files(tmp_path: Path) -> None:
     _setup_consumer(tmp_path)
     result = offboard(tmp_path, ["ruff.toml"], keep_files=False)

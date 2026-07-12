@@ -267,9 +267,10 @@ def _recorded_versions(root: Path, expected: list[ExpectedArtifact]) -> list[str
     for artifact in expected:
         if artifact.seed_once:
             continue
-        path = root / artifact.output_path
+        path = confined_target(root, artifact.output_path, operation="read managed marker")
         if path.is_file():
             try:
+                path = confined_target(root, artifact.output_path, operation="read managed marker")
                 text = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 # R3-4-1: a non-UTF-8 file at a managed output path carries no valid marker → no
@@ -665,7 +666,7 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
         bootstrap=declaration.bootstrap,
         overrides=declaration.overrides,
     ):
-        present = (clone / artifact.output).exists()
+        present = confined_target(clone, artifact.output, operation="probe proposal artifact").exists()
         if artifact.seed_once:
             if present:
                 untouched.append(artifact.output)
@@ -1870,7 +1871,9 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
     if not locations:
         print("profile declares no version-source locations", file=sys.stderr)
         return 2
-    present = [loc for loc in locations if (root / loc).is_file()]
+    present = [
+        loc for loc in locations if confined_target(root, loc, operation="probe version source").is_file()
+    ]
     try:
         changed = bump_files(root, locations, args.version, args.build_number)
     except AviatoError as exc:

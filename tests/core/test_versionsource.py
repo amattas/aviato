@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from aviato.core.errors import AviatoError
+from aviato.core.errors import AviatoError, PathConfinementError
 from aviato.plugins.version_formats import bump_files, bump_text
 
 
@@ -163,6 +163,29 @@ def test_bump_files_rewrites_existing_locations(tmp_path: Path) -> None:
     changed = bump_files(tmp_path, ["pyproject.toml", "missing.toml"], "1.1.0")
     assert changed == ["pyproject.toml"]
     assert 'version = "1.1.0"' in (tmp_path / "pyproject.toml").read_text()
+
+
+@pytest.mark.parametrize("symlink_leaf", [False, True])
+def test_bump_files_rejects_symlink_escape_before_any_write(tmp_path: Path, symlink_leaf: bool) -> None:
+    safe = tmp_path / "VERSION"
+    safe.write_text("1.0.0\n", encoding="utf-8")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    outside_target = outside / "pyproject.toml"
+    original = b'[project]\nversion = "1.0.0"\n'
+    outside_target.write_bytes(original)
+    if symlink_leaf:
+        (tmp_path / "pyproject.toml").symlink_to(outside_target)
+        location = "pyproject.toml"
+    else:
+        (tmp_path / "nested").symlink_to(outside, target_is_directory=True)
+        location = "nested/pyproject.toml"
+
+    with pytest.raises(PathConfinementError, match=location):
+        bump_files(tmp_path, ["VERSION", location], "2.0.0")
+
+    assert safe.read_text(encoding="utf-8") == "1.0.0\n"
+    assert outside_target.read_bytes() == original
 
 
 def test_bump_files_non_utf8_fails_closed(tmp_path: Path) -> None:

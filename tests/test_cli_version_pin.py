@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from aviato.cli import main
+from aviato.cli import _recorded_versions, main
+from aviato.core.diagnosis import ExpectedArtifact
+from aviato.core.errors import PathConfinementError
 
 
 def _consumer(tmp_path: Path, pin: str) -> Path:
@@ -43,3 +45,13 @@ def test_sync_tolerates_non_utf8_managed_file(tmp_path: Path) -> None:
     (root / "ruff.toml").write_bytes(b"\xff\xfe# not valid utf-8 \x00\x80")
     rc = main(["sync", str(root)])  # must NOT raise UnicodeDecodeError
     assert rc in (0, 2)
+
+
+def test_recorded_versions_rejects_symlinked_artifact_parent(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "cfg.toml").write_text("outside\n", encoding="utf-8")
+    (tmp_path / "nested").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(PathConfinementError, match=r"read managed marker.*nested/cfg\.toml"):
+        _recorded_versions(tmp_path, [ExpectedArtifact("nested/cfg.toml", "expected\n")])

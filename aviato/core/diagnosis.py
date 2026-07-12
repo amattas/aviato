@@ -195,6 +195,7 @@ def diagnose(
             recorded = sidecar.get(artifact.output_path)
             if recorded is not None:
                 try:
+                    target = confined_target(root, artifact.output_path, operation="diagnose seed artifact")
                     live_hash = content_hash(target.read_text(encoding="utf-8", errors="replace"))
                 except OSError:
                     # R5-3-DIAG-OS: the seed-once target is a DIRECTORY or otherwise unreadable
@@ -202,6 +203,7 @@ def diagnose(
                     # Treat it as diverged (§5.14 "absence/unreadable reads as broken"), never crash
                     # the fleet scan with a raw OSError.
                     live_hash = None
+                target = confined_target(root, artifact.output_path, operation="diagnose seed artifact")
                 if not target.exists() or live_hash != recorded:
                     report.seed_divergence.append(artifact.output_path)
             continue

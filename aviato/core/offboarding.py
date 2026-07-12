@@ -123,13 +123,13 @@ def offboard(root: Path, managed_outputs: Sequence[str], *, keep_files: bool) ->
         target.unlink()
         result.removed.append(output)
 
-    declaration = preflight[declaration_output]
+    declaration = confined_target(root, declaration_output, operation="inspect offboard declaration")
     if declaration.is_file():
         declaration = confined_target(root, declaration_output, operation="delete offboard declaration")
         declaration.unlink()
         result.declaration_removed = True
 
-    sidecar = preflight[sidecar_output]
+    sidecar = confined_target(root, sidecar_output, operation="inspect offboard sidecar")
     if sidecar.is_file():
         sidecar = confined_target(root, sidecar_output, operation="delete offboard sidecar")
         sidecar.unlink()

@@ -67,6 +67,24 @@ def test_bump_version_rewrites_pyproject(tmp_path: Path, capsys: pytest.CaptureF
     assert 'version = "0.2.0"' in (tmp_path / "pyproject.toml").read_text()
 
 
+def test_bump_version_rejects_symlinked_version_source_leaf(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    github = tmp_path / ".github"
+    github.mkdir()
+    (github / "aviato.yaml").write_text("profile: python-library\nversion: 0\n", encoding="utf-8")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.toml"
+    original = b'[project]\nversion = "0.1.0"\n'
+    outside.write_bytes(original)
+    (tmp_path / "pyproject.toml").symlink_to(outside)
+
+    rc = main(["bump-version", "0.2.0", str(tmp_path)])
+
+    assert rc != 0
+    assert "pyproject.toml" in capsys.readouterr().err
+    assert outside.read_bytes() == original
+
+
 def test_bump_version_idempotent_when_already_current(tmp_path: Path) -> None:
     # §2.5: re-bumping a manifest already at the target is a successful no-op (exit 0), not
     # "no version-source files found" exit 1 — a release retry on an already-bumped tree

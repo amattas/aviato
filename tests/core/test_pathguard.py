@@ -96,6 +96,9 @@ def test_consumer_and_module_boundaries_do_not_reintroduce_direct_joins() -> Non
         "aviato/core/diagnosis.py": ("root / artifact.output_path", "root / candidate"),
         "aviato/core/offboarding.py": ("root / output",),
         "aviato/core/registry.py": ("self.root /",),
+        "aviato/github_platform.py": ("self.workdir / output_path",),
+        "aviato/plugins/version_formats.py": ("Path(root) / location",),
+        "aviato/cli.py": ("root / artifact.output_path", "clone / artifact.output", "root / loc"),
     }
     for relative_file, forbidden in guarded_modules.items():
         tree = ast.parse((REPO_ROOT / relative_file).read_text(encoding="utf-8"))

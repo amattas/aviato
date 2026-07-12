@@ -21,7 +21,9 @@ from urllib.parse import quote
 from . import github
 from .command import CommandError
 from .core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
+from .core.pathguard import confined_target
 from .core.ports import Issue
+from .core.scaffold import atomic_write
 from .core.settingsdrift import CONSENT_ID_HEX_LEN
 
 # A human grants consent by adding a label of this form to the tracking issue;
@@ -769,10 +771,10 @@ class GitHubPlatform:
         base = github.default_branch(repo) or "main"
         owner = repo.split("/", 1)[0]
 
+        for output_path in files:
+            confined_target(self.workdir, output_path, operation="write proposal")
         for output_path, content in files.items():
-            target = self.workdir / output_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+            atomic_write(self.workdir, output_path, content, operation="write proposal")
 
         self._git("switch", "-C", branch)
         self._git("add", "--", *files.keys())

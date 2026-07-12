@@ -8,6 +8,7 @@ import pytest
 from aviato import github
 from aviato.command import CommandError
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
+from aviato.core.errors import PathConfinementError
 from aviato.core.ports import Platform
 from aviato.github_platform import (
     GitHubPlatform,
@@ -921,6 +922,38 @@ def test_open_or_update_proposal_writes_files_and_pushes(tmp_path, monkeypatch: 
     assert any(j.startswith("git -c user.name=aviato-bot") and "commit" in j for j in joined)
     assert any("git push --force origin aviato/sync/x" in j for j in joined)
     assert any("gh pr create" in j for j in joined)
+
+
+@pytest.mark.parametrize("symlink_leaf", [False, True])
+def test_open_or_update_proposal_rejects_symlink_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, symlink_leaf: bool
+) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    original = b"outside remains unchanged\n"
+    if symlink_leaf:
+        outside_target = outside / "proposal.yml"
+        outside_target.write_bytes(original)
+        workflows = tmp_path / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        (workflows / "proposal.yml").symlink_to(outside_target)
+    else:
+        outside_target = outside / "workflows" / "proposal.yml"
+        outside_target.parent.mkdir()
+        outside_target.write_bytes(original)
+        (tmp_path / ".github").symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    with pytest.raises(PathConfinementError, match=r"write proposal.*\.github/workflows/proposal\.yml"):
+        GitHubPlatform(workdir=tmp_path).open_or_update_proposal(
+            "owner/repo",
+            "aviato/sync/x",
+            "Aviato sync",
+            {".github/workflows/proposal.yml": "name: proposal\n"},
+            "body",
+        )
+
+    assert outside_target.read_bytes() == original
 
 
 def test_open_or_update_proposal_skips_pr_create_when_pr_exists(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
