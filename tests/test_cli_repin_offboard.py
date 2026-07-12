@@ -121,8 +121,31 @@ def test_repin_dry_run_rejects_invalid_declaration_before_success(
     captured = capsys.readouterr()
     assert rc == 2
     assert invalid_name in captured.err
-    assert "dry run" not in captured.out
+    assert captured.out == ""  # rejected before any repin plan output
     assert declaration_path.read_text(encoding="utf-8") == original
+
+
+def test_repin_dry_run_reports_orphaned_overrides_from_plan(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    declaration_path = tmp_path / ".github" / "aviato.yaml"
+    declaration_path.parent.mkdir()
+    declaration_path.write_text(
+        "profile: python-library\nversion: 0\nvariables:\n"
+        "  distribution-name: acme\n  import-name: acme\n"
+        "overrides:\n  settings:\n    nonexistent_key: true\n"
+        "  pipelines:\n    remove: [ghost-pipeline]\n",
+        encoding="utf-8",
+    )
+
+    rc = main(["repin", str(tmp_path), "1"])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "re-pin 0 -> 1" in captured.out
+    assert "nonexistent_key" in captured.out
+    assert "ghost-pipeline" in captured.out
+    assert "unknown settings override" not in captured.err
 
 
 def test_repin_reports_skipped_hand_edited_files(

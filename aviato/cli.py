@@ -1142,10 +1142,8 @@ def cmd_repin(args: argparse.Namespace) -> int:
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(root)
-        resolved = resolve_profile(
-            registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
-        )
-        resolve_declared_variables(resolved.variables, declaration.variables)
+        base_resolved = resolve_profile(registry, declaration.profile)
+        resolve_declared_variables(base_resolved.variables, declaration.variables)
         plan = plan_repin(registry, declaration, args.version)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
