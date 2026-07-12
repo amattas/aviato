@@ -8,6 +8,9 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 - [low] The docs-caller↔CI-caller display-name parity check (`_check_docs_caller_name_parity`) scans only scaffold template files, not rendered instances — the managed `.github/workflows/aviato-docs.yml` and consumer rendered workflows aren't checked for the `workflow_run` name coupling, so a rename there silently kills docs deploys. Extend the check to rendered instances. — FINDINGS #40 (narrowed) · aviato/validation.py:240-255
 - [low] Replace the mike bridge with Zensical-native versioning when it ships — mike fork pinned at 2d4ad79 meanwhile. — spec 2026-07-11
+- [low] pin-parity docs check is fail-open on missing sources (validation.py _check_scaffold_constant_parity: if p.is_file() skip) — add presence requirement. — final review 2026-07-11
+- [low] wf-docs callers keep an inert actions: read grant (C12-W5 artifact restore removed); drop on next caller regen batch. — final review 2026-07-11
+- [low] Dependabot bumps of website/requirements.txt will fail the pin-parity check until the scaffold + starter copies are hand-synced — expected finding-43 friction; document/automate. — final review 2026-07-11
 
 ## Settled — do not reopen
 

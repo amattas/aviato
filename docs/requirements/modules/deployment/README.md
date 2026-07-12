@@ -131,7 +131,7 @@ Aviato-driven, operator-gated rollback flow is a candidate for a later version.
 |---|---|---|---|---|---|
 | PyPI | OIDC Trusted Publishing | **No** | `id-token: write`, `contents: read` | Linux | Yes (TestPyPI) |
 | GHCR | platform token | **No** | `packages: write`, `contents: read` | Linux | Yes (test image) |
-| Zensical docs (Pages) | platform token | **No** | `pages: write`, `id-token: write`, `contents: read` | Linux | Yes |
+| Zensical docs (Pages) | platform token | **No** | `contents: write` (push job only; build job read-only) | Linux | Yes |
 | App Store Connect | App Store Connect API key + signing assets | **Yes** | `contents: read` | macOS | **No — operator-verified** |
 | File-drift / report automation | platform token (ephemeral) | **No** | read scope + `issues`/`pull-requests: write` | Linux | Yes |
 | Settings-drift detection (§5.6) | operator-supplied admin **read** token | **Optional, read-only** | `administration: read` (read branch protection/rulesets) | Linux | Yes |

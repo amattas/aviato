@@ -93,9 +93,10 @@ full and is not relaxed — §9 Precedence):
    per-language gates **and** the common lint (actionlint/yamllint/hadolint/
    shellcheck/helm-lint), all blocking.
 3. Its deployment pipeline performs a **real publish** to a real target (TestPyPI
-   for PyPI; a test image for GHCR; a real **multi-version Zensical** Pages
-   publish when `docs: true` — new version reachable, `latest` alias resolves,
-   Zensical's built-in search works, Mermaid renders, and `/sitemap.xml` exists)
+   for PyPI; a test image for GHCR; a real **multi-version Zensical** docs
+   publish — versioned onto the docs branch on release, served via Pages only when
+   enabled — when `docs: true`; when served: new version reachable, `latest` alias
+   resolves, Zensical's built-in search works, Mermaid renders, and `/sitemap.xml` exists)
    with test-artifact hygiene (§11.6) — **except** App Store Connect,
    operator-verified via a real TestFlight upload (§13.4.7). A **zero-deploy
    profile** (`python-component`) has no deployment pipeline; its DoD is verify +
@@ -122,9 +123,10 @@ adoption-time warnings.
   registration is an adoption warning.**)**
 - **GHCR:** provide the container build definition (operator-owned, probed — never seeded, R5-6) **(probeable)**;
   set package visibility/permissions to link the package to the repository.
-- **Zensical docs (only when `docs: true`):** enable GitHub Pages for the
-  repository with the **GitHub Actions** source **(probeable)**. Search is
-  Zensical's built-in search — no external search service to configure.
+- **Zensical docs (only when `docs: true`):** optional Pages serving,
+  "deploy from branch: gh-pages" source, only needed when the operator wants the
+  branch served. Search is Zensical's built-in search — no external search service
+  to configure.
   The Zensical build is a Python/pip toolchain and runs on the standard Linux runner.
 - **Security baseline (§2.13):** enable code scanning, secret scanning + push
   protection, and Dependabot for the repository **(probeable)**. On private

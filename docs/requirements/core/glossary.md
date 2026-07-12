@@ -47,8 +47,9 @@
 - **Documentation site** — the Consumer's published docs: a **multi-version
   Zensical** site (version dropdown + `latest` alias, Zensical's built-in search,
   Mermaid rendering, and sitemap generation) built from authored
-  md/mdx plus language-emitted API md/mdx (§12) and deployed to GitHub Pages on a
-  release tag (§13.3). **Opt-in** via `docs: true` (§6.1); off by default. The
+  md/mdx plus language-emitted API md/mdx (§12) and versioned onto the docs branch
+  on release; served via Pages only when enabled (§13.3). **Opt-in** via `docs: true`
+  (§6.1); off by default. The
   docs deploy consumes md/mdx only — language-agnostic, never inspecting source
   (§2.9).
 - **Security baseline** — the always-on security scanning every profile includes
