@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import shutil
 import subprocess
 import sys
@@ -94,13 +95,23 @@ def test_built_wheel_runtime_version_matches_metadata(tmp_path: Path) -> None:
     else:
         install = [str(python), "-m", "pip", "install", "--no-deps", str(wheel)]
     subprocess.run(install, check=True, capture_output=True, text=True)
-    installed_version = subprocess.run(
-        [str(python), "-c", "from aviato import __version__; print(__version__)"],
+    outside_checkout = tmp_path / "outside-checkout"
+    outside_checkout.mkdir()
+    installed = subprocess.run(
+        [
+            str(python),
+            "-c",
+            "import json; import aviato; print(json.dumps([aviato.__version__, aviato.__file__]))",
+        ],
         check=True,
         capture_output=True,
         text=True,
+        cwd=outside_checkout,
     ).stdout.strip()
+    installed_version, module_file = json.loads(installed)
 
+    assert Path(module_file).resolve().is_relative_to(environment.resolve())
+    assert "site-packages" in Path(module_file).parts
     assert installed_version == metadata["Version"]
 
 
