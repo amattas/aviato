@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
@@ -267,6 +268,95 @@ def test_repin_open_pr_unknown_seed_integrity_opens_no_proposal(
     assert proposal_called is False
     assert clone_path is not None
     assert (clone_path / ".github" / "aviato.yaml").read_text(encoding="utf-8") == original_declaration
+
+
+def test_legacy_sync_then_local_repin_materializes_distinct_target_registry(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration.parent.mkdir()
+    declaration.write_text(
+        "profile: python-library\nversion: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "target-library"
+    shutil.copytree(MODULE_SOURCE_ROOT, target)
+    sentinel = "# target-registry-sentinel\n"
+    template = target / "scaffold" / "files" / "ruff.toml.txt"
+    template.write_text(template.read_text() + sentinel, encoding="utf-8")
+    fetched: list[str] = []
+
+    @contextmanager
+    def fake_fetch(repository: str, pin: str):  # noqa: ARG001
+        fetched.append(pin)
+        yield Registry(MODULE_SOURCE_ROOT if pin == "0" else target)
+
+    monkeypatch.setattr(cli, "fetch_library_registry", fake_fetch)
+    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
+
+    assert main(["sync", str(tmp_path), "--rebaseline-seeds"]) == 0
+    assert yaml.safe_load(declaration.read_text())["profile-identity"] == "aviato-profile/python-library/v1"
+    capsys.readouterr()
+    assert main(["repin", str(tmp_path), "0.1.0", "--write"]) == 0
+    assert fetched == ["0", "0.1.0"]
+    assert sentinel.strip() in (tmp_path / "ruff.toml").read_text()
+
+
+def test_repin_proposal_materializes_target_registry_body(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _adopt(source)
+    target = tmp_path / "target-library"
+    shutil.copytree(MODULE_SOURCE_ROOT, target)
+    sentinel = "# proposal-target-registry-sentinel\n"
+    template = target / "scaffold" / "files" / "ruff.toml.txt"
+    template.write_text(template.read_text() + sentinel, encoding="utf-8")
+    captured: dict[str, str] = {}
+
+    @contextmanager
+    def fake_fetch(repository: str, pin: str):  # noqa: ARG001
+        yield Registry(target)
+
+    def fake_run(cmd, **__):
+        if cmd[:3] == ["gh", "repo", "clone"]:
+            shutil.copytree(source, Path(cmd[4]), dirs_exist_ok=True)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def fake_proposal(self, *_args, **_kwargs):  # noqa: ANN001
+        captured["ruff"] = (self.workdir / "ruff.toml").read_text()
+        return "branch"
+
+    monkeypatch.setattr(cli, "fetch_library_registry", fake_fetch)
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
+    monkeypatch.setattr(cli.GitHubPlatform, "open_worktree_proposal", fake_proposal)
+
+    assert main(["repin", "acme/widget", "0.1.0", "--open-pr"]) == 0
+    assert sentinel.strip() in captured["ruff"]
+
+
+def test_repin_open_pr_reports_orphaned_overrides_before_blocking_summary(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run(cmd, **__):
+        if cmd[:3] == ["gh", "repo", "clone"]:
+            clone = Path(cmd[4])
+            (clone / ".github").mkdir(parents=True)
+            (clone / ".github" / "aviato.yaml").write_text(
+                "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
+                "version: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n"
+                "overrides:\n  settings:\n    removed-setting: true\n",
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    rc = main(["repin", "acme/widget", "0.1.0", "--open-pr"])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "removed-setting" in captured.err
+    assert captured.err.index("removed-setting") < captured.err.index("re-pin blocked")
 
 
 def test_offboard_dry_run_then_write(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

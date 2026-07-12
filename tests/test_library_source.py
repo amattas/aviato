@@ -15,7 +15,11 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 
 
 def _archive(
-    *, root: str = f"amattas-aviato-{SHA[:7]}", member: str = "aviato/library/profile.yaml", kind: str = "file"
+    *,
+    root: str = f"amattas-aviato-{SHA[:7]}",
+    member: str = "aviato/library/profile.yaml",
+    kind: str = "file",
+    second_root: str | None = None,
 ) -> bytes:
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w:gz") as archive:
@@ -27,6 +31,10 @@ def _archive(
         else:
             info.size = len(body)
         archive.addfile(info, None if kind == "symlink" else io.BytesIO(body))
+        if second_root is not None:
+            extra = tarfile.TarInfo(f"{second_root}/README.md")
+            extra.size = 1
+            archive.addfile(extra, io.BytesIO(b"x"))
     return output.getvalue()
 
 
@@ -76,6 +84,8 @@ def test_fetch_library_registry_resolves_exact_commit_and_cleans_up(
         (_archive(kind="symlink"), "link"),
         (_archive(member="README.md"), "aviato/library"),
         (_archive(root="amattas-aviato-deadbee"), "commit"),
+        (_archive(root=f"wrong-commit-{SHA[:7]}-spoof"), "commit"),
+        (_archive(second_root="other-root"), "one commit-root"),
     ],
 )
 def test_fetch_library_registry_rejects_unsafe_or_mismatched_archives_and_cleans_up(

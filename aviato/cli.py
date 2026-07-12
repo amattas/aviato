@@ -539,6 +539,22 @@ def _resolve_onboard_declaration(
     --migrate-profile, or an attempt to move the pin via onboarding; the caller maps
     that to a clean CLI error. Canonicalizes ``args.pin`` in place so the marker
     rendering downstream emits the same bare pin (§6.1)."""
+    resolved_identity = registry.profile(args.profile).identity
+    if existing is not None:
+        if existing.profile_identity is None:
+            raise DeclarationError(
+                "existing declaration has no profile identity; run `aviato sync <path>` first so "
+                "the declaration's own pinned Library registry can migrate it safely"
+            )
+        if existing.profile_identity != resolved_identity:
+            raise DeclarationError(
+                f"existing declaration profile identity mismatch: records {existing.profile_identity!r}, "
+                f"but profile {args.profile!r} resolves to {resolved_identity!r}; refusing to re-onboard"
+            )
+        profile_identity = existing.profile_identity
+    else:
+        profile_identity = resolved_identity
+
     flags = _parse_var_flags(args.var)
     variables = resolve_variables(
         resolved.variables,
@@ -569,7 +585,7 @@ def _resolve_onboard_declaration(
     declaration = Declaration(
         profile=args.profile,
         version=pin,
-        profile_identity=registry.profile(args.profile).identity,
+        profile_identity=profile_identity,
         docs=docs,
         variables=persisted,
         overrides=(existing.overrides if existing else {}),
@@ -1390,6 +1406,8 @@ def _repin_proposal(args: argparse.Namespace) -> int:
     if not plan.ok:
         for name in plan.newly_required:
             print(f"newly-required variable (set before re-pinning): {name}", file=sys.stderr)
+        for name in plan.orphaned_overrides:
+            print(f"orphaned override (no longer in the profile): {name}", file=sys.stderr)
         for name in plan.conflicting_overrides:
             print(f"conflicting pipelines.add override (now bundled at the target): {name}", file=sys.stderr)
         print("re-pin blocked; resolve the above first (§5.12).", file=sys.stderr)

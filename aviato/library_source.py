@@ -76,7 +76,7 @@ def _safe_library_members(archive: tarfile.TarFile, sha: str) -> tuple[str, list
     if len(roots) != 1:
         raise AviatoError("Library archive does not have one commit-root directory")
     root = next(iter(roots))
-    if sha[:7] not in root:
+    if not root.endswith(f"-{sha[:7]}"):
         raise AviatoError(f"Library archive commit root {root!r} does not match resolved commit {sha}")
     if not any(m.isfile() and len(PurePosixPath(m.name).parts) > 3 for m in selected):
         raise AviatoError("Library archive is missing the aviato/library tree")

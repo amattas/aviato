@@ -105,3 +105,89 @@ def test_onboard_open_pr_rejects_symlinked_artifact_probe(
     assert "LICENSE" in capsys.readouterr().err
     assert outside.read_bytes() == original
     assert proposal_called is False
+
+
+@pytest.mark.parametrize("identity_line", ["", "profile-identity: aviato-profile/repurposed/v1\n"])
+def test_reonboard_open_pr_refuses_legacy_or_mismatched_identity_without_proposal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], identity_line: str
+) -> None:
+    proposal_called = False
+
+    def fake_run(cmd, **__):
+        if cmd[:3] == ["gh", "repo", "clone"]:
+            dest = Path(cmd[4])
+            (dest / ".github").mkdir(parents=True)
+            (dest / ".github" / "aviato.yaml").write_text(
+                "profile: python-library\n"
+                f"{identity_line}"
+                "version: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def fake_proposal(*_args, **_kwargs):
+        nonlocal proposal_called
+        proposal_called = True
+        return "branch"
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli.GitHubPlatform, "open_or_update_proposal", fake_proposal)
+    rc = main(
+        [
+            "onboard",
+            "acme/widget",
+            "--open-pr",
+            "--profile",
+            "python-library",
+            "--pin",
+            "0",
+            "--allow-unresolved-pin",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "profile identity" in captured.err.lower()
+    if identity_line:
+        assert "mismatch" in captured.err.lower()
+    else:
+        assert "aviato sync" in captured.err
+    assert proposal_called is False
+
+
+def test_reonboard_open_pr_preserves_equal_profile_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd, **__):
+        if cmd[:3] == ["gh", "repo", "clone"]:
+            dest = Path(cmd[4])
+            (dest / ".github").mkdir(parents=True)
+            (dest / ".github" / "aviato.yaml").write_text(
+                "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
+                "version: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def fake_proposal(self, repo, branch, title, files, body):  # noqa: ANN001
+        captured.update(files=files)
+        return branch
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli.GitHubPlatform, "open_or_update_proposal", fake_proposal)
+    assert (
+        main(
+            [
+                "onboard",
+                "acme/widget",
+                "--open-pr",
+                "--profile",
+                "python-library",
+                "--pin",
+                "0",
+                "--allow-unresolved-pin",
+            ]
+        )
+        == 0
+    )
+    assert "profile-identity: aviato-profile/python-library/v1" in captured["files"][".github/aviato.yaml"]

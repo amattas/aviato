@@ -103,10 +103,13 @@ def test_reonboard_preserves_docs_opt_in(tmp_path: Path) -> None:
         "import-name=acme",
     ]
     assert main(base + ["--docs"]) == 0
-    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["docs"] is True
+    first = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
+    assert first["docs"] is True
     # Re-onboard WITHOUT --docs → docs must stay true (preserved like overrides).
     assert main(base) == 0
-    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["docs"] is True
+    second = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
+    assert second["docs"] is True
+    assert second["profile-identity"] == first["profile-identity"]
 
 
 def test_reonboard_docs_true_also_scaffolds_docs_workflow(tmp_path: Path) -> None:
@@ -267,3 +270,41 @@ def test_onboard_without_write_only_prints_plan(tmp_path: Path, capsys: pytest.C
     assert rc == 0
     assert "Onboarding plan" in out
     assert not (tmp_path / ".github" / "aviato.yaml").exists()  # plan-only, no write
+
+
+@pytest.mark.parametrize("identity_line", ["", "profile-identity: aviato-profile/repurposed/v1\n"])
+def test_reonboard_write_refuses_legacy_or_mismatched_identity_without_mutation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], identity_line: str
+) -> None:
+    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration.parent.mkdir()
+    original = (
+        "profile: python-library\n"
+        f"{identity_line}"
+        "version: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n"
+    )
+    declaration.write_text(original, encoding="utf-8")
+
+    rc = main(
+        [
+            "onboard",
+            str(tmp_path),
+            "--profile",
+            "python-library",
+            "--write",
+            "--allow-dirty",
+            "--pin",
+            "0",
+            "--allow-unresolved-pin",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "profile identity" in captured.err.lower()
+    if identity_line:
+        assert "mismatch" in captured.err.lower()
+    else:
+        assert "aviato sync" in captured.err
+    assert declaration.read_text(encoding="utf-8") == original
+    assert not (tmp_path / "ruff.toml").exists()
