@@ -60,8 +60,8 @@ ghcr-publish:
   environment: ghcr
   runner: linux
 docs-pages:
-  # Zensical/mike branch deploy: read-only build job + contents:write push job; no Pages/OIDC scopes.
-  privileges: ["contents: read", "contents: write"]
+  # Read-only build + isolated branch push + optional no-consumer-code Pages deploy.
+  privileges: ["contents: read", "contents: write", "pages: write", "id-token: write"]
   runner: linux
 app-store-connect:
   # actions: read — the §11.4 environment-reviewer probe reads environment protection rules.

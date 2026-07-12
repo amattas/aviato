@@ -582,7 +582,7 @@ class GitHubPlatform:
         repo: str,
         *,
         environments: tuple[str, ...] = (),
-        probe_pages: bool = False,
+        probe_pages_build_type: bool = False,
         drift_workflow_path: str | None = None,
     ) -> tuple[bool | None, bool | None, dict[str, bool | None]]:
         """Probe issue-channel availability, scan-heartbeat presence, and §17 remote prereqs.
@@ -690,14 +690,13 @@ class GitHubPlatform:
         except github.GitHubAPIError:
             for key in ("secret_scanning", "secret_scanning_push_protection", "dependabot_security_updates"):
                 remote.setdefault(key, None)
-        # R7-3-DOCTOR-NOISE: probe Pages only when the caller indicates a docs-bearing profile —
-        # otherwise the doctor surfaces a noisy "pages_source_actions: unknown / no" for repos that
-        # have no docs at all. The caller (cmd_doctor) sets `probe_pages` from `declaration.docs`.
-        if probe_pages:
+        # Probe Pages only for a declaration that both builds docs and opts into serving them.
+        # Branch-only docs publishers need no Pages configuration and must stay quiet in doctor.
+        if probe_pages_build_type:
             try:
-                remote["pages_source_actions"] = github.pages_source_is_actions(repo)
+                remote["pages_build_type_workflow"] = github.pages_build_type_is_workflow(repo)
             except github.GitHubAPIError:
-                remote["pages_source_actions"] = None
+                remote["pages_build_type_workflow"] = None
         # R7-3-APPSTORE-ENV: each environment name is plug-in DATA from the resolved profile (the
         # binding doesn't know WHICH capability needs it); probe each and surface under a `env:<name>`
         # key in `prerequisites_remote`.

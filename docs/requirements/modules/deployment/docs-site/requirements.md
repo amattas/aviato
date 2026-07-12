@@ -27,9 +27,9 @@ narrative-only site.
   defaults to 0 (unlimited); an operator may set N>0 to cap to the newest N versions,
   pruned via `mike delete` on each release.
 - **Deploy target:** the `docs-branch` input (default `gh-pages`). The workflow
-  refuses to target the repository default branch. **Pages serving is decoupled and
-  optional** — enabling GitHub Pages to serve this branch is a separate operator
-  toggle; the workflow succeeds identically whether Pages is enabled or not.
+  refuses to target the repository default branch. `serve-pages` is a non-secret
+  boolean, default false: false still builds and pushes the canonical branch;
+  true additionally deploys that exact branch tree through Pages Actions.
 - **Search:** Zensical's built-in search — no external search service, no Algolia
   configuration (superseded; see backlog).
 
@@ -44,19 +44,23 @@ skips the deploy) → refuse to target the default branch → `mike deploy` on t
 branch (every policy-conformant release deploys its own version; `latest` alias +
 `mike set-default` move only when this release is the highest) → optional retention
 prune via `mike delete` when `docs-retention` > 0 → bundle the local docs branch as a
-git-bundle artifact → handoff to the push job, which fast-forward-pushes it.
+git-bundle artifact → materialize the exact `refs/heads/<docs-branch>` tree and
+reject escaping symlinks → handoff to the push job, which fast-forward-pushes it.
 **Auth (C12-W4, adapted for branch deploys):** permissions are per-job — the build
 job runs the consumer's emit command and holds only `contents: read`; only the
 separate push job, which runs **no consumer code**, holds `contents: write` and
 verifies the bundle fast-forwards before pushing (refuses on concurrent-deploy or
-rewritten-history mismatch). No stored secret.
+rewritten-history mismatch). When `serve-pages=true`, the read-only build configures
+and uploads the Pages artifact; a second no-consumer-code deploy job runs only after
+build and push succeed, holds only `pages: write` and `id-token: write`, and deploys
+to the `github-pages` environment. No stored secret.
 **Why a deployment plug-in:** publishing the docs branch is a privileged outward
 write; modeling it under §13 (tag-gated, declared privileges) keeps it consistent
 with "deployment runs only on a release tag" rather than escaping the deployment
 interface.
-**Operator prerequisite:** none to produce the docs branch. Serving it via GitHub
-Pages (source: the docs branch, or a workflow reading from it) is an optional,
-separate operator toggle (§17).
+**Operator prerequisite:** none to produce the docs branch. To serve it, set
+`serve-pages: true` and configure Settings → Pages → Source as **GitHub Actions**
+(`build_type=workflow`), never Deploy from a branch (§17).
 **DoD:** always verifiable from the docs branch alone — after a release deploy, the
 branch contains the new version's directory, and alias state is correct (`latest`
 moved iff this release is the highest, per the monotonic guard). When the operator
@@ -72,5 +76,5 @@ flowchart TD
     D --> E["mike deploy on local branch (+ retention prune)"]
     E --> F["Bundle handoff to push job"]
     F --> G["Fast-forward push (contents: write, no consumer code)"]
-    G --> H["Confirm: version dir + alias state on branch;<br/>site checks only if Pages is enabled"]
+    G --> H["Optional same-run Pages deploy<br/>(pages + OIDC only, exact branch tree)"]
 ```

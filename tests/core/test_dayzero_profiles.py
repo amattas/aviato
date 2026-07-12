@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import pytest
+import yaml
 
 from aviato.core.composition import resolve_profile
 from aviato.core.registry import Registry
-from aviato.paths import MODULE_SOURCE_ROOT
+from aviato.paths import MODULE_SOURCE_ROOT, REPO_ROOT
 
 DAYZERO = ("python-library", "python-service", "python-component", "node-service", "swift-app")
 
@@ -101,6 +102,7 @@ def test_python_service_is_a_container_service_not_a_library(registry: Registry)
         "owner",
         "repo",
         "project-name",
+        "serve-pages",
     }, var_names
     assert "distribution-name" not in var_names and "import-name" not in var_names
     assert "image-name" not in var_names
@@ -385,6 +387,47 @@ def test_swift_caller_requires_workspace_or_project() -> None:
 def test_docs_opt_in_composes_docs_pipeline(registry: Registry, name: str) -> None:
     assert "docs-pages" not in resolve_profile(registry, name).pipelines
     assert "docs-pages" in resolve_profile(registry, name, docs=True).pipelines
+
+
+@pytest.mark.parametrize("name", DAYZERO)
+def test_docs_profiles_default_pages_serving_off(registry: Registry, name: str) -> None:
+    resolved = resolve_profile(registry, name)
+    serve = next(variable for variable in resolved.variables if variable.name == "serve-pages")
+    assert serve.type == "boolean"
+    assert serve.required is False
+    assert serve.default is False
+
+
+def test_aviato_library_enables_pages_in_rendered_docs_caller(registry: Registry) -> None:
+    from aviato.core.onboarding import resolved_artifacts
+
+    declaration = yaml.safe_load((REPO_ROOT / ".github" / "aviato.yaml").read_text(encoding="utf-8"))
+    assert declaration["variables"]["serve-pages"] is True
+    artifacts = resolved_artifacts(
+        registry,
+        "aviato-library",
+        declaration["variables"],
+        pin=declaration["version"],
+        docs=True,
+        bootstrap=True,
+    )
+    docs = next(artifact for artifact in artifacts if artifact.output == ".github/workflows/aviato-docs.yml")
+    rendered = yaml.safe_load(docs.body)
+    assert rendered["jobs"]["docs"]["with"]["serve-pages"] is True
+
+
+def test_serve_pages_rejects_non_boolean_declaration(registry: Registry) -> None:
+    from aviato.core.errors import DeclarationError
+    from aviato.core.onboarding import resolved_artifacts
+
+    with pytest.raises(DeclarationError, match="serve-pages.*not a boolean"):
+        resolved_artifacts(
+            registry,
+            "python-service",
+            {"serve-pages": "certainly"},
+            pin="0",
+            docs=True,
+        )
 
 
 def test_node_language_variant_is_enum(registry: Registry) -> None:

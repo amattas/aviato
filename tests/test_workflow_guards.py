@@ -306,6 +306,79 @@ def test_docs_retention_defaults_to_keep_all() -> None:
     assert guard_pos < prune_pos, "the -gt 0 keep-all guard must precede the prune logic"
 
 
+def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> None:
+    wf = _load("reusable-docs-pages.yml")
+    on_block = wf.get("on") or wf.get(True)
+    serve = on_block["workflow_call"]["inputs"]["serve-pages"]
+    assert serve["required"] is False
+    assert serve["type"] == "boolean"
+    assert serve["default"] is False
+
+    build = wf["jobs"]["build"]
+    push = wf["jobs"]["push"]
+    deploy = wf["jobs"]["deploy"]
+    assert build["permissions"] == {"contents": "read"}
+    assert push["permissions"] == {"contents": "write"}
+    assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
+    assert set(deploy["needs"]) == {"build", "push"}
+    assert "inputs.serve-pages" in str(deploy["if"])
+    assert "success()" in str(deploy["if"])
+    assert deploy["environment"] == {
+        "name": "github-pages",
+        "url": "${{ steps.deployment.outputs.page_url }}",
+    }
+    assert deploy["steps"] == [
+        {
+            "name": "Deploy GitHub Pages",
+            "id": "deployment",
+            "uses": "actions/deploy-pages@v4",
+        }
+    ], "the privileged deploy job must execute no consumer commands"
+
+    steps = build["steps"]
+    materialize = next(step for step in steps if step.get("name") == "Materialize exact docs branch tree")
+    body = materialize["run"]
+    assert "refs/heads/${DOCS_BRANCH}" in body
+    assert "git archive" in body
+    assert "symlink" in body.lower()
+    configure = next(step for step in steps if str(step.get("uses", "")).startswith("actions/configure-pages@"))
+    upload = next(step for step in steps if str(step.get("uses", "")).startswith("actions/upload-pages-artifact@"))
+    assert "inputs.serve-pages" in str(configure["if"])
+    assert "inputs.serve-pages" in str(upload["if"])
+    assert upload["with"]["path"] == "/tmp/aviato-pages-site"
+
+    assert wf["concurrency"]["cancel-in-progress"] is False
+
+
+def test_rendered_library_docs_caller_enables_pages_and_grants_only_call_union() -> None:
+    caller = _load("aviato-docs.yml")
+    docs = caller["jobs"]["docs"]
+    assert docs["with"]["serve-pages"] is True
+    assert docs["permissions"] == {
+        "actions": "read",
+        "contents": "write",
+        "pages": "write",
+        "id-token": "write",
+    }
+
+
+def test_starter_docs_deploys_exact_branch_artifact_after_push() -> None:
+    starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
+    assert starter["permissions"] == {}
+    assert starter["concurrency"]["cancel-in-progress"] is False
+    assert "${{ github.repository }}" in starter["concurrency"]["group"]
+    assert starter["jobs"]["build"]["permissions"] == {"contents": "read"}
+    assert starter["jobs"]["push"]["permissions"] == {"contents": "write"}
+    deploy = starter["jobs"]["deploy"]
+    assert set(deploy["needs"]) == {"build", "push"}
+    assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
+    assert all("run" not in step for step in deploy["steps"])
+    body = (REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8")
+    assert 'git archive "refs/heads/${DOCS_BRANCH}"' in body
+    assert "refusing escaping symlink" in body
+    assert "actions/upload-pages-artifact@" in body
+
+
 def test_registry_publishes_run_in_deployment_environments() -> None:
     # finding 7: PyPI/GHCR publishes get the same platform-level environment gate the
     # Pages/App Store deploys already have.

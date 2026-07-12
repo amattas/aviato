@@ -794,6 +794,23 @@ def test_probe_health_heartbeat_false_when_stale_for_old_head(monkeypatch: pytes
     assert heartbeat is False
 
 
+def test_probe_health_pages_build_type_only_when_serve_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github, "gh_json_optional", _probe_optional(has_issues=True, head_sha=None, artifacts=[]))
+    calls: list[str] = []
+
+    def pages(repo: str) -> bool:
+        calls.append(repo)
+        return True
+
+    monkeypatch.setattr(github, "pages_build_type_is_workflow", pages)
+    _, _, without = GitHubPlatform().probe_health("o/r", probe_pages_build_type=False)
+    assert "pages_build_type_workflow" not in without
+    assert calls == []
+    _, _, with_pages = GitHubPlatform().probe_health("o/r", probe_pages_build_type=True)
+    assert with_pages["pages_build_type_workflow"] is True
+    assert calls == ["o/r"]
+
+
 def test_probe_health_heartbeat_false_when_no_artifact_or_expired(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "gh_json_optional", _probe_optional(has_issues=False, head_sha="abc", artifacts=[]))
     issue_channel, heartbeat, _remote = GitHubPlatform().probe_health("o/r")

@@ -256,8 +256,8 @@ def protected_environment_has_reviewers(slug: str, environment: str) -> bool | N
     return False  # environment exists + parseable rules but no required-reviewer rule (real "no")
 
 
-def pages_source_is_actions(slug: str) -> bool | None:
-    """True iff the repo has Pages enabled with the GitHub Actions source (§13.3).
+def pages_build_type_is_workflow(slug: str) -> bool | None:
+    """True iff the repo's Pages build type is ``workflow`` (§13.3).
 
     R6-2-§17-PROBE: §17 lists this as remote-probeable. Returns None on an ambiguous read so
     `doctor` can surface "unable to determine" rather than mis-report "absent" (§5.14).

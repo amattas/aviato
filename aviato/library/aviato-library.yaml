@@ -4,6 +4,7 @@ workflows: python-library-wf
 scaffold: aviato-library-sc
 settings: baseline
 variables:
+  - {name: serve-pages, type: boolean, required: false, default: false}
   # finding 38: the typing migration is COMPLETE for the package (mypy --strict
   # aviato is clean); the Library now runs the gate it mandates for consumers,
   # scoped to the package via typecheck-command (tests are a follow-up).

@@ -205,28 +205,28 @@ def test_settings_read_token_scope_is_noop_without_admin_token(monkeypatch: pyte
     assert os.environ["GH_TOKEN"] == "platform-token"
 
 
-def test_pages_source_is_actions_returns_none_on_404_or_missing_schema(monkeypatch) -> None:
+def test_pages_build_type_workflow_returns_none_on_404_or_missing_schema(monkeypatch) -> None:
     # R7-3-PAGES-§5.14: a 404 from /pages conflates "off" with "no perms" and "invisible" — the
     # honest mapping is unknown (None), per §5.14 "absence/unreadable reads as broken, not clean".
     # R7-3-PAGES-SCHEMA: a present dict lacking build_type (schema drift) is also unknown, not no.
     from aviato import github as gh
 
     monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: None)  # the 404 path
-    assert gh.pages_source_is_actions("o/r") is None
+    assert gh.pages_build_type_is_workflow("o/r") is None
     monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: "weird-non-dict")
-    assert gh.pages_source_is_actions("o/r") is None
+    assert gh.pages_build_type_is_workflow("o/r") is None
     monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: {"public": True})  # no build_type
-    assert gh.pages_source_is_actions("o/r") is None
+    assert gh.pages_build_type_is_workflow("o/r") is None
 
 
-def test_pages_source_is_actions_resolves_workflow_vs_legacy(monkeypatch) -> None:
+def test_pages_build_type_workflow_resolves_workflow_vs_legacy(monkeypatch) -> None:
     # The two determinate cases the API DOES distinguish: Actions-sourced (workflow) vs branch.
     from aviato import github as gh
 
     monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: {"build_type": "workflow"})
-    assert gh.pages_source_is_actions("o/r") is True
+    assert gh.pages_build_type_is_workflow("o/r") is True
     monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: {"build_type": "legacy"})
-    assert gh.pages_source_is_actions("o/r") is False
+    assert gh.pages_build_type_is_workflow("o/r") is False
 
 
 def test_upsert_ruleset_matches_when_list_omits_target(monkeypatch: pytest.MonkeyPatch) -> None:

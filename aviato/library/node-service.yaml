@@ -4,6 +4,7 @@ workflows: node-service-wf
 scaffold: node-service-sc
 settings: baseline
 variables:
+  - {name: serve-pages, type: boolean, required: false, default: false}
   # finding 28: read (never guessed) from the git remote / provision slug by the CLI
   # auto-detection tier; seeds the LICENSE/CODEOWNERS owner. Optional, NO default —
   # an unset optional is omitted from render vars so seed-once templates keep the

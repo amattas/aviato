@@ -29,6 +29,17 @@ CALLER_ONLY_PRIVILEGES = {
 }
 
 
+def test_docs_pages_privilege_union_includes_isolated_pages_deployer() -> None:
+    module = Registry(MODULE_SOURCE_ROOT).pipeline_module("docs-pages")
+    assert module is not None
+    assert set(module.privileges) == {
+        "contents: read",
+        "contents: write",
+        "pages: write",
+        "id-token: write",
+    }
+
+
 def _workflow_privileges(wf: dict) -> set[str]:
     """The UNION of a workflow's top-level + per-job ``permissions`` (§8.9). A workflow may scope
     permissions PER JOB — e.g. docs-pages runs the consumer build under contents:read and deploys under

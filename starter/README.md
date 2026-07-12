@@ -43,7 +43,8 @@ local build output dir). Python repos: uncomment the pydoc-markdown block in
 4. Swap in the new `docs.yml`.
 5. Delete `versioned_docs/`, `versioned_sidebars/`, `versions.json` — version
    history now lives on the `gh-pages` branch via `mike`, not in the source tree.
-6. Flip the Pages source (Settings → Pages) if you're serving the branch.
+6. Set Pages source to **GitHub Actions** (Settings → Pages) so the workflow can
+   deploy the exact versioned branch artifact after its branch push succeeds.
 7. Then run once, from `website/`, to seed `gh-pages` with the existing
    history: `mike deploy --push <current-release> latest && mike set-default
    --push latest && mike deploy --push dev`.
@@ -64,9 +65,10 @@ the `docs/` tree convention: per-module requirements with per-module
    any time.
 2. **CodeQL:** repo Settings → Code security → CodeQL analysis → Default setup.
    (Settings-based; needs no workflow file.)
-3. **Pages (optional, docs sites only):** Settings → Pages → Source: Deploy
-   from a branch → `gh-pages` — flip on/off anytime; the workflow pushes the
-   branch either way.
+3. **Pages (docs sites only):** Settings → Pages → Source: **GitHub Actions**.
+   Never select Deploy from a branch: the workflow first archives the versioned
+   `gh-pages` state, then deploys that exact tree through Pages Actions in the
+   same non-cancelling run.
 4. **PyPI trusted publisher** (Python libraries only): pypi.org → Publishing →
    publisher with workflow **`release.yml`** and environment **`release`**.
    PyPI matches the workflow file that contains the publish step plus the

@@ -102,11 +102,14 @@ jobs:
     permissions:
       actions: read
       contents: write
+      pages: write
+      id-token: write
     uses: {{ aviato-workflow-prefix }}reusable-docs-pages.yml{{ aviato-workflow-suffix }}
     with:
       working-directory: website
       release-tag: ${{ needs.resolve.outputs.tag }}
       gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
+      serve-pages: {{ serve-pages }}
       # Narrative-only docs (mirrors swift-app): a container service has no installable Python
       # library API to auto-generate a reference from, so there is no pydoc-markdown emit step
       # (and hence no import-name dependency — §13.2). Authors write the docs under website/.

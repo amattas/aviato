@@ -925,6 +925,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         # which env name). Today only app-store-connect declares one; future deploy pipelines that
         # require a protected environment can add the field without code changes here.
         environments = tuple(sorted({p.environment for p in resolved.pipeline_modules if p.environment}))
+        effective_variables = resolve_declared_variables(resolved.variables, declaration.variables)
+        serve_pages = effective_variables.get("serve-pages") is True
         (
             report.issue_channel_available,
             report.scan_heartbeat_present,
@@ -932,7 +934,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         ) = GitHubPlatform().probe_health(
             slug,
             environments=environments,
-            probe_pages=declaration.docs,
+            probe_pages_build_type=declaration.docs and serve_pages,
             # findings 30/31/32: API-state probes — drift caller enabled + last-run
             # conclusion, and code-scanning enablement (§2.13/§17 "probeable").
             drift_workflow_path=DRIFT_CALLER_PATH,
