@@ -28,99 +28,61 @@ def test_gh_json_can_allow_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_codeql_merge_protection_requires_exact_active_branch_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "default_branch", lambda slug: "main")
-    monkeypatch.setattr(github, "gh_json_paginated", lambda endpoint, default=None: [{"id": 7}, {"id": 8}])
-    payloads = {
-        7: {
-            "target": "branch",
-            "enforcement": "active",
-            "conditions": {"ref_name": {"include": ["refs/heads/other"], "exclude": []}},
-            "rules": [],
+    effective = [
+        {"type": "pull_request", "ruleset_source_type": "Repository"},
+        {
+            "type": "code_scanning",
+            "parameters": {"code_scanning_tools": [dict(github.EXPECTED_CODEQL_RULE)]},
         },
-        8: {
-            "target": "branch",
-            "enforcement": "active",
-            "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
-            "rules": [
-                {
-                    "type": "code_scanning",
-                    "parameters": {"code_scanning_tools": [dict(github.EXPECTED_CODEQL_RULE)]},
-                }
-            ],
-        },
-    }
-    monkeypatch.setattr(github, "gh_json", lambda endpoint: payloads[int(endpoint.rsplit("/", 1)[1])])
+    ]
+    monkeypatch.setattr(github, "gh_json_paginated", lambda endpoint, default=None: effective)
     assert github.codeql_merge_protection_present("o/r") is True
 
-    payloads[8]["rules"][0]["parameters"]["code_scanning_tools"][0]["security_alerts_threshold"] = "critical"
+    effective[1]["parameters"]["code_scanning_tools"][0]["security_alerts_threshold"] = "critical"
+    assert github.codeql_merge_protection_present("o/r") is False
+
+    effective.pop()
     assert github.codeql_merge_protection_present("o/r") is False
 
 
-def test_codeql_merge_protection_honors_default_branch_conditions(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(github, "default_branch", lambda slug: "main")
-    monkeypatch.setattr(github, "gh_json_paginated", lambda endpoint, default=None: [{"id": 9}])
-    payload = {
-        "target": "branch",
-        "enforcement": "active",
-        "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
-        "rules": [
+def test_codeql_merge_protection_reads_effective_nested_default_branch_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(github, "default_branch", lambda slug: "release/main")
+    endpoints: list[str] = []
+
+    def effective(endpoint: str, default=None):
+        endpoints.append(endpoint)
+        return [
             {
                 "type": "code_scanning",
                 "parameters": {"code_scanning_tools": [dict(github.EXPECTED_CODEQL_RULE)]},
             }
-        ],
-    }
-    monkeypatch.setattr(github, "gh_json", lambda endpoint: payload)
+        ]
+
+    monkeypatch.setattr(github, "gh_json_paginated", effective)
     assert github.codeql_merge_protection_present("o/r") is True
-
-    payload["conditions"]["ref_name"] = {"include": ["refs/heads/release"], "exclude": []}
-    assert github.codeql_merge_protection_present("o/r") is False
-
-    payload["conditions"]["ref_name"] = {"include": ["~DEFAULT_BRANCH"], "exclude": ["refs/heads/main"]}
-    assert github.codeql_merge_protection_present("o/r") is False
-
-    payload["conditions"]["ref_name"] = {"include": ["refs/heads/main"], "exclude": ["~DEFAULT_BRANCH"]}
-    assert github.codeql_merge_protection_present("o/r") is False
+    assert endpoints == ["repos/o/r/rules/branches/release%2Fmain"]
 
 
 @pytest.mark.parametrize(
     "bad_value",
     [
-        {"list": {}},
-        {"list": [7]},
-        {"detail": []},
-        {"detail": {"target": "branch", "enforcement": "active", "conditions": {}, "rules": []}},
-        {
-            "detail": {
-                "target": "branch",
-                "enforcement": "active",
-                "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
-                "rules": {},
-            }
-        },
-        {
-            "detail": {
-                "target": "branch",
-                "enforcement": "active",
-                "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
-                "rules": [{"type": "code_scanning", "parameters": []}],
-            }
-        },
-        {
-            "detail": {
-                "target": "branch",
-                "enforcement": "active",
-                "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
-                "rules": [{"type": "code_scanning", "parameters": {"code_scanning_tools": {}}}],
-            }
-        },
+        {},
+        [7],
+        [{"type": 7}],
+        [{"type": "code_scanning"}],
+        [{"type": "code_scanning", "parameters": []}],
+        [{"type": "code_scanning", "parameters": {"code_scanning_tools": {}}}],
+        [{"type": "code_scanning", "parameters": {"code_scanning_tools": [7]}}],
+        [{"type": "code_scanning", "parameters": {"code_scanning_tools": [{"tool": "CodeQL"}]}}],
     ],
 )
 def test_codeql_merge_protection_fails_closed_on_successful_malformed_shapes(
-    monkeypatch: pytest.MonkeyPatch, bad_value: dict
+    monkeypatch: pytest.MonkeyPatch, bad_value: object
 ) -> None:
     monkeypatch.setattr(github, "default_branch", lambda slug: "main")
-    monkeypatch.setattr(github, "gh_json_paginated", lambda endpoint, default=None: bad_value.get("list", [{"id": 1}]))
-    monkeypatch.setattr(github, "gh_json", lambda endpoint: bad_value.get("detail", {}))
+    monkeypatch.setattr(github, "gh_json_paginated", lambda endpoint, default=None: bad_value)
     with pytest.raises(github.GitHubAPIError):
         github.codeql_merge_protection_present("o/r")
 

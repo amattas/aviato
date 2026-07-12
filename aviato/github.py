@@ -7,7 +7,6 @@ import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -321,83 +320,38 @@ def repository_rulesets(slug: str) -> list[dict[str, Any]]:
 
 
 def codeql_merge_protection_present(slug: str) -> bool:
-    """Whether an active branch ruleset carries the exact required CodeQL threshold.
+    """Whether the default branch's effective rules carry the exact CodeQL threshold.
 
-    Reads every paginated ruleset summary and then its full payload because the list
-    endpoint omits rules. API ambiguity raises through the normal fail-closed helpers;
-    callers such as doctor map that to unknown rather than absent.
+    GitHub evaluates ruleset targeting/conditions and returns only rules effective for
+    this branch. This avoids locally emulating fnmatch/ref-condition semantics. API or
+    successful-response schema ambiguity raises so doctor maps it to unknown.
     """
     branch = default_branch(slug)
     if not branch:
         raise GitHubAPIError(f"repos/{slug}", 0, "repository response omitted default_branch")
-    default_ref = f"refs/heads/{branch}"
+    endpoint = f"repos/{slug}/rules/branches/{quote(branch, safe='')}"
+    rules = gh_json_paginated(endpoint, default=[])
+    if not isinstance(rules, list):
+        raise GitHubAPIError(endpoint, 0, "effective branch rules response was not an array")
 
-    summaries = gh_json_paginated(f"repos/{slug}/rulesets", default=[])
-    if not isinstance(summaries, list):
-        raise GitHubAPIError(f"repos/{slug}/rulesets", 0, "ruleset list response was not an array")
-
-    def _shape_error(ruleset_id: Any, message: str) -> GitHubAPIError:
-        return GitHubAPIError(f"repos/{slug}/rulesets/{ruleset_id}", 0, message)
-
-    def _matches_default(value: str) -> bool:
-        return value in {"~ALL", "~DEFAULT_BRANCH"} or fnmatchcase(default_ref, value)
-
-    for summary in summaries:
-        if not isinstance(summary, dict):
-            raise GitHubAPIError(f"repos/{slug}/rulesets", 0, "ruleset list contained a non-object entry")
-        ruleset_id = summary.get("id")
-        if ruleset_id is None:
-            raise GitHubAPIError(f"repos/{slug}/rulesets", 0, "ruleset summary omitted id")
-        payload = gh_json(f"repos/{slug}/rulesets/{ruleset_id}")
-        if not isinstance(payload, dict):
-            raise _shape_error(ruleset_id, "ruleset detail response was not an object")
-        if not isinstance(payload.get("target"), str) or not isinstance(payload.get("enforcement"), str):
-            raise _shape_error(ruleset_id, "ruleset detail omitted target or enforcement")
-
-        conditions = payload.get("conditions")
-        ref_name = conditions.get("ref_name") if isinstance(conditions, dict) else None
-        includes = ref_name.get("include") if isinstance(ref_name, dict) else None
-        excludes = ref_name.get("exclude") if isinstance(ref_name, dict) else None
-        if (
-            not isinstance(includes, list)
-            or not includes
-            or not all(isinstance(item, str) for item in includes)
-            or not isinstance(excludes, list)
-            or not all(isinstance(item, str) for item in excludes)
+    for rule in rules:
+        if not isinstance(rule, dict) or not isinstance(rule.get("type"), str):
+            raise GitHubAPIError(endpoint, 0, "effective branch rules contained a malformed rule")
+        if rule.get("type") != "code_scanning":
+            continue
+        parameters = rule.get("parameters")
+        if not isinstance(parameters, dict):
+            raise GitHubAPIError(endpoint, 0, "code_scanning rule parameters was not an object")
+        tools = parameters.get("code_scanning_tools")
+        if not isinstance(tools, list):
+            raise GitHubAPIError(endpoint, 0, "code_scanning_tools was not an array")
+        if not all(
+            isinstance(tool, dict) and all(isinstance(tool.get(key), str) for key in EXPECTED_CODEQL_RULE)
+            for tool in tools
         ):
-            raise _shape_error(ruleset_id, "ruleset detail contained malformed ref_name conditions")
-
-        rules = payload.get("rules")
-        if not isinstance(rules, list):
-            raise _shape_error(ruleset_id, "ruleset detail rules was not an array")
-        for rule in rules:
-            if not isinstance(rule, dict) or not isinstance(rule.get("type"), str):
-                raise _shape_error(ruleset_id, "ruleset detail contained a malformed rule")
-            if "parameters" in rule and not isinstance(rule["parameters"], dict):
-                raise _shape_error(ruleset_id, "ruleset rule parameters was not an object")
-            if rule.get("type") == "code_scanning":
-                parameters = rule.get("parameters")
-                if not isinstance(parameters, dict):
-                    raise _shape_error(ruleset_id, "code_scanning rule parameters was not an object")
-                tools = parameters.get("code_scanning_tools")
-                if not isinstance(tools, list):
-                    raise _shape_error(ruleset_id, "code_scanning_tools was not an array")
-                if not all(
-                    isinstance(tool, dict) and all(isinstance(tool.get(key), str) for key in EXPECTED_CODEQL_RULE)
-                    for tool in tools
-                ):
-                    raise _shape_error(ruleset_id, "code_scanning_tools contained a malformed tool")
-
-        if payload.get("target") != "branch" or payload.get("enforcement") != "active":
-            continue
-        if not any(_matches_default(item) for item in includes) or any(_matches_default(item) for item in excludes):
-            continue
-        for rule in rules:
-            if rule.get("type") != "code_scanning":
-                continue
-            tools = rule["parameters"]["code_scanning_tools"]
-            if any(all(tool.get(key) == value for key, value in EXPECTED_CODEQL_RULE.items()) for tool in tools):
-                return True
+            raise GitHubAPIError(endpoint, 0, "code_scanning_tools contained a malformed tool")
+        if any(all(tool.get(key) == value for key, value in EXPECTED_CODEQL_RULE.items()) for tool in tools):
+            return True
     return False
 
 
