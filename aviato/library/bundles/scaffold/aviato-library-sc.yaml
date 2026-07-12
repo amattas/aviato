@@ -5,14 +5,10 @@ templates:
   - wf-ci-python-library
   - wf-drift
   # Self-docs (operator decision 2026-06): the Library publishes its own versioned
-  # Docusaurus site through the same §13.3 pipeline consumers get — one docs
-  # version per release, matching the §2.6 pin model. Bootstrap renders the docs
-  # caller through local workflow refs like the CI caller.
+  # Zensical site through the same §13.3 pipeline consumers get — one docs version
+  # per release, matching the §2.6 pin model. Bootstrap renders the docs caller
+  # through local workflow refs like the CI caller.
   - wf-docs-python-library
-  - docs-npmrc
-  - docs-eslint-config
-  - docusaurus-config
-  - docusaurus-config-algolia
-  - docs-package
-  - docs-sidebars
+  - zensical-config
   - docs-intro
+  - docs-requirements

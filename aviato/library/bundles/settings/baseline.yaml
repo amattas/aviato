@@ -32,3 +32,12 @@ settings:
     secret_scanning: true
     secret_push_protection: true
     dependency_scanning: true
+  # Repo-level PR merge-method toggles, reconciled by §5.6/§5.7 (read + diff + apply). GitHub
+  # returns these as top-level booleans on the repo GET and accepts them 1:1 on the repo PATCH.
+  # Managed for fleet consistency (operator decision 2026-07-11): every managed repo allows all
+  # three merge methods so contributors get a uniform merge UI across the fleet — modeled as
+  # desired state so a repo that flips one off drifts and is caught by the §5.7 reviewed diff.
+  repository:
+    allow_merge_commit: true
+    allow_squash_merge: true
+    allow_rebase_merge: true

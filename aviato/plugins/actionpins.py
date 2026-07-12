@@ -664,6 +664,19 @@ _PIP_PKG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]*(?:\[[A-Za-z0-9_,.-]+\])?$")
 _PIP_VERSION_OP_RE = re.compile(r"(===|==|>=|<=|~=|!=|<|>)")
 _NPX_RE = re.compile(r"(?<![\w-])npx(?![\w-])")
 _NPM_EXACT_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+# §11.3 (Zensical/mike): a VCS requirement exposes no index version, so its ref MUST be an
+# immutable full commit SHA — `git+…@<40-hex>`. A branch, tag, short SHA, or missing ref is
+# a floating install and is flagged like any unpinned package.
+_VCS_URL_RE = re.compile(r"\b(?i:git)\+[A-Za-z0-9+.-]+://\S+")
+_VCS_FULL_SHA_RE = re.compile(r"@[0-9a-f]{40}$")
+# Only `@${AVIATO_REF}` is exempt: it is the ONE sanctioned mutable-ref self-install (the repo's
+# established Library self-install pattern, C12-W1), and the Aviato workflows validate that
+# variable against a pin before install — so flagging the literal token would be a false positive
+# on a ref this gate cannot evaluate anyway. Any OTHER variable ref (`@${REF}`, `@${SOMEVERSION}`,
+# …) is a floating install like any other unpinned branch/tag/short-SHA and must be flagged: the
+# original regex (`@\$\{[^}]*\}`) exempted ANY variable name, which would let a consumer smuggle a
+# floating `git+...@${WHATEVER}` VCS install past §11.3 undetected.
+_VCS_VAR_REF_RE = re.compile(r"@\$\{AVIATO_REF\}$")
 
 
 def _unpinned_pip_packages(rest: str) -> list[str]:
@@ -673,14 +686,19 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
     name (`build`) AND a non-exact specifier (`foo>=1.0`, `foo~=1.0`, the wildcard `foo==1.*`)
     are all flagged; only a concrete `==`/`===` pin with no wildcard is accepted. Excludes
     things that are not a plain index package: option flags, the local project
-    (`.`/`.[extra]`/`-e <path>`), requirements/constraints files, VCS (`git+…`), built wheels
-    (`*.whl`), URLs, and shell-variable tokens (`${…}`) — conservative, so a legitimate
-    local/VCS install never trips it.
+    (`.`/`.[extra]`/`-e <path>`), requirements/constraints files, built wheels (`*.whl`), plain
+    URLs, and shell-variable tokens (`${…}`) — conservative, so a legitimate local install never
+    trips it. A **VCS token** (`git+…`) exposes no index version, so instead of being exempt it
+    is validated: it is flagged unless its ref is an immutable full commit SHA
+    (`git+…@<40-hex>`) — a branch, tag, short SHA, or missing ref is a floating install. A ref
+    that is a shell variable (`git+…@${AVIATO_REF}`) is OUT OF SCOPE for this static check: it is
+    resolved at workflow runtime (the repo's established self-install pattern pins the variable
+    itself before install), so a literal-ref requirement cannot be evaluated against it.
 
-    PEP 508 **environment markers** (``foo==1.0; python_version<'3.9'``) and **direct
-    references** (``foo @ git+…``) are NOT flagged: the marker fragment (a quote-bearing token)
-    is ignored, and a name immediately followed by ``@`` is a direct reference, not a floating
-    index package — both would otherwise be false positives.
+    PEP 508 **environment markers** (``foo==1.0; python_version<'3.9'``) are NOT flagged: the
+    marker fragment (a quote-bearing token) is ignored. A **direct reference**
+    (``foo @ git+…``) is likewise not a bare floating index package, but when its URL is a git
+    VCS requirement (``git+…``) the same full-SHA requirement applies to the URL.
 
     R8-12-PIP-WHITESPACE: PEP 440 §VersionSpecifiers permits whitespace around the operator
     (``foo == 1.2.3`` is a valid exact pin), but a plain ``rest.split()`` would emit three tokens
@@ -690,14 +708,14 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
     rest = re.sub(r"\s*(===|==|>=|<=|~=|!=|<|>)\s*", r"\1", rest)
     tokens = rest.split()
     flagged: list[str] = []
-    skip_next = False
+    skip_count = 0
     for index, token in enumerate(tokens):
-        if skip_next:
-            skip_next = False
+        if skip_count:
+            skip_count -= 1
             continue
         stripped = token.strip("'\"")
         if stripped in ("-r", "--requirement", "-c", "--constraint"):
-            skip_next = True  # the following token is a file path, not a package
+            skip_count = 1  # the following token is a file path, not a package
             continue
         if stripped.startswith("-"):  # any other flag (-e, --quiet, --upgrade, …)
             continue
@@ -710,11 +728,27 @@ def _unpinned_pip_packages(rest: str) -> list[str]:
         # carries an inner quote that survives the outer-quote strip — not a package. Skip it.
         if "'" in spec or '"' in spec:
             continue
-        # A PEP 508 direct reference `name @ url`: the next token is `@`. Not a floating index
-        # package (the URL/VCS ref pins it), so don't flag the bare name.
+        # A PEP 508 direct reference `name @ url`: the next token is `@`. The URL pins the
+        # package UNLESS it is itself a VCS token missing a full commit SHA ref — then it's a
+        # floating install, flagged just like a bare unpinned name (§11.3).
         if index + 1 < len(tokens) and tokens[index + 1].strip("'\"") == "@":
+            url = tokens[index + 2].strip("'\"") if index + 2 < len(tokens) else ""
+            url = url.split("#", 1)[0]
+            if _VCS_URL_RE.search(url) and not _VCS_FULL_SHA_RE.search(url) and not _VCS_VAR_REF_RE.search(url):
+                flagged.append(stripped)
+            # Consume the `@` and url tokens so they are not re-evaluated as their own tokens on
+            # subsequent iterations — otherwise a bad VCS URL is flagged twice (once here by
+            # name, once again as a bare VCS token when the loop reaches it).
+            skip_count = 2 if index + 2 < len(tokens) else 1
             continue
-        # Not a plain index package: path, VCS/URL, wheel, or shell variable.
+        # A bare VCS token (`git+…`) exposes no index version, so it must carry a full commit
+        # SHA ref; a branch, tag, short SHA, or missing ref is a floating install.
+        if _VCS_URL_RE.search(spec):
+            url = spec.split("#", 1)[0]
+            if not _VCS_FULL_SHA_RE.search(url) and not _VCS_VAR_REF_RE.search(url):
+                flagged.append(spec)
+            continue
+        # Not a plain index package: path, URL, wheel, or shell variable.
         if any(marker in spec for marker in ("@", "/", "$", ":")) or spec.endswith(".whl"):
             continue
         if spec in (".", "") or spec.startswith("."):

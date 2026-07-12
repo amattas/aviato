@@ -16,36 +16,57 @@ first; the release workflow refuses a tag that doesn't match.
 | Python app/tool (no PyPI) | `python-app/` same three files | same destinations |
 | Node service | `node-service/ci.yml`, `release.yml`, `dependabot.yml`, `npmrc` | same destinations; `npmrc` → `.npmrc` at repo root |
 | Container service | `container-service/release.yml` **plus** the `ci.yml`+`dependabot.yml` for the repo's language | `.github/workflows/release.yml` |
-| Docs site (Docusaurus) | `docs-site/docs.yml` → `.github/workflows/docs.yml`; everything else in `docs-site/` → `website/` (`npmrc` → `website/.npmrc`) | full site scaffold — see below |
+| Docs site (Zensical) | `docs-site/docs.yml` → `.github/workflows/docs.yml`; `zensical.toml`, `requirements.txt`, `docs/` → `website/` | full site scaffold — see below |
 | Swift app | `swift-app/ci.yml`, `dependabot.yml` | same destinations |
 
 Every workflow has a `# CUSTOMIZE` comment block at the top listing the lines
 you're expected to adjust (commands, paths, Python/Node versions).
 
-### Docs-site scaffold (proven on pydmp)
+### Docs-site scaffold
 
-`docs-site/` is a complete Docusaurus site, not just the deploy workflow:
-self-hosted full-text search (no Algolia account), per-mode Prism themes
-(Docusaurus's default is a dark palette in BOTH modes — unreadable on light),
-browser-preference color mode, native doc versioning (latest release at the
-site root, main at `/dev`, dropdown in the navbar), hardened `.npmrc`, IBM
-Plex design system with a swappable accent palette, and a committed lockfile.
-Fill the ALL-CAPS placeholders (`PROJECT`/`OWNER`/`REPO`), and gitignore
-`website/{node_modules,build,.docusaurus}` + the generated API reference.
-Python repos: uncomment the pydoc-markdown block in `docs.yml` for
-docstring-generated API docs (the `mdx.format: md` front matter it writes is
-load-bearing). Cutting a docs version joins each release-bump PR:
-`cd website && npm run docusaurus docs:version X.Y.Z`.
+`docs-site/` is a complete Zensical site, not just the deploy workflow:
+built-in full-text search and Mermaid diagram support, no separate npm
+toolchain. Versioning is via `mike`, deployed onto the `gh-pages` branch — the
+`latest` alias lives at the root, `dev` deploys from every push to `main`, and
+each release tag additionally deploys its exact version (`mike` moves `latest`
+only when the tag is the highest release; older tags land under their own
+version path without touching `latest`). Fill the ALL-CAPS placeholders in
+`zensical.toml` (`PROJECT`/`OWNER`/`REPO`), and gitignore `website/site` (the
+local build output dir). Python repos: uncomment the pydoc-markdown block in
+`docs.yml` for docstring-generated API docs.
+
+### Migrating a Docusaurus docs site
+
+1. Delete `website/{package.json,package-lock.json,docusaurus.config.js,sidebars.js,.npmrc,src}`.
+2. Keep `website/docs/`.
+3. Add `zensical.toml` + `requirements.txt` from this kit.
+4. Swap in the new `docs.yml`.
+5. Delete `versioned_docs/`, `versioned_sidebars/`, `versions.json` — version
+   history now lives on the `gh-pages` branch via `mike`, not in the source tree.
+6. Flip the Pages source (Settings → Pages) if you're serving the branch.
+7. Then run once, from `website/`, to seed `gh-pages` with the existing
+   history: `mike deploy --push <current-release> latest && mike set-default
+   --push latest && mike deploy --push dev`.
+
+### Agent skill (any repo)
+
+`skills/docs-structure/` → copy to `.claude/skills/docs-structure/` (Claude
+Code) and reference it from `AGENTS.md` for other agentic coders. It defines
+the `docs/` tree convention: per-module requirements with per-module
+`backlog.md`, architecture docs, and Mermaid-only diagrams in markdown.
 
 ## One-time setup per repo (clicks + one script, no automation)
 
 1. **Rulesets:** `./rulesets/apply-rulesets.sh OWNER/REPO` — branch protection
    (PR required, `ci` check required, no force-push/deletion, admin bypass for
-   emergencies) and tag protection (tags are immutable). Idempotent; re-run
+   emergencies) and tag protection (tags are immutable). Also normalizes PR
+   merge methods (all three — merge/squash/rebase — allowed). Idempotent; re-run
    any time.
 2. **CodeQL:** repo Settings → Code security → CodeQL analysis → Default setup.
    (Settings-based; needs no workflow file.)
-3. **Pages** (docs sites only): Settings → Pages → Source: GitHub Actions.
+3. **Pages (optional, docs sites only):** Settings → Pages → Source: Deploy
+   from a branch → `gh-pages` — flip on/off anytime; the workflow pushes the
+   branch either way.
 4. **PyPI trusted publisher** (Python libraries only): pypi.org → Publishing →
    publisher with workflow **`release.yml`** and environment **`release`**.
    PyPI matches the workflow file that contains the publish step plus the
@@ -67,5 +88,5 @@ load-bearing). Cutting a docs version joins each release-bump PR:
 - Container releases are multi-arch (amd64 + arm64 on native runners, for ARM
   k8s nodes); each arch is scanned before its bytes are pushed, then a manifest
   ties them together. Single-arch repos delete one matrix entry.
-- Docs are Docusaurus everywhere — repos still on mkdocs convert as part of
-  their migration; there is deliberately no mkdocs flavor.
+- Docs are Zensical everywhere (2026-07-11 decision, supersedes
+  Docusaurus-everywhere); repos on Docusaurus/mkdocs convert during migration.

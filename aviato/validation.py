@@ -25,6 +25,11 @@ REQUIRED_FILES = [
     # (drops typed privileges/status-checks, disables the undeclared-pipeline check) and without
     # denylist.txt the §9b agnosticism scan can't run — yet validate() reported no missing file.
     "aviato/library/pipelines.yaml",
+    # §13.3 docs scaffold metadata: the Zensical site config (seed-once) and the
+    # managed docs toolchain requirements. Load-bearing — a missing metadata file
+    # silently drops the artifact from the docs opt-in scaffold set.
+    "aviato/library/scaffold/zensical-config.yaml",
+    "aviato/library/scaffold/docs-requirements.yaml",
     "aviato/plugins/denylist.txt",
     ".github/dependabot.yml",
     ".github/workflows/ci.yml",
@@ -331,6 +336,23 @@ def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
             "byte-identical across docs callers (finding 43)"
         )
 
+    docs_pin_sources = [
+        root / "aviato" / "library" / "scaffold" / "files" / "docs-requirements.txt.txt",
+        root / "website" / "requirements.txt",
+        root / "starter" / "docs-site" / "requirements.txt",
+    ]
+    pin_sets = {
+        str(p.relative_to(root)): sorted(
+            line.split("#", 1)[0].strip()
+            for line in p.read_text(encoding="utf-8").splitlines()
+            if line.split("#", 1)[0].strip()
+        )
+        for p in docs_pin_sources
+        if p.is_file()
+    }
+    if len(set(map(tuple, pin_sets.values()))) > 1:
+        errors.append(f"docs toolchain pins differ across requirements sources: {pin_sets} (finding 43)")
+
 
 def _check_baseline_settings_keys(root: Path, errors: list[str]) -> None:
     """Every baseline default-branch/security key must be one the apply path can WRITE (§5.1).
@@ -346,7 +368,11 @@ def _check_baseline_settings_keys(root: Path, errors: list[str]) -> None:
     from .github_platform import RECONCILABLE_SETTING_KEYS
 
     settings = load_yaml(baseline_path).get("settings", {})
-    declared = set(settings.get("default_branch", {})) | set(settings.get("security", {}))
+    declared = (
+        set(settings.get("default_branch", {}))
+        | set(settings.get("security", {}))
+        | set(settings.get("repository", {}))
+    )
     unknown = sorted(declared - set(RECONCILABLE_SETTING_KEYS))
     if unknown:
         errors.append(
@@ -542,6 +568,10 @@ def _check_library_bootstrap(root: Path, errors: list[str]) -> None:
 _MONOTONIC_ALIAS_WORKFLOWS = [
     ".github/workflows/reusable-docker-ghcr.yml",
     ".github/workflows/reusable-docs-pages.yml",
+    # The starter kit's copyable docs caller embeds the same hand-copied comparator (as a
+    # `<<'PY'` heredoc), so it joins the parity battery — a drifted kit copy would let an
+    # older release move the `latest` alias backward just as a workflow copy would.
+    "starter/docs-site/docs.yml",
 ]
 
 # (candidate, existing tags). Expected results are computed from is_highest itself, so the check

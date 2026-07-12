@@ -28,6 +28,24 @@ def _adopt(tmp_path: Path, *extra: str) -> int:
     )
 
 
+@pytest.mark.parametrize("from_slug_arg", [True, False])
+def test_autodetect_fills_owner_and_repo_from_slug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, from_slug_arg: bool
+) -> None:
+    # §5.2 auto-detection: both `owner` AND `repo` are READ from the authoritative repo slug
+    # (the slug argument for proposal paths, or the git remote) — same source/authority. `repo`
+    # is the second slug segment, exactly as `owner` is the first.
+    from aviato import cli
+
+    if from_slug_arg:
+        detected = cli._autodetect_vars("octocat/hello-world")
+    else:
+        monkeypatch.setattr(cli, "remote_url", lambda r: "git@github.com:octocat/hello-world.git")
+        monkeypatch.setattr(cli, "normalize_slug", lambda remote: "octocat/hello-world")
+        detected = cli._autodetect_vars(str(tmp_path))
+    assert detected == {"owner": "octocat", "repo": "hello-world"}
+
+
 def test_onboard_lists_composed_pipelines_and_variables(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["onboard", "owner/repo", "--profile", "python-library"])
     out = capsys.readouterr().out

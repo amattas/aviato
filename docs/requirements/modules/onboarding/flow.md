@@ -1,0 +1,72 @@
+<!-- Split from REQUIREMENTS.md (2026-07-11) - section numbering preserved verbatim. Index: docs/requirements/README.md -->
+
+### 5.2 Repository onboarding (provision-new and adopt-existing)
+
+**Trigger:** operator wants a repository to follow a convention set.
+**Actor:** operator (local CLI), own credentials.
+**Variable resolution (impure):** required variables resolve by precedence
+**flags > declaration file > environment > auto-detection**, then the resolved
+set is **written into the declaration** for reproducibility — **except variables
+typed `secret` (§6.6), which are NEVER written to the declaration**; resolving a
+secret-typed variable into the persisted set is a **hard error** (§8.15), so the
+declaration carries no secrets (§6.6/§11.4). "Auto-detection"
+derives from a **defined, enumerated** set of host sources (e.g. repository
+name, the platform's repository metadata, the operator's configured identity);
+nothing outside that enumerated set is auto-detected. **Day-zero scope:** the
+resolution honors the auto-detection tier (it is the lowest-precedence source in
+`resolve_variables`), but **day-zero profiles deliberately auto-map no
+identity-bearing variable** (distribution / import / image / project / bundle
+names). Because a resolved variable is **persisted into the declaration** (above),
+auto-detecting one would silently write a *guess* — and these identifiers need
+language-specific normalization (a directory name is not a PyPI distribution name),
+so a wrong guess is worse than failing closed. Day-zero therefore resolves these
+from flag / declaration / environment and **fails closed** (lists the missing
+variable) when unset; populating the auto-detection tier with safe, normalized
+sources is a post-day-zero refinement.
+**Preconditions:** every *required* variable resolves; for adopt, the working
+tree is clean unless overridden. A fresh provision/adopt **must** record an
+explicit Library pin supplied by the operator; the process never fabricates a
+default pin. That pin must resolve to a published Library tag/branch before
+write/provision proceeds. A dedicated unresolved-pin escape hatch is permitted
+only for intentional offline/test scaffolds and must be named as such.
+**Two paths, one shape:**
+- *Provision-new*: create the repository, apply **minimal** protection (§2.11),
+  scaffold, first commit, then apply **full** protection.
+- *Adopt-existing*: write/merge the declaration, scaffold onto a branch, open a
+  proposal for review.
+**Guards:** never change an already-declared profile to a different one without
+an explicit migrate override; enumerate files left untouched (seed-once,
+unmanaged) in the proposal.
+**Partially-provisioned state & recovery (normative):** between minimal and full
+protection the repo is in a defined **partially-provisioned** state. Minimal
+protection (no force-push, no deletion; no PR-required gate that would block the
+first commit) is **safe to persist** indefinitely. If full protection fails after
+the first commit, the process reports the partial state and exposes an
+**idempotent `complete-protection` recovery operation** that re-applies full
+protection and is safe to re-run any number of times.
+
+```mermaid
+flowchart TD
+    Start["Operator: onboard repo with profile P"] --> Vars["Resolve required variables<br/>(flags > declaration > env > enumerated auto-detect),<br/>then write NON-SECRET into declaration (secret-typed = hard error, §8.15)"]
+    Vars --> V{"All required vars present?"}
+    V -- no --> Vfail["FAIL CLOSED: list missing vars + how to set"]
+    V -- yes --> Mode{"New or existing?"}
+
+    Mode -- new --> N1["Create repository"]
+    N1 --> N2["Apply MINIMAL protection<br/>(safe to persist; does not block first commit)"]
+    N2 --> N3["Scaffold managed artifacts"]
+    N3 --> N4["First commit + push"]
+    N4 --> N5["Apply FULL protection"]
+    N5 --> N6{"Full protection applied?"}
+    N6 -- no --> N7["REPORT partial-provisioned state +<br/>idempotent complete-protection recovery op"]
+    N6 -- yes --> Done["Onboarded"]
+
+    Mode -- existing --> E0{"Already declares a different profile?"}
+    E0 -- "yes & no override" --> Emig["REFUSE: require explicit --migrate-profile"]
+    E0 -- "no / override" --> E1{"Working tree clean (or override)?"}
+    E1 -- no --> Edirty["REFUSE: clean tree or pass --allow-dirty"]
+    E1 -- yes --> E2["Write/merge declaration<br/>(resolved profile + version + vars)"]
+    E2 --> E3["Scaffold onto a branch"]
+    E3 --> E4["Open proposal; enumerate UNCHANGED<br/>seed-once/unmanaged files"]
+    E4 --> Done
+```

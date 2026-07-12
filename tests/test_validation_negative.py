@@ -205,11 +205,18 @@ def test_branch_ruleset_approval_literal_drift_is_detected(repo_copy: Path) -> N
     assert any("required_approving_review_count" in e and "policy.yml" in e for e in errors)
 
 
-def test_monotonic_alias_inline_drift_is_detected(repo_copy: Path) -> None:
+@pytest.mark.parametrize(
+    "rel_path",
+    [
+        ".github/workflows/reusable-docker-ghcr.yml",
+        "starter/docs-site/docs.yml",  # the starter kit's hand-copied comparator joins the battery
+    ],
+)
+def test_monotonic_alias_inline_drift_is_detected(repo_copy: Path, rel_path: str) -> None:
     # The deploy workflows embed a hand-copied `highest.py` that must agree with core's
     # is_highest (§8.14/§13.2). Flip its prerelease rank so a final release no longer outranks
     # its beta/alpha — validation must catch the divergence (else an alias could move backward).
-    f = repo_copy / ".github" / "workflows" / "reusable-docker-ghcr.yml"
+    f = repo_copy / rel_path
     text = f.read_text(encoding="utf-8")
     drifted = text.replace('rank = {None: 2, "beta": 1, "alpha": 0}', 'rank = {None: 0, "beta": 1, "alpha": 2}')
     assert drifted != text, "fixture did not contain the expected inline rank table"
@@ -328,3 +335,15 @@ def test_scaffold_cron_drift_is_detected(repo_copy: Path) -> None:
     assert drifted != text, "fixture did not contain the shared CI cron"
     body.write_text(drifted, encoding="utf-8")
     assert any("finding 43" in e for e in validate(repo_copy))
+
+
+def test_docs_toolchain_pin_drift_is_flagged(repo_copy: Path) -> None:
+    # Change the zensical pin in ONE of the three docs requirements sources and
+    # assert validate() reports the drift (finding 43 mechanism).
+    target = repo_copy / "starter" / "docs-site" / "requirements.txt"
+    text = target.read_text()
+    drifted = text.replace("zensical==0.0.50", "zensical==0.0.49")
+    assert drifted != text, "fixture did not contain the expected zensical pin"
+    target.write_text(drifted)
+    errors = validate(repo_copy)
+    assert any("docs toolchain pins differ" in e for e in errors), errors

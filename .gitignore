@@ -9,8 +9,8 @@ dist/
 _wheelout/
 # Self-docs site dependencies/output (the docs SOURCES under website/ are committed).
 node_modules/
-website/build/
-website/.docusaurus/
+website/site/
+starter/docs-site/site/
 catalog.md
 repos-*.txt
 

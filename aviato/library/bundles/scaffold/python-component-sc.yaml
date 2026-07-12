@@ -6,11 +6,7 @@ add:
   - wf-ci-python-component
   - wf-drift
   - wf-docs-python-component
-  - docs-npmrc
-  - docs-eslint-config
-  - docusaurus-config
-  - docusaurus-config-algolia
-  - docs-package
-  - docs-sidebars
+  - zensical-config
   - docs-intro
+  - docs-requirements
 remove: []

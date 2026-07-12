@@ -1,71 +1,84 @@
-# Docs — build and deploy to GitHub Pages on every push to the default branch.
-# Deliberately NOT tied to release tags: docs ship when they merge.
-# Copy to: .github/workflows/docs.yml
-# One-time: repo Settings → Pages → Source: GitHub Actions.
+# Docs — Zensical + mike, versioned onto the gh-pages branch.
+# main push  -> `mike deploy dev`             (rolling dev docs)
+# tag push   -> `mike deploy X.Y.Z latest`    (latest moves only for the highest release)
+# Copy to: .github/workflows/docs.yml ; site source lives in website/.
+# One-time (OPTIONAL — only if you want the branch SERVED): repo Settings → Pages →
+# Source: Deploy from a branch → gh-pages. The workflow only pushes the branch and
+# works identically with Pages on or off.
 #
 # CUSTOMIZE:
-#  - DOCS_DIR if the Docusaurus site doesn't live in website/
-#  - node-version
+#  - DOCS_DIR if the Zensical site doesn't live in website/
+#  - the PYTHON API DOCS block for Python repos (pydoc-markdown)
 name: Docs
 
 on:
   push:
     branches: [main]
+    tags: ["[0-9]*"]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   DOCS_DIR: website
 
 concurrency:
-  group: pages
+  group: docs
   cancel-in-progress: false
 
 jobs:
   docs:
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v6
         with:
-          persist-credentials: false
-      # PYTHON API DOCS (optional): generate an API reference from docstrings
-      # before the site build — uncomment and set PACKAGE/-I path. The
-      # `mdx.format: md` front matter is load-bearing: generated markdown
-      # contains braces MDX treats as JSX expressions, failing the build.
-      # Gitignore `website/docs/api/reference.md`; versioned snapshots commit
-      # their own frozen copy when you cut a docs version.
-      # - uses: actions/setup-python@v6
-      #   with:
-      #     python-version: "3.12"
-      # - name: Generate API reference from docstrings
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install docs toolchain (exact pins)
+        run: python -m pip install --quiet -r "${DOCS_DIR}/requirements.txt"
+      # PYTHON API DOCS (optional): generate an API reference from docstrings.
+      # - name: Generate API reference
       #   run: |
       #     python -m pip install --quiet -e . "pydoc-markdown==4.8.2"
-      #     mkdir -p website/docs/api
-      #     {
-      #       printf -- '---\ntitle: API Reference\nmdx:\n  format: md\n---\n\n'
-      #       pydoc-markdown -I src -p PACKAGE
-      #     } > website/docs/api/reference.md
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: ${{ env.DOCS_DIR }}/package-lock.json
-      - name: Build
+      #     mkdir -p ${DOCS_DIR}/docs/api
+      #     pydoc-markdown -I src -p PACKAGE > ${DOCS_DIR}/docs/api/reference.md
+      - name: Deploy
         working-directory: ${{ env.DOCS_DIR }}
         run: |
-          npm ci
-          npm run build
-      - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v5
-        with:
-          path: ${{ env.DOCS_DIR }}/build
-      - uses: actions/deploy-pages@v5
-        id: deployment
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+            if [[ ! "${TAG}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$ ]]; then
+              echo "not a release tag (${TAG}); skipping docs"; exit 0
+            fi
+            # §8.14 monotonic guard: `latest` moves only for the highest release. This inline
+            # comparator mirrors aviato.core.versioning.is_highest and is held to parity by
+            # `aviato validate` (_check_monotonic_alias_parity) — keep the two in lockstep.
+            cat > /tmp/highest.py <<'PY'
+          import sys, re
+          rel = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(\d+))?$")
+          rank = {None: 2, "beta": 1, "alpha": 0}
+          def key(t):
+              m = rel.match(t.strip())
+              return (int(m[1]), int(m[2]), int(m[3]), rank[m[4]], int(m[5] or 0)) if m else None
+          cand = sys.argv[1]; ck = key(cand)
+          keys = [k for k in map(key, sys.stdin) if k]
+          print("true" if ck and max(keys + [ck]) == ck else "false")
+          PY
+            HIGHEST="$(git tag --list | python3 /tmp/highest.py "${TAG}")"
+            if [ "${HIGHEST}" = "true" ]; then
+              mike deploy --push --update-aliases "${TAG}" latest
+              mike set-default --push latest
+            else
+              echo "::warning::${TAG} is not the highest release; not moving latest."
+              mike deploy --push "${TAG}"
+            fi
+          else
+            mike deploy --push dev
+          fi

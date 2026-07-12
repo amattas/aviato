@@ -300,7 +300,7 @@ def _tri(value: bool | None) -> str:
 
 
 def _desired_settings(resolved: ResolvedSet) -> dict[str, Any]:
-    """Flat reconcilable settings: branch protection + repo security toggles (§5.6/§2.13).
+    """Flat reconcilable settings: branch protection + repo security + PR merge-method toggles (§5.6/§2.13/§2.9).
 
     Rulesets are applied separately (`apply-rulesets`) and are not part of the
     branch-protection/security reconcile diff.
@@ -315,6 +315,7 @@ def _desired_settings(resolved: ResolvedSet) -> dict[str, Any]:
     flat = {
         **resolved.settings.get("default_branch", {}),
         **resolved.settings.get("security", {}),
+        **resolved.settings.get("repository", {}),
     }
     return {key: value for key, value in flat.items() if key in RECONCILABLE_SETTING_KEYS}
 
@@ -466,18 +467,25 @@ def _proposal_slug(target: str) -> str:
 def _autodetect_vars(target: str) -> dict[str, str]:
     """§5.2 auto-detection tier: only values READ from authoritative sources (finding 28).
 
-    ``owner`` comes from the slug argument (proposal paths) or the repository's own git
-    remote — the authoritative identity, not a heuristic guess, so the day-zero "no
-    identity-bearing auto-mapping" rule's rationale (wrong guesses get persisted) does
-    not apply to it. Absent/foreign remote → empty mapping: the variable stays unset
-    and seed-once templates keep their ``{{ owner }}`` placeholder for the operator.
+    ``owner`` and ``repo`` both come from the slug argument (proposal paths) or the
+    repository's own git remote — the authoritative identity, not a heuristic guess, so
+    the day-zero "no identity-bearing auto-mapping" rule's rationale (wrong guesses get
+    persisted) does not apply to them. ``repo`` is the second slug segment, exactly as
+    ``owner`` is the first. Absent/foreign remote → empty mapping: the variables stay
+    unset and seed-once templates keep their ``{{ owner }}``/``{{ repo }}`` placeholders
+    for the operator.
     """
     if not Path(target).is_dir() and is_owner_repo_slug(target):
-        return {"owner": target.split("/", 1)[0]}
+        return _owner_repo_vars(target)
     slug = normalize_slug(remote_url(Path(target)))
     if slug:
-        return {"owner": slug.split("/", 1)[0]}
+        return _owner_repo_vars(slug)
     return {}
+
+
+def _owner_repo_vars(slug: str) -> dict[str, str]:
+    owner, repo = slug.split("/", 1)
+    return {"owner": owner, "repo": repo}
 
 
 def _resolve_onboard_declaration(

@@ -162,14 +162,13 @@ Language CI workflows share the same command contract:
 - `run-tests`
 - `run-build`
 
-`reusable-node-ci.yml` and the Docusaurus Pages workflow default to Node 24 and
-block npm versions below 11.10 (the floor for `min-release-age` support) before
-any install command. They set `ignore-scripts=true`, `engine-strict=true`, and
-`min-release-age=7`; Node and docs scaffolds also write those values into
-managed `.npmrc` files and declare `node >=24` / `npm >=11.10` in package
-manifests so local and CI installs share the same supply-chain posture. Node CI
-uses `npx --no-install` for local tool bins, and the common lint gate rejects
-unsafe plain `npx` registry fetches.
+`reusable-node-ci.yml` defaults to Node 24 and blocks npm versions below 11.10
+(the floor for `min-release-age` support) before any install command. It sets
+`ignore-scripts=true`, `engine-strict=true`, and `min-release-age=7`; Node
+scaffolds also write those values into managed `.npmrc` files and declare
+`node >=24` / `npm >=11.10` in package manifests so local and CI installs share
+the same supply-chain posture. Node CI uses `npx --no-install` for local tool
+bins, and the common lint gate rejects unsafe plain `npx` registry fetches.
 
 ## Profile Templates
 
@@ -192,11 +191,11 @@ and rulesets for a repository. The common scaffold also seeds `CONTRIBUTING.md`,
 `.github/CODEOWNERS`, and issue/PR templates (seed-once; the consumer owns them
 after seeding).
 
-When `docs: true`, Aviato scaffolds a Docusaurus site under `website/` with the
-first-party Docusaurus ESLint plugin, opt-in Algolia search (enabled via the
-`algolia` profile variable; default off), Mermaid rendering, and sitemap
-configuration through the classic preset. The docs publish workflow installs,
-lints, versions, builds, and publishes the site on release refs;
+When `docs: true`, Aviato scaffolds a **Zensical** docs site under `website/`,
+versioned onto a docs branch by a mike fork (Mermaid rendering and sitemap
+generation included; search is Zensical's built-in search, no external service).
+The docs publish workflow installs, versions, builds, and publishes the site
+on release refs;
 `docs-retention` defaults to 0, which keeps every released version's docs.
 
 The Library's own `.github/aviato.yaml` uses the internal `aviato-library`
@@ -225,5 +224,6 @@ are installed, so Apple secrets are not exposed to arbitrary versioning logic.
 
 ## Architecture
 
-See `ARCHITECTURE.md` for the current implementation map and
-`REQUIREMENTS.md` for the broader requirements-backed system design.
+See `docs/architecture/` for the current implementation map and
+`docs/requirements/` (§ index in `docs/requirements/README.md`) for the
+requirements-backed system design.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,7 +9,7 @@ import yaml
 
 from aviato.core.composition import _resolve_list, _variable_spec, resolve_profile
 from aviato.core.errors import CompositionError
-from aviato.core.model import VersionSourceModule
+from aviato.core.model import ResolvedSet, VersionSourceModule
 from aviato.core.registry import Registry
 
 
@@ -278,6 +279,63 @@ def test_docs_opt_in_adds_docs_pipeline(module_root: Path) -> None:
     with_docs = resolve_profile(reg, "child", docs=True)
     assert "docs-pages" not in without.pipelines  # default off
     assert "docs-pages" in with_docs.pipelines
+
+
+@pytest.fixture
+def resolved_python_library_docs() -> ResolvedSet:
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    return resolve_profile(Registry(MODULE_SOURCE_ROOT), "python-library", docs=True)
+
+
+def test_docs_opt_in_seeds_zensical_scaffold(resolved_python_library_docs: ResolvedSet) -> None:
+    # §13.3: docs:true seeds a Zensical site (zensical.toml + intro.md + a pinned docs
+    # requirements.txt) and never the retired Docusaurus scaffold (config / sidebars /
+    # package.json / eslint / per-site npmrc) or any algolia search config. TemplateModule
+    # carries no module name, so the scaffold set is inspected by output_path (as in
+    # test_resolve_resolves_template_refs_to_modules).
+    outputs = {t.output_path for t in resolved_python_library_docs.templates}
+    assert {"website/zensical.toml", "website/docs/index.md", "website/requirements.txt"} <= outputs
+    retired = ("sidebars.js", "package.json", "eslint.config.mjs", "/.npmrc")
+    assert not any("docusaurus" in o or "algolia" in o or o.endswith(retired) for o in outputs)
+
+
+def test_scaffold_placeholders_have_a_render_source() -> None:
+    # Parity guard (§5.3/§6.6): every ``{{ name }}`` placeholder a scaffold body carries must
+    # resolve to something the render layer can supply FOR THAT PROFILE — a declared profile
+    # variable, a profile derived_variable, or a render-provided var (aviato-*, docs, year,
+    # default-branch). Otherwise a strict (managed) render hard-fails and a lenient (seed-once)
+    # render silently bakes a dead ``{{ placeholder }}`` into the consumer tree — e.g. the docs
+    # scaffold's zensical.toml referencing repo / project-name / owner. The regex mirrors
+    # render._PLACEHOLDER, so GitHub ``${{ github.* }}`` / ``${{ secrets.* }}`` expressions
+    # (multi-token, not matched) are correctly ignored.
+    from aviato.core.onboarding import render_variables
+    from aviato.paths import MODULE_SOURCE_ROOT
+
+    placeholder = re.compile(r"\{\{\s*(\w[\w-]*)\s*\}\}")
+    render_provided = set(render_variables({}, pin="0", docs=True).keys())
+    reg = Registry(MODULE_SOURCE_ROOT)
+    profiles = (
+        "python-library",
+        "python-service",
+        "python-component",
+        "node-service",
+        "swift-app",
+        "aviato-library",
+    )
+    unresolved: dict[str, set[str]] = {}
+    for prof in profiles:
+        rs = resolve_profile(reg, prof, docs=True)
+        declared = {v.name for v in rs.variables}
+        derived = {
+            d["name"] for d in reg.profile_doc(prof).get("derived_variables", []) if isinstance(d, dict) and "name" in d
+        }
+        known = declared | derived | render_provided
+        for template in rs.templates:
+            for match in placeholder.finditer(reg.template_body(template)):
+                if match.group(1) not in known:
+                    unresolved.setdefault(prof, set()).add(match.group(1))
+    assert not unresolved, f"scaffold placeholders with no render source: {unresolved}"
 
 
 def test_docs_pipeline_not_duplicated_if_already_present(module_root: Path) -> None:

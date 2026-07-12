@@ -1,0 +1,10 @@
+[project]
+site_name = "Aviato"
+site_url = "https://amattas.github.io/aviato/"
+repo_url = "https://github.com/amattas/aviato"
+docs_dir = "docs"
+
+[project.extra.version]
+provider = "mike"
+default = "latest"
+alias = true

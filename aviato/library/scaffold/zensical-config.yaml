@@ -1,0 +1,7 @@
+name: zensical-config
+output_path: website/zensical.toml
+source: files/zensical.toml.txt
+comment: "#"
+seed_once: true
+when:
+  docs: "true"

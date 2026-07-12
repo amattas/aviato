@@ -13,12 +13,10 @@ variables:
   - {name: typecheck-command, type: string, required: false, default: "python -m mypy --strict ."}
   # Self-docs: the API-reference emit command targets the import package.
   - {name: import-name, type: string}
-  # finding 20 parity: the docusaurus config variants are when-gated on `algolia`
-  # (default off); the when-match needs the variable DECLARED on this profile too.
-  - {name: algolia, type: string, required: false, default: "false"}
-  - {name: algolia-app-id, type: string, required: false}
-  - {name: algolia-search-api-key, type: string, required: false}
-  - {name: algolia-index-name, type: string, required: false}
+  # seeds the zensical.toml site metadata (seed-once; unset leaves the placeholder)
+  - {name: owner, type: string, required: false}
+  - {name: repo, type: string, required: false}
+  - {name: project-name, type: string, required: false}
 docs_pipeline: docs-pages
 version_source:
   locations: [pyproject.toml]

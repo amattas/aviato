@@ -13,13 +13,9 @@ add:
   - wf-ci-python-service
   - wf-drift
   - wf-docs-python-service
-  - docs-npmrc
-  - docs-eslint-config
-  - docusaurus-config
-  - docusaurus-config-algolia
-  - docs-package
-  - docs-sidebars
+  - zensical-config
   - docs-intro
+  - docs-requirements
 remove:
   # python-sc seeds pyproject.toml (the library packaging manifest); a container service that
   # builds via its Dockerfile and installs from requirements.txt does not use it (§13.2).

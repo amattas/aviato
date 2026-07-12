@@ -209,6 +209,21 @@ def repo_security_settings(slug: str) -> dict[str, Any]:
     return sa if isinstance(sa, dict) else {}
 
 
+# Canonical PR merge-method toggle keys (top-level booleans on GET/PATCH /repos/{owner}/{repo}).
+# github_platform derives _REPOSITORY_SETTING_KEYS from this tuple — one copy, no drift.
+MERGE_METHOD_KEYS = ("allow_merge_commit", "allow_squash_merge", "allow_rebase_merge")
+
+
+def repo_merge_methods(slug: str) -> dict[str, Any]:
+    """Return the repo's top-level PR merge-method toggles (``MERGE_METHOD_KEYS``)
+    from the repo GET, failing closed on an ambiguous read (§2.7) — only keys
+    GitHub actually reports are kept."""
+    repo = gh_json_optional(f"repos/{slug}", default={})
+    if not isinstance(repo, dict):
+        return {}
+    return {key: repo[key] for key in MERGE_METHOD_KEYS if key in repo}
+
+
 def protected_environment_has_reviewers(slug: str, environment: str) -> bool | None:
     """True iff a GitHub Environment exists for ``slug`` with at least one required reviewer (§17).
 

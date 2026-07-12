@@ -52,15 +52,17 @@ mutable reference).
 
 ### npm install hardening
 
-Node and Docusaurus install paths require npm **11.10** or newer (`min-release-age`
+Node install paths require npm **11.10** or newer (`min-release-age`
 is only honored from 11.10.0 — older 11.x silently ignores it). The reusable
-workflows fail before install if npm is older, then set `ignore-scripts=true`,
-`engine-strict=true`, and `min-release-age=7`. Managed Node/docs scaffolds also
+Node workflow fails before install if npm is older, then sets `ignore-scripts=true`,
+`engine-strict=true`, and `min-release-age=7`. Managed Node scaffolds also
 write those values into `.npmrc`, and package manifests declare
 `node >=24` / `npm >=11.10`, so local installs and CI use the same supply-chain
 defaults. Node CI invokes local tool binaries with `npx --no-install`, and the
 common lint gate rejects unsafe plain `npx`, so a missing
 ESLint/Prettier/TypeScript binary fails instead of triggering a registry fetch.
+The docs site (Zensical + mike) is a Python/pip toolchain and is not subject
+to these Node-specific rules.
 
 ### Library bootstrap local install
 

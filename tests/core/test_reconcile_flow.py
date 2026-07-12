@@ -45,6 +45,38 @@ def test_apply_path_mutates_and_comments() -> None:
     assert platform.settings["required_reviews"] == 2
 
 
+def test_merge_method_drift_detected_and_reconciled() -> None:
+    # §5.6/§5.7: a repo whose live `allow_merge_commit` is false drifts from the desired
+    # fleet-consistency baseline (all three merge methods allowed). The classifier detects
+    # the change; the operator-gated reconcile applies the diff and live state converges.
+    desired = {"allow_merge_commit": True, "allow_squash_merge": True, "allow_rebase_merge": True}
+    live = {"allow_merge_commit": False, "allow_squash_merge": True, "allow_rebase_merge": True}
+    diff = classify_settings(desired=desired, live=live)
+    assert "allow_merge_commit" in diff.changes  # drift is detected
+    diff_id = diff_identity(diff)
+    issue = Issue(
+        key="k",
+        open=True,
+        consent_diff_id=diff_id,
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
+        consent_role_lookup_ok=True,
+    )
+    platform = FakePlatform(settings=dict(live), issues={"k": issue})
+    outcome = run_reconcile(
+        platform,
+        repo="o/r",
+        issue_key="k",
+        desired_settings=desired,
+        pin="v1",
+        tool_version="1.0.0",
+        recorded_version="1.0.0",
+        confirmed_diff_id=diff_id,
+    )
+    assert outcome.action == "apply"
+    assert platform.settings["allow_merge_commit"] is True  # converged
+
+
 def test_apply_succeeds_even_if_audit_comment_fails(capsys) -> None:
     # §5.7 audit breadcrumb is best-effort: once apply_settings has landed, a transient failure
     # posting the "Applied" comment must NOT raise out (which would make the operator think the

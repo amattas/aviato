@@ -1,3 +1,5 @@
+import pytest
+
 from aviato.plugins.actionpins import (
     action_pin_violations,
     unpinned_requirements_lines,
@@ -41,7 +43,14 @@ def test_exact_pip_pin_is_ok():
 
 
 def test_pip_local_vcs_wheel_requirements_skipped():
-    text = "          pip install . -e ./pkg -r reqs.txt git+https://x dist/a.whl\n"
+    # §11.3: local paths, -r requirements files, and wheels stay exempt. A VCS token now
+    # requires a full commit SHA (see test_vcs_pip_installs_require_full_commit_sha below),
+    # so the VCS token here is pinned to a 40-hex SHA rather than the old bare `git+https://x`.
+    text = (
+        "          pip install . -e ./pkg -r reqs.txt "
+        "git+https://github.com/squidfunk/mike.git@2d4ad799442f4592db8ad53b179bfb33db8c69ac "
+        "dist/a.whl\n"
+    )
     assert unpinned_tool_invocations(text) == []
 
 
@@ -169,3 +178,68 @@ def test_pyproject_extras_scanner_covers_inline_arrays_and_single_quotes():
         'y = ["quoted-but-outside>=1"]\n'
     )
     assert unpinned_pyproject_extra_lines(text) == ["black>=24.1.0", "ruff>=0.8.0", "sphinx>=7"]
+
+
+_MIKE_SHA = "2d4ad799442f4592db8ad53b179bfb33db8c69ac"
+
+
+@pytest.mark.parametrize(
+    ("token", "flagged"),
+    [
+        (f"git+https://github.com/squidfunk/mike.git@{_MIKE_SHA}", False),
+        (f"mike @ git+https://github.com/squidfunk/mike.git@{_MIKE_SHA}", False),
+        ("git+https://github.com/squidfunk/mike.git", True),
+        ("git+https://github.com/squidfunk/mike.git@master", True),
+        ("git+https://github.com/squidfunk/mike.git@2d4ad79", True),
+        (f"mike @ git+https://github.com/squidfunk/mike.git@{_MIKE_SHA[:12]}", True),
+        ("GIT+https://github.com/squidfunk/mike.git@master", True),
+        ("git+https://github.com/amattas/aviato@${AVIATO_REF}", False),
+        ("mike @ git+https://github.com/squidfunk/mike.git@${REF}", True),
+        ("git+https://github.com/x/y.git@${SOMEVERSION}", True),
+        ("pkg @ git+https://github.com/x/y.git@${REF}", True),
+        # The AVIATO_REF exemption is right-anchored: it applies only when the var IS the
+        # ref at the END of the URL. A var mid-path or with trailing garbage is a floating
+        # install and must still be flagged (§11.3).
+        ("git+https://host/@${AVIATO_REF}/pkg.git@master", True),
+        ("git+https://github.com/x/y.git@${AVIATO_REF}x", True),
+    ],
+)
+def test_vcs_pip_installs_require_full_commit_sha(token: str, flagged: bool) -> None:
+    from aviato.plugins.actionpins import _unpinned_pip_packages
+
+    result = _unpinned_pip_packages(f" {token}")
+    assert bool(result) is flagged, result
+
+
+def test_bad_direct_reference_flags_exactly_once() -> None:
+    from aviato.plugins.actionpins import _unpinned_pip_packages
+
+    result = _unpinned_pip_packages(f" mike @ git+https://github.com/squidfunk/mike.git@{_MIKE_SHA[:12]}")
+    assert result == ["mike"]
+
+
+def test_bare_bad_vcs_flags_exactly_once() -> None:
+    from aviato.plugins.actionpins import _unpinned_pip_packages
+
+    token = "git+https://github.com/squidfunk/mike.git@master"
+    result = _unpinned_pip_packages(f" {token}")
+    assert result == [token]
+
+
+def test_vcs_scheme_case_insensitive_gate() -> None:
+    from aviato.plugins.actionpins import _unpinned_pip_packages
+
+    token = "GIT+https://github.com/squidfunk/mike.git@master"
+    result = _unpinned_pip_packages(f" {token}")
+    assert result == [token]
+
+
+def test_unpinned_requirements_lines_vcs_contract() -> None:
+    body = (
+        f"mike @ git+https://github.com/squidfunk/mike.git@{_MIKE_SHA}  # comment\n"
+        "git+https://github.com/squidfunk/mike.git@master\n"
+    )
+    flagged = unpinned_requirements_lines(body)
+    assert flagged.count("git+https://github.com/squidfunk/mike.git@master") == 1
+    assert "mike" not in flagged
+    assert not any("2d4ad799442f4592db8ad53b179bfb33db8c69ac" in item for item in flagged)

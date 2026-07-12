@@ -701,6 +701,31 @@ def test_to_security_payload_api_shape() -> None:
     assert payload["secret_scanning_push_protection"] == {"status": "disabled"}
 
 
+def test_map_repository_settings_from_live() -> None:
+    from aviato.github_platform import map_repository_settings
+
+    repo = {
+        "allow_merge_commit": True,
+        "allow_squash_merge": False,
+        # allow_rebase_merge absent → omitted (never a false destructive), like map_security_settings
+        "unrelated": 1,
+    }
+    assert map_repository_settings(repo) == {
+        "allow_merge_commit": True,
+        "allow_squash_merge": False,
+    }
+
+
+def test_to_repository_payload_subset_and_shape() -> None:
+    from aviato.github_platform import to_repository_payload
+
+    # Only keys present in the desired dict appear in the PATCH body, mapped 1:1 to top-level booleans.
+    payload = to_repository_payload({"allow_merge_commit": True, "allow_squash_merge": False})
+    assert payload == {"allow_merge_commit": True, "allow_squash_merge": False}
+    assert "allow_rebase_merge" not in payload
+    assert to_repository_payload({}) == {}
+
+
 def _probe_optional(*, has_issues, head_sha, artifacts):
     def optional(endpoint, **__):
         if endpoint == "repos/o/r":
@@ -764,9 +789,28 @@ def test_read_settings_includes_security(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {"secret_scanning": {"status": "enabled"}})
+    monkeypatch.setattr(github, "repo_merge_methods", lambda repo: {})
     settings = GitHubPlatform().read_settings("o/r")
     assert settings["secret_scanning"] is True
     assert "requires_pull_request" in settings  # branch fields still present
+
+
+def test_read_settings_includes_merge_methods(monkeypatch: pytest.MonkeyPatch) -> None:
+    # §5.6/§2.9: the three repo-level PR merge-method toggles are read from the repo GET so a
+    # live `allow_merge_commit: false` drifts from the desired `true` baseline.
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
+    monkeypatch.setattr(
+        github,
+        "repo_merge_methods",
+        lambda repo: {"allow_merge_commit": False, "allow_squash_merge": True, "allow_rebase_merge": True},
+    )
+    settings = GitHubPlatform().read_settings("o/r")
+    assert settings["allow_merge_commit"] is False
+    assert settings["allow_squash_merge"] is True
+    assert settings["allow_rebase_merge"] is True
 
 
 def test_read_settings_composes_gh_responses(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -777,9 +821,10 @@ def test_read_settings_composes_gh_responses(monkeypatch: pytest.MonkeyPatch) ->
         lambda repo, branch: [{"type": "pull_request", "parameters": {"required_approving_review_count": 1}}],
     )
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
-    # Mock the security read too, or read_settings makes a real `gh api` call (which
-    # fails in CI with no GH_TOKEN); this test must stay fully hermetic.
+    # Mock the security + merge-method reads too, or read_settings makes a real `gh api` call
+    # (which fails in CI with no GH_TOKEN); this test must stay fully hermetic.
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
+    monkeypatch.setattr(github, "repo_merge_methods", lambda repo: {})
 
     settings = GitHubPlatform().read_settings("o/r")
     # flat shape (matches the desired default_branch map the CLI passes)

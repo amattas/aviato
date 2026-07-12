@@ -196,14 +196,18 @@ def test_node_ci_gates_fail_loud_without_if_present() -> None:
 
 
 def test_docs_retention_defaults_to_keep_all() -> None:
-    # finding 37 (operator decision): every released version's docs are kept; the
-    # pruner must special-case cap<=0 — versions[:0] would otherwise prune EVERYTHING.
+    # finding 37 (operator decision): every released version's docs are kept by default.
+    # The Zensical/mike rewrite gates the ENTIRE prune snippet behind `RETENTION -gt 0`
+    # rather than special-casing cap<=0 inside the python pruner — 0 (the default) means
+    # the prune step never runs at all, so no version is ever removed.
     wf = _load("reusable-docs-pages.yml")
     on_block = wf.get("on") or wf.get(True)
     assert on_block["workflow_call"]["inputs"]["docs-retention"]["default"] == 0
     body = (WORKFLOWS / "reusable-docs-pages.yml").read_text(encoding="utf-8")
-    assert "keeping all versions" in body, "pruner missing the cap<=0 keep-all branch"
-    assert body.index("cap <= 0") < body.index("versions[:cap]"), "keep-all guard must precede the slice"
+    assert 'if [ "${RETENTION}" -gt 0 ]' in body, "prune snippet must be gated on RETENTION -gt 0"
+    guard_pos = body.index('if [ "${RETENTION}" -gt 0 ]')
+    prune_pos = body.index('"mike", "delete"')
+    assert guard_pos < prune_pos, "the -gt 0 keep-all guard must precede the prune logic"
 
 
 def test_registry_publishes_run_in_deployment_environments() -> None:
@@ -232,21 +236,33 @@ def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
     # runs. Only workflows that legitimately push (or fetch) from the checkout keep
     # credentials: the release write job (pushes tags/branches; its derive job is
     # pinned to false by the split test), the gate (post-checkout `git fetch origin`),
-    # and the drift automation (open_or_update_proposal pushes the proposal branch
-    # from the working tree).
-    exempt = {"reusable-release.yml", "reusable-release-gate.yml", "reusable-consumer-automation.yml"}
+    # the drift automation (open_or_update_proposal pushes the proposal branch from the
+    # working tree), and — C12-W4 — the docs `push` job, which fast-forward-pushes the
+    # docs branch and holds contents:write; its sibling `build` job runs consumer code
+    # and must still checkout with persist-credentials: false.
+    exempt_workflows = {"reusable-release.yml", "reusable-release-gate.yml", "reusable-consumer-automation.yml"}
+    exempt_jobs = {("reusable-docs-pages.yml", "push")}
     for path in sorted(WORKFLOWS.glob("*.yml")):
-        if path.name in exempt:
+        if path.name in exempt_workflows:
             continue
         wf = _load(path.name)
         for job_name, job in (wf.get("jobs") or {}).items():
             if not isinstance(job, dict):
+                continue
+            if (path.name, job_name) in exempt_jobs:
                 continue
             for step in job.get("steps", []) or []:
                 if not str(step.get("uses", "")).startswith("actions/checkout"):
                     continue
                 persist = (step.get("with") or {}).get("persist-credentials")
                 assert persist is False, f"{path.name}:{job_name}: checkout must set persist-credentials: false"
+
+    # The exempted docs push job legitimately persists credentials to push.
+    docs_wf = _load("reusable-docs-pages.yml")
+    push_checkout = next(
+        s for s in docs_wf["jobs"]["push"]["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
+    )
+    assert push_checkout["with"]["persist-credentials"] is True
 
 
 def test_release_workflow_splits_derive_from_write_job() -> None:
@@ -278,12 +294,7 @@ def test_common_lint_lints_every_dockerfile() -> None:
 def test_npm_workflows_harden_installs_before_installing() -> None:
     # npm min-release-age and ignore-scripts reduce dependency-confusion / postinstall
     # risk. npm 11+ is required because older npm rejects min-release-age.
-    for name, job_name in (
-        ("reusable-node-ci.yml", "node-ci"),
-        # C12-W4: docs publish is split into build (untrusted, npm-installing) and
-        # deploy (privileged) jobs; the npm hardening lives in build.
-        ("reusable-docs-pages.yml", "build"),
-    ):
+    for name, job_name in (("reusable-node-ci.yml", "node-ci"),):
         wf = _load(name)
         on_block = wf.get("on") or wf.get(True)
         assert on_block["workflow_call"]["inputs"]["node-version"]["default"] == "24"
@@ -307,6 +318,11 @@ def test_npm_workflows_harden_installs_before_installing() -> None:
         assert "npm config set min-release-age 7 --location=user" in run
         assert steps.index(harden) < steps.index(install), f"{name} must harden npm before install"
 
+    # C12-W4/Zensical: the docs publish workflow was rewritten off npm entirely (pip/Zensical/
+    # mike) — it must contain no `npm ` invocation at all, so npm can't sneak back in un-hardened.
+    docs_body = (WORKFLOWS / "reusable-docs-pages.yml").read_text(encoding="utf-8")
+    assert "npm " not in docs_body, "reusable-docs-pages.yml must not invoke npm (Zensical/mike, pip-only)"
+
 
 def test_node_service_scaffold_uses_npm11_capable_node_default() -> None:
     body = (SCAFFOLD_FILES / "wf-node-service.yml").read_text(encoding="utf-8")
@@ -315,16 +331,73 @@ def test_node_service_scaffold_uses_npm11_capable_node_default() -> None:
     assert 'lint-command: "npx --no-install eslint ."' in body
 
 
-def test_docs_publish_lints_docusaurus_site_after_install() -> None:
+def test_docs_publish_installs_pinned_toolchain_fail_closed() -> None:
+    # The Zensical/mike rewrite replaced the Docusaurus npm install/lint with a pip
+    # install of an exact-pinned requirements file (§11.3), which must fail closed
+    # (not silently proceed unpinned) when the file is missing.
     wf = _load("reusable-docs-pages.yml")
-    on_block = wf.get("on") or wf.get(True)
-    lint_input = on_block["workflow_call"]["inputs"]["lint-command"]
-    assert lint_input["default"] == "npm run lint --if-present"
+    build = wf["jobs"]["build"]
+    steps = build["steps"]
+    install = next(s for s in steps if s.get("name") == "Install docs toolchain (exact pins, §11.3)")
+    run = install["run"]
+    assert "DOCS_REQUIREMENTS" in install.get("env", {})
+    assert 'if [ ! -f "${DOCS_REQUIREMENTS}" ]' in run
+    assert "::error::" in run
+    assert "exit 1" in run
+    assert 'python3 -m pip install --quiet -r "${DOCS_REQUIREMENTS}"' in run
+
+    # C12-W4: the consumer-eval emit step runs in `build`, which holds only contents:read;
+    # contents:write appears ONLY in the separate `push` job.
+    assert build["permissions"] == {"contents": "read"}
+    emit = next(s for s in steps if s.get("name") == "Emit language API docs")
+    assert steps.index(install) < steps.index(emit)
+    assert wf["jobs"]["push"]["permissions"] == {"contents": "write"}
+
+
+def test_docs_publish_fetches_existing_branch_authenticated_fail_closed() -> None:
+    # Review finding: the old "fetch existing docs branch" line used an unauthenticated
+    # ambient `git fetch origin ... || true`, which fails silently on private repos
+    # (checkout uses persist-credentials: false) — mike then builds an orphan branch and
+    # the push job's fast-forward check rejects it, breaking publishing permanently after
+    # the first release. The fetch must be a separate, step-scoped-token, fail-closed step.
+    wf = _load("reusable-docs-pages.yml")
+    build = wf["jobs"]["build"]
+    steps = build["steps"]
+    fetch = next(s for s in steps if s.get("name") == "Fetch existing docs branch")
+    run = fetch["run"]
+    assert fetch.get("env", {}).get("GH_TOKEN") == "${{ github.token }}"
+    assert "refusing to build an orphan docs branch" in run
+    assert "git ls-remote --exit-code --heads" in run
+    assert '"${status}" -eq 2' in run, "a missing branch (first deploy) must not fail closed"
+    assert "|| true" not in run
+
+    deploy = next(s for s in steps if s.get("name") == "Deploy version onto the local docs branch (mike)")
+    assert "git fetch origin" not in deploy["run"], "the old unauthenticated ambient fetch must be removed"
+    assert steps.index(fetch) < steps.index(deploy)
+
+    # C12-W4: the job token stays step-scoped — it must not leak into the consumer eval
+    # step or the mike deploy step's environment or command text.
+    emit = next(s for s in steps if s.get("name") == "Emit language API docs")
+    assert "GH_TOKEN" not in (emit.get("env") or {})
+    assert "GH_TOKEN" not in emit.get("run", "")
+    assert "GH_TOKEN" not in (deploy.get("env") or {})
+    assert "GH_TOKEN" not in deploy["run"]
+
+
+def test_docs_publish_refuses_default_branch_as_docs_branch() -> None:
+    # Review finding (minor): docs-branch must never be the repository default branch —
+    # mike's history-rewriting deploy onto the default branch would clobber it.
+    wf = _load("reusable-docs-pages.yml")
     steps = wf["jobs"]["build"]["steps"]
-    install = next(s for s in steps if s.get("name") == "Install")
-    lint = next(s for s in steps if s.get("name") == "Lint docs site")
-    assert steps.index(install) < steps.index(lint)
-    assert "LINT_COMMAND" in lint.get("env", {})
+    guard = next(s for s in steps if s.get("name") == "Refuse to target the default branch")
+    run = guard["run"]
+    assert guard.get("env", {}).get("DOCS_BRANCH") == "${{ inputs.docs-branch }}"
+    assert guard.get("env", {}).get("DEFAULT_BRANCH") == "${{ github.event.repository.default_branch }}"
+    assert '"${DOCS_BRANCH}" = "${DEFAULT_BRANCH}"' in run
+    assert "::error::" in run
+    assert "exit 1" in run
+    deploy = next(s for s in steps if s.get("name") == "Deploy version onto the local docs branch (mike)")
+    assert steps.index(guard) < steps.index(deploy)
 
 
 def test_common_lint_blocks_unsafe_npx_registry_fetches() -> None:
