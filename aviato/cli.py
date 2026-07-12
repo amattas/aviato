@@ -580,9 +580,6 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         print(str(exc), file=sys.stderr)
         return 2
 
-    _dump_consumer_declaration(declaration, target)
-    print(f"wrote {declaration_path.relative_to(target)}")
-
     # Scaffold with the RESOLVED declaration.docs (the preserved/effective value), so the docs
     # artifacts always match what the declaration records (§5.2/§6.1/§13.3) — never args.docs.
     items = materialize_items(
@@ -594,7 +591,34 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         bootstrap=declaration.bootstrap,
         overrides=declaration.overrides,
     )
-    result = scaffold(target, items, profile=args.profile, version=args.pin)
+    fresh_onboarding = existing is None
+    if fresh_onboarding:
+        baselined = [
+            item.output
+            for item in items
+            if item.seed_once
+            and confined_target(target, item.output, operation="inspect seed baseline").exists()
+        ]
+        for output in baselined:
+            print(f"baselined {output}")
+
+    result = scaffold(
+        target,
+        items,
+        profile=args.profile,
+        version=args.pin,
+        baseline_existing_seeds=fresh_onboarding,
+    )
+    if result.seed_integrity_unknown:
+        print(
+            "seed-once integrity state is missing, corrupt, or incomplete; "
+            "an adopted repository must use `aviato sync PATH --rebaseline-seeds`",
+            file=sys.stderr,
+        )
+        return 2
+
+    _dump_consumer_declaration(declaration, target)
+    print(f"wrote {declaration_path.relative_to(target)}")
     for output in result.written:
         print(f"wrote {output}")
     for output in result.seeded:
@@ -897,13 +921,30 @@ def cmd_sync(args: argparse.Namespace) -> int:
         print(pin_error, file=sys.stderr)
         return 2
 
+    baselined = [
+        item.output
+        for item in items
+        if item.seed_once and confined_target(root, item.output, operation="inspect seed baseline").exists()
+    ]
+    if args.rebaseline_seeds:
+        for output in baselined:
+            print(f"baselined {output}")
+
     result = scaffold(
         root,
         items,
         profile=declaration.profile,
         version=declaration.version,
         force=args.force,
+        baseline_existing_seeds=args.rebaseline_seeds,
     )
+    if result.seed_integrity_unknown:
+        print(
+            "seed-once integrity state is missing, corrupt, or incomplete; "
+            "review current seed files and run `aviato sync PATH --rebaseline-seeds`",
+            file=sys.stderr,
+        )
+        return 2
     for output in result.written:
         print(f"wrote {output}")
     for output in result.seeded:
@@ -972,7 +1013,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
         # not only in `doctor` — otherwise the scale-out command silently drops the one signal
         # seed-once tracking exists to provide.
         if scan.seed_divergence:
-            print(f"  seed divergence: {', '.join(sorted(scan.seed_divergence))}", file=sys.stderr)
+            for output in sorted(scan.seed_divergence):
+                print(f"  seed divergence: {output}", file=sys.stderr)
         # finding 33: the §5.4 probes the sweep previously dropped.
         if scan.drift_automation_present is False:
             print("  drift automation: MISSING", file=sys.stderr)
@@ -2081,6 +2123,11 @@ def build_parser() -> argparse.ArgumentParser:
     sync = subparsers.add_parser("sync", help="Materialize managed artifacts into a consumer repository.")
     sync.add_argument("path", help="Path to the consumer repository.")
     sync.add_argument("--force", action="store_true", help="Overwrite unmanaged/malformed-marker files.")
+    sync.add_argument(
+        "--rebaseline-seeds",
+        action="store_true",
+        help="Explicitly adopt current seed-once contents and replace the integrity sidecar.",
+    )
     sync.add_argument(
         "--override-version-pin", action="store_true", help="Proceed despite a version-pin mismatch (§2.6)."
     )

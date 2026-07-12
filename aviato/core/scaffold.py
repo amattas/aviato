@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Literal
 
 from .marker import content_hash, parse_marker_from_text, render_marker, strip_marker_from_text
 from .pathguard import confined_target
@@ -23,6 +25,12 @@ class ScaffoldItem:
     seed_once: bool = False
 
 
+@dataclass(frozen=True)
+class SeedSidecar:
+    status: Literal["ok", "missing", "corrupt"]
+    hashes: dict[str, str]
+
+
 @dataclass
 class ScaffoldResult:
     written: list[str] = field(default_factory=list)
@@ -34,6 +42,8 @@ class ScaffoldResult:
     # diagnosis dirty-drift — never silently regenerated (§5.3/§5.4 one posture).
     skipped_foreign: list[str] = field(default_factory=list)
     seeded: list[str] = field(default_factory=list)
+    baselined: list[str] = field(default_factory=list)
+    seed_integrity_unknown: bool = False
 
 
 def atomic_write(root: Path, relative: str, text: str | None = None, *, operation: str = "write file") -> None:
@@ -75,21 +85,38 @@ def atomic_write(root: Path, relative: str, text: str | None = None, *, operatio
         raise
 
 
-def read_sidecar(root: Path) -> dict[str, str]:
+def read_sidecar(root: Path) -> SeedSidecar:
     path = confined_target(root, SIDECAR_PATH, operation="read sidecar")
+    if not path.exists():
+        return SeedSidecar("missing", {})
     if not path.is_file():
-        return {}
+        return SeedSidecar("corrupt", {})
     # The sidecar is a report-only advisory record (§6.3); a corrupt/truncated/non-UTF-8 one
     # (manual edit, half-written, merge-conflict markers) must degrade to "no recorded hashes",
     # never crash diagnosis/scaffold — and thus never abort a whole fleet scan (the per-repo
     # guard in scan_fleet catches only AviatoError, so a raw JSONDecodeError would escape).
     try:
+        def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate sidecar key: {key}")
+                result[key] = value
+            return result
+
         path = confined_target(root, SIDECAR_PATH, operation="read sidecar")
         with path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-        return {}
-    return data if isinstance(data, dict) else {}
+            data = json.load(handle, object_pairs_hook=unique_object)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError):
+        return SeedSidecar("corrupt", {})
+    if not isinstance(data, dict) or not all(
+        isinstance(key, str)
+        and isinstance(value, str)
+        and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+        for key, value in data.items()
+    ):
+        return SeedSidecar("corrupt", {})
+    return SeedSidecar("ok", data)
 
 
 def _write_sidecar(root: Path, data: dict[str, str]) -> None:
@@ -125,6 +152,7 @@ def scaffold(
     profile: str,
     version: str,
     force: bool = False,
+    baseline_existing_seeds: bool = False,
 ) -> ScaffoldResult:
     """Materialize managed and seed-once artifacts (§5.3, §6.3).
 
@@ -146,7 +174,32 @@ def scaffold(
     for output in overlay:
         confined_target(root, output, operation="write scaffold output")
 
-    sidecar = read_sidecar(root)
+    sidecar_state = read_sidecar(root)
+    seed_items = {output: item for output, item in overlay.items() if item.seed_once}
+    existing_seed_hashes: dict[str, str] = {}
+    for output in seed_items:
+        target = confined_target(root, output, operation="read scaffold output")
+        if not target.exists():
+            continue
+        if not baseline_existing_seeds and (
+            sidecar_state.status != "ok" or output not in sidecar_state.hashes
+        ):
+            result.seed_integrity_unknown = True
+            return result
+        if baseline_existing_seeds:
+            try:
+                target = confined_target(root, output, operation="read scaffold output")
+                existing_seed_hashes[output] = content_hash(target.read_text(encoding="utf-8"))
+            except (UnicodeDecodeError, OSError):
+                result.seed_integrity_unknown = True
+                return result
+
+    # Explicit rebaseline is a reviewed replacement, not a merge: obsolete records
+    # must disappear and the resulting sidecar must describe exactly this resolved set.
+    sidecar = {} if baseline_existing_seeds else dict(sidecar_state.hashes)
+    if baseline_existing_seeds:
+        sidecar.update(existing_seed_hashes)
+        result.baselined.extend(existing_seed_hashes)
     sidecar_changed = False
 
     for output, item in overlay.items():
@@ -154,21 +207,6 @@ def scaffold(
 
         if item.seed_once:
             if target.exists():
-                # §6.3 seed-once: never overwrite an existing operator-owned file. But if the
-                # sidecar has NO recorded hash for it (the report-only integrity record was
-                # deleted/lost, or the file pre-existed adoption), re-establish the baseline from
-                # the file's CURRENT content so a deleted sidecar self-heals on the next sync and
-                # FUTURE tamper is again visible (§5.14 "absence reads as broken, never clean").
-                # This cannot retroactively detect tampering that happened before the heal — the
-                # sidecar is an advisory record, not a security boundary; once deleted, prior
-                # content is unknowable.
-                if output not in sidecar:
-                    try:
-                        target = confined_target(root, output, operation="read scaffold output")
-                        sidecar[output] = content_hash(target.read_text(encoding="utf-8"))
-                        sidecar_changed = True
-                    except (UnicodeDecodeError, OSError):
-                        pass  # binary seed-once file (§6.3), or a directory/unreadable path (N4) — no text hash
                 continue
             atomic_write(root, output, item.body, operation="write scaffold output")
             sidecar[output] = content_hash(item.body)
@@ -238,7 +276,11 @@ def scaffold(
         atomic_write(root, output, rendered, operation="write scaffold output")
         result.written.append(output)
 
-    if sidecar_changed:
+    if baseline_existing_seeds:
+        # Even an empty resolved seed set is meaningful during explicit rebaseline:
+        # it removes every obsolete key from a prior sidecar.
+        _write_sidecar(root, sidecar)
+    elif sidecar_changed:
         _write_sidecar(root, sidecar)
 
     return result

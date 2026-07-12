@@ -188,24 +188,26 @@ def diagnose(
         target = confined_target(root, artifact.output_path, operation="diagnose artifact")
         if artifact.seed_once:
             # A recorded seed-once file diverges if it is now MISSING (deleted — §6.3 tamper
-            # visibility, e.g. a removed operator-owned seed file) OR its content changed. The `and`/`or`
-            # short-circuit so a missing file is never read. errors="replace": a seed-once file
-            # may be binary (§6.3); read leniently so the probe never crashes a fleet scan — a
-            # binary just won't match its text hash. Reported, never overwritten.
-            recorded = sidecar.get(artifact.output_path)
-            if recorded is not None:
-                try:
-                    target = confined_target(root, artifact.output_path, operation="diagnose seed artifact")
-                    live_hash = content_hash(target.read_text(encoding="utf-8", errors="replace"))
-                except OSError:
-                    # R5-3-DIAG-OS: the seed-once target is a DIRECTORY or otherwise unreadable
-                    # (IsADirectoryError &c. are OSError, which errors="replace" does NOT handle).
-                    # Treat it as diverged (§5.14 "absence/unreadable reads as broken"), never crash
-                    # the fleet scan with a raw OSError.
-                    live_hash = None
+            # visibility, e.g. a removed operator-owned seed file) OR its content changed.
+            # errors="replace": a seed-once file may be binary (§6.3); read leniently so the
+            # probe never crashes a fleet scan — a binary just won't match its text hash.
+            # Missing/corrupt/incomplete sidecar state is broken too. Reported, never overwritten.
+            recorded = sidecar.hashes.get(artifact.output_path)
+            if sidecar.status != "ok" or recorded is None:
+                report.seed_divergence.append(artifact.output_path)
+                continue
+            try:
                 target = confined_target(root, artifact.output_path, operation="diagnose seed artifact")
-                if not target.exists() or live_hash != recorded:
-                    report.seed_divergence.append(artifact.output_path)
+                live_hash = content_hash(target.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                # R5-3-DIAG-OS: the seed-once target is a DIRECTORY or otherwise unreadable
+                # (IsADirectoryError &c. are OSError, which errors="replace" does NOT handle).
+                # Treat it as diverged (§5.14 "absence/unreadable reads as broken"), never crash
+                # the fleet scan with a raw OSError.
+                live_hash = None
+            target = confined_target(root, artifact.output_path, operation="diagnose seed artifact")
+            if not target.exists() or live_hash != recorded:
+                report.seed_divergence.append(artifact.output_path)
             continue
         report.statuses[artifact.output_path] = _classify_managed(
             root, artifact.output_path, artifact.body, profile=profile

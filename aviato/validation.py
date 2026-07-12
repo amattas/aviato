@@ -510,8 +510,9 @@ def _check_library_bootstrap(root: Path, errors: list[str]) -> None:
     """The Library's own managed artifacts must bootstrap through local workflow refs (§5.10)."""
     from .core.declaration import load_declaration
     from .core.onboarding import resolved_artifacts
+    from .core.pathguard import confined_target
     from .core.registry import Registry
-    from .core.scaffold import ScaffoldItem, render_managed
+    from .core.scaffold import ScaffoldItem, read_sidecar, render_managed
 
     declaration_path = root / ".github" / "aviato.yaml"
     if not declaration_path.exists():
@@ -541,8 +542,10 @@ def _check_library_bootstrap(root: Path, errors: list[str]) -> None:
         return
 
     expected = {}
+    expected_seeds: set[str] = set()
     for artifact in artifacts:
         if artifact.seed_once:
+            expected_seeds.add(artifact.output)
             continue
         item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
         expected[artifact.output] = render_managed(item, profile=declaration.profile, version=declaration.version)
@@ -559,6 +562,21 @@ def _check_library_bootstrap(root: Path, errors: list[str]) -> None:
             errors.append(f"{rel_path} is stale: it does not match the rendered Library bootstrap artifact (§5.10)")
         if f"{LIBRARY_SLUG}/.github/workflows/" in text:
             errors.append(f"{rel_path} uses a released Aviato ref in bootstrap; use local workflow refs (§5.10)")
+
+    sidecar = read_sidecar(root)
+    if sidecar.status != "ok":
+        errors.append(f"Library seed sidecar is {sidecar.status}; explicitly rebaseline current seed outputs")
+    else:
+        missing_records = sorted(expected_seeds - sidecar.hashes.keys())
+        obsolete_records = sorted(sidecar.hashes.keys() - expected_seeds)
+        if missing_records or obsolete_records:
+            errors.append(
+                "Library seed sidecar does not exactly match resolved seed outputs: "
+                f"missing={missing_records}, obsolete={obsolete_records}"
+            )
+    for rel_path in sorted(expected_seeds):
+        if not confined_target(root, rel_path, operation="validate Library seed output").is_file():
+            errors.append(f"missing Library bootstrap seed artifact: {rel_path}")
 
 
 # Workflows that embed an inline `highest.py` reimplementation of the §8.14/§13.2 monotonic

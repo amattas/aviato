@@ -161,6 +161,30 @@ def test_seed_once_integrity_divergence_is_reported_not_overwritten(tmp_path: Pa
     assert (tmp_path / "Dockerfile").read_text() == "FROM tampered\n"  # never overwritten
 
 
+@pytest.mark.parametrize("sidecar_body", [None, "{ corrupt"])
+def test_unknown_seed_sidecar_is_reported_broken_without_crashing(
+    tmp_path: Path, sidecar_body: str | None
+) -> None:
+    (tmp_path / "Dockerfile").write_text("FROM operator\n", encoding="utf-8")
+    if sidecar_body is not None:
+        (tmp_path / ".github").mkdir()
+        (tmp_path / ".github" / "aviato.seed.json").write_text(sidecar_body, encoding="utf-8")
+
+    report = diagnose(tmp_path, [ExpectedArtifact("Dockerfile", "", seed_once=True)])
+
+    assert report.seed_divergence == ["Dockerfile"]
+
+
+def test_missing_expected_seed_record_is_reported_broken(tmp_path: Path) -> None:
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "aviato.seed.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "Dockerfile").write_text("FROM operator\n", encoding="utf-8")
+
+    report = diagnose(tmp_path, [ExpectedArtifact("Dockerfile", "", seed_once=True)])
+
+    assert report.seed_divergence == ["Dockerfile"]
+
+
 def test_seed_once_rechecks_confinement_at_read_and_final_exists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
