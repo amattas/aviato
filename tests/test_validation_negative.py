@@ -548,6 +548,33 @@ def test_policy_zizmor_repository_exemption_must_be_ref_pin(repo_copy: Path, rep
     assert any("zizmor.yml" in error and "amattas/aviato" in error and "ref-pin" in error for error in errors)
 
 
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    [
+        ("github/*: ref-pin", "github/*: ref-pin\n        evil/*: ref-pin"),
+        ("github/*: ref-pin", "github/*: ref-pin\n        evil/repository: ref-pin"),
+        ("github/*: ref-pin", "github/*: ref-pin\n        evil/repository/*: hash-pin"),
+        ('"*": hash-pin', '"*": ref-pin'),
+        ("        actions/*: ref-pin          # first-party GitHub — branch/tag allowed\n", ""),
+        ("        amattas/aviato/*: ref-pin\n", ""),
+    ],
+)
+def test_zizmor_unpinned_uses_policy_map_is_closed(
+    repo_copy: Path,
+    needle: str,
+    replacement: str,
+) -> None:
+    config = repo_copy / "aviato/library/zizmor.yml"
+    text = config.read_text(encoding="utf-8")
+    drifted = text.replace(needle, replacement, 1)
+    assert drifted != text
+    config.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("zizmor.yml" in error and "exactly equal" in error for error in errors)
+
+
 def test_library_repository_policy_mutation_binds_validation_and_remote(repo_copy: Path) -> None:
     from aviato import cli
     from aviato.policy import library_repository, load_policy

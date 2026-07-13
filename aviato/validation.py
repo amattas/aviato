@@ -341,7 +341,6 @@ _INSTALL_URL_COPY_COUNTS = {
     ".github/workflows/reusable-release.yml": 2,
 }
 _GITHUB_VCS_INSTALL_RE = re.compile(r"git\+https://github\.com/(?P<repository>[^@\s\"']+)@")
-_ZIZMOR_REPOSITORY_POLICY_RE = re.compile(r"^(?P<repository>[^/\s]+/[^/\s]+)/\*$")
 
 
 def _check_library_repository_copies(root: Path, policy: dict[str, Any], repository: str, errors: list[str]) -> None:
@@ -367,28 +366,19 @@ def _check_library_repository_copies(root: Path, policy: dict[str, Any], reposit
             policies = zizmor["rules"]["unpinned-uses"]["config"]["policies"]
             if not isinstance(policies, dict):
                 raise TypeError("policies must be a mapping")
-            repository_policies: list[tuple[str, object]] = []
-            for key, value in policies.items():
-                match = _ZIZMOR_REPOSITORY_POLICY_RE.fullmatch(key) if isinstance(key, str) else None
-                if match is not None:
-                    repository_policies.append((match.group("repository"), value))
-        except (KeyError, TypeError) as exc:
+        except (KeyError, OSError, TypeError, ValueError, yaml.YAMLError) as exc:
             errors.append(f"aviato/library/zizmor.yml repository policies cannot be read: {exc} (finding 41)")
         else:
-            expected_key = f"{repository}/*"
-            if policies.get(expected_key) != "ref-pin":
+            expected_policies = {
+                "actions/*": "ref-pin",
+                "github/*": "ref-pin",
+                f"{repository}/*": "ref-pin",
+                "*": "hash-pin",
+            }
+            if policies != expected_policies:
                 errors.append(
-                    f"aviato/library/zizmor.yml policy {expected_key!r} must have value exactly 'ref-pin' (finding 41)"
-                )
-            extra_ref_pin = [
-                actual_repository
-                for actual_repository, value in repository_policies
-                if actual_repository != repository and value == "ref-pin"
-            ]
-            if extra_ref_pin:
-                errors.append(
-                    "aviato/library/zizmor.yml has extra repository-level ref-pin exemptions "
-                    f"{extra_ref_pin!r}; only {repository!r} is allowed (finding 41)"
+                    "aviato/library/zizmor.yml unpinned-uses policies must be exactly equal to "
+                    f"{expected_policies!r}; got {policies!r} (finding 41)"
                 )
 
     contributing = root / "aviato/library/scaffold/files/contributing.md.txt"
