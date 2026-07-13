@@ -13,6 +13,14 @@ from aviato.rulesets import render_all_rulesets, ruleset_content_drift
 Ruleset = dict[str, Any]
 
 
+def test_every_rendered_ruleset_explicitly_clears_bypass_actors() -> None:
+    # A GitHub ruleset PUT preserves omitted bypass_actors. The desired payload must
+    # therefore send an explicit empty list or an interim live bypass survives apply.
+    payloads = render_all_rulesets()
+    assert payloads
+    assert all(payload.get("bypass_actors") == [] for payload in payloads)
+
+
 def test_rendered_tag_ruleset_uses_policy_pattern() -> None:
     policy = load_policy()
     payloads = render_all_rulesets()

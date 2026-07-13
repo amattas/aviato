@@ -441,7 +441,8 @@ def _submit_ruleset(endpoint: str, method: str, payload: dict[str, Any]) -> None
         if payload_path is not None:
             payload_path.unlink(missing_ok=True)
     if result.returncode != 0:
-        raise GitHubAPIError(endpoint, result.returncode, result.stderr)
+        error = "\n".join(part for part in (result.stderr.strip(), result.stdout.strip()) if part)
+        raise GitHubAPIError(endpoint, result.returncode, error)
 
 
 def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> RulesetApplyResult:
