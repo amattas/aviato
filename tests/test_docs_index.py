@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "docs" / "requirements" / "README.md"
 CODE_ROOT = ROOT / "aviato"
@@ -123,6 +125,7 @@ def test_current_requirements_do_not_retain_stale_normative_text() -> None:
         ROOT / "docs" / "architecture" / "infrastructure.md",
         ROOT / "docs" / "architecture" / "validation.md",
         *sorted((ROOT / "docs" / "requirements").rglob("*.md")),
+        *sorted((ROOT / "docs" / "specifications").rglob("*.md")),
     ]
     hits = [
         f"{path.relative_to(ROOT)}: {term}"
@@ -142,3 +145,44 @@ def test_completed_2026_07_11_plans_are_marked_implemented() -> None:
         ROOT / "docs" / "superpowers" / "plans" / "2026-07-12-repository-integrity-release-hardening.md"
     ).read_text(encoding="utf-8")
     assert "**STATUS: IMPLEMENTED**" not in "\n".join(current.splitlines()[:10])
+
+
+SPECIFICATION_MOVES = (
+    ("6", "core/consumer-contract.md", "core/consumer-contract.md"),
+    ("5.2", "modules/onboarding/flow.md", "modules/onboarding/flow.md"),
+    ("5.10", "modules/onboarding/bootstrap.md", "modules/onboarding/bootstrap.md"),
+    ("5.3", "modules/scaffolding/sync.md", "modules/scaffolding/sync.md"),
+    ("5.5", "modules/drift/file-drift.md", "modules/drift/file-drift.md"),
+    ("5.6", "modules/drift/settings-drift.md", "modules/drift/settings-drift.md"),
+    ("5.4", "modules/fleet/diagnosis.md", "modules/fleet/diagnosis.md"),
+    ("5.11", "modules/fleet/scan.md", "modules/fleet/scan.md"),
+    ("5.7", "modules/reconcile/flow.md", "modules/reconcile/flow.md"),
+    ("5.8", "modules/reconcile/consent.md", "modules/reconcile/consent.md"),
+    ("5.9", "modules/versioning/release.md", "modules/versioning/release.md"),
+    ("5.12", "modules/versioning/repin.md", "modules/versioning/repin.md"),
+    ("5.13", "modules/offboarding/flow.md", "modules/offboarding/flow.md"),
+    ("5.14", "modules/security/scanning.md", "modules/security/scanning.md"),
+    ("11.3", "modules/security/supply-chain.md", "modules/security/supply-chain.md"),
+    ("12.1", "modules/languages/python/requirements.md", "modules/languages/python/requirements.md"),
+    ("12.2", "modules/languages/node/requirements.md", "modules/languages/node/requirements.md"),
+    ("12.3", "modules/languages/swift/requirements.md", "modules/languages/swift/requirements.md"),
+    ("13.1", "modules/deployment/pypi/requirements.md", "modules/deployment/pypi/requirements.md"),
+    ("13.2", "modules/deployment/ghcr/requirements.md", "modules/deployment/ghcr/requirements.md"),
+    ("13.3", "modules/deployment/docs-site/requirements.md", "modules/deployment/docs-site/requirements.md"),
+    ("13.4", "modules/deployment/apple/requirements.md", "modules/deployment/apple/requirements.md"),
+)
+
+
+@pytest.mark.parametrize(("section", "old_rel", "new_rel"), SPECIFICATION_MOVES)
+def test_behavioral_contracts_live_under_specifications(section: str, old_rel: str, new_rel: str) -> None:
+    old_path = ROOT / "docs/requirements" / old_rel
+    new_path = ROOT / "docs/specifications" / new_rel
+    assert not old_path.exists(), f"§{section} remains under requirements: {old_path.relative_to(ROOT)}"
+    assert new_path.is_file(), f"§{section} specification missing: {new_path.relative_to(ROOT)}"
+    assert _index()[section].resolve() == new_path.resolve()
+
+
+def test_specifications_index_defines_document_ownership() -> None:
+    text = (ROOT / "docs/specifications/README.md").read_text(encoding="utf-8")
+    required = {"precise", "testable", "Requirements", "Architecture", "Security", "§"}
+    assert sorted(term for term in required if term not in text) == []
