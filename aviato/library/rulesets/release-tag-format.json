@@ -2,6 +2,7 @@
   "name": "Common: release tag format",
   "target": "tag",
   "enforcement": "active",
+  "bypass_actors": [],
   "conditions": {
     "ref_name": {
       "include": [

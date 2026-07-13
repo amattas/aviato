@@ -54,9 +54,9 @@ binding, and CLI tests.
 Addresses THREAT-006 and THREAT-009. The target posture requires PR/check/CodeQL
 gates, blocks branch/tag deletion and non-fast-forward changes, and explicitly
 clears bypass actors. Only a correlated unsupported tag pattern may degrade,
-while immutability stays enforced. The corrective no-bypass payload is approved
-in PR #60, but its merge and live reapply remain outstanding; this control is
-therefore blocked rather than implemented.
+while immutability stays enforced. The corrective no-bypass payload is tracked
+in PR #60. This control remains blocked until a live reapply/readback using that
+payload proves zero bypass actors plus the exact CodeQL and check thresholds.
 
 ## SEC-008 — Prevent secret persistence
 

@@ -188,6 +188,36 @@ def test_active_hardening_plan_matches_current_rollout_state() -> None:
     assert sorted(term for term in forbidden if term in text) == []
 
 
+def test_pr60_rollout_records_preserve_blocked_live_rollout_boundary() -> None:
+    backlog = (ROOT / "docs/requirements/modules/security/backlog.md").read_text(encoding="utf-8")
+    backlog_item = next(line for line in backlog.splitlines() if "PR #60" in line)
+    assert "Use the convergence fix tracked by PR #60 to reapply both rulesets" in backlog_item
+    assert "SEC-007 remains blocked until live readback passes" in backlog_item
+
+    sec007 = _matrix_rows()["SEC-007"]
+    assert sec007[2] == "blocked"
+    assert "No-bypass live reapply/readback using the PR #60 convergence fix" in sec007[6]
+
+    controls = (ROOT / "docs/security/controls.md").read_text(encoding="utf-8")
+    control = controls.split("## SEC-007", 1)[1].split("\n## ", 1)[0]
+    normalized_control = " ".join(control.split())
+    assert "This control remains blocked until a live reapply/readback" in normalized_control
+    assert "proves zero bypass actors plus the exact CodeQL and check thresholds" in normalized_control
+
+    plan = (ROOT / "docs/superpowers/plans/2026-07-12-repository-integrity-release-hardening.md").read_text(
+        encoding="utf-8"
+    )
+    normalized_plan = " ".join(plan.split())
+    required_plan_boundaries = {
+        "Checkpoint 1 separates its explicit merge-authorization decision from the required live reapply/readback",
+        "Explicit operator authorization is required",
+        "gh pr merge 60 --repo amattas/aviato --merge --admin",
+        "Do not run that command without the user's explicit approval",
+        "it is not standing authorization for future bypasses",
+    }
+    assert sorted(term for term in required_plan_boundaries if term not in normalized_plan) == []
+
+
 SPECIFICATION_MOVES = (
     ("6", "core/consumer-contract.md", "core/consumer-contract.md"),
     ("5.2", "modules/onboarding/flow.md", "modules/onboarding/flow.md"),

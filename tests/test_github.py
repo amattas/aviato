@@ -256,6 +256,37 @@ def test_upsert_ruleset_retries_precise_unsupported_tag_metadata_422_once(
     assert not any(path.exists() for path in payload_paths)
 
 
+def test_upsert_ruleset_reads_structured_unsupported_tag_error_from_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Live `gh api` wrote only the generic HTTP status to stderr and the structured
+    # validation body to stdout. The fallback classifier needs both streams.
+    payload = _tag_ruleset_payload()
+    monkeypatch.setattr(
+        github,
+        "repository_rulesets",
+        lambda slug: [{"name": "Common: release tag format", "target": "tag", "id": 42}],
+    )
+    calls: list[list[str]] = []
+    structured = (
+        '{"message":"Validation Failed","errors":['
+        '{"field":"rules/2/type","value":"tag_name_pattern","code":"invalid"}]}'
+    )
+
+    def fake_run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(cmd, 1, structured, "gh: Validation Failed (HTTP 422)")
+        return subprocess.CompletedProcess(cmd, 0, "{}", "")
+
+    monkeypatch.setattr(github, "run", fake_run)
+
+    result = github.upsert_ruleset("o/r", payload, apply=True)
+
+    assert result.degraded_rules == ("tag_name_pattern",)
+    assert len(calls) == 2
+
+
 @pytest.mark.parametrize(
     "stderr",
     [
