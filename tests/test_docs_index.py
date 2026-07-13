@@ -155,11 +155,13 @@ def test_completed_superpowers_artifacts_are_pruned_but_active_plan_remains() ->
         "plans/2026-07-11-zensical-docs.md",
         "plans/2026-07-12-starter-documentation-governance.md",
         "plans/2026-07-13-tag-ruleset-string-422.md",
+        "plans/2026-07-13-solo-maintainer-ruleset-override.md",
         "specs/2026-05-29-actionpins-zizmor-migration-design.md",
         "specs/2026-07-11-docs-restructure-design.md",
         "specs/2026-07-11-zensical-docs-design.md",
         "specs/2026-07-12-starter-documentation-governance-design.md",
         "specs/2026-07-13-tag-ruleset-string-422-design.md",
+        "specs/2026-07-13-solo-maintainer-ruleset-override-design.md",
     )
     root = ROOT / "docs/superpowers"
     assert [path for path in completed if (root / path).exists()] == []
@@ -171,10 +173,14 @@ def test_active_hardening_plan_matches_current_rollout_state() -> None:
     text = path.read_text(encoding="utf-8")
     required = {
         "PR #60",
+        "PR #62",
         "PR #59",
         "release PR #42",
         "authorization was consumed",
         "zero bypass actors",
+        "required_reviews: 0",
+        "normal merge path",
+        "makes another reviewer eligible",
         "docs: false",
         "SEC-007",
         "Dependabot",
@@ -227,12 +233,18 @@ def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
     controls = (ROOT / "docs/security/controls.md").read_text(encoding="utf-8")
     control = controls.split("## SEC-007", 1)[1].split("\n## ", 1)[0]
     normalized_control = " ".join(control.split())
-    assert "Live readback on 2026-07-13 verified zero bypass actors" in normalized_control
+    assert "Live readback on 2026-07-13 after applying the declaration verified a required review count of zero" in normalized_control
+    assert "zero bypass actors" in normalized_control
     assert "exact CodeQL and required-check thresholds" in normalized_control
     assert "not bypass permission" in normalized_control
     assert "exactly one eligible reviewer" in normalized_control
     assert "required review count of zero" in normalized_control
     assert "restore the default of one required approval" in normalized_control
+
+    assert (
+        "Live readback on 2026-07-13 proved the repository-specific required review count of zero is active"
+        in sec007[6]
+    )
 
     threat_model = (ROOT / "docs/security/threat-model.md").read_text(encoding="utf-8")
     threat006 = threat_model.split("## THREAT-006", 1)[1].split("\n## ", 1)[0]

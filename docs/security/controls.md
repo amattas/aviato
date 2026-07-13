@@ -56,7 +56,8 @@ gates, blocks branch/tag deletion and non-fast-forward changes, and explicitly
 clears bypass actors. Only a correlated unsupported tag pattern may degrade,
 while immutability stays enforced. PR #60 merged as
 `a3e87ac00359309157fdeae153ebe29e03242a16`. Live readback on 2026-07-13
-verified zero bypass actors on the
+after applying the declaration verified a required review count of zero, zero
+bypass actors on the
 [branch ruleset](https://github.com/amattas/aviato/rules/17482301) and
 [tag ruleset](https://github.com/amattas/aviato/rules/17483804), exact CodeQL
 and required-check thresholds, and branch/tag immutability; tag metadata-pattern

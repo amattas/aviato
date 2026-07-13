@@ -28,8 +28,14 @@ backlogs.
 
 - PR #60 merged as `a3e87ac00359309157fdeae153ebe29e03242a16` after the
   explicitly authorized one-time admin merge.
-- Live branch ruleset readback proves zero bypass actors, the three exact
-  required checks, exact CodeQL thresholds, and immutability.
+- Aviato's own declaration now carries `required_reviews: 0` while it has no
+  independent eligible reviewer. Exact live branch ruleset readback proves the
+  zero review count, zero bypass actors, the three exact required checks, exact
+  CodeQL thresholds, review-thread and stale-review handling, and immutability.
+  PR #62 is the deadlock evidence and delivery PR; its acceptance criterion is
+  the normal merge path without admin bypass. Before or in the same settings
+  change that makes another reviewer eligible, remove the override and restore
+  the profile default of one approval.
 - Live tag ruleset readback proves zero bypass actors and immutability; the
   unsupported metadata-pattern rule is the only degradation.
 - **PR #59:** open, blocked canary for proving CodeQL ruleset enforcement after
