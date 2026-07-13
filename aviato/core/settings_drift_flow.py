@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -37,7 +38,6 @@ def _render_issue_body(
     drifted_rulesets: list[str],
     repo: str,
     issue_key: str,
-    profile: str | None,
     declaration_path: str | None = None,
 ) -> str:
     lines = ["Aviato detected settings drift."]
@@ -63,16 +63,12 @@ def _render_issue_body(
         # Rulesets are remediated by the operator-direct, idempotent `apply-rulesets` (which
         # re-asserts the rendered desired content), NOT the §5.7 reconcile (branch/security only).
         # Reported here so a missing OR content-weakened (disabled / permissive pattern / lowered
-        # approvals) required ruleset is not invisible (§5.6). C12-3: prefer `--declaration <path>`
+        # approvals) required ruleset is not invisible (§5.6). C12-3: always use the declaration
         # so the restored ruleset resolves the consumer's OVERRIDES (the SAME status checks drift
-        # used) and never re-adds a check the consumer removed; fall back to `--profile` (base) only
-        # when no declaration path is known.
-        if declaration_path:
-            apply_flag = f" --declaration {declaration_path}"
-        elif profile:
-            apply_flag = f" --profile {profile}"
-        else:
-            apply_flag = ""
+        # used) and never re-adds a check the consumer removed. Default to the repository-root path
+        # when a binding does not provide one; reverting to the base profile is unsafe.
+        declaration = declaration_path or ".github/aviato.yaml"
+        apply_flag = f" --declaration {shlex.quote(declaration)}"
         lines += [
             "",
             "Missing or drifted required rulesets (apply separately — NOT via reconcile):",
@@ -108,13 +104,17 @@ def run_settings_drift(
     Also reports **missing or content-drifted required rulesets** (§5.6): the caller
     passes ``drifted_rulesets`` (computed from the rendered desired vs the live payloads —
     the GitHub-specific comparison lives outside this agnostic flow), surfaced on the same
-    tracking issue and remediated by ``apply-rulesets --apply --profile`` (NOT the
-    consent-gated reconcile, which writes only branch/security).
+    tracking issue and remediated by ``apply-rulesets --apply --declaration`` (NOT the
+    consent-gated reconcile, which writes only branch/security). Declaration-aware remediation
+    preserves repository-specific overrides; a base-profile fallback is intentionally forbidden.
+    ``profile`` remains accepted for compatibility with older callers but is never used to render
+    remediation guidance.
 
     The issue channel being unavailable fails loud (the platform raises); an
     unreadable settings surface fails closed as SettingsReadError. No settings
     mutation is ever performed.
     """
+    _ = profile
     live = platform.read_settings(repo)
     diff = classify_settings(desired=desired_settings, live=live)
     issue = platform.get_issue(repo, issue_key)
@@ -155,7 +155,7 @@ def run_settings_drift(
         repo,
         issue_key,
         "Aviato: settings drift",
-        _render_issue_body(diff, list(drifted_rulesets), repo, issue_key, profile, declaration_path),
+        _render_issue_body(diff, list(drifted_rulesets), repo, issue_key, declaration_path),
     )
     return SettingsDriftOutcome(
         status="reported",

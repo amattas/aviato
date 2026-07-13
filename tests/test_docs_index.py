@@ -37,6 +37,7 @@ STALE_NORMATIVE_TEXT = {
     "Advance floating major reference UNCONDITIONALLY",
     "Deploy from a branch → gh-pages",
     "no grep mirror",
+    "apply-rulesets … --apply --profile <p>",
 }
 
 # Citations whose literal number never appeared in REQUIREMENTS.md:
@@ -137,6 +138,13 @@ def test_current_requirements_do_not_retain_stale_normative_text() -> None:
     ]
     assert not hits, "stale normative text remains:\n" + "\n".join(hits)
 
+    declaration_aware_remediation = "apply-rulesets … --apply --declaration .github/aviato.yaml"
+    for path in (
+        ROOT / "docs/specifications/modules/drift/settings-drift.md",
+        ROOT / "docs/specifications/modules/reconcile/flow.md",
+    ):
+        assert declaration_aware_remediation in path.read_text(encoding="utf-8"), path
+
 
 def test_backlogs_contain_only_open_work_and_settled_decisions() -> None:
     for path in sorted((ROOT / "docs/requirements").rglob("backlog.md")):
@@ -233,7 +241,10 @@ def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
     controls = (ROOT / "docs/security/controls.md").read_text(encoding="utf-8")
     control = controls.split("## SEC-007", 1)[1].split("\n## ", 1)[0]
     normalized_control = " ".join(control.split())
-    assert "Live readback on 2026-07-13 after applying the declaration verified a required review count of zero" in normalized_control
+    assert (
+        "Live readback on 2026-07-13 after applying the declaration verified a required review count of zero"
+        in normalized_control
+    )
     assert "zero bypass actors" in normalized_control
     assert "exact CodeQL and required-check thresholds" in normalized_control
     assert "not bypass permission" in normalized_control
@@ -268,6 +279,9 @@ def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
         "non-fast-forward",
         "active-enforcement",
         "no-bypass",
+        "`--declaration .github/aviato.yaml`",
+        "never `--profile`",
+        "Fresh previews",
         "before or in the same settings change that makes another reviewer eligible",
     }
     assert sorted(term for term in required_contract if term not in normalized_exception) == []
