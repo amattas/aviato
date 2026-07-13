@@ -8,13 +8,6 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 - (none)
 
-## Resolved by 2026-07-12 hardening plan
-
-- Validation subprocesses are finite; strict typing covers `aviato` and tests; protocol test doubles match their ports.
-- `library.repository` centralizes the Library slug and validation binds every intentional copy.
-- Python scaffold metadata targets 3.12; root development extras are exact-pin checked.
-- README covers load-bearing CLI flags; onboarding plans list protected deployment environments.
-- Completed 2026-07-11 plans carry implementation status and current supply-chain wording describes one implementation.
 
 ## Settled — do not reopen
 

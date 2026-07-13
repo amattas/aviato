@@ -8,9 +8,6 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 - (none)
 
-## Resolved by 2026-07-12 hardening plan
-
-- §6.3 and §13.2 now state that container build definitions are operator-provided, probed, and never seeded.
 
 ## Settled — do not reopen
 

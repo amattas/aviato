@@ -137,15 +137,30 @@ def test_current_requirements_do_not_retain_stale_normative_text() -> None:
     assert not hits, "stale normative text remains:\n" + "\n".join(hits)
 
 
-def test_completed_2026_07_11_plans_are_marked_implemented() -> None:
-    for name in ("2026-07-11-docs-restructure.md", "2026-07-11-zensical-docs.md"):
-        text = (ROOT / "docs" / "superpowers" / "plans" / name).read_text(encoding="utf-8")
-        assert "**STATUS: IMPLEMENTED**" in "\n".join(text.splitlines()[:10]), name
+def test_backlogs_contain_only_open_work_and_settled_decisions() -> None:
+    for path in sorted((ROOT / "docs/requirements").rglob("backlog.md")):
+        text = path.read_text(encoding="utf-8")
+        headings = set(re.findall(r"^## (.+)$", text, re.MULTILINE))
+        assert "Open" in headings, path
+        assert "Settled — do not reopen" in headings, path
+        assert not {heading for heading in headings if "Resolved" in heading or "Completed" in heading}, path
 
-    current = (
-        ROOT / "docs" / "superpowers" / "plans" / "2026-07-12-repository-integrity-release-hardening.md"
-    ).read_text(encoding="utf-8")
-    assert "**STATUS: IMPLEMENTED**" not in "\n".join(current.splitlines()[:10])
+
+def test_completed_superpowers_artifacts_are_pruned_but_active_plan_remains() -> None:
+    completed = (
+        "plans/2026-05-21-agnostic-core-engine.md",
+        "plans/2026-05-29-actionpins-zizmor-migration.md",
+        "plans/2026-07-11-docs-restructure.md",
+        "plans/2026-07-11-zensical-docs.md",
+        "plans/2026-07-12-starter-documentation-governance.md",
+        "specs/2026-05-29-actionpins-zizmor-migration-design.md",
+        "specs/2026-07-11-docs-restructure-design.md",
+        "specs/2026-07-11-zensical-docs-design.md",
+        "specs/2026-07-12-starter-documentation-governance-design.md",
+    )
+    root = ROOT / "docs/superpowers"
+    assert [path for path in completed if (root / path).exists()] == []
+    assert (root / "plans/2026-07-12-repository-integrity-release-hardening.md").is_file()
 
 
 SPECIFICATION_MOVES = (
@@ -206,6 +221,15 @@ def _headed_ids(path: Path, prefix: str) -> set[str]:
     return set(pattern.findall(path.read_text(encoding="utf-8")))
 
 
+def _stable_requirement_ids() -> set[str]:
+    pattern = re.compile(r"^## (REQ-[A-Z0-9-]+)\b", re.MULTILINE)
+    return {
+        identifier
+        for path in (ROOT / "docs/requirements").rglob("*.md")
+        for identifier in pattern.findall(path.read_text(encoding="utf-8"))
+    }
+
+
 def test_security_records_cross_link_threats_controls_and_architecture() -> None:
     threat_model = ROOT / "docs/security/threat-model.md"
     controls = ROOT / "docs/security/controls.md"
@@ -225,6 +249,7 @@ def test_security_records_cross_link_threats_controls_and_architecture() -> None
 def test_traceability_has_exactly_one_row_per_requirement_threat_and_control() -> None:
     rows = _matrix_rows()
     expected = {f"§{section}" for section in _index()}
+    expected |= _stable_requirement_ids()
     expected |= _headed_ids(ROOT / "docs/security/threat-model.md", "THREAT")
     expected |= _headed_ids(ROOT / "docs/security/controls.md", "SEC")
     assert set(rows) == expected
