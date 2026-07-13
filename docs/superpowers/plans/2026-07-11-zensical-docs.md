@@ -1,5 +1,11 @@
 # Docusaurus → Zensical Docs Stack Implementation Plan
 
+**STATUS: IMPLEMENTED**
+
+> Historical implementation record. The 2026-07-12 Pages hardening supersedes
+> the branch-serving setup text below: current serving uses GitHub Actions while
+> the versioned branch remains archival state.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace Docusaurus with Zensical (pip-based SSG + mike-fork versioning onto a docs branch) across the engine docs plug-in, the starter kit, and this repo's `website/`.
@@ -465,7 +471,7 @@ alias = true
 # tag push   -> `mike deploy X.Y.Z latest`    (latest moves only for the highest release)
 # Copy to: .github/workflows/docs.yml ; site source lives in website/.
 # One-time (OPTIONAL — only if you want the branch SERVED): repo Settings → Pages →
-# Source: Deploy from a branch → gh-pages. The workflow only pushes the branch and
+# Historical source mode at implementation time: branch serving. The workflow only pushes the branch and
 # works identically with Pages on or off.
 #
 # CUSTOMIZE:
@@ -544,7 +550,7 @@ jobs:
 
 (The kit is standalone — one job is acceptable here; the kit's threat model accepts consumer code = your own repo. The engine keeps the two-job split.)
 
-- [ ] **Step 3: `starter/README.md`:** update the docs-site row in "What to copy where" (copy set: `docs-site/docs.yml` → `.github/workflows/docs.yml`; `zensical.toml`, `requirements.txt`, `docs/` → `website/`); rewrite the "Docs-site scaffold" section (Zensical: built-in search + Mermaid, versioning via mike onto gh-pages — latest alias at root, `dev` from main; pydoc-markdown block for Python repos; gitignore `website/site`); one-time setup step 3 becomes "**Pages (optional, docs sites only):** Settings → Pages → Source: Deploy from a branch → `gh-pages` — flip on/off anytime; the workflow pushes the branch either way"; update "Conventions baked in" bullet "Docs are Docusaurus everywhere" → "Docs are Zensical everywhere (2026-07-11 decision, supersedes Docusaurus-everywhere); repos on Docusaurus/mkdocs convert during migration"; append a `### Migrating a Docusaurus docs site` subsection: delete `website/{package.json,package-lock.json,docusaurus.config.js,sidebars.js,.npmrc,src}`, keep `website/docs/`, add `zensical.toml` + `requirements.txt` from the kit, swap `docs.yml`, delete `versioned_docs/ versioned_sidebars/ versions.json` (history now lives on gh-pages), flip Pages source if serving, then `mike deploy --push <current-release> latest && mike set-default --push latest && mike deploy --push dev`.
+- [ ] **Step 3: `starter/README.md`:** update the docs-site row in "What to copy where" (copy set: `docs-site/docs.yml` → `.github/workflows/docs.yml`; `zensical.toml`, `requirements.txt`, `docs/` → `website/`); rewrite the "Docs-site scaffold" section (Zensical: built-in search + Mermaid, versioning via mike onto gh-pages — latest alias at root, `dev` from main; pydoc-markdown block for Python repos; gitignore `website/site`); at implementation time the optional Pages setup used branch serving (superseded in 2026-07-12 by GitHub Actions); update the old single-stack docs bullet to the Zensical decision; append a `### Migrating a Docusaurus docs site` subsection with the corresponding source cleanup and mike migration commands.
 - [ ] **Step 4: Prove the scaffold builds:** `cd starter/docs-site && PATH=<envbin>:$PATH python3 -m pip install -r requirements.txt --quiet && python3 -m zensical build` (or the `zensical` console script) → build succeeds into `site/`; add a `\`\`\`mermaid` block to a scratch copy of `docs/index.md` and rebuild to confirm Mermaid renders (inspect the emitted HTML for a mermaid container). Delete `site/` afterwards.
 - [ ] **Step 5: Commit** — `git add -A starter && git commit -m "feat(starter): docs-site scaffold is Zensical + mike (branch deploy, optional Pages)"`
 

@@ -92,6 +92,21 @@ aviato onboard amattas/example --profile python-library --pin 1.2.3 --open-pr  #
 aviato provision amattas/example --profile node-service --pin 1.2.3
 ```
 
+Local mutation is always explicit. `onboard` plans by default; `--write` applies
+the plan, `--allow-dirty` acknowledges a non-clean worktree, and
+`--migrate-profile` authorizes changing an existing declaration's stable profile
+identity. Repeat `--var KEY=VALUE` for non-secret profile variables. Provisioning
+is private by default; add `--public` only when the new repository is intended to
+be public. `--override-version-pin` is the exceptional recovery switch for a
+recorded-pin mismatch; ordinary pin movement uses `aviato repin`.
+
+```bash
+aviato onboard /path/to/repo --profile python-service --pin 1.2.3 --docs --var serve-pages=true --write
+aviato onboard /path/to/repo --profile python-service --pin 1.2.3 --migrate-profile --allow-dirty --write
+aviato provision OWNER/REPO --profile node-service --pin 1.2.3 --var project-name=app --var language-variant=typescript --public
+aviato sync /path/to/repo --override-version-pin
+```
+
 `--docs` on `onboard`/`provision` composes the opt-in docs deploy.
 
 Fresh writes and provisioning refuse to invent a default pin. The requested pin
@@ -118,6 +133,70 @@ aviato bump-version 1.3.0 /path/to/consumer  # write the version into version-so
 aviato is-highest 1.2.3 1.0.0 1.2.3          # exit 0 iff arg1 is the highest release among the rest
 aviato lint-actions PATH                     # supply-chain pinning gate (zizmor + fail-closed curl|bash)
 aviato validate                              # validate this repository's policy infrastructure (source checkout only)
+```
+
+`scan` is read-only unless `--fix` is supplied; `--fix` opens managed-file
+proposals and `--audit` also reports the open settings-drift issue. `offboard
+--write` removes Aviato's declaration/management state but preserves managed
+files unless `--delete-files` is also supplied. If `doctor` reports missing or
+corrupt seed integrity state, inspect the files first, then explicitly accept the
+current seed-once contents as the new baseline:
+
+```bash
+aviato scan /path/to/fleet --fix --audit
+aviato offboard /path/to/consumer --write --delete-files
+aviato sync /path/to/consumer --rebaseline-seeds
+```
+
+### Operator setup and live verification
+
+Repository and service controls are deliberately operator-run. Apply the full
+rulesets first; on GitHub plans that do not support tag metadata restrictions,
+the command reports a loud degraded posture while retaining tag deletion and
+non-fast-forward protection. Any unrelated API failure remains fatal.
+
+```bash
+aviato apply-rulesets OWNER/REPO --apply --profile PROFILE
+gh api --paginate repos/OWNER/REPO/rulesets
+gh api --method PUT repos/OWNER/REPO/automated-security-fixes
+```
+
+For PyPI or TestPyPI Trusted Publishing, register the consumer repository's
+`.github/workflows/aviato-ci.yml` and protected `pypi` environment with the
+project. The publishing job must remain in that consumer workflow so its OIDC
+identity matches the registration; do not fall back to an API token.
+
+```bash
+# protection.json must name at least one required reviewer; an empty list is rejected at deploy time.
+gh api --method PUT repos/OWNER/REPO/environments/pypi --input protection.json
+gh api repos/OWNER/REPO/environments/pypi
+```
+
+In the PyPI/TestPyPI project UI, enter exactly: owner `OWNER`, repository
+`REPO`, workflow `aviato-ci.yml`, environment `pypi`. Registration is an
+out-of-band service operation; Aviato never stores a publishing credential.
+
+Docs are always versioned onto `gh-pages` when `docs: true`. To serve them, set
+the non-secret profile variable `serve-pages: true`, configure Pages for the
+custom workflow build type, and verify the same release run contains a successful
+`deploy-pages` job:
+
+```bash
+gh api --method PUT repos/OWNER/REPO/pages -f build_type=workflow
+gh api repos/OWNER/REPO/pages
+gh run list --repo OWNER/REPO --limit 20
+```
+
+Before treating a rollout as live-verified, run the local gate and inspect the
+exact external evidence (PR check/status SHA, full ruleset payloads, open CodeQL
+alerts, package index entry, Pages URL, and App Store receipt release asset):
+
+```bash
+AVIATO_STRICT_TOOLS=1 ./scripts/validate.sh
+aviato doctor .
+gh api --paginate repos/OWNER/REPO/code-scanning/alerts -f state=open -f tool_name=CodeQL --method GET
+gh pr view PR_NUMBER --repo OWNER/REPO --json mergeable,mergeStateStatus,statusCheckRollup
+gh release view RELEASE_TAG --repo OWNER/REPO --json url,assets
 ```
 
 The legacy script names still work:

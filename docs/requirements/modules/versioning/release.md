@@ -57,6 +57,6 @@ flowchart TD
     Min --> D
     Pat --> D
     D --> E["Produce release (version bump · changelog · tag)"]
-    E --> F["Advance floating major reference UNCONDITIONALLY"]
+    E --> F["Advance floating major reference only if highest in major line (§8.14)"]
     F --> G["Done"]
 ```

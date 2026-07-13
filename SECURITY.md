@@ -98,6 +98,37 @@ Deploys consume the release gate's **validated commit SHA** — never the mutabl
 tag — and re-verify the tag against it immediately before publishing (C12-W2).
 See `reusable-release.yml` / `reusable-release-gate.yml`.
 
+PyPI is a deliberate identity exception to cross-repository reuse: the reusable
+workflow builds, audits, and hands off a vetted artifact, while the generated
+consumer-local `.github/workflows/aviato-ci.yml` performs OIDC publishing inside
+the protected `pypi` environment. PyPI therefore sees the registered consumer
+workflow identity in `job_workflow_ref`; API-token fallback is not supported.
+
+### Security evidence and protected settings
+
+Security analysis resolves one explicit target ref to one commit SHA. Checkout,
+CodeQL analysis, SARIF upload, release gating, and heartbeat evidence all name
+that same immutable commit. The workflow actively queries CodeQL results and
+fails on high or critical findings; the branch ruleset also requires CodeQL at
+high-or-higher severity. Dispatch verification is bridged to the release PR head
+as the exact required status contexts, with no ruleset bypass actor.
+
+Ruleset capability fallback is intentionally narrow. Only a GitHub 422 response
+that identifies the unsupported tag metadata-pattern rule may retry without that
+single rule, and the resulting repository is reported as degraded. Tag deletion
+and non-fast-forward protection remain. Ambiguous or unrelated failures never
+become warnings.
+
+Docs serving uses Pages Actions in the same release run. The read-only build
+exports the exact versioned branch tree; a no-consumer-code deploy job alone has
+`pages: write` and OIDC. `serve-pages=true` requires Pages
+`build_type=workflow`; the archival `gh-pages` push is not treated as a deploy
+trigger.
+
+Profile continuity is bound to the declaration's persisted immutable
+`profile-identity`, not a hash of evolvable profile contents. Legacy identity
+migration is explicit, pin-scoped, and refuses dirty/unrecognized targets.
+
 ## Residual, documented scopes
 
 - The §8.15 secret guard is **type/name-based**: it blocks variables declared

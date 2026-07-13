@@ -6,8 +6,11 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- [med] `persist-credentials: false` is still missing on two non-pushing checkouts (all others fixed): reusable-consumer-automation.yml:73 has no `with:` clause at all (defaults to persist — and this job pip-installs Aviato with `contents: write`), and reusable-release-gate.yml:56-59 has a `with:` block (fetch-depth/fetch-tags) but no `persist-credentials: false`. Add to both. — FINDINGS #6 (narrowed) · .github/workflows/reusable-consumer-automation.yml:73; reusable-release-gate.yml:56-59
-- [med] SECURITY.md now documents `AVIATO_SETTINGS_TOKEN`, but reusable-consumer-automation.yml:6 still carries the false header comment "no stored secret (platform token only, §6.6)" while lines 26-34 of the same file define the settings-token secret. Fix the header comment. — FINDINGS #60 (narrowed) · .github/workflows/reusable-consumer-automation.yml:6,26-34
+- (none)
+
+## Resolved by 2026-07-12 hardening plan
+
+- Non-pushing checkouts do not persist credentials, and consumer-automation documentation accurately describes the optional settings-read token.
 
 ## Settled — do not reopen
 

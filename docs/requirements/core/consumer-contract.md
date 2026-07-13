@@ -38,11 +38,14 @@ surface, specified normatively below.
 
 - A managed file's **first non-blank line** is a marker using the file's native
   comment syntax, of the canonical form:
-  `aviato:managed profile=<name> version=<pin> hash=<content-hash>`
-  (e.g. `# aviato:managed profile=python-library version=1 hash=…` for
+  `aviato:managed profile=<name> version=<pin> hash=<content-hash> inputs=<input-hash>`
+  (e.g. `# aviato:managed profile=python-library version=1 hash=… inputs=…` for
   hash-comment files; the equivalent block/line comment for other syntaxes).
-- The marker records **profile**, **version**, and a **content-hash** of the
-  rendered body (excluding the marker line) for drift comparison (§5.5).
+- The marker records **profile**, **version**, a **content-hash** of the rendered
+  body (excluding the marker line), and an **input-hash** of canonical resolved
+  non-secret variables. Drift therefore detects a changed render input even when
+  the old body happens to remain byte-identical (§5.5). Legacy markers without
+  `inputs` are readable for migration but are rewritten to the canonical form.
 - A line that contains the `aviato:managed` token but does not parse to this exact
   grammar is **malformed** → treated per §5.4 (dirty-drift; never silently
   overwritten).
@@ -52,16 +55,22 @@ surface, specified normatively below.
 ### 6.3 Non-annotatable & operator-owned files (seed-once)
 
 Files that cannot carry an in-file marker (JSON-family configs, legal text such
-as LICENSE, lockfiles, binaries) and operator-owned source (container build
-definitions, application entrypoints) are **seed-once**: the scaffolder writes
-them only when **absent** and **never overwrites them**. After seeding, the
-operator owns them, and they are **excluded from drift *remediation*** (Aviato
+as LICENSE, lockfiles, binaries) and explicitly configured operator-owned source
+templates are **seed-once**: the scaffolder writes them only when **absent** and
+**never overwrites them**. Container build definitions are a separate
+operator-provided prerequisite: Aviato probes them but never seeds them. After
+seeding, the operator owns the seed-once files, and they are **excluded from drift
+*remediation*** (Aviato
 never regenerates or clobbers them). However, at seed time the scaffolder
 **records a content-hash for each seeded file in a report-only sidecar**;
 diagnosis (§5.4) compares the live file to that recorded hash and **reports**
 divergence — **report-only, never an overwrite** — so security-relevant seed-once
-files (e.g. Dockerfiles, entrypoints) are not invisible to integrity checks. The
-sidecar is advisory: it gives tamper *visibility* without fighting the required
+files are not invisible to integrity checks. The
+sidecar is report-only, but its state is fail-closed: missing, malformed, duplicate-key,
+or invalid-hash content is **unknown integrity**, never silently interpreted as a
+clean baseline. After inspection, only the explicit operator command `aviato sync
+<path> --rebaseline-seeds` may replace the sidecar with hashes of the current
+resolved seed set. This gives tamper *visibility* without fighting the required
 operator edits that make these files operator-owned. (This replaces the earlier
 "no sidecar at all" stance, which left these files with zero integrity tracking.)
 

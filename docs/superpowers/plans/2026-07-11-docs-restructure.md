@@ -1,5 +1,10 @@
 # Docs Restructure + docs-structure Skill Implementation Plan
 
+**STATUS: IMPLEMENTED**
+
+> Historical implementation record. Later Zensical and 2026-07-12 hardening
+> work supersedes any stack or operator-control wording preserved in its steps.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Split `REQUIREMENTS.md` and `ARCHITECTURE.md` into a per-module `docs/` tree with a guarded § index, seed per-module backlogs from the findings docs, and ship a reusable `docs-structure` skill in the starter kit.
@@ -530,7 +535,7 @@ masters. These decisions are normative for the kit and its consumers.
   workflows exact-pinned. Dependabot bumps weekly.
 - Container releases are multi-arch (amd64 + arm64 on native runners); each arch
   scanned before its bytes are pushed, then a manifest ties them together.
-- Docs are Docusaurus everywhere (no mkdocs flavor); docs deploy on main pushes;
+- At the time, docs used the single pre-Zensical stack (no mkdocs flavor); docs deploy on main pushes;
   native versioning (latest at root, main at `/dev`).
 - Learnings from consumer repos are backported to the kit masters.
 ```
@@ -546,7 +551,7 @@ masters. These decisions are normative for the kit and its consumers.
 
 ## Settled — do not reopen
 
-- Docusaurus everywhere; no mkdocs flavor (OVERLAY G1, operator decision).
+- One docs stack everywhere; no mkdocs flavor (historical OVERLAY G1 decision, since superseded by Zensical).
 - Multi-arch container builds REQUIRED — amd64+arm64 native-runner matrix (G2).
 - No infra/terraform profile (G3, operator decision).
 ```

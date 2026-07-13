@@ -20,18 +20,22 @@ Reusable workflows live in `.github/workflows` and are consumed through
 - `reusable-docker-ghcr.yml` builds and Trivy-scans OCI archives, then promotes
   the exact scanned archives to GHCR by digest — no rebuild between scan and
   push. The publish job runs in a deployment environment (default `ghcr`).
-- `reusable-pypi-publish.yml` publishes Python packages through PyPI trusted
-  publishing; the publish job runs in a deployment environment (default
-  `pypi`).
+- `reusable-pypi-publish.yml` is the read-only build/audit/artifact producer.
+  The generated consumer-local `aviato-ci.yml` owns the protected `pypi` job and
+  PyPI action so its OIDC identity matches that consumer's Trusted Publisher
+  registration.
 - `reusable-docs-pages.yml` installs the pinned Zensical + mike-fork toolchain,
   emits language docs, and versions the site onto a docs branch (default
   `gh-pages`) via mike; a separate no-consumer-code push job (C12-W4) fast-
   forward-pushes the bundle handoff. Its `docs-retention` input defaults to 0,
-  which keeps every released version's docs. Pages serving of that branch is a
-  separate, optional operator toggle.
+  which keeps every released version's docs. With `serve-pages=true`, that same
+  run uploads the exact branch tree and a no-consumer-code job deploys it with
+  Pages Actions; Pages must use `build_type=workflow`.
 - `reusable-app-store-connect.yml` archives, signs, exports, and uploads Apple
   app builds to App Store Connect.
-- `reusable-security-baseline.yml` provides CodeQL and dependency-review gates.
+- `reusable-security-baseline.yml` resolves one target ref/SHA, checks out and
+  analyzes that exact commit, binds SARIF/heartbeat evidence to it, and fails on
+  open CodeQL results at high or critical severity.
 - `reusable-release.yml` derives the next version from Conventional Commits and
   cuts the release (release PR, then tag + GitHub release), split into a
   read-only derive job and a write release job.
@@ -39,6 +43,9 @@ Reusable workflows live in `.github/workflows` and are consumed through
   publishing workflows proceed and exports the validated commit as a
   `gated-sha` output; deploy workflows check out that exact commit — never the
   mutable tag — and re-verify the tag still points at it before publishing.
+- Generated callers include a dispatch-only, no-checkout status bridge that
+  publishes the exact required CI/security/common-lint contexts onto a release
+  PR head SHA, allowing branch rulesets to remain enforced without bypasses.
 - `reusable-consumer-automation.yml` runs the scheduled drift report: it opens
   file-drift proposals and files settings-drift tracking issues, and never
   mutates protected settings.
@@ -89,12 +96,18 @@ Rulesets are applied by an operator command. The library may provide templates
 and rendering logic, but protected settings are not silently mutated by
 unattended automation.
 
-The near-term shape is:
+The implemented shape is:
 
 - `aviato/library/policy.yml` owns policy constants such as the release tag pattern.
 - `aviato/library/rulesets.yml` declares which ruleset templates exist and how policy
   values are injected into them.
 - ruleset JSON files remain readable templates.
+
+Application is capability-aware but fail-closed. A GitHub 422 proven to identify
+only the unsupported tag metadata-pattern rule is retried once without that rule
+and reported as degraded; tag deletion/non-fast-forward protection remains.
+Auth, network, malformed, unrelated 4xx/5xx, and ambiguous 422 failures are never
+downgraded.
 
 ### Core Engine
 
@@ -107,13 +120,22 @@ identifier from `aviato/plugins/denylist.txt`) and checked as part of
 (the §5.10 module-source tree: `aviato/library/<profile>.yaml`, `aviato/library/bundles/`,
 `aviato/library/scaffold/`), loaded by `aviato/core/registry.py`. See `CLAUDE.md` for the module map.
 
+Consumer-tree access is confined at every read, write, replace, and delete; a
+parent escape or symlink traversal is rejected before I/O. Declaration variables
+are centrally type/constraint checked before resolution. Managed markers bind
+both rendered body bytes and canonical non-secret input identity. Seed-once
+state distinguishes ok, missing, and corrupt sidecars and requires the explicit
+`--rebaseline-seeds` recovery command. Profiles carry an immutable manifest
+identity persisted as `profile-identity`, so re-pin continuity does not depend
+on a digest of legitimately evolvable profile contents.
+
 Supply-chain pin enforcement (§11.3) is a plug-in concern. `uses:`/container-image pinning is
 delegated to **zizmor** (a pinned dependency) configured by bundled policy data at
 `aviato/library/zizmor.yml`; `curl|bash` fetch-execute uses a **fail-closed** rule (reject anything
 not provably checksum-verified or piped to an allowlisted data sink — deliberately *not* an
 interpreter enumeration, which fails open). Both run through the one `aviato lint-actions`
 entrypoint, invoked identically by `aviato validate` and by every consumer's `reusable-common-lint`
-CI — a single implementation, no grep mirror.
+CI — one implementation with no independent workflow-side detector.
 
 The Library consumes itself through the internal `aviato-library` profile and a
 declaration that sets `bootstrap: true`. Bootstrap rendering is validated against
@@ -143,7 +165,8 @@ The Python CLI lives in `aviato/`.
   accepts `--docs`.
 - `aviato doctor <path>` classifies a consumer's managed artifacts (§5.4).
 - `aviato sync <path>` materializes managed/seed-once artifacts into a consumer
-  repository from its declaration (§5.3).
+  repository from its declaration (§5.3); `--rebaseline-seeds` is the explicit,
+  inspect-first recovery action for missing/corrupt seed integrity state.
 - `aviato scan <paths...>` diagnoses many local consumer repositories
   (read-only); `--fix` opens managed-file proposals and `--audit` also surfaces
   each repo's open settings-drift tracking issue (§5.11).

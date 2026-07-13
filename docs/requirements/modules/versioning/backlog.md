@@ -6,8 +6,11 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- [low] §5.9 mermaid flowchart still reads "Advance floating major reference UNCONDITIONALLY", contradicting the `is-highest` monotonic guard the workflow applies (reusable-release.yml) and the narrative text (already reworded to "guarded monotonically per §8.14"). Reword the diagram node. — FINDINGS #57 (narrowed) · docs/requirements/modules/versioning/release.md (§5.9 diagram, was REQUIREMENTS.md:821)
-- [med] Release-PR required checks stay BLOCKED under rulesets: GitHub doesn't surface `workflow_dispatch` check runs in a PR's status rollup, so the §5.9 propose-phase dispatch passes on the commit but the ruleset's required contexts read "expected". Durable fix (operator-verified by design — needs a release-capable pass): a caller-side dispatch-only job (`statuses: write`, `if: always()`, `needs` ci/security/common-lint) mirroring each pipeline's `status_check` context as a commit STATUS on `github.sha`, with context strings bound to `pipelines.yaml` by a guard test. Touches 5 wf-* caller bodies + regen + sync + §5.9. Interim mitigation in place: `bypass_actors` (RepositoryRole admin, `pull_request` mode) on the branch ruleset. — FINDINGS F-1
+- (none)
+
+## Resolved by 2026-07-12 hardening plan
+
+- The release diagram states the monotonic major-alias guard, and generated callers bridge dispatch results into PR-visible required status contexts with policy-bound names and no bypass actors.
 
 ## Settled — do not reopen
 
