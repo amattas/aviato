@@ -1,52 +1,68 @@
 ---
 name: docs-structure
-description: Use when creating, organizing, or splitting project documentation — requirements, specs, architecture docs, findings, or backlogs. Establishes the canonical docs/ tree (per-module requirements with per-module backlog.md, architecture docs), Mermaid-only diagrams, and numbering-preservation rules for splitting monoliths that code cites.
+description: Use when creating, organizing, splitting, or reconciling project requirements, specifications, architecture, security documentation, findings, backlogs, traceability, or dated design artifacts.
 ---
 
 # Project docs structure
 
-Organize long-lived project documentation in this tree. It is language- and
-framework-agnostic; adapt module names to the project's domains.
+Use one living home for each kind of project truth:
 
-```
+```text
 docs/
 ├─ requirements/
-│  ├─ README.md              # entry point; section → file index when numbering exists
-│  ├─ core/                  # cross-cutting principles, contracts, definitions of done
-│  └─ modules/
-│     └─ <module>/           # one directory per cohesive capability
-│        ├─ <topic>.md       # small, single-purpose topic files
-│        └─ backlog.md       # the ONLY backlog location for this module
-├─ architecture/
-│  ├─ overview.md            # purpose, boundaries, non-goals
-│  ├─ infrastructure.md      # components and how they're wired
-│  ├─ data-flow.md           # how data moves end to end
-│  └─ data-schema.md         # persistent shapes (when the project has them)
-└─ superpowers/              # dated design artifacts, if the project uses that workflow
-   ├─ specs/YYYY-MM-DD-<topic>-design.md
-   └─ plans/YYYY-MM-DD-<feature>.md
+│  ├─ README.md
+│  ├─ traceability.md
+│  ├─ core/
+│  └─ modules/<module>/{<topic>.md,backlog.md}
+├─ specifications/
+│  ├─ README.md
+│  ├─ core/
+│  └─ modules/<module>/<topic>.md
+├─ architecture/{overview.md,infrastructure.md,data-flow.md,data-schema.md,security.md}
+├─ security/{threat-model.md,controls.md}
+└─ superpowers/{specs,plans}/
 ```
+
+Adapt module names and omit architecture files that do not apply.
+
+## Ownership
+
+| Location | Owns |
+|---|---|
+| `requirements/` | What must be true and why: stable IDs, scope, constraints, acceptance criteria |
+| `specifications/` | Precise testable behavior: interfaces, schemas, workflows, state transitions, errors, compatibility |
+| `architecture/` | Current components, boundaries, dependencies, deployment, and data flow |
+| `security/` | Threats, assets, actors, trust boundaries, mitigations, controls, assumptions, residual risks |
+| module `backlog.md` | Unresolved work and settled decisions only |
+| `requirements/traceability.md` | Requirement/threat to specification, implementation, and verification evidence |
+| `superpowers/` | Temporary dated design/execution artifacts, never the system of record |
+
+Do not invent parallel names such as `contracts/`, a root `BACKLOG.md`, or a
+completed-work archive. Put API contracts in specifications, security risks in
+the threat model, and open work in its owning module backlog.
 
 ## Rules
 
-1. **Module = cohesive capability.** Topics are small, single-purpose files.
-   Families (languages, deployment targets, providers) become subdirectories
-   under their module (e.g. `languages/python/`), each with its own topic
-   files and `backlog.md`.
-2. **Backlogs live per module.** Every module directory carries `backlog.md`
-   with `## Open` and `## Settled — do not reopen` sections. Never create
-   root-level findings/TODO monoliths; a new finding goes straight into the
-   owning module's backlog. Entry format:
-   `[severity] summary — source · file:line pointer`. Settled entries record
-   deliberate decisions so future reviews don't reopen them.
-3. **Diagrams are Mermaid, in the markdown.** Every diagram is a ```mermaid
-   fenced block — never a committed image or binary, never ASCII art. Code and
-   config examples remain ordinary fenced code blocks.
-4. **Splitting a monolith that code cites:** preserve section numbering
-   verbatim; never split one numbered subsection across files; maintain a
-   number → file index in `docs/requirements/README.md`; leave the original
-   path as a short pointer stub; add a test that every number cited in code
-   resolves through the index.
-5. **Specs and plans are dated artifacts**, separate from living requirements.
-   Requirements are updated in place; specs/plans are not rewritten to match
-   later reality.
+1. A module is one cohesive capability. Keep topic files small and
+   single-purpose. Families become subdirectories under their module.
+2. Every module backlog has `## Open` and `## Settled — do not reopen`.
+   Remove completed work; Git history and traceability preserve evidence.
+3. Give requirements and threats stable IDs. Maintain the chain
+   `THREAT-* -> SEC-* -> specification -> control/code -> verification` and
+   the equivalent requirement-first chain for non-security work.
+4. Before pruning a plan or stray document, promote every durable requirement,
+   behavior, decision, threat, mitigation, assumption, accepted risk, and open
+   item into its living owner; update traceability; verify links; then delete.
+5. Put diagrams in Mermaid fenced blocks in Markdown. Do not commit diagram
+   images or ASCII art. Keep code/config examples in ordinary fences.
+6. When splitting a document cited by code, preserve section numbering
+   verbatim, never split one numbered subsection, maintain the number-to-file
+   index in `docs/requirements/README.md`, leave a pointer stub at the old path,
+   and test that every citation resolves.
+
+## Common mistakes
+
+- Requirements containing request schemas or algorithms: move those details to specifications.
+- Architecture used as a future-work list: move unresolved work to the owning backlog.
+- `SECURITY.md` as the only threat record: keep public reporting policy there and living analysis under `docs/security/`.
+- Deleting dated plans because implementation landed: promote durable content and update traceability first.
