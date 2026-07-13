@@ -286,6 +286,10 @@ def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
     }
     assert sorted(term for term in required_contract if term not in normalized_exception) == []
 
+    infrastructure = (ROOT / "docs/architecture/infrastructure.md").read_text(encoding="utf-8")
+    normalized_infrastructure = " ".join(infrastructure.split())
+    assert "mandatory once `.github/aviato.yaml` exists" in normalized_infrastructure
+
 
 def test_onboarding_documents_complete_tag_rejection_string_entry_contract() -> None:
     onboarding = (ROOT / "docs/specifications/modules/onboarding/flow.md").read_text(encoding="utf-8")

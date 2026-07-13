@@ -351,6 +351,7 @@ def test_unsupported_tag_metadata_classifier_accepts_correlated_rule_type_reject
         '{"field":"rules/4/type","value":"deletion","code":"unsupported"}]} (HTTP 422)',
         'For rules/2/parameters/pattern, "tag_name_pattern" is not a valid value. (HTTP 422)',
         'For conditions/ref_name, "tag_name_pattern" is unsupported. (HTTP 422)',
+        "tag_name_pattern is valid, but deletion is an unsupported repository rule type (HTTP 422)",
         'gh: Validation Failed (HTTP 422)\n{"message":"Validation Failed","errors":["Invalid rule \'deletion\': "]}',
         "gh: Validation Failed (HTTP 422)\n"
         '{"message":"Validation Failed","errors":["Invalid field \'tag_name_pattern\': "]}',

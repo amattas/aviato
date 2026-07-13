@@ -367,13 +367,23 @@ def _unsupported_tag_metadata_rule(stderr: str) -> bool:
         return False
 
     rejection = r"(?:not\s+(?:a\s+)?(?:valid|supported|permitted)|an?\s+unsupported|unsupported|invalid)"
-    tag = r'["\']?tag_name_pattern["\']?'
+    tag = r'(?<![\w])["\']?tag_name_pattern["\']?(?![\w])'
     repository_rule_type = r"repository\s+rule\s+type"
+    rejection_predicate = rf"(?:is\s+)?{rejection}\b"
+    # The rejection must directly predicate tag_name_pattern. Bounded wildcards here can
+    # accidentally correlate a positive mention of this rule with a different rule's rejection
+    # later in the same error entry, authorizing an unrelated degraded retry.
     exact_type_rejections = (
-        re.compile(rf"{tag}[^\n;]{{0,80}}{rejection}[^\n;]{{0,40}}{repository_rule_type}", re.IGNORECASE),
-        re.compile(rf"{repository_rule_type}[^\n;]{{0,80}}{tag}[^\n;]{{0,40}}{rejection}", re.IGNORECASE),
+        re.compile(
+            rf"(?:rule\s+type\s+)?{tag}\s+{rejection_predicate}\s+{repository_rule_type}\b",
+            re.IGNORECASE,
+        ),
+        re.compile(rf"{repository_rule_type}\s+{tag}\s+{rejection_predicate}", re.IGNORECASE),
     )
-    path_rejection = re.compile(rf"rules/\d+/type\b[^\n;]{{0,80}}{tag}[^\n;]{{0,50}}{rejection}", re.IGNORECASE)
+    path_rejection = re.compile(
+        rf"rules/\d+/type\b[\s,:=-]*{tag}\s+{rejection_predicate}\s+(?:value|{repository_rule_type})\b",
+        re.IGNORECASE,
+    )
     exact_string_rejection = re.compile(
         r'\s*invalid\s+rule\s+["\']tag_name_pattern["\']\s*:\s*',
         re.IGNORECASE,
