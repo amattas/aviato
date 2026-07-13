@@ -5,14 +5,10 @@ scaffold: aviato-library-sc
 settings: baseline
 variables:
   - {name: serve-pages, type: boolean, required: false, default: false}
-  # finding 38: the typing migration is COMPLETE for the package (mypy --strict
-  # aviato is clean); the Library now runs the gate it mandates for consumers,
-  # scoped to the package via typecheck-command (tests are a follow-up).
+  # finding 38: the typing migration is COMPLETE for the package and tests;
+  # the Library now runs the gate it mandates for consumers.
   - {name: run-typecheck, type: string, required: false, default: "true"}
-  # finding 38: the type-check COMMAND is a variable so the Library can scope strict
-  # mypy to its package (tests pending) while consumers keep the strict-everything
-  # default from reusable-python-ci.
-  - {name: typecheck-command, type: string, required: false, default: "python -m mypy --strict ."}
+  - {name: typecheck-command, type: string, required: false, default: "python -m mypy --strict aviato tests"}
   # Self-docs: the API-reference emit command targets the import package.
   - {name: import-name, type: string}
   # seeds the zensical.toml site metadata (seed-once; unset leaves the placeholder)

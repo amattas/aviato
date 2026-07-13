@@ -2,20 +2,26 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
+from typing import TextIO, cast
 
 import pytest
 
 from aviato import github
 from aviato.rulesets import render_all_rulesets
 
+JsonValue = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
+JsonObject = dict[str, JsonValue]
 
-def _tag_ruleset_payload() -> dict:
-    return next(payload for payload in render_all_rulesets() if payload["target"] == "tag")
+
+def _tag_ruleset_payload() -> JsonObject:
+    return cast(JsonObject, next(payload for payload in render_all_rulesets() if payload["target"] == "tag"))
 
 
-def _capture_payload(cmd: list[str]) -> dict:
-    return json.loads(Path(cmd[cmd.index("--input") + 1]).read_text(encoding="utf-8"))
+def _capture_payload(cmd: list[str]) -> JsonObject:
+    return cast(JsonObject, json.loads(Path(cmd[cmd.index("--input") + 1]).read_text(encoding="utf-8")))
 
 
 def test_gh_json_raises_on_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,7 +45,7 @@ def test_gh_json_can_allow_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_codeql_merge_protection_requires_exact_active_branch_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "default_branch", lambda slug: "main")
-    effective = [
+    effective: list[JsonObject] = [
         {"type": "pull_request", "ruleset_source_type": "Repository"},
         {
             "type": "code_scanning",
@@ -49,7 +55,14 @@ def test_codeql_merge_protection_requires_exact_active_branch_threshold(monkeypa
     monkeypatch.setattr(github, "gh_json_paginated", lambda endpoint, default=None: effective)
     assert github.codeql_merge_protection_present("o/r") is True
 
-    effective[1]["parameters"]["code_scanning_tools"][0]["security_alerts_threshold"] = "critical"
+    effective[1] = {
+        "type": "code_scanning",
+        "parameters": {
+            "code_scanning_tools": [
+                {**cast(JsonObject, github.EXPECTED_CODEQL_RULE), "security_alerts_threshold": "critical"}
+            ]
+        },
+    }
     assert github.codeql_merge_protection_present("o/r") is False
 
     effective.pop()
@@ -62,7 +75,7 @@ def test_codeql_merge_protection_reads_effective_nested_default_branch_endpoint(
     monkeypatch.setattr(github, "default_branch", lambda slug: "release/main")
     endpoints: list[str] = []
 
-    def effective(endpoint: str, default=None):
+    def effective(endpoint: str, default: object = None) -> list[JsonObject]:
         endpoints.append(endpoint)
         return [
             {
@@ -121,9 +134,12 @@ def test_gh_json_optional_returns_default_on_genuine_404(monkeypatch: pytest.Mon
 def test_upsert_ruleset_posts_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: [])
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
-    )
+
+    def recording_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(github, "run", recording_run)
     result = github.upsert_ruleset("o/r", {"name": "Common: protect default branch"}, apply=True)
     assert "Created" in result.message
     method = calls[0][calls[0].index("--method") + 1]
@@ -138,9 +154,12 @@ def test_upsert_ruleset_puts_to_existing_id_when_present(monkeypatch: pytest.Mon
         lambda slug: [{"name": "Common: protect default branch", "id": 4242}],
     )
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
-    )
+
+    def recording_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(github, "run", recording_run)
     result = github.upsert_ruleset("o/r", {"name": "Common: protect default branch"}, apply=True)
     assert "Updated" in result.message
     method = calls[0][calls[0].index("--method") + 1]
@@ -152,9 +171,12 @@ def test_upsert_ruleset_matches_by_name_and_target_not_name_alone(monkeypatch: p
     # N1 (cycle 11): a live ruleset that shares a NAME but targets a different ref kind must NOT be
     # updated — that would overwrite the wrong protected resource. The desired payload creates its own.
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
-    )
+
+    def recording_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(github, "run", recording_run)
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: [{"name": "Protect", "target": "tag", "id": 99}])
     result = github.upsert_ruleset("o/r", {"name": "Protect", "target": "branch"}, apply=True)
     assert "Created" in result.message
@@ -182,12 +204,12 @@ def test_upsert_ruleset_requires_name(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize("existing", [[], [{"name": "Common: release tag format", "target": "tag", "id": 42}]])
 def test_upsert_ruleset_retries_precise_unsupported_tag_metadata_422_once(
-    monkeypatch: pytest.MonkeyPatch, existing: list[dict]
+    monkeypatch: pytest.MonkeyPatch, existing: list[JsonObject]
 ) -> None:
     payload = _tag_ruleset_payload()
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: existing)
     calls: list[list[str]] = []
-    submitted: list[dict] = []
+    submitted: list[JsonObject] = []
     payload_paths: list[Path] = []
     payload_modes: list[int] = []
 
@@ -213,7 +235,8 @@ def test_upsert_ruleset_retries_precise_unsupported_tag_metadata_422_once(
     assert len(calls) == 2
     assert [cmd[cmd.index("--method") + 1] for cmd in calls] == (["PUT", "PUT"] if existing else ["POST", "POST"])
     assert submitted[0] == payload
-    assert submitted[1] == {**payload, "rules": [r for r in payload["rules"] if r["type"] != "tag_name_pattern"]}
+    rules = cast(list[JsonObject], payload["rules"])
+    assert submitted[1] == {**payload, "rules": [rule for rule in rules if rule["type"] != "tag_name_pattern"]}
     assert payload_modes == [0o600, 0o600]
     assert not any(path.exists() for path in payload_paths)
 
@@ -277,21 +300,22 @@ def test_upsert_ruleset_removes_temp_file_when_json_serialization_fails(
 ) -> None:
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: [])
     created: list[Path] = []
-    original = github.tempfile.NamedTemporaryFile
+    tempfile_module = tempfile
+    original = cast(Callable[..., TextIO], tempfile_module.NamedTemporaryFile)
 
-    def tracking_tempfile(*args: object, **kwargs: object):
+    def tracking_tempfile(*args: object, **kwargs: object) -> TextIO:
         handle = original(*args, **kwargs)
         created.append(Path(handle.name))
         return handle
 
-    monkeypatch.setattr(github.tempfile, "NamedTemporaryFile", tracking_tempfile)
+    monkeypatch.setattr(tempfile_module, "NamedTemporaryFile", tracking_tempfile)
     monkeypatch.setattr(
         github,
         "run",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("gh must not run after serialization failure")),
     )
     payload = _tag_ruleset_payload()
-    payload["not_json"] = {"a-set"}
+    cast(dict[str, object], payload)["not_json"] = {"a-set"}
 
     with pytest.raises(TypeError, match="JSON serializable"):
         github.upsert_ruleset("o/r", payload, apply=True)
@@ -360,7 +384,7 @@ def test_settings_read_token_scope_is_noop_without_admin_token(monkeypatch: pyte
     assert os.environ["GH_TOKEN"] == "platform-token"
 
 
-def test_pages_build_type_workflow_returns_none_on_404_or_missing_schema(monkeypatch) -> None:
+def test_pages_build_type_workflow_returns_none_on_404_or_missing_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     # R7-3-PAGES-§5.14: a 404 from /pages conflates "off" with "no perms" and "invisible" — the
     # honest mapping is unknown (None), per §5.14 "absence/unreadable reads as broken, not clean".
     # R7-3-PAGES-SCHEMA: a present dict lacking build_type (schema drift) is also unknown, not no.
@@ -374,7 +398,7 @@ def test_pages_build_type_workflow_returns_none_on_404_or_missing_schema(monkeyp
     assert gh.pages_build_type_is_workflow("o/r") is None
 
 
-def test_pages_build_type_workflow_resolves_workflow_vs_legacy(monkeypatch) -> None:
+def test_pages_build_type_workflow_resolves_workflow_vs_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
     # The two determinate cases the API DOES distinguish: Actions-sourced (workflow) vs branch.
     from aviato import github as gh
 
@@ -385,7 +409,9 @@ def test_pages_build_type_workflow_resolves_workflow_vs_legacy(monkeypatch) -> N
 
 
 @pytest.mark.parametrize("build_type", [True, 1, [], {}, "actions", "branch", "WORKFLOW", ""])
-def test_pages_build_type_workflow_returns_none_for_malformed_or_unknown_enum(monkeypatch, build_type) -> None:
+def test_pages_build_type_workflow_returns_none_for_malformed_or_unknown_enum(
+    monkeypatch: pytest.MonkeyPatch, build_type: object
+) -> None:
     from aviato import github as gh
 
     monkeypatch.setattr(gh, "gh_json_optional", lambda *a, **k: {"build_type": build_type})

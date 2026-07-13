@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import yaml
@@ -13,13 +15,14 @@ import aviato.cli as cli
 from aviato.cli import main
 from aviato.core.model import VariableSpec
 from aviato.core.registry import Registry
+from aviato.github_platform import GitHubPlatform
 from aviato.paths import MODULE_SOURCE_ROOT
 
 
 @pytest.fixture(autouse=True)
-def _published_target_registry(monkeypatch: pytest.MonkeyPatch):
+def _published_target_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     @contextmanager
-    def fake_fetch(repository: str, pin: str):  # noqa: ARG001
+    def fake_fetch(repository: str, pin: str) -> Iterator[Registry]:  # noqa: ARG001
         yield Registry(MODULE_SOURCE_ROOT)
 
     monkeypatch.setattr(cli, "fetch_library_registry", fake_fetch)
@@ -243,7 +246,7 @@ def test_repin_open_pr_unknown_seed_integrity_opens_no_proposal(
     )
     proposal_called = False
 
-    def fake_run(cmd, **__):
+    def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         nonlocal clone_path
         if cmd[:3] == ["gh", "repo", "clone"]:
             clone_path = Path(cmd[4])
@@ -251,14 +254,14 @@ def test_repin_open_pr_unknown_seed_integrity_opens_no_proposal(
             (clone_path / ".github" / "aviato.yaml").write_text(original_declaration, encoding="utf-8")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    def fake_proposal(*_args, **_kwargs):
+    def fake_proposal(*_args: object, **_kwargs: object) -> str:
         nonlocal proposal_called
         proposal_called = True
         return "branch"
 
     monkeypatch.setattr(cli, "run", fake_run)
     monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
-    monkeypatch.setattr(cli.GitHubPlatform, "open_worktree_proposal", fake_proposal)
+    monkeypatch.setattr(GitHubPlatform, "open_worktree_proposal", fake_proposal)
 
     rc = main(["repin", "acme/widget", "1.0.0", "--open-pr", "--override-version-pin"])
 
@@ -287,7 +290,7 @@ def test_legacy_sync_then_local_repin_materializes_distinct_target_registry(
     fetched: list[str] = []
 
     @contextmanager
-    def fake_fetch(repository: str, pin: str):  # noqa: ARG001
+    def fake_fetch(repository: str, pin: str) -> Iterator[Registry]:  # noqa: ARG001
         fetched.append(pin)
         yield Registry(MODULE_SOURCE_ROOT if pin == "0" else target)
 
@@ -314,22 +317,22 @@ def test_repin_proposal_materializes_target_registry_body(tmp_path: Path, monkey
     captured: dict[str, str] = {}
 
     @contextmanager
-    def fake_fetch(repository: str, pin: str):  # noqa: ARG001
+    def fake_fetch(repository: str, pin: str) -> Iterator[Registry]:  # noqa: ARG001
         yield Registry(target)
 
-    def fake_run(cmd, **__):
+    def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gh", "repo", "clone"]:
             shutil.copytree(source, Path(cmd[4]), dirs_exist_ok=True)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    def fake_proposal(self, *_args, **_kwargs):  # noqa: ANN001
+    def fake_proposal(self: GitHubPlatform, *_args: object, **_kwargs: object) -> str:
         captured["ruff"] = (self.workdir / "ruff.toml").read_text()
         return "branch"
 
     monkeypatch.setattr(cli, "fetch_library_registry", fake_fetch)
     monkeypatch.setattr(cli, "run", fake_run)
     monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
-    monkeypatch.setattr(cli.GitHubPlatform, "open_worktree_proposal", fake_proposal)
+    monkeypatch.setattr(GitHubPlatform, "open_worktree_proposal", fake_proposal)
 
     assert main(["repin", "acme/widget", "0.1.0", "--open-pr"]) == 0
     assert sentinel.strip() in captured["ruff"]
@@ -338,7 +341,7 @@ def test_repin_proposal_materializes_target_registry_body(tmp_path: Path, monkey
 def test_repin_open_pr_reports_orphaned_overrides_before_blocking_summary(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_run(cmd, **__):
+    def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gh", "repo", "clone"]:
             clone = Path(cmd[4])
             (clone / ".github").mkdir(parents=True)
@@ -389,7 +392,7 @@ def test_offboard_delete_files_removes_managed(tmp_path: Path) -> None:
 def test_offboard_open_pr_opens_reviewable_removal_proposal(monkeypatch: pytest.MonkeyPatch) -> None:
     # §5.13: offboarding opens a REVIEWABLE proposal (PR) capturing the removal, with an
     # explicit §2.13 baseline-removal warning — not just a silent local mutation.
-    def fake_run(cmd, **__):
+    def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
             (dest / ".github").mkdir(parents=True, exist_ok=True)
@@ -402,9 +405,9 @@ def test_offboard_open_pr_opens_reviewable_removal_proposal(monkeypatch: pytest.
             )
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    captured: dict = {}
+    captured: dict[str, object] = {}
 
-    def fake_proposal(self, repo, branch, title, body):  # noqa: ANN001
+    def fake_proposal(self: GitHubPlatform, repo: str, branch: str, title: str, body: str) -> str:
         captured.update(repo=repo, branch=branch, title=title, body=body)
         # the offboard mutations must have already been applied to the worktree
         captured["declaration_gone"] = not (self.workdir / ".github" / "aviato.yaml").exists()
@@ -412,11 +415,12 @@ def test_offboard_open_pr_opens_reviewable_removal_proposal(monkeypatch: pytest.
         return branch
 
     monkeypatch.setattr(cli, "run", fake_run)
-    monkeypatch.setattr(cli.GitHubPlatform, "open_worktree_proposal", fake_proposal)
+    monkeypatch.setattr(GitHubPlatform, "open_worktree_proposal", fake_proposal)
 
     rc = main(["offboard", "acme-org/widget", "--open-pr"])
     assert rc == 0
     assert captured["repo"] == "acme-org/widget"
-    assert "baseline" in captured["body"].lower() and "§2.13" in captured["body"]
+    body = cast(str, captured["body"])
+    assert "baseline" in body.lower() and "§2.13" in body
     assert captured["declaration_gone"] is True
     assert captured["marker_stripped"] is True

@@ -473,7 +473,9 @@ def test_monotonic_alias_timeout_is_one_actionable_error(repo_copy: Path, monkey
     monkeypatch.setattr(validation, "_MONOTONIC_ALIAS_WORKFLOWS", ["starter/docs-site/docs.yml"])
 
     def timeout(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout", 0))
+        timeout_value = kwargs.get("timeout", 0)
+        assert isinstance(timeout_value, int | float)
+        raise subprocess.TimeoutExpired(cmd=str(args[0]), timeout=timeout_value)
 
     monkeypatch.setattr(subprocess, "run", timeout)
     errors: list[str] = []

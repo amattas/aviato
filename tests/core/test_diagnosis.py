@@ -84,7 +84,7 @@ def test_renderer_tracks_unused_optional_variable_and_docs_but_not_pin(tmp_path:
     registry = Registry(MODULE_SOURCE_ROOT)
     base = {"distribution-name": "acme", "import-name": "acme"}
 
-    def editorconfig(*, owner: str, pin: str, docs: bool = False) -> ScaffoldItem:
+    def editorconfig(*, owner: str, pin: str, docs: bool = False) -> _ScaffoldItem:
         items = materialize_items(registry, "python-library", {**base, "owner": owner}, pin=pin, docs=docs)
         return next(item for item in items if item.output == ".editorconfig")
 
@@ -273,9 +273,9 @@ def test_seed_once_rechecks_confinement_at_read_and_final_exists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import aviato.core.diagnosis as diagnosis_module
+    from aviato.core.pathguard import confined_target as original_guard
 
     scaffold(tmp_path, [ScaffoldItem("Dockerfile", "FROM x\n", "#", True)], profile="p", version="v1")
-    original_guard = diagnosis_module.confined_target
     calls: list[str] = []
 
     def tracking_guard(root: Path, relative: str, *, operation: str) -> Path:
@@ -379,7 +379,7 @@ def test_bootstrap_declaration_allowed_in_library(tmp_path: Path) -> None:
     assert report.statuses == {}
 
 
-def test_directory_at_managed_path_classifies_dirty_drift_without_crashing(tmp_path) -> None:
+def test_directory_at_managed_path_classifies_dirty_drift_without_crashing(tmp_path: Path) -> None:
     # R5-3-DIAG-OS: a DIRECTORY (or other unreadable path) at a managed output path raises
     # IsADirectoryError (an OSError, not UnicodeDecodeError); diagnosis must catch it and classify
     # dirty-drift, never leak a raw OSError that would abort a fleet scan.

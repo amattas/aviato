@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import Any, cast
 
 import yaml
 
@@ -26,10 +27,12 @@ _CI_TEXT = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="
 _PYPROJECT = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
 
-def _validate_step() -> dict:
+def _validate_step() -> dict[str, Any]:
     ci = yaml.safe_load(_CI_TEXT)
     steps = ci["jobs"]["validate"]["steps"]
-    return next(s for s in steps if str(s.get("run", "")).strip().startswith("./scripts/validate.sh"))
+    return cast(
+        dict[str, Any], next(s for s in steps if str(s.get("run", "")).strip().startswith("./scripts/validate.sh"))
+    )
 
 
 def test_ci_runs_validate_strict() -> None:

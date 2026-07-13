@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,7 +13,11 @@ from aviato.core.repin import plan_repin
 _DEFAULT_VARS = {"dist": "x"}
 
 
-def _decl(version: str = "v1", variables=None, overrides=None) -> Declaration:
+def _decl(
+    version: str = "v1",
+    variables: dict[str, str] | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> Declaration:
     return Declaration(
         profile="child",
         version=version,

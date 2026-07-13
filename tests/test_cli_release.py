@@ -9,6 +9,7 @@ import venv
 import zipfile
 from email.parser import Parser
 from functools import partial
+from importlib import metadata
 from importlib.metadata import version as distribution_version
 from pathlib import Path
 
@@ -54,7 +55,7 @@ def test_runtime_version_does_not_swallow_metadata_errors(monkeypatch: pytest.Mo
     def fail(_: str) -> str:
         raise RuntimeError("malformed distribution metadata")
 
-    monkeypatch.setattr(aviato.metadata, "version", fail)
+    monkeypatch.setattr(metadata, "version", fail)
 
     with pytest.raises(RuntimeError, match="malformed distribution metadata"):
         aviato._runtime_version()
@@ -62,9 +63,9 @@ def test_runtime_version_does_not_swallow_metadata_errors(monkeypatch: pytest.Mo
 
 def test_runtime_version_falls_back_only_when_distribution_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     def missing(_: str) -> str:
-        raise aviato.metadata.PackageNotFoundError("aviato")
+        raise metadata.PackageNotFoundError("aviato")
 
-    monkeypatch.setattr(aviato.metadata, "version", missing)
+    monkeypatch.setattr(metadata, "version", missing)
     monkeypatch.setattr(aviato, "_source_version", lambda: "2.3.4")
 
     assert aviato._runtime_version() == "2.3.4"
@@ -224,7 +225,7 @@ def test_version_pin_error_checks_all_markers_not_just_first(tmp_path: Path) -> 
     assert err is not None and "999.0.0" in err
 
 
-def test_bump_version_refuses_malformed_and_bare_major(tmp_path, capsys) -> None:
+def test_bump_version_refuses_malformed_and_bare_major(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # finding 21: a garbage version was previously spliced into manifests and reported
     # as success; a bare-major pin (a Library ref, not a release version) is refused too.
     from aviato.cli import main
@@ -238,7 +239,7 @@ def test_bump_version_refuses_malformed_and_bare_major(tmp_path, capsys) -> None
     assert "not a release version" in capsys.readouterr().err
 
 
-def test_bump_version_accepts_policy_valid_prereleases(tmp_path, capsys) -> None:
+def test_bump_version_accepts_policy_valid_prereleases(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # second-review fix: X.Y.Z-alphaN/-betaN are policy-valid bump targets and must
     # pass the input gate (the failure here is the missing declaration, proving the
     # version validation accepted it); leading-zero components are rejected (finding 47).

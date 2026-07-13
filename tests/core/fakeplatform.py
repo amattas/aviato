@@ -42,7 +42,7 @@ class FakePlatform:
         # R5-4: desired security toggles apply_settings should report as SKIPPED (feature
         # unavailable). Empty by default → a clean, full apply.
         self.skipped_on_apply: list[str] = []
-        self.calls: list[tuple[str, tuple]] = []
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
     def read_settings(self, repo: str) -> dict[str, Any]:
         return dict(self.settings)

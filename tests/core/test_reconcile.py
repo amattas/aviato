@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import dataclasses
+from typing import Any, cast
+
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from aviato.core.reconcile import ReconcileState, reconcile_decision
 from aviato.core.settingsdrift import classify_settings, diff_identity
@@ -9,8 +12,8 @@ from aviato.core.settingsdrift import classify_settings, diff_identity
 _DEFAULT_DIFF_ID = diff_identity(classify_settings(desired={"required_reviews": 2}, live={"required_reviews": 1}))
 
 
-def _state(**overrides) -> ReconcileState:
-    base = dict(
+def _state(**overrides: object) -> ReconcileState:
+    base = ReconcileState(
         issue_open=True,
         consent_present=True,
         consent_diff_id=_DEFAULT_DIFF_ID,
@@ -26,8 +29,7 @@ def _state(**overrides) -> ReconcileState:
         pin="v1",
         recorded_version="1.0.0",
     )
-    base.update(overrides)
-    return ReconcileState(**base)
+    return dataclasses.replace(base, **cast(dict[str, Any], overrides))
 
 
 def test_gate_binds_to_recomputed_diff_id_not_state_field() -> None:

@@ -19,7 +19,7 @@ _OUTPUTS = (
     Path("starter/docs-site/requirements.txt"),
     Path("aviato/library/scaffold/files/docs-requirements.txt.txt"),
 )
-_INPUT_HASH = "8d84e9eca0fb633c0a59990180868f8e60f753626eeead4030e43c3faaa6ee5d"
+_INPUT_HASH = "c87eec0cc6164b4a0fb591c6236ef87133960db010cc737ecb6d7c9680304085"
 
 
 def _requirements(pins: dict[str, str], *, starter: bool) -> str:

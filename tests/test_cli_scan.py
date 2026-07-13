@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 from aviato import cli
 from aviato.cli import _scan_has_file_drift, main
+from aviato.core.diagnosis import DiagnosisReport, diagnose
 from aviato.core.errors import AviatoError
-from aviato.core.file_drift_flow import _PROPOSABLE
+from aviato.core.file_drift_flow import _PROPOSABLE, FileDriftOutcome
+from aviato.core.fleet import RepoScan
 from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
 from aviato.core.scaffold import scaffold
+from aviato.github_platform import GitHubPlatform
 
 ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 
@@ -110,18 +115,18 @@ def test_scan_surfaces_seed_once_divergence(tmp_path: Path, capsys: pytest.Captu
 def test_scan_fix_gate_matches_proposable_statuses(status: str, fixable: bool) -> None:
     # The --fix gate must align with file_drift_flow._PROPOSABLE; a stale "drift" literal
     # here previously made --fix silently no-op on mergeable-drift (the common drift case).
-    assert _scan_has_file_drift(SimpleNamespace(statuses={"some/file": status})) is fixable
+    assert _scan_has_file_drift(RepoScan("repo", statuses={"some/file": status})) is fixable
 
 
 def test_scan_fix_gate_empty_is_not_fixable() -> None:
-    assert _scan_has_file_drift(SimpleNamespace(statuses={})) is False
+    assert _scan_has_file_drift(RepoScan("repo")) is False
 
 
 def test_scan_fix_gate_agrees_with_proposable_set() -> None:
     # The gate must agree with file_drift_flow._PROPOSABLE for EVERY status, so a future
     # proposable status added there cannot silently diverge from what --fix acts on.
     for status in (*_PROPOSABLE, "dirty-drift", "clean"):
-        assert _scan_has_file_drift(SimpleNamespace(statuses={"f": status})) is (status in _PROPOSABLE)
+        assert _scan_has_file_drift(RepoScan("repo", statuses={"f": status})) is (status in _PROPOSABLE)
 
 
 def test_scan_fix_proposes_from_clone_not_operator_working_tree(
@@ -146,25 +151,25 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
 
     monkeypatch.setattr(cli, "_version_pin_error", lambda *a, **k: None)  # not under test here
     monkeypatch.setattr(cli, "remote_url", lambda root: "https://github.com/o/r.git")
-    original_diagnose = cli.diagnose
+    original_diagnose = cast(Callable[..., DiagnosisReport], diagnose)
     diagnosis_calls: list[dict[str, object]] = []
 
-    def capture_diagnose(*args, **kwargs):
+    def capture_diagnose(*args: object, **kwargs: object) -> DiagnosisReport:
         diagnosis_calls.append(kwargs)
         return original_diagnose(*args, **kwargs)
 
     monkeypatch.setattr(cli, "diagnose", capture_diagnose)
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
         assert "clone" in cmd, f"scan --fix ran an unexpected command in/near the operator tree: {cmd}"
         Path(cmd[-1]).mkdir(parents=True, exist_ok=True)  # stand in for the clone
         return SimpleNamespace(stdout="", stderr="", returncode=0)
 
     captured: dict[str, str] = {}
 
-    def fake_run_file_drift(platform, **kwargs):
+    def fake_run_file_drift(platform: GitHubPlatform, **kwargs: object) -> FileDriftOutcome:
         captured["workdir"] = str(platform.workdir)
-        return SimpleNamespace(proposed=[".editorconfig"], dirty=[])
+        return FileDriftOutcome(proposed=[".editorconfig"], dirty=[])
 
     monkeypatch.setattr(cli, "run", fake_run)
     monkeypatch.setattr(cli, "run_file_drift", fake_run_file_drift)
@@ -174,7 +179,7 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
     # The proposal platform's workdir is the temp clone, NOT the operator's repo.
     assert captured["workdir"] != str(consumer)
     assert "aviato-scanfix-" in captured["workdir"]
-    expected_inputs = cli._diagnosis_probe_inputs(cli.Registry(cli.MODULE_SOURCE_ROOT), "python-library")
+    expected_inputs = cli._diagnosis_probe_inputs(Registry(MODULE_SOURCE_ROOT), "python-library")
     assert {key: diagnosis_calls[-1][key] for key in expected_inputs} == expected_inputs
 
 

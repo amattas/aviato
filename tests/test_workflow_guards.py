@@ -4,6 +4,8 @@ import json
 import os
 import re
 import subprocess
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -16,13 +18,22 @@ from aviato.validation import _TEMPLATE_EXAMPLE_VARS
 
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 SCAFFOLD_FILES = REPO_ROOT / "aviato" / "library" / "scaffold" / "files"
+JsonDict = dict[str, Any]
 
 
-def _load(name: str) -> dict:
-    return yaml.safe_load((WORKFLOWS / name).read_text())
+def _load(name: str) -> JsonDict:
+    loaded = yaml.safe_load((WORKFLOWS / name).read_text())
+    assert isinstance(loaded, dict)
+    return loaded
 
 
-def _rendered_python_library_workflow() -> dict:
+def _on(workflow: JsonDict) -> JsonDict:
+    block = workflow.get("on") or cast(dict[object, Any], workflow).get(True)
+    assert isinstance(block, dict)
+    return block
+
+
+def _rendered_python_library_workflow() -> JsonDict:
     artifacts = resolved_artifacts(
         Registry(MODULE_SOURCE_ROOT),
         "python-library",
@@ -31,7 +42,9 @@ def _rendered_python_library_workflow() -> dict:
         docs=False,
     )
     body = next(a.body for a in artifacts if a.output == ".github/workflows/aviato-ci.yml")
-    return yaml.safe_load(body)
+    loaded = yaml.safe_load(body)
+    assert isinstance(loaded, dict)
+    return loaded
 
 
 def test_serializing_workflows_declare_per_repo_concurrency() -> None:
@@ -157,11 +170,11 @@ def test_deploys_consume_the_gated_sha() -> None:
     # not the mutable tag — checkout by gated-sha plus a pre-publish tag→gated-sha
     # re-verify, so a tag force-moved between gate and publish aborts the deploy.
     gate = _load("reusable-release-gate.yml")
-    gate_on = gate.get("on") or gate.get(True)
+    gate_on = _on(gate)
     assert "gated-sha" in (gate_on["workflow_call"].get("outputs") or {}), "gate must export gated-sha"
     for name in _DEPLOY_WORKFLOWS:
         wf = _load(name)
-        on_block = wf.get("on") or wf.get(True)
+        on_block = _on(wf)
         inputs = on_block["workflow_call"]["inputs"]
         assert inputs.get("gated-sha", {}).get("required") is True, f"{name} must require gated-sha"
         body = (WORKFLOWS / name).read_text(encoding="utf-8")
@@ -181,12 +194,12 @@ def test_callers_pass_gated_sha_to_deploys() -> None:
         assert threaded, f"{caller.name} wires a deploy without threading the gated SHA (C12-W2)"
 
 
-def _release_gate_step(name: str) -> dict:
+def _release_gate_step(name: str) -> JsonDict:
     workflow = _load("reusable-release-gate.yml")
     return next(step for step in workflow["jobs"]["gate"]["steps"] if step.get("name") == name)
 
 
-def test_release_gate_resolves_release_tag_commit_for_descendant_event_sha(tmp_path) -> None:
+def test_release_gate_resolves_release_tag_commit_for_descendant_event_sha(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     remote = tmp_path / "remote.git"
     repository.mkdir()
@@ -275,7 +288,7 @@ def test_language_ci_contract_parity() -> None:
     }
     for name in ("reusable-python-ci.yml", "reusable-node-ci.yml", "reusable-swift-ci.yml"):
         wf = _load(name)
-        on_block = wf.get("on") or wf.get(True)
+        on_block = _on(wf)
         inputs = set(on_block["workflow_call"]["inputs"])
         missing = expected - inputs
         assert not missing, f"{name} missing shared-contract inputs: {sorted(missing)}"
@@ -285,7 +298,7 @@ def test_node_ci_gates_fail_loud_without_if_present() -> None:
     # finding 29: a consumer deleting the lint/test script from the operator-owned
     # manifest must FAIL the verify gate, not silently skip it.
     wf = _load("reusable-node-ci.yml")
-    on_block = wf.get("on") or wf.get(True)
+    on_block = _on(wf)
     inputs = on_block["workflow_call"]["inputs"]
     assert inputs["lint-command"]["default"] == "npm run lint"
     assert inputs["test-command"]["default"] == "npm test"
@@ -297,7 +310,7 @@ def test_docs_retention_defaults_to_keep_all() -> None:
     # rather than special-casing cap<=0 inside the python pruner — 0 (the default) means
     # the prune step never runs at all, so no version is ever removed.
     wf = _load("reusable-docs-pages.yml")
-    on_block = wf.get("on") or wf.get(True)
+    on_block = _on(wf)
     assert on_block["workflow_call"]["inputs"]["docs-retention"]["default"] == 0
     body = (WORKFLOWS / "reusable-docs-pages.yml").read_text(encoding="utf-8")
     assert 'if [ "${RETENTION}" -gt 0 ]' in body, "prune snippet must be gated on RETENTION -gt 0"
@@ -308,7 +321,7 @@ def test_docs_retention_defaults_to_keep_all() -> None:
 
 def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> None:
     wf = _load("reusable-docs-pages.yml")
-    on_block = wf.get("on") or wf.get(True)
+    on_block = _on(wf)
     serve = on_block["workflow_call"]["inputs"]["serve-pages"]
     assert serve["required"] is False
     assert serve["type"] == "boolean"
@@ -379,7 +392,7 @@ def test_starter_docs_deploys_exact_branch_artifact_after_push() -> None:
     assert "actions/upload-pages-artifact@" in body
 
 
-def test_starter_invalid_tag_skips_every_publish_stage(tmp_path) -> None:
+def test_starter_invalid_tag_skips_every_publish_stage(tmp_path: Path) -> None:
     starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
     build = starter["jobs"]["build"]
     assert build["outputs"]["publish"] == "${{ steps.release.outputs.publish }}"
@@ -408,7 +421,7 @@ def test_starter_invalid_tag_skips_every_publish_stage(tmp_path) -> None:
     ("ref_type", "ref_name", "expected"),
     [("tag", "1.2.3", ["publish=true", "tag=1.2.3"]), ("branch", "main", ["publish=true", "tag="])],
 )
-def test_starter_valid_refs_publish(ref_type: str, ref_name: str, expected: list[str], tmp_path) -> None:
+def test_starter_valid_refs_publish(ref_type: str, ref_name: str, expected: list[str], tmp_path: Path) -> None:
     starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
     release = next(step for step in starter["jobs"]["build"]["steps"] if step.get("id") == "release")
     output = tmp_path / "github-output"
@@ -470,7 +483,7 @@ def test_pypi_reusable_only_builds_vetted_artifact_and_local_caller_publishes() 
 
 def test_pypi_stale_caller_fails_before_build_with_sync_instruction() -> None:
     reusable = _load("reusable-pypi-publish.yml")
-    on_block = reusable.get("on") or reusable.get(True)
+    on_block = _on(reusable)
     marker = on_block["workflow_call"]["inputs"]["consumer-publisher-present"]
     assert marker["required"] is False
     assert marker["type"] == "boolean"
@@ -624,7 +637,7 @@ def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
 )
 def test_app_store_reviewer_gate_matches_github_helper_fixtures(
     monkeypatch: pytest.MonkeyPatch,
-    environment: dict,
+    environment: JsonDict,
     helper_result: bool | None,
     workflow_result: bool,
 ) -> None:
@@ -740,7 +753,7 @@ def test_npm_workflows_harden_installs_before_installing() -> None:
     # risk. npm 11+ is required because older npm rejects min-release-age.
     for name, job_name in (("reusable-node-ci.yml", "node-ci"),):
         wf = _load(name)
-        on_block = wf.get("on") or wf.get(True)
+        on_block = _on(wf)
         assert on_block["workflow_call"]["inputs"]["node-version"]["default"] == "24"
         steps = wf["jobs"][job_name]["steps"]
         harden = next(s for s in steps if s.get("name") == "Harden npm install behavior")
@@ -953,7 +966,7 @@ def test_consumer_automation_settings_drift_token_is_optional_and_read_only() ->
 
     # The optional admin token is declared (not required).
     # (YAML 1.1 parses the `on:` key as boolean True, hence wf.get(True).)
-    on_block = wf.get("on") or wf.get(True)
+    on_block = _on(wf)
     settings_secret = on_block["workflow_call"]["secrets"]["settings-token"]
     assert settings_secret.get("required") is False
 
@@ -1022,7 +1035,7 @@ def test_security_baseline_retains_fail_closed_structure() -> None:
     assert any("Gate" in name for name in gate_steps), "missing 'Gate on required scans' step"
 
 
-def _codeql_severity_gate() -> tuple[dict, dict]:
+def _codeql_severity_gate() -> tuple[JsonDict, JsonDict]:
     wf = _load("reusable-security-baseline.yml")
     job = wf["jobs"]["codeql"]
     step = next(s for s in job["steps"] if s.get("name") == "Gate CodeQL high/critical alerts")
@@ -1095,7 +1108,7 @@ def test_codeql_severity_gate_runs_after_processed_analysis_and_before_heartbeat
     ],
 )
 def test_codeql_severity_gate_deterministic_alert_fixtures(
-    tmp_path, pages: list[list[dict]], expected_returncode: int
+    tmp_path: Path, pages: list[list[JsonDict]], expected_returncode: int
 ) -> None:
     """Exercise the operative gate with deterministic alert pages (the local SARIF canary)."""
     _, gate = _codeql_severity_gate()
@@ -1139,7 +1152,7 @@ def test_codeql_severity_gate_deterministic_alert_fixtures(
     ],
 )
 def test_codeql_severity_gate_fails_closed_on_api_or_response_ambiguity(
-    tmp_path, response: str, exit_code: int
+    tmp_path: Path, response: str, exit_code: int
 ) -> None:
     _, gate = _codeql_severity_gate()
     fake_gh = tmp_path / "gh"
@@ -1164,7 +1177,7 @@ def test_codeql_severity_gate_fails_closed_on_api_or_response_ambiguity(
 def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
     """Every source read and findings upload must bind to the same immutable commit."""
     wf = _load("reusable-security-baseline.yml")
-    on_block = wf.get("on") or wf.get(True)
+    on_block = _on(wf)
     inputs = on_block["workflow_call"]["inputs"]
     assert inputs["ref"]["required"] is False
     assert inputs["sha"]["required"] is False
@@ -1285,7 +1298,7 @@ def test_pypi_publish_isolates_build_from_oidc_token() -> None:
     jobs = wf["jobs"]
     caller_jobs = _rendered_python_library_workflow()["jobs"]
 
-    def holds_token(perms: dict) -> bool:
+    def holds_token(perms: JsonDict) -> bool:
         return perms.get("id-token") == "write" or perms.get("attestations") == "write"
 
     for job_name, job in jobs.items():
@@ -1320,14 +1333,14 @@ def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
     caller = _rendered_python_library_workflow()
     steps = {"build": wf["jobs"]["build"]["steps"], "publish": caller["jobs"]["pypi-publish"]["steps"]}
 
-    def _step(job: str, action_substr: str) -> dict:
+    def _step(job: str, action_substr: str) -> JsonDict:
         return next(s for s in steps[job] if action_substr in (s.get("uses") or ""))
 
     up = _step("build", "upload-artifact")["with"]
     down = _step("publish", "download-artifact")["with"]
     wd = "${{ inputs.working-directory }}"
 
-    on_block = wf.get("on") or wf.get(True)
+    on_block = _on(wf)
     assert on_block["workflow_call"]["outputs"]["artifact-name"]["value"] == "${{ jobs.build.outputs.artifact-name }}"
     assert up["name"] == "aviato-pypi-dist"
     assert down["name"] == "${{ needs.pypi.outputs.artifact-name }}"

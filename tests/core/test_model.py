@@ -66,6 +66,7 @@ def test_resolved_set_holds_composed_modules() -> None:
         toolchain={},
     )
     assert rs.pipelines == ("verify",)
+    assert rs.version_source is not None
     assert rs.version_source.locations == ("pyproject.toml",)
 
 

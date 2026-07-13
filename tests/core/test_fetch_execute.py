@@ -1,3 +1,5 @@
+import pytest
+
 from aviato.plugins.actionpins import fetch_execute_violations as fev
 
 # AST-based (PyYAML + bashlex) fetch-execute detector. The corpus IS the spec: every historical bypass
@@ -135,17 +137,17 @@ ALLOWED = [
 ]
 
 
-def test_flags_every_historical_bypass():
+def test_flags_every_historical_bypass() -> None:
     for line in FLAGGED:
         assert fev(line), f"fail-open miss: {line!r}"
 
 
-def test_allows_data_pipes_and_verified_installs():
+def test_allows_data_pipes_and_verified_installs() -> None:
     for line in ALLOWED:
         assert fev(line) == [], f"false positive: {line!r}"
 
 
-def test_only_run_blocks_scanned_not_metadata():
+def test_only_run_blocks_scanned_not_metadata() -> None:
     wf = (
         "jobs:\n  a:\n    steps:\n"
         '      - name: "see curl https://x | bash docs"\n'
@@ -156,13 +158,13 @@ def test_only_run_blocks_scanned_not_metadata():
     assert len(out) == 1, out
 
 
-def test_run_block_scalar_variants_extracted():
+def test_run_block_scalar_variants_extracted() -> None:
     assert fev("      - run: |\n          set -e\n          curl https://x/i.sh | bash\n")
     assert fev("      - run: |2\n          curl https://x/i.sh | bash\n")
     assert fev("      - run : curl https://x/i.sh | bash\n")
 
 
-def test_quoted_and_flow_run_keys_extracted():
+def test_quoted_and_flow_run_keys_extracted() -> None:
     # cycle-13 Group D: a real YAML parse normalises quoted keys and flow-style steps, so a `curl|bash`
     # behind `"run":` or `{run: …}` can no longer evade the line regex that the first walk relied on.
     q = chr(34)
@@ -177,12 +179,12 @@ def test_quoted_and_flow_run_keys_extracted():
     )
 
 
-def test_unparseable_block_with_fetch_fails_closed():
+def test_unparseable_block_with_fetch_fails_closed() -> None:
     # a templated/garbled block that mentions curl but bashlex can't parse -> fail closed
     assert fev("      - run: curl https://x/i.sh | {{ bad templating |\n")
 
 
-def test_fetch_execute_fails_closed_when_bashlex_missing(monkeypatch) -> None:
+def test_fetch_execute_fails_closed_when_bashlex_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     # finding 24 (§5.14): a missing bashlex must surface as a clean reported violation
     # (mirroring the zizmor-unavailable posture), never a raw ImportError traceback —
     # and never as a silently-clean scan.

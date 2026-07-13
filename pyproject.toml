@@ -56,7 +56,7 @@ aviato = ["library/**/*", "plugins/*.txt"]
 testpaths = ["tests"]
 
 [tool.mypy]
-files = ["aviato"]
+files = ["aviato", "tests"]
 strict = true
 # Local build litter must not alias the package (duplicate-module errors).
 exclude = ["^build/", "^_wheelout/", "^dist/"]

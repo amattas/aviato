@@ -61,10 +61,11 @@ def test_settings_override_rejects_bare_list_restatement() -> None:
     from aviato.paths import MODULE_SOURCE_ROOT
 
     registry = Registry(MODULE_SOURCE_ROOT)
-    for bad in (
+    bad_cases: tuple[dict[str, object], ...] = (
         {"settings": {"rulesets": []}},
         {"settings": {"default_branch": {"required_status_checks": ["x"]}}},
-    ):
+    )
+    for bad in bad_cases:
         with pytest.raises(CompositionError):
             resolve_profile(registry, "python-library", overrides=bad)
     # A non-list (scalar/map) settings override still works.
@@ -98,6 +99,7 @@ def test_version_source_locations_are_overridable() -> None:
     overridden = resolve_profile(
         registry, "swift-app", overrides={"version_source": {"locations": ["App.xcodeproj/project.pbxproj"]}}
     )
+    assert overridden.version_source is not None
     assert overridden.version_source.locations == ("App.xcodeproj/project.pbxproj",)
     # Malformed override (no locations list) and overriding a profile with no version_source fail loud.
     with pytest.raises(CompositionError):
@@ -182,7 +184,8 @@ def test_non_dict_security_override_is_clean_composition_error() -> None:
     from aviato.paths import MODULE_SOURCE_ROOT
 
     registry = Registry(MODULE_SOURCE_ROOT)
-    for bad in (False, None, "off", 0, []):
+    bad_values: tuple[object, ...] = (False, None, "off", 0, [])
+    for bad in bad_values:
         with pytest.raises(CompositionError):
             resolve_profile(registry, "python-library", overrides={"settings": {"security": bad}})
 
@@ -409,7 +412,7 @@ def test_profile_declared_version_source_locations_validated_like_override() -> 
     from aviato.core.composition import _validated_locations
 
     assert _validated_locations({"locations": ["VERSION"]}, context="x") == ("VERSION",)
-    for bad in (
+    bad_values: tuple[object, ...] = (
         {},
         {"locations": []},
         {"locations": [123]},
@@ -417,7 +420,8 @@ def test_profile_declared_version_source_locations_validated_like_override() -> 
         {"locations": [True]},
         "scalar",
         None,
-    ):
+    )
+    for bad in bad_values:
         with pytest.raises(CompositionError):
             _validated_locations(bad, context="x")
 

@@ -248,4 +248,4 @@ def test_bump_text_rejects_non_object_package_json() -> None:
     # finding 21: valid JSON need not be an object — a top-level array previously
     # AttributeError'd on .get and escaped as a raw traceback instead of AviatoError.
     with pytest.raises(AviatoError, match="no top-level version string"):
-        bump_text(Path("package.json"), "[1, 2, 3]", "1.2.3", None)
+        bump_text("package.json", "[1, 2, 3]", "1.2.3", None)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from typing import Any
 
 import yaml
 
@@ -8,6 +9,8 @@ from aviato import github
 from aviato.paths import POLICY_DATA_ROOT
 from aviato.policy import load_policy, release_tag_pattern
 from aviato.rulesets import render_all_rulesets, ruleset_content_drift
+
+Ruleset = dict[str, Any]
 
 
 def test_rendered_tag_ruleset_uses_policy_pattern() -> None:
@@ -46,7 +49,7 @@ def test_tag_ruleset_excludes_floating_major_aliases_for_realistic_widths() -> N
     assert "refs/tags/v[0-9]" not in exclude
 
 
-def _status_contexts(payloads: list) -> set[str]:
+def _status_contexts(payloads: list[Ruleset]) -> set[str]:
     contexts: set[str] = set()
     for payload in payloads:
         for rule in payload.get("rules", []):
@@ -101,7 +104,7 @@ def test_codeql_ruleset_threshold_removal_or_weakening_is_drift() -> None:
     assert ruleset_content_drift(branch, weakened) is True
 
 
-def _approval_counts(payloads: list) -> list[int]:
+def _approval_counts(payloads: list[Ruleset]) -> list[int]:
     counts: list[int] = []
     for payload in payloads:
         for rule in payload.get("rules", []):
@@ -128,7 +131,7 @@ def test_required_approvals_default_uses_policy() -> None:
     assert all(c == expected for c in counts)
 
 
-def _branch_and_tag():
+def _branch_and_tag() -> tuple[Ruleset, Ruleset]:
     import copy
 
     from aviato.rulesets import render_all_rulesets

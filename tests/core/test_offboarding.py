@@ -7,6 +7,7 @@ import pytest
 
 from aviato.core.errors import PathConfinementError
 from aviato.core.offboarding import offboard
+from aviato.core.pathguard import confined_target
 from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
 from aviato.core.scaffold import scaffold
 
@@ -72,7 +73,7 @@ def test_offboard_rechecks_static_targets_before_metadata_and_unlink(
     import aviato.core.offboarding as offboarding_module
 
     _setup_consumer(tmp_path)
-    original_guard = offboarding_module.confined_target
+    original_guard = confined_target
     calls: dict[str, list[str]] = {".github/aviato.yaml": [], ".github/aviato.seed.json": []}
 
     def tracking_guard(root: Path, relative: str, *, operation: str) -> Path:

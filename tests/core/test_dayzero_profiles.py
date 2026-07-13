@@ -139,6 +139,7 @@ def test_python_service_is_a_container_service_not_a_library(registry: Registry)
     }, var_names
     assert "distribution-name" not in var_names and "import-name" not in var_names
     assert "image-name" not in var_names
+    assert rs.version_source is not None
     assert rs.version_source.locations == ("VERSION",)
     # The scaffold seeds VERSION + requirements-dev.txt and does NOT seed a pyproject.toml.
     from aviato.core.onboarding import resolved_artifacts
@@ -159,7 +160,8 @@ def test_swift_app_requires_macos_and_deploys_app_store(registry: Registry) -> N
     assert "app-store-connect" in rs.pipelines
     # review #17: macOS-requirement is derived from the resolved pipelines' data-driven runner,
     # not a profile-level flag — swift-app composes at least one macos pipeline.
-    runners = {registry.pipeline_module(p).runner for p in rs.pipelines if registry.pipeline_module(p)}
+    modules = [registry.pipeline_module(p) for p in rs.pipelines]
+    runners = {module.runner for module in modules if module is not None}
     assert "macos" in runners
 
 

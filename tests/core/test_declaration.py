@@ -9,7 +9,7 @@ from aviato.core.declaration import Declaration, dump_declaration, load_declarat
 from aviato.core.errors import DeclarationError
 
 
-def _write(path: Path, data: dict) -> None:
+def _write(path: Path, data: dict[str, object]) -> None:
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
 
 
@@ -151,7 +151,6 @@ def test_bootstrap_field_parses_round_trips_and_omitted_when_false(tmp_path: Pat
     # declaration omits it (defaults False) so the field never appears as noise on adopted repos.
     from aviato.core.declaration import declaration_to_yaml
 
-    assert load_declaration  # imported
     lib = Declaration(profile="p", version="2", bootstrap=True)
     path = tmp_path / "aviato.yaml"
     dump_declaration(lib, tmp_path, "aviato.yaml")
@@ -177,7 +176,7 @@ def test_legacy_v_prefix_is_tolerated_on_read_but_never_emitted(tmp_path: Path) 
     assert yaml.safe_load(declaration_to_yaml(Declaration(profile="p", version="vegetable")))["version"] == "vegetable"
 
 
-def test_non_utf8_declaration_raises_declaration_error_not_raw_unicode(tmp_path) -> None:
+def test_non_utf8_declaration_raises_declaration_error_not_raw_unicode(tmp_path: Path) -> None:
     # R5-4-DECL: a non-UTF-8 aviato.yaml must map to DeclarationError (an AviatoError), not leak a
     # raw UnicodeDecodeError past main()'s net / abort a fleet scan.
     import pytest

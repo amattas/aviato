@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 
-def _write(path: Path, data: dict) -> None:
+def _write(path: Path, data: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 

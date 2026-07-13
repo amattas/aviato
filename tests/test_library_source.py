@@ -4,6 +4,7 @@ import io
 import json
 import subprocess
 import tarfile
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -41,7 +42,7 @@ def _archive(
 def _fake_run(monkeypatch: pytest.MonkeyPatch, archive_bytes: bytes, *, annotated: bool = False) -> list[list[str]]:
     calls: list[list[str]] = []
 
-    def fake(command, **kwargs):  # noqa: ANN001, ARG001
+    def fake(command: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         command = list(command)
         calls.append(command)
         endpoint = command[2] if command[:2] == ["gh", "api"] else ""
@@ -92,7 +93,7 @@ def test_fetch_library_registry_rejects_unsafe_or_mismatched_archives_and_cleans
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, archive_bytes: bytes, match: str
 ) -> None:
     _fake_run(monkeypatch, archive_bytes)
-    monkeypatch.setattr(library_source.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr("aviato.library_source.tempfile.tempdir", str(tmp_path))
     before = set(tmp_path.iterdir())
     with pytest.raises(AviatoError, match=match), library_source.fetch_library_registry("amattas/aviato", "1"):
         pass

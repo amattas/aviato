@@ -4,6 +4,7 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 import yaml
@@ -12,7 +13,7 @@ from aviato.core.errors import PathConfinementError
 from aviato.paths import REPO_ROOT
 
 
-def _load_script(name: str):
+def _load_script(name: str) -> ModuleType:
     path = REPO_ROOT / "scripts" / name
     spec = importlib.util.spec_from_file_location(name.replace("-", "_"), path)
     assert spec is not None and spec.loader is not None

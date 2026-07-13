@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -54,7 +55,7 @@ def test_sync_backfills_legacy_identity_from_its_declared_pin(
     fetched: list[str] = []
 
     @contextmanager
-    def fake_fetch(repository: str, pin: str):  # noqa: ARG001
+    def fake_fetch(repository: str, pin: str) -> Iterator[Registry]:
         fetched.append(pin)
         yield Registry(MODULE_SOURCE_ROOT)
 
@@ -83,7 +84,7 @@ def test_legacy_sync_fetch_failure_or_identity_mismatch_mutates_nothing(
         )
 
     @contextmanager
-    def fake_fetch(repository: str, pin: str):  # noqa: ARG001
+    def fake_fetch(repository: str, pin: str) -> Iterator[Registry]:
         if failure == "unresolved":
             raise AviatoError("pin does not resolve")
         yield Registry(target)

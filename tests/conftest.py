@@ -3,10 +3,12 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from aviato.paths import REPO_ROOT
 
 
-def pytest_configure(config) -> None:
+def pytest_configure(config: pytest.Config) -> None:
     """Refuse to run if the temp root resolves inside the repo (fail fast, fail loud).
 
     Python's ``tempfile`` falls back to the CURRENT WORKING DIRECTORY when ``$TMPDIR``

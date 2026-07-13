@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=93866be5c12d07444a8735a0d94ecc23bd709d10326dc4ae68765bfe81296f27 inputs=8d84e9eca0fb633c0a59990180868f8e60f753626eeead4030e43c3faaa6ee5d
+# aviato:managed profile=aviato-library version=0 hash=080d7ea6f20cf2b2b220d3471c519ac155ab6690b603320c5e8f6f17c3973bb2 inputs=c87eec0cc6164b4a0fb591c6236ef87133960db010cc737ecb6d7c9680304085
 name: Aviato Python Library
 
 on:
@@ -37,7 +37,7 @@ jobs:
       lint-command: "python -m ruff check ."
       test-command: "python -m pytest --cov --cov-report=term-missing"
       build-command: "python -m build"
-      typecheck-command: "python -m mypy --strict aviato"
+      typecheck-command: "python -m mypy --strict aviato tests"
       run-typecheck: true
       run-build: true
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 
 import pytest
 
@@ -11,8 +12,10 @@ from aviato.command import DEFAULT_TIMEOUT_SECONDS, CommandError, run
 
 
 def test_run_maps_timeout_to_command_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_run(cmd, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout"))
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        timeout = kwargs.get("timeout")
+        assert isinstance(timeout, (int, float))
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(CommandError) as exc_info:
@@ -22,9 +25,9 @@ def test_run_maps_timeout_to_command_error(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_run_passes_a_finite_default_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: dict = {}
+    seen: dict[str, object] = {}
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         seen.update(kwargs)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -35,46 +38,46 @@ def test_run_passes_a_finite_default_timeout(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_gh_read_retries_rate_limit_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list = []
+    calls: list[list[str]] = []
     responses = [
         subprocess.CompletedProcess([], 1, "", "HTTP 429: API rate limit exceeded"),
         subprocess.CompletedProcess([], 0, '{"ok": true}', ""),
     ]
 
-    def fake_run(args, **kwargs):
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(args)
         return responses[len(calls) - 1]
 
     monkeypatch.setattr(github, "run", fake_run)
-    monkeypatch.setattr(github.time, "sleep", lambda s: None)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
     assert github.gh_json("repos/o/r") == {"ok": True}
     assert len(calls) == 2
 
 
 def test_gh_read_does_not_retry_plain_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     # Auth/404/semantic errors must surface immediately — only throttle shapes retry.
-    calls: list = []
+    calls: list[list[str]] = []
 
-    def fake_run(args, **kwargs):
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(args)
         return subprocess.CompletedProcess([], 1, "", "gh: Not Found (HTTP 404)")
 
     monkeypatch.setattr(github, "run", fake_run)
-    monkeypatch.setattr(github.time, "sleep", lambda s: None)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
     with pytest.raises(github.GitHubAPIError):
         github.gh_json("repos/o/r")
     assert len(calls) == 1
 
 
 def test_gh_read_gives_up_after_bounded_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list = []
+    calls: list[list[str]] = []
 
-    def fake_run(args, **kwargs):
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(args)
         return subprocess.CompletedProcess([], 1, "", "you have exceeded a secondary rate limit")
 
     monkeypatch.setattr(github, "run", fake_run)
-    monkeypatch.setattr(github.time, "sleep", lambda s: None)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
     with pytest.raises(github.GitHubAPIError):
         github.gh_json("repos/o/r")
     assert len(calls) == github._RATE_LIMIT_ATTEMPTS
@@ -84,8 +87,10 @@ def test_run_timeout_degrades_when_check_false(monkeypatch: pytest.MonkeyPatch) 
     # second-review fix: with check=False a timeout must RETURN a failed result (like
     # any other failure) so allow_error/optional read paths degrade — one slow call
     # must not abort a whole fleet sweep.
-    def fake_run(cmd, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout"))
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        timeout = kwargs.get("timeout")
+        assert isinstance(timeout, (int, float))
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     result = run(["gh", "api", "x"], check=False, timeout=1)

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
+import pytest
+
+from aviato.core.diagnosis import diagnose as original_diagnose
 from aviato.core.fleet import scan_fleet
 from aviato.core.onboarding import materialize_items
 from aviato.core.registry import Registry
@@ -64,17 +68,16 @@ def test_scan_aggregates_per_repo_status(tmp_path: Path) -> None:
     assert any(status == "missing" for status in by_path["b"].statuses.values())
 
 
-def test_fleet_passes_profile_derived_health_inputs(tmp_path: Path, monkeypatch) -> None:
+def test_fleet_passes_profile_derived_health_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from aviato.core import fleet
 
     consumer = tmp_path / "consumer"
     _make_consumer(consumer, scaffold_all=False)
-    original_diagnose = fleet.diagnose
     calls: list[dict[str, object]] = []
 
-    def capture(*args, **kwargs):
+    def capture(*args: object, **kwargs: object) -> object:
         calls.append(kwargs)
-        return original_diagnose(*args, **kwargs)
+        return original_diagnose(*cast(tuple[Any, ...], args), **cast(dict[str, Any], kwargs))
 
     monkeypatch.setattr(fleet, "diagnose", capture)
     markers = ("reusable-consumer-automation",)
