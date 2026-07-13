@@ -6,14 +6,13 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- (none)
+- [live rollout] Merge approved PR #60 using the temporary admin bypass only after explicit operator authorization, reapply rulesets, and verify zero bypass actors plus exact CodeQL/check thresholds. — trace: SEC-007
+- [live verification] Use canary PR #59 to prove the applied ruleset blocks the critical CodeQL alert, then record the durable run/alert evidence and clean up the canary at the authorized checkpoint. — trace: SEC-010
+- [live rollout] Enable Dependabot security updates and run `aviato doctor` after ruleset convergence. — trace: SEC-010
 
-## Resolved by 2026-07-12 hardening plan
-
-- Non-pushing checkouts do not persist credentials, and consumer-automation documentation accurately describes the optional settings-read token.
 
 ## Settled — do not reopen
 
 - §11.3 detector semantics are frozen: bashlex-AST taint, fail-closed, block-level verify. NO interpreter enumeration, any-word matching, order-aware verify, grep mirrors, or a second in-workflow checker (8d069f7, accf092, faaeb10, 66951ba, 9ccea23). The same impl runs in every consumer's CI via reusable-common-lint.yml — single implementation, no mirror to drift.
-- zizmor scope decision (#18): the gate covers `unpinned-uses`, `unpinned-images`, and `template-injection`; `dangerous-triggers` stays non-gating (recorded in zizmor.yml + SECURITY.md + §11.3).
+- zizmor scope decision (#18): the gate covers `unpinned-uses`, `unpinned-images`, and `template-injection`; `dangerous-triggers` stays non-gating (recorded in `zizmor.yml`, `docs/security/threat-model.md`, and §11.3).
 - npm/Node hardening is only ever strengthened, never relaxed (S6).

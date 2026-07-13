@@ -49,12 +49,28 @@ local build output dir). Python repos: uncomment the pydoc-markdown block in
    history: `mike deploy --push <current-release> latest && mike set-default
    --push latest && mike deploy --push dev`.
 
-### Agent skill (any repo)
+### Agent guidance and repo-local skills (any repo)
 
-`skills/docs-structure/` → copy to `.claude/skills/docs-structure/` (Claude
-Code) and reference it from `AGENTS.md` for other agentic coders. It defines
-the `docs/` tree convention: per-module requirements with per-module
-`backlog.md`, architecture docs, and Mermaid-only diagrams in markdown.
+Copy the governance pack once when adopting the starter:
+
+| Starter master | Consumer destination | Update behavior |
+|---|---|---|
+| `starter/CLAUDE.md` | `CLAUDE.md` | Create when missing; otherwise merge only the marked managed block |
+| `starter/AGENTS.md` | `AGENTS.md` | Create when missing; otherwise merge only the marked managed block |
+| `starter/skills/<name>/` | `.claude/skills/<name>/` | Replace the whole managed skill directory after drift review |
+| `starter/docs/requirements/traceability.md` | `docs/requirements/traceability.md` | Seed-once; maintain content, never replace it with the blank template |
+
+The managed skills are `docs-structure`, `traceability`,
+`docs-reconciliation`, and `test-consolidation`. Claude Code discovers the
+canonical `.claude/skills/` copies; `AGENTS.md` directs Codex and other agents
+to read the same files, avoiding duplicated skill bodies.
+
+On an update, preserve every unknown/project-local skill. If a managed skill
+has local modifications, stop for an operator decision: accept the canonical
+replacement or fork the customization under a different skill name. Never
+line-merge a skill. Existing agent files keep all project-specific content
+outside `aviato:documentation-governance` markers; replace only that managed
+block. Living documentation and the traceability matrix remain seed-once.
 
 ## One-time setup per repo (clicks + one script, no automation)
 

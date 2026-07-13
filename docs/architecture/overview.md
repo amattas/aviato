@@ -8,6 +8,12 @@ and the near-term direction agreed for making it more consistent and modular.
 broader requirements document; this file is the implementation-facing map of
 what Aviato is today.
 
+Precise behavioral contracts live in `docs/specifications/`. Security is a
+cross-cutting view: `docs/security/threat-model.md` owns risks,
+`docs/security/controls.md` owns mitigations, and `security.md` shows where
+those controls sit in this architecture. Current evidence is recorded in
+`docs/requirements/traceability.md`.
+
 ## Purpose
 
 Aviato is a reusable GitHub policy, CI, release, and onboarding conventions

@@ -8,9 +8,6 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 - (none)
 
-## Resolved by 2026-07-12 hardening plan
-
-- Onboarding derives the LICENSE owner, and validation enforces required scaffold-constant/pin source presence and parity.
 
 ## Settled — do not reopen
 

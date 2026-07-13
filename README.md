@@ -318,6 +318,7 @@ are installed, so Apple secrets are not exposed to arbitrary versioning logic.
 
 ## Architecture
 
-See `docs/architecture/` for the current implementation map and
-`docs/requirements/` (§ index in `docs/requirements/README.md`) for the
-requirements-backed system design.
+See `docs/requirements/` for outcomes and constraints,
+`docs/specifications/` for precise testable behavior, `docs/architecture/` for
+the current implementation map, and `docs/security/` for threats and controls.
+The § citation index remains `docs/requirements/README.md`.

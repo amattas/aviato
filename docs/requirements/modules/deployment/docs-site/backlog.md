@@ -7,11 +7,8 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 ## Open
 
 - [external watch] Replace the pinned mike bridge with Zensical-native versioning when that capability ships; until then `aviato/library/docs-toolchain.yaml` owns the immutable fork SHA and the sync script updates every generated copy. — spec 2026-07-11
+- [external verification] Deploy a disposable consumer docs site through Pages Actions and verify the exact gated tree, version path, and `latest` alias; Aviato itself intentionally has no self-site. — trace: §13.3, SEC-005
 
-## Resolved by 2026-07-12 hardening plan
-
-- Docs caller-name parity includes authoritative, generated, and rendered instances; missing sources fail closed.
-- Docs callers dropped the inert artifact permission, and one policy file plus `sync-docs-toolchain-pins.py` owns all exact tool pins.
 
 ## Settled — do not reopen
 

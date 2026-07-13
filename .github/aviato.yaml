@@ -1,11 +1,10 @@
 profile: aviato-library
 profile-identity: aviato-profile/aviato-library/v1
 version: '0'
-docs: true
+docs: false
 bootstrap: true
 variables:
   import-name: aviato
-  serve-pages: true
   # finding 38: strict type-check scoped to the package (the shared caller default
   # checks '.', which would pull the not-yet-strict tests into the gate).
   typecheck-command: python -m mypy --strict aviato tests

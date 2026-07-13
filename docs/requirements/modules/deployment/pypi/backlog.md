@@ -6,11 +6,8 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- (none)
+- [external verification] Publish the gated artifact to TestPyPI through the consumer-local trusted publisher and verify identity, provenance, and installability. — trace: §13.1
 
-## Resolved by 2026-07-12 hardening plan
-
-- Artifact handoff actions use compatible majors, and OIDC publishing now lives in the generated consumer workflow with a fail-closed stale-caller guard.
 
 ## Settled — do not reopen
 
