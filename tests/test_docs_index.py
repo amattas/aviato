@@ -170,7 +170,9 @@ def test_active_hardening_plan_matches_current_rollout_state() -> None:
         "PR #60",
         "PR #59",
         "release PR #42",
-        "temporary admin bypass",
+        "a3e87ac",
+        "authorization was consumed",
+        "zero bypass actors",
         "docs: false",
         "SEC-007",
         "Dependabot",
@@ -188,34 +190,41 @@ def test_active_hardening_plan_matches_current_rollout_state() -> None:
     assert sorted(term for term in forbidden if term in text) == []
 
 
-def test_pr60_rollout_records_preserve_blocked_live_rollout_boundary() -> None:
+def test_pr60_rollout_records_preserve_verified_live_rollout_boundary() -> None:
     backlog = (ROOT / "docs/requirements/modules/security/backlog.md").read_text(encoding="utf-8")
-    backlog_item = next(line for line in backlog.splitlines() if "PR #60" in line)
-    assert "Use the convergence fix tracked by PR #60 to reapply both rulesets" in backlog_item
-    assert "SEC-007 remains blocked until live readback passes" in backlog_item
+    open_work = backlog.split("## Open", 1)[1].split("## Settled", 1)[0]
+    assert "SEC-007" not in open_work
 
     sec007 = _matrix_rows()["SEC-007"]
-    assert sec007[2] == "blocked"
-    assert "No-bypass live reapply/readback using the PR #60 convergence fix" in sec007[6]
+    assert sec007[2] == "verified"
+    assert "rules/17482301" in sec007[5]
+    assert "rules/17483804" in sec007[5]
 
     controls = (ROOT / "docs/security/controls.md").read_text(encoding="utf-8")
     control = controls.split("## SEC-007", 1)[1].split("\n## ", 1)[0]
     normalized_control = " ".join(control.split())
-    assert "This control remains blocked until a live reapply/readback" in normalized_control
-    assert "proves zero bypass actors plus the exact CodeQL and check thresholds" in normalized_control
+    assert "Live readback on 2026-07-13 verified zero bypass actors" in normalized_control
+    assert "exact CodeQL and required-check thresholds" in normalized_control
+
+    onboarding = (ROOT / "docs/specifications/modules/onboarding/flow.md").read_text(encoding="utf-8")
+    assert "Invalid rule 'tag_name_pattern':" in onboarding
+    assert "one error entry at a time" in onboarding
 
     plan = (ROOT / "docs/superpowers/plans/2026-07-12-repository-integrity-release-hardening.md").read_text(
         encoding="utf-8"
     )
     normalized_plan = " ".join(plan.split())
-    required_plan_boundaries = {
-        "Checkpoint 1 separates its explicit merge-authorization decision from the required live reapply/readback",
-        "Explicit operator authorization is required",
+    required_plan_evidence = {
+        "Checkpoint 1 — completed",
+        "a3e87ac00359309157fdeae153ebe29e03242a16",
         "gh pr merge 60 --repo amattas/aviato --merge --admin",
-        "Do not run that command without the user's explicit approval",
-        "it is not standing authorization for future bypasses",
+        "authorization was consumed",
+        "not standing authorization",
+        "zero bypass actors",
     }
-    assert sorted(term for term in required_plan_boundaries if term not in normalized_plan) == []
+    assert sorted(term for term in required_plan_evidence if term not in normalized_plan) == []
+    assert "admin bypass is still present" not in normalized_plan
+    assert "After PR #60 merges" not in normalized_plan
 
 
 SPECIFICATION_MOVES = (
@@ -343,6 +352,7 @@ def test_traceability_local_links_resolve() -> None:
         ("§2.13", (".github/workflows/reusable-security-baseline.yml", "tests/test_workflow_guards.py")),
         ("§2.14", ("aviato/core/ports.py", "tests/core/test_ports.py")),
         ("SEC-003", ("actions/runs/29219938630",)),
+        ("SEC-007", ("rules/17482301", "rules/17483804")),
         ("SEC-010", ("pull/59",)),
     ),
 )
@@ -391,7 +401,6 @@ def test_normative_or_aggregate_traceability_rows_do_not_overclaim_verification(
         "§17",
         "SEC-001",
         "SEC-005",
-        "SEC-007",
         "SEC-010",
     ),
 )

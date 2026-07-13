@@ -54,9 +54,13 @@ binding, and CLI tests.
 Addresses THREAT-006 and THREAT-009. The target posture requires PR/check/CodeQL
 gates, blocks branch/tag deletion and non-fast-forward changes, and explicitly
 clears bypass actors. Only a correlated unsupported tag pattern may degrade,
-while immutability stays enforced. The corrective no-bypass payload is tracked
-in PR #60. This control remains blocked until a live reapply/readback using that
-payload proves zero bypass actors plus the exact CodeQL and check thresholds.
+while immutability stays enforced. PR #60 merged as
+`a3e87ac00359309157fdeae153ebe29e03242a16`. Live readback on 2026-07-13
+verified zero bypass actors on the
+[branch ruleset](https://github.com/amattas/aviato/rules/17482301) and
+[tag ruleset](https://github.com/amattas/aviato/rules/17483804), exact CodeQL
+and required-check thresholds, and branch/tag immutability; tag metadata-pattern
+omission is the only degraded capability.
 
 ## SEC-008 — Prevent secret persistence
 

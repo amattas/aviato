@@ -6,9 +6,8 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- [live rollout] Use the convergence fix tracked by PR #60 to reapply both rulesets, then verify zero bypass actors plus exact CodeQL/check thresholds; SEC-007 remains blocked until live readback passes. — trace: SEC-007
 - [live verification] Use canary PR #59 to prove the applied ruleset blocks the critical CodeQL alert, then record the durable run/alert evidence and clean up the canary at the authorized checkpoint. — trace: SEC-010
-- [live rollout] Enable Dependabot security updates and run `aviato doctor` after ruleset convergence. — trace: SEC-010
+- [live rollout] Enable Dependabot security updates and run `aviato doctor` now that ruleset convergence is verified. — trace: SEC-010
 
 
 ## Settled — do not reopen

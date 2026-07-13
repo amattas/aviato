@@ -56,6 +56,9 @@ as **DEGRADED**; deletion and non-fast-forward protections, conditions,
 enforcement, and the no-bypass posture remain intact. No other API, authentication,
 network, malformed-response, or validation failure is downgraded. A later failure
 does not roll back earlier successful mutations, which are reported as they occur.
+The correlated response may be a structured type-error object or the exact
+whole-entry string `Invalid rule 'tag_name_pattern':` inside `errors`; string
+matching examines one error entry at a time and never combines entries.
 
 ```mermaid
 flowchart TD
