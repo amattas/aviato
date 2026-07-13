@@ -1,8 +1,8 @@
 # Repository integrity and release hardening — active rollout plan
 
-**Status:** local implementation complete; live rollout paused at an explicit
-operator checkpoint.
-**Updated:** 2026-07-12
+**Status:** ruleset convergence verified; live rollout continues at the next
+explicit operator checkpoint.
+**Updated:** 2026-07-13
 
 This dated file is an execution aid, not the system of record. Living behavior
 is owned by `docs/requirements/`, `docs/specifications/`,
@@ -26,13 +26,18 @@ backlogs.
 
 ## Current live state
 
-- **PR #60:** corrective ruleset-convergence change. Checkpoint 1 separates its
-  explicit merge-authorization decision from the required live reapply/readback;
-  off-platform review is not GitHub approval.
-- **Branch ruleset:** PR/check/CodeQL protection applied, but the temporary
-  admin bypass is still present. This leaves SEC-007 blocked.
-- **Tag ruleset:** deletion and non-fast-forward protection are active; the
-  unsupported metadata-pattern rule remains a documented degraded capability.
+- PR #60 merged as `a3e87ac00359309157fdeae153ebe29e03242a16` after the
+  explicitly authorized one-time admin merge.
+- Aviato's own declaration now carries `required_reviews: 0` while it has no
+  independent eligible reviewer. Exact live branch ruleset readback proves the
+  zero review count, zero bypass actors, the three exact required checks, exact
+  CodeQL thresholds, review-thread and stale-review handling, and immutability.
+  PR #62 is the deadlock evidence and delivery PR; its acceptance criterion is
+  the normal merge path without admin bypass. Before or in the same settings
+  change that makes another reviewer eligible, remove the override and restore
+  the profile default of one approval.
+- Live tag ruleset readback proves zero bypass actors and immutability; the
+  unsupported metadata-pattern rule is the only degradation.
 - **PR #59:** open, blocked canary for proving CodeQL ruleset enforcement after
   convergence. Do not merge it.
 - **release PR #42:** open. Do not merge or publish from it until later release
@@ -40,33 +45,17 @@ backlogs.
 - **Dependabot:** security updates still need to be enabled and verified after
   ruleset convergence.
 
-## Checkpoint 1 — merge the convergence fix
+## Checkpoint 1 — completed
 
-Blocking decision: the PR author cannot self-approve under the partially applied
-one-approval rule. Explicit operator authorization is required to use the
-temporary admin bypass exactly once:
+The user explicitly authorized this one-time command, which was run once:
 
 ```bash
 gh pr merge 60 --repo amattas/aviato --merge --admin
 ```
 
-Do not run that command without the user's explicit approval. Its purpose is to
-land the code that removes the same bypass; it is not standing authorization for
-future bypasses.
-
-After PR #60 merges:
-
-1. Confirm the merged SHA and required checks.
-2. Reapply the `aviato-library` ruleset profile using the corrected CLI.
-3. Fetch both rulesets from GitHub and record exact evidence:
-   - branch `bypass_actors` is empty;
-   - required contexts are the policy-bound common, security, and CI contexts;
-   - CodeQL thresholds are `alerts_threshold=none` and
-     `security_alerts_threshold=high_or_higher`;
-   - branch/tag deletion and non-fast-forward protections remain;
-   - tag metadata-pattern degradation is the only omitted rule.
-4. Update SEC-007 and the security backlog from `blocked` only after the live
-   response proves convergence.
+That authorization was consumed and is not standing authorization for any
+future bypass. The hotfix CLI completed the correlated tag-rule fallback, and
+the exact live readback above closed SEC-007.
 
 ## Checkpoint 2 — finish approved Phase 6 verification
 
@@ -98,7 +87,6 @@ in its owning backlog until its linked evidence exists.
 
 ## Completion criteria
 
-- SEC-007 is verified with zero live bypass actors.
 - SEC-010 links the canary's effective ruleset enforcement evidence.
 - Dependabot and `aviato doctor` state are recorded.
 - Target-specific external backlog items are completed or explicitly retained

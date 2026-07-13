@@ -11,7 +11,9 @@ from aviato.cli import main
 from aviato.github_platform import GitHubPlatform
 
 
-def test_onboard_open_pr_builds_proposal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_onboard_open_pr_builds_proposal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     # Simulate `gh repo clone OWNER/REPO <dest>` by materializing a clone dir that
     # already contains a LICENSE (an operator-owned seed-once file that must be left
     # untouched), and capture the proposal instead of pushing it.
@@ -49,6 +51,7 @@ def test_onboard_open_pr_builds_proposal(tmp_path: Path, monkeypatch: pytest.Mon
             "import-name=acme",
         ]
     )
+    out = capsys.readouterr().out
     assert rc == 0
     files = cast(dict[str, str], captured["files"])
     assert captured["repo"] == "acme-org/widget"
@@ -63,6 +66,9 @@ def test_onboard_open_pr_builds_proposal(tmp_path: Path, monkeypatch: pytest.Mon
     # the pre-existing seed-once LICENSE is NOT overwritten and is enumerated as untouched
     assert "LICENSE" not in files
     assert "LICENSE" in cast(str, captured["body"])
+    assert "aviato complete-protection /path/to/checkout" in out
+    assert ("aviato apply-rulesets acme-org/widget --apply --declaration /path/to/checkout/.github/aviato.yaml") in out
+    assert "apply-rulesets acme-org/widget --apply --profile" not in out
 
 
 def test_onboard_open_pr_rejects_symlinked_artifact_probe(

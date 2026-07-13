@@ -63,8 +63,12 @@ availability and post-publication behavior remain external.
 
 Ambiguous API failures, stale consent, retained ruleset bypasses, or unsupported
 rule handling can silently weaken protected settings. **Mitigations:** SEC-006,
-SEC-007. **Residual risk:** GitHub may not support tag metadata-pattern rules;
-that one proven case is reported as degraded while immutability remains.
+SEC-007. **Residual risks:** GitHub may not support tag metadata-pattern rules;
+that one proven case is reported as degraded while immutability remains. A
+documented solo-maintainer exception may set the required-review count to zero
+only while no independent eligible reviewer exists. That accepted absence of
+independent human review retains PR, machine-gate, immutability, and no-bypass
+protections and ends when another eligible reviewer is granted access.
 
 ## THREAT-007 — Secrets persist, leak to logs, or enter declarations
 

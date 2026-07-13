@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "docs" / "requirements" / "README.md"
@@ -36,6 +37,7 @@ STALE_NORMATIVE_TEXT = {
     "Advance floating major reference UNCONDITIONALLY",
     "Deploy from a branch → gh-pages",
     "no grep mirror",
+    "apply-rulesets … --apply --profile <p>",
 }
 
 # Citations whose literal number never appeared in REQUIREMENTS.md:
@@ -136,6 +138,13 @@ def test_current_requirements_do_not_retain_stale_normative_text() -> None:
     ]
     assert not hits, "stale normative text remains:\n" + "\n".join(hits)
 
+    declaration_aware_remediation = "apply-rulesets … --apply --declaration .github/aviato.yaml"
+    for path in (
+        ROOT / "docs/specifications/modules/drift/settings-drift.md",
+        ROOT / "docs/specifications/modules/reconcile/flow.md",
+    ):
+        assert declaration_aware_remediation in path.read_text(encoding="utf-8"), path
+
 
 def test_backlogs_contain_only_open_work_and_settled_decisions() -> None:
     for path in sorted((ROOT / "docs/requirements").rglob("backlog.md")):
@@ -153,10 +162,14 @@ def test_completed_superpowers_artifacts_are_pruned_but_active_plan_remains() ->
         "plans/2026-07-11-docs-restructure.md",
         "plans/2026-07-11-zensical-docs.md",
         "plans/2026-07-12-starter-documentation-governance.md",
+        "plans/2026-07-13-tag-ruleset-string-422.md",
+        "plans/2026-07-13-solo-maintainer-ruleset-override.md",
         "specs/2026-05-29-actionpins-zizmor-migration-design.md",
         "specs/2026-07-11-docs-restructure-design.md",
         "specs/2026-07-11-zensical-docs-design.md",
         "specs/2026-07-12-starter-documentation-governance-design.md",
+        "specs/2026-07-13-tag-ruleset-string-422-design.md",
+        "specs/2026-07-13-solo-maintainer-ruleset-override-design.md",
     )
     root = ROOT / "docs/superpowers"
     assert [path for path in completed if (root / path).exists()] == []
@@ -168,9 +181,14 @@ def test_active_hardening_plan_matches_current_rollout_state() -> None:
     text = path.read_text(encoding="utf-8")
     required = {
         "PR #60",
+        "PR #62",
         "PR #59",
         "release PR #42",
-        "temporary admin bypass",
+        "authorization was consumed",
+        "zero bypass actors",
+        "required_reviews: 0",
+        "normal merge path",
+        "makes another reviewer eligible",
         "docs: false",
         "SEC-007",
         "Dependabot",
@@ -187,35 +205,105 @@ def test_active_hardening_plan_matches_current_rollout_state() -> None:
     assert sorted(term for term in required if term not in text) == []
     assert sorted(term for term in forbidden if term in text) == []
 
+    normalized_plan = " ".join(text.split())
+    required_plan_evidence = {
+        "Checkpoint 1 — completed",
+        "a3e87ac00359309157fdeae153ebe29e03242a16",
+        "gh pr merge 60 --repo amattas/aviato --merge --admin",
+        "not standing authorization",
+    }
+    assert sorted(term for term in required_plan_evidence if term not in normalized_plan) == []
+    assert "admin bypass is still present" not in normalized_plan
+    assert "After PR #60 merges" not in normalized_plan
 
-def test_pr60_rollout_records_preserve_blocked_live_rollout_boundary() -> None:
+
+def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
+    declaration = yaml.safe_load((ROOT / ".github/aviato.yaml").read_text(encoding="utf-8"))
+    assert declaration["overrides"]["settings"]["default_branch"] == {"required_reviews": 0}
+
     backlog = (ROOT / "docs/requirements/modules/security/backlog.md").read_text(encoding="utf-8")
-    backlog_item = next(line for line in backlog.splitlines() if "PR #60" in line)
-    assert "Use the convergence fix tracked by PR #60 to reapply both rulesets" in backlog_item
-    assert "SEC-007 remains blocked until live readback passes" in backlog_item
+    open_work = backlog.split("## Open", 1)[1].split("## Settled", 1)[0]
+    assert "SEC-007" not in open_work
+    settled = backlog.split("## Settled — do not reopen", 1)[1]
+    assert "`required_reviews: 0`" in settled
+    assert "standing bypass actors" in settled
+    assert "recurring admin merges" in settled
 
     sec007 = _matrix_rows()["SEC-007"]
-    assert sec007[2] == "blocked"
-    assert "No-bypass live reapply/readback using the PR #60 convergence fix" in sec007[6]
+    assert sec007[2] == "verified"
+    assert ".github/aviato.yaml" in sec007[4]
+    assert "rules/17482301" in sec007[5]
+    assert "rules/17483804" in sec007[5]
+    assert "pull/62" in sec007[5]
+    assert "required review count of zero" in sec007[6]
+    assert "no independent eligible reviewer" in sec007[6]
 
     controls = (ROOT / "docs/security/controls.md").read_text(encoding="utf-8")
     control = controls.split("## SEC-007", 1)[1].split("\n## ", 1)[0]
     normalized_control = " ".join(control.split())
-    assert "This control remains blocked until a live reapply/readback" in normalized_control
-    assert "proves zero bypass actors plus the exact CodeQL and check thresholds" in normalized_control
-
-    plan = (ROOT / "docs/superpowers/plans/2026-07-12-repository-integrity-release-hardening.md").read_text(
-        encoding="utf-8"
+    assert (
+        "Live readback on 2026-07-13 after applying the declaration verified a required review count of zero"
+        in normalized_control
     )
-    normalized_plan = " ".join(plan.split())
-    required_plan_boundaries = {
-        "Checkpoint 1 separates its explicit merge-authorization decision from the required live reapply/readback",
-        "Explicit operator authorization is required",
-        "gh pr merge 60 --repo amattas/aviato --merge --admin",
-        "Do not run that command without the user's explicit approval",
-        "it is not standing authorization for future bypasses",
+    assert "zero bypass actors" in normalized_control
+    assert "exact CodeQL and required-check thresholds" in normalized_control
+    assert "not bypass permission" in normalized_control
+    assert "exactly one eligible reviewer" in normalized_control
+    assert "required review count of zero" in normalized_control
+    assert "restore the default of one required approval" in normalized_control
+
+    assert (
+        "Live readback on 2026-07-13 proved the repository-specific required review count of zero is active"
+        in sec007[6]
+    )
+
+    threat_model = (ROOT / "docs/security/threat-model.md").read_text(encoding="utf-8")
+    threat006 = threat_model.split("## THREAT-006", 1)[1].split("\n## ", 1)[0]
+    assert "accepted absence of independent human review" in " ".join(threat006.split())
+
+    onboarding = (ROOT / "docs/specifications/modules/onboarding/flow.md").read_text(encoding="utf-8")
+    exception = onboarding.split("**Solo-maintainer review exception (normative):**", 1)[1].split(
+        "\nFor `python-library`", 1
+    )[0]
+    normalized_exception = " ".join(exception.split())
+    required_contract = {
+        "`required_reviews: 0`",
+        "no independent eligible reviewer",
+        "not bypass authority",
+        "pull-request",
+        "required-check",
+        "CodeQL",
+        "review-thread",
+        "stale-review",
+        "deletion",
+        "non-fast-forward",
+        "active-enforcement",
+        "no-bypass",
+        "`--declaration .github/aviato.yaml`",
+        "never `--profile`",
+        "Fresh previews",
+        "before or in the same settings change that makes another reviewer eligible",
     }
-    assert sorted(term for term in required_plan_boundaries if term not in normalized_plan) == []
+    assert sorted(term for term in required_contract if term not in normalized_exception) == []
+
+    infrastructure = (ROOT / "docs/architecture/infrastructure.md").read_text(encoding="utf-8")
+    normalized_infrastructure = " ".join(infrastructure.split())
+    assert "mandatory once `.github/aviato.yaml` exists" in normalized_infrastructure
+
+
+def test_onboarding_documents_complete_tag_rejection_string_entry_contract() -> None:
+    onboarding = (ROOT / "docs/specifications/modules/onboarding/flow.md").read_text(encoding="utf-8")
+    assert "Invalid rule 'tag_name_pattern':" in onboarding
+    required_string_entry_contract = {
+        r"""^\s*invalid\s+rule\s+["']tag_name_pattern["']\s*:\s*$""",
+        "case-insensitive",
+        "either single or double quotes",
+        "surrounding whitespace",
+        "terminal whitespace after the colon",
+        "one error entry at a time",
+        "never combines entries",
+    }
+    assert sorted(term for term in required_string_entry_contract if term not in onboarding) == []
 
 
 SPECIFICATION_MOVES = (
@@ -391,7 +479,6 @@ def test_normative_or_aggregate_traceability_rows_do_not_overclaim_verification(
         "§17",
         "SEC-001",
         "SEC-005",
-        "SEC-007",
         "SEC-010",
     ),
 )

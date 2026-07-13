@@ -150,10 +150,11 @@ The Python CLI lives in `aviato/`.
 
 - `aviato audit <root>` discovers and audits repositories under a local root.
 - `aviato audit --repo <path>` audits one local repository.
-- `aviato apply-rulesets <owner/repo>` applies configured rulesets (dry-run by
-  default; `--apply` mutates). `--declaration <path>` resolves status checks
-  and approvals through a consumer's `.github/aviato.yaml` overrides so an
-  apply never re-adds a check the consumer removed.
+- `aviato apply-rulesets <owner/repo>` renders configured rulesets (dry-run by
+  default; `--apply` mutates). Bare or `--profile` use is limited to the
+  pre-declaration path. `--declaration <path>` is mandatory once
+  `.github/aviato.yaml` exists so status checks and approvals resolve through
+  consumer overrides and an apply cannot restore profile defaults.
 - `aviato render-rulesets` renders the ruleset payloads after policy injection.
 - `aviato validate` validates this repository's policy infrastructure.
 - `aviato onboard <path-or-owner/repo>` prints the composition-backed onboarding

@@ -23,10 +23,9 @@ CLI surface (entrypoint `aviato.cli:main`):
 ```bash
 aviato audit .                              # discover + audit repos under a local root
 aviato audit --repo /path/to/repo           # audit one explicit local repo
-aviato apply-rulesets OWNER/REPO            # dry-run rulesets
-aviato apply-rulesets OWNER/REPO --apply    # apply rulesets
-aviato apply-rulesets OWNER/REPO --required-approvals 0 --apply  # solo-repo override
-aviato apply-rulesets OWNER/REPO --declaration /path/.github/aviato.yaml --apply  # override-aware apply (C12-3): resolves checks/approvals through the consumer's declared overrides — what settings-drift remediation recommends
+aviato apply-rulesets OWNER/REPO --profile PROFILE  # base-profile dry run only before a declaration exists
+aviato apply-rulesets OWNER/REPO --declaration /path/.github/aviato.yaml  # normal adopted-repo dry run; resolves checks/approvals through declared overrides
+aviato apply-rulesets OWNER/REPO --declaration /path/.github/aviato.yaml --apply  # apply the reviewed declaration-resolved payload, including a declared solo-maintainer override
 aviato render-rulesets                       # print rendered ruleset JSON
 aviato onboard PATH --profile python-library --pin 1.2.3 [--write --allow-dirty --var k=v --docs]  # plan, or adopt a local repo (§5.2); --docs composes the opt-in docs deploy (§13.3)
 aviato onboard OWNER/REPO --profile python-library --pin 1.2.3 --open-pr  # adopt an existing repo via a reviewable scaffold PR (§5.2)

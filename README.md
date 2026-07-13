@@ -60,23 +60,30 @@ Audit one repository:
 aviato audit --repo /Users/amattas/GitHub/example
 ```
 
-Dry-run rulesets:
+Dry-run the rulesets resolved from an adopted repository's declaration:
 
 ```bash
-aviato apply-rulesets amattas/example
+aviato apply-rulesets amattas/example --declaration /path/to/example/.github/aviato.yaml
 ```
 
-Apply rulesets:
+Apply the reviewed declaration-resolved rulesets:
 
 ```bash
-aviato apply-rulesets amattas/example --apply
+aviato apply-rulesets amattas/example --declaration /path/to/example/.github/aviato.yaml --apply
 ```
 
-Override required PR approvals for a solo repo:
+For a solo-maintainer repository, persist the liveness exception in its
+declaration rather than relying on an ephemeral CLI flag:
 
-```bash
-aviato apply-rulesets amattas/example --required-approvals 0 --apply
+```yaml
+overrides:
+  settings:
+    default_branch:
+      required_reviews: 0
 ```
+
+Then dry-run and apply using `--declaration` as above. Remove that override
+before or in the same settings change that makes another reviewer eligible.
 
 Validate this repository:
 
@@ -156,7 +163,7 @@ the command reports a loud degraded posture while retaining tag deletion and
 non-fast-forward protection. Any unrelated API failure remains fatal.
 
 ```bash
-aviato apply-rulesets OWNER/REPO --apply --profile PROFILE
+aviato apply-rulesets OWNER/REPO --apply --declaration /path/to/checkout/.github/aviato.yaml
 gh api --paginate repos/OWNER/REPO/rulesets
 # The list endpoint is only a summary. Fetch every full live payload for amattas/aviato:
 for id in $(gh api --paginate repos/amattas/aviato/rulesets --jq '.[].id'); do
@@ -213,7 +220,7 @@ The legacy script names still work:
 
 ```bash
 ./scripts/audit-repos.sh .
-./scripts/apply-rulesets.sh --repo amattas/example --apply
+./scripts/apply-rulesets.sh --repo amattas/example --declaration /path/to/example/.github/aviato.yaml --apply
 ```
 
 ## Reusable Workflows

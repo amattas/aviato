@@ -74,7 +74,8 @@ def test_consent_oscillation_back_to_old_diff_requires_fresh_consent() -> None:
 
 def test_drifted_ruleset_is_reported_even_with_clean_settings() -> None:
     # §5.6: a ruleset that is missing OR content-drifted (computed by the caller) must be reported
-    # (not "clean"), remediated via apply-rulesets WITH --profile — even when settings match.
+    # (not "clean"), remediated from the declaration — even when settings match. A caller that
+    # omits the path must still fail closed to the repository-root declaration, never --profile.
     platform = FakePlatform(settings={"required_reviews": 2})
     outcome = run_settings_drift(
         platform,
@@ -82,7 +83,7 @@ def test_drifted_ruleset_is_reported_even_with_clean_settings() -> None:
         desired_settings={"required_reviews": 2},  # no settings drift
         issue_key="k",
         drifted_rulesets=("Common: release tag format",),
-        profile="python-library",
+        profile="python-library",  # compatibility-only input must never select profile remediation
     )
     assert outcome.status == "reported"
     assert outcome.drifted_rulesets == ("Common: release tag format",)
@@ -90,7 +91,8 @@ def test_drifted_ruleset_is_reported_even_with_clean_settings() -> None:
     _, args = next(c for c in platform.calls if c[0] == "open_or_update_issue")
     body = args[3]
     assert isinstance(body, str)
-    assert "apply-rulesets o/r --apply --profile python-library" in body  # M-2: --profile included
+    assert "apply-rulesets o/r --apply --declaration .github/aviato.yaml" in body
+    assert "apply-rulesets o/r --apply --profile" not in body
     assert "Common: release tag format" in body
 
 
@@ -102,7 +104,6 @@ def test_no_drifted_rulesets_with_clean_settings_is_clean() -> None:
         desired_settings={"required_reviews": 2},
         issue_key="k",
         drifted_rulesets=(),
-        profile="python-library",
     )
     assert outcome.status == "clean"
     assert outcome.drifted_rulesets == ()

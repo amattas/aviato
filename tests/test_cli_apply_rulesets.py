@@ -43,6 +43,27 @@ def test_apply_rulesets_aggregates_slugs_from_all_sources(
     assert calls[0]["apply"] is False  # default is dry-run
 
 
+def test_apply_rulesets_declaration_preserves_zero_approval_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_apply(monkeypatch)
+    declaration = Path(__file__).resolve().parents[1] / ".github" / "aviato.yaml"
+
+    rc = cli.main(["apply-rulesets", "amattas/aviato", "--declaration", str(declaration)])
+
+    assert rc == 0
+    assert calls == [
+        {
+            "slugs": ["amattas/aviato"],
+            "apply": False,
+            "approvals": 0,
+            "checks": [
+                "ci / Python CI",
+                "common-lint / Common lint",
+                "security / Security baseline heartbeat",
+            ],
+        }
+    ]
+
+
 def test_apply_rulesets_requires_a_slug(capsys: pytest.CaptureFixture[str]) -> None:
     rc = cli.main(["apply-rulesets"])
     assert rc == 2
