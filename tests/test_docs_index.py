@@ -153,10 +153,12 @@ def test_completed_superpowers_artifacts_are_pruned_but_active_plan_remains() ->
         "plans/2026-07-11-docs-restructure.md",
         "plans/2026-07-11-zensical-docs.md",
         "plans/2026-07-12-starter-documentation-governance.md",
+        "plans/2026-07-13-tag-ruleset-string-422.md",
         "specs/2026-05-29-actionpins-zizmor-migration-design.md",
         "specs/2026-07-11-docs-restructure-design.md",
         "specs/2026-07-11-zensical-docs-design.md",
         "specs/2026-07-12-starter-documentation-governance-design.md",
+        "specs/2026-07-13-tag-ruleset-string-422-design.md",
     )
     root = ROOT / "docs/superpowers"
     assert [path for path in completed if (root / path).exists()] == []
