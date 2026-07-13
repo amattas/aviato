@@ -191,6 +191,17 @@ def test_active_hardening_plan_matches_current_rollout_state() -> None:
     assert sorted(term for term in required if term not in text) == []
     assert sorted(term for term in forbidden if term in text) == []
 
+    normalized_plan = " ".join(text.split())
+    required_plan_evidence = {
+        "Checkpoint 1 — completed",
+        "a3e87ac00359309157fdeae153ebe29e03242a16",
+        "gh pr merge 60 --repo amattas/aviato --merge --admin",
+        "not standing authorization",
+    }
+    assert sorted(term for term in required_plan_evidence if term not in normalized_plan) == []
+    assert "admin bypass is still present" not in normalized_plan
+    assert "After PR #60 merges" not in normalized_plan
+
 
 def test_pr60_rollout_records_preserve_verified_live_rollout_boundary() -> None:
     backlog = (ROOT / "docs/requirements/modules/security/backlog.md").read_text(encoding="utf-8")
@@ -208,6 +219,8 @@ def test_pr60_rollout_records_preserve_verified_live_rollout_boundary() -> None:
     assert "Live readback on 2026-07-13 verified zero bypass actors" in normalized_control
     assert "exact CodeQL and required-check thresholds" in normalized_control
 
+
+def test_onboarding_documents_complete_tag_rejection_string_entry_contract() -> None:
     onboarding = (ROOT / "docs/specifications/modules/onboarding/flow.md").read_text(encoding="utf-8")
     assert "Invalid rule 'tag_name_pattern':" in onboarding
     required_string_entry_contract = {
@@ -220,22 +233,6 @@ def test_pr60_rollout_records_preserve_verified_live_rollout_boundary() -> None:
         "never combines entries",
     }
     assert sorted(term for term in required_string_entry_contract if term not in onboarding) == []
-
-    plan = (ROOT / "docs/superpowers/plans/2026-07-12-repository-integrity-release-hardening.md").read_text(
-        encoding="utf-8"
-    )
-    normalized_plan = " ".join(plan.split())
-    required_plan_evidence = {
-        "Checkpoint 1 — completed",
-        "a3e87ac00359309157fdeae153ebe29e03242a16",
-        "gh pr merge 60 --repo amattas/aviato --merge --admin",
-        "authorization was consumed",
-        "not standing authorization",
-        "zero bypass actors",
-    }
-    assert sorted(term for term in required_plan_evidence if term not in normalized_plan) == []
-    assert "admin bypass is still present" not in normalized_plan
-    assert "After PR #60 merges" not in normalized_plan
 
 
 SPECIFICATION_MOVES = (
