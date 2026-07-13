@@ -23,6 +23,7 @@ agents to the canonical skills copied under `.claude/skills/`:
 - `docs-structure`
 - `traceability`
 - `docs-reconciliation`
+- `test-consolidation`
 
 Keeping one skill copy avoids drift between tool-specific directories. Claude
 Code discovers the skills in its conventional location; `AGENTS.md` instructs
@@ -32,6 +33,35 @@ skill masters remain under `starter/skills/<name>/` and are copied to
 `.claude/skills/<name>/` in the consumer. The matrix master is
 `starter/docs/requirements/traceability.md` and is copied to the matching
 consumer path.
+
+### Update lifecycle
+
+Starter-managed skills are versioned process definitions and are replaced
+atomically from their masters. Line-by-line skill merges are forbidden because
+they can produce an internally inconsistent workflow. Only the four known
+starter-managed skill names are eligible for replacement; project-local skills
+with other names remain untouched. If a managed skill has local modifications,
+sync reports the drift and requires an operator decision instead of silently
+overwriting it. A deliberate customization should be forked under a distinct
+skill name.
+
+Agent files use different semantics. Their canonical governance text is
+bounded by stable managed markers:
+
+```markdown
+<!-- aviato:documentation-governance:start -->
+<!-- canonical managed instructions -->
+<!-- aviato:documentation-governance:end -->
+```
+
+During starter adoption, a missing agent file is copied from the template. If
+it exists without the markers, the operator inserts the managed block once
+without replacing existing content. Later starter updates replace only the
+block and preserve all project-specific instructions around it. The
+traceability matrix and other living documentation are seed-once artifacts:
+after creation they are updated semantically and are never reset from a blank
+starter template. The starter remains a reviewed copy workflow; automatic
+consumer synchronization is outside this design.
 
 ## Canonical living documentation
 
@@ -141,9 +171,19 @@ Runs an ordered cleanup:
 A security artifact cannot be pruned until every durable threat, mitigation,
 assumption, and accepted risk has a living home and traceability link.
 
+### `test-consolidation`
+
+The existing user-level skill at
+`~/.claude/skills/test-consolidation/SKILL.md` becomes the starter master. It
+baselines a green suite, inventories distinct behavior, prefers
+parameterization for input/output variants, consolidates only genuinely
+redundant coverage, requires approval before destructive reductions, and
+verifies that behavioral coverage and assertions are preserved. It remains a
+separate cleanup workflow rather than being mixed into feature changes.
+
 ## Agent instructions and cost efficiency
 
-Both agent templates require agents to use the three skills when relevant and
+Both agent templates require agents to use the four skills when relevant and
 to reconcile the backlog and traceability matrix before declaring feature or
 documentation work complete. They also establish these cost principles:
 
@@ -159,21 +199,40 @@ documentation work complete. They also establish these cost principles:
 - Separate unrelated or high-risk changes even when combining them would be
   cheaper; reviewability and rollback safety remain requirements.
 
+The managed block also carries the user-level test-development policy from
+`~/.claude/CLAUDE.md`:
+
+- TDD rigor does not imply high test volume. Do not add trivial, redundant, or
+  near-duplicate tests for coverage numbers or apparent thoroughness.
+- Before adding a test, inspect the existing suite and extend or parameterize
+  a test that exercises the same behavior.
+- Prefer the framework's native parameterization mechanism for variants of one
+  behavior. Do not merge unrelated behaviors into a mega-test.
+- Every test must assert a distinct behavior. If it can fail only when an
+  existing test also fails, fold it into the stronger test or omit it.
+- Use the repo-local `test-consolidation` skill for suite-wide cleanup.
+
 ## Validation
 
 Tests are written before the templates and assert:
 
-1. Both root agent templates, all three skills, and the traceability template
+1. Both root agent templates, all four skills, and the traceability template
    exist in the starter master.
 2. Every path referenced by an agent template or the starter README resolves
    within the copied starter layout.
 3. `CLAUDE.md` and `AGENTS.md` contain equivalent governance, completion, and
-   cost-efficiency requirements while retaining tool-specific introductions.
+   cost-efficiency requirements while retaining tool-specific introductions;
+   their managed blocks are byte-identical.
 4. The traceability template contains the required fields and allowed states.
 5. The skills use the canonical paths and distinguish requirements,
    specifications, architecture, security, backlogs, and temporary artifacts.
 6. No template contains unresolved project-specific placeholders. Optional
    documents are clearly labeled instead of represented by placeholder text.
+7. Managed skill updates replace only recognized skill directories; agent-file
+   updates replace only the marked block; traceability and living docs remain
+   seed-once.
+8. The shared agent block requires distinct-behavior tests, parameterization,
+   and the `test-consolidation` skill without weakening TDD or verification.
 
 The full repository validation gate must pass before the branch is published.
 
