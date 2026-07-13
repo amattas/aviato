@@ -324,6 +324,32 @@ def test_high_risk_traceability_rows_use_precise_evidence(identifier: str, requi
 @pytest.mark.parametrize(
     "identifier",
     (
+        "§2.2",
+        "§3",
+        "§4",
+        "§5",
+        "§6",
+        "§7",
+        "§8",
+        "§10",
+        "§11",
+        "§12",
+        "§13",
+        "§14",
+        "§15",
+        "§18",
+    ),
+)
+def test_normative_or_aggregate_traceability_rows_do_not_overclaim_verification(identifier: str) -> None:
+    cells = _matrix_rows()[identifier]
+    assert cells[2] == "accepted"
+    assert cells[4] == "—"
+    assert cells[5] == "—"
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    (
         "§9",
         "§11.6",
         "§13.1",

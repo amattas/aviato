@@ -27,7 +27,8 @@ backlogs.
 ## Current live state
 
 - **PR #60:** corrective ruleset-convergence fix, all checks green and
-  independently approved, not merged.
+  independently code-reviewed off-platform, but with no GitHub approval; not
+  merged.
 - **Branch ruleset:** PR/check/CodeQL protection applied, but the temporary
   admin bypass is still present. This leaves SEC-007 blocked.
 - **Tag ruleset:** deletion and non-fast-forward protection are active; the
