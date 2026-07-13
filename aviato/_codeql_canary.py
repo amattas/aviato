@@ -1,10 +1,13 @@
 # mypy: ignore-errors
 """Disposable CodeQL blocking canary. Never merge this file."""
 
-from django.http import HttpRequest, HttpResponse  # type: ignore[import-not-found]
+from flask import Flask, request  # type: ignore[import-not-found]
+
+app = Flask(__name__)
 
 
-def evaluate_untrusted_expression(request: HttpRequest) -> HttpResponse:
+@app.route("/codeql-canary")
+def evaluate_untrusted_expression() -> object:
     """Deliberately pass an HTTP request parameter to a code-evaluation sink."""
-    expression = request.POST.get("expression", "")
-    return HttpResponse(str(eval(expression)))  # noqa: B307
+    expression = request.args.get("expression")
+    return eval(expression)  # noqa: B307
