@@ -67,7 +67,9 @@ use an empty command and a disabled default.
 
 Docs-enabled profiles scaffold a Zensical `website/` with an exact-pinned
 `requirements.txt` (zensical + the mike fork, §11.3), Zensical's built-in
-search, Mermaid rendering, and sitemap configuration.
+search, Mermaid rendering, and sitemap configuration. This is a consumer
+capability: Aviato's own bootstrap declaration sets `docs: false` and carries no
+`website/`, self-docs caller, or seed sidecar.
 
 ### Caller Templates
 

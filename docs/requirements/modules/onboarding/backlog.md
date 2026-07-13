@@ -8,10 +8,6 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 - (none)
 
-## Resolved by 2026-07-12 hardening plan
-
-- Provisioning and ruleset application use canonical slug validation before any GitHub call.
-- Ruleset apply retries only a proven unsupported tag metadata rule, preserves tag immutability, and reports degraded posture.
 
 ## Settled — do not reopen
 

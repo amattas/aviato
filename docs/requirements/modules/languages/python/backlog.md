@@ -8,9 +8,6 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 - (none)
 
-## Resolved by 2026-07-12 hardening plan
-
-- The Python component profile exposes and forwards the same optional `typecheck-command` contract as the library profile.
 
 ## Settled — do not reopen
 
