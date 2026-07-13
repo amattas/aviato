@@ -53,3 +53,17 @@ def test_traceability_template_has_canonical_schema_and_states() -> None:
         assert f"| {column} " in text
     for state in ("proposed", "accepted", "implemented", "verified", "blocked", "retired"):
         assert f"`{state}`" in text
+
+
+def test_starter_readme_documents_governance_copy_and_update_semantics() -> None:
+    text = (STARTER / "README.md").read_text(encoding="utf-8")
+    for term in (
+        "starter/CLAUDE.md",
+        "starter/AGENTS.md",
+        ".claude/skills/",
+        "replace",
+        "managed block",
+        "seed-once",
+        "local modifications",
+    ):
+        assert term in text

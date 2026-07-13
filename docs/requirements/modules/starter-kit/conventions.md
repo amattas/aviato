@@ -28,3 +28,19 @@ masters. These decisions are normative for the kit and its consumers.
   `gh-pages`) via a mike fork; docs deploy on release tags. GitHub Pages
   serving of that branch is a separate, optional operator toggle.
 - Learnings from consumer repos are backported to the kit masters.
+- **Agent guidance merges; managed skills replace.** The kit's `CLAUDE.md` and
+  `AGENTS.md` templates carry one byte-identical marked governance block. An
+  existing consumer file preserves project-specific text and replaces only
+  that block. The four named starter skills (`docs-structure`, `traceability`,
+  `docs-reconciliation`, `test-consolidation`) replace atomically after local
+  drift review; unknown skills are untouched and deliberate customizations use
+  a different name.
+- **Living records are seed-once.** The traceability matrix and living
+  requirements, specifications, architecture, and security docs are created
+  only when absent, then reconciled semantically—never reset from templates.
+- Completed work leaves backlog `Open` after its requirement and traceability
+  state are current. Dated plans are pruned after every durable fact is promoted
+  to living documentation; plans never become the project system of record.
+- Correctness and local verification precede publishing. Coherent changes may
+  share one branch and pull request to avoid redundant CI runs, but cost does
+  not weaken tests, security gates, review, release controls, or evidence.
