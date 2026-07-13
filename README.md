@@ -158,6 +158,10 @@ non-fast-forward protection. Any unrelated API failure remains fatal.
 ```bash
 aviato apply-rulesets OWNER/REPO --apply --profile PROFILE
 gh api --paginate repos/OWNER/REPO/rulesets
+# The list endpoint is only a summary. Fetch every full live payload for amattas/aviato:
+for id in $(gh api --paginate repos/amattas/aviato/rulesets --jq '.[].id'); do
+  gh api "repos/amattas/aviato/rulesets/${id}"
+done
 gh api --method PUT repos/OWNER/REPO/automated-security-fixes
 ```
 
@@ -167,7 +171,7 @@ project. The publishing job must remain in that consumer workflow so its OIDC
 identity matches the registration; do not fall back to an API token.
 
 ```bash
-# protection.json must name at least one required reviewer; an empty list is rejected at deploy time.
+# Required reviewers are an operator prerequisite; configure at least one in protection.json.
 gh api --method PUT repos/OWNER/REPO/environments/pypi --input protection.json
 gh api repos/OWNER/REPO/environments/pypi
 ```
@@ -175,11 +179,17 @@ gh api repos/OWNER/REPO/environments/pypi
 In the PyPI/TestPyPI project UI, enter exactly: owner `OWNER`, repository
 `REPO`, workflow `aviato-ci.yml`, environment `pypi`. Registration is an
 out-of-band service operation; Aviato never stores a publishing credential.
+GitHub enforces the configured environment gate, and `aviato doctor` plus
+operator verification checks the required-reviewer posture when applicable.
+Only the App Store workflow has an additional explicit fail-closed runtime
+preflight of the environment's reviewer list; the PyPI publisher does not.
 
 Docs are always versioned onto `gh-pages` when `docs: true`. To serve them, set
 the non-secret profile variable `serve-pages: true`, configure Pages for the
 custom workflow build type, and verify the same release run contains a successful
-`deploy-pages` job:
+job ID `deploy`, with display name `Deploy GitHub Pages`. That job invokes the
+`actions/deploy-pages` action; `deploy-pages` is the action name, not Aviato's
+job/check name:
 
 ```bash
 gh api --method PUT repos/OWNER/REPO/pages -f build_type=workflow

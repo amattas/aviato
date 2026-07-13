@@ -102,6 +102,20 @@ def test_readme_documents_load_bearing_operator_flags() -> None:
     assert not missing, f"README omits load-bearing operator terms: {missing}"
 
 
+def test_readme_documents_exact_external_control_verification() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    required = {
+        "repos/amattas/aviato/rulesets/${id}",
+        "Required reviewers are an operator prerequisite",
+        "job ID `deploy`",
+        "display name `Deploy GitHub Pages`",
+        "`actions/deploy-pages`",
+    }
+    missing = sorted(term for term in required if term not in readme)
+    assert not missing, f"README omits exact external-control verification: {missing}"
+    assert "an empty list is rejected at deploy time" not in readme
+
+
 def test_current_requirements_do_not_retain_stale_normative_text() -> None:
     current = [
         ROOT / "README.md",
