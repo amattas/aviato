@@ -21,7 +21,9 @@ from urllib.parse import quote
 from . import github
 from .command import CommandError
 from .core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
+from .core.pathguard import confined_target
 from .core.ports import Issue
+from .core.scaffold import atomic_write
 from .core.settingsdrift import CONSENT_ID_HEX_LEN
 
 # A human grants consent by adding a label of this form to the tracking issue;
@@ -213,7 +215,9 @@ def current_consent(events: list[dict[str, Any]]) -> ConsentGrant | None:
 # Branch-ruleset rule types the desired settings model represents (§5.6). A live
 # rule of any OTHER type is unmodeled protection the reconcile must not silently
 # shadow (see apply_settings fail-closed guard).
-_MODELED_RULE_TYPES = frozenset({"pull_request", "non_fast_forward", "deletion", "required_status_checks"})
+_MODELED_RULE_TYPES = frozenset(
+    {"pull_request", "non_fast_forward", "deletion", "required_status_checks", "code_scanning"}
+)
 
 # Classic-protection toggles the wholesale branch-protection PUT (to_branch_protection_payload)
 # does NOT carry, so if any is ENABLED live it would be silently dropped (§2.4/§2.9). Each is a
@@ -578,8 +582,9 @@ class GitHubPlatform:
         repo: str,
         *,
         environments: tuple[str, ...] = (),
-        probe_pages: bool = False,
+        probe_pages_build_type: bool = False,
         drift_workflow_path: str | None = None,
+        desired_rulesets: tuple[dict[str, Any], ...] = (),
     ) -> tuple[bool | None, bool | None, dict[str, bool | None]]:
         """Probe issue-channel availability, scan-heartbeat presence, and §17 remote prereqs.
 
@@ -596,6 +601,19 @@ class GitHubPlatform:
         issue_channel: bool | None = None
         heartbeat: bool | None = None
         remote: dict[str, bool | None] = {}
+        if desired_rulesets:
+            # Doctor must not call a capability-degraded apply fully protected. Compare the live
+            # payload to the same complete desired payload settings drift uses; an unreadable
+            # admin surface is unknown, and an omitted tag metadata rule is explicitly non-clean.
+            from .rulesets import drifted_ruleset_names
+
+            try:
+                live_rulesets = self.read_rulesets(repo)
+                remote["ruleset_protection_full"] = not bool(
+                    drifted_ruleset_names(list(desired_rulesets), live_rulesets)
+                )
+            except github.SettingsReadError:
+                remote["ruleset_protection_full"] = None
         try:
             repo_data = github.gh_json_optional(f"repos/{repo}", default=None)
             if isinstance(repo_data, dict) and "has_issues" in repo_data:
@@ -610,15 +628,69 @@ class GitHubPlatform:
             head = github.gh_json_optional(f"repos/{repo}/commits/{branch}", default=None) if branch else None
             head_sha = head.get("sha") if isinstance(head, dict) else None
             if head_sha:
+                artifact_name = f"aviato-security-heartbeat-{head_sha}"
                 artifacts = github.gh_json_optional(
-                    f"repos/{repo}/actions/artifacts?name=aviato-security-heartbeat&per_page=30", default=None
+                    f"repos/{repo}/actions/artifacts?name={artifact_name}&per_page=30", default=None
                 )
-                items = (artifacts.get("artifacts") or []) if isinstance(artifacts, dict) else []
-                heartbeat = any(
-                    not item.get("expired") and (item.get("workflow_run") or {}).get("head_sha") == head_sha
-                    for item in items
-                    if isinstance(item, dict)
-                )
+                items = artifacts.get("artifacts") if isinstance(artifacts, dict) else None
+                if isinstance(items, list):
+                    heartbeat = False
+                    ambiguous_candidate = False
+                    expected_ref = f"refs/heads/{branch}"
+                    for item in items:
+                        if not isinstance(item, dict):
+                            ambiguous_candidate = True
+                            continue
+                        if item.get("name") != artifact_name:
+                            continue
+                        expired = item.get("expired")
+                        if expired is True:
+                            continue
+                        if expired is not False:
+                            ambiguous_candidate = True
+                            continue
+                        workflow_run = item.get("workflow_run")
+                        if not isinstance(workflow_run, dict):
+                            ambiguous_candidate = True
+                            continue
+                        if workflow_run.get("head_sha") != head_sha:
+                            continue
+                        run_id = workflow_run.get("id")
+                        if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
+                            ambiguous_candidate = True
+                            continue
+                        try:
+                            with tempfile.TemporaryDirectory(prefix="aviato-heartbeat-") as tmp:
+                                github.run(
+                                    [
+                                        "gh",
+                                        "run",
+                                        "download",
+                                        str(run_id),
+                                        "--repo",
+                                        repo,
+                                        "--name",
+                                        artifact_name,
+                                    ],
+                                    cwd=tmp,
+                                )
+                                payload_path = Path(tmp) / "aviato-security-heartbeat.json"
+                                payload = json.loads(payload_path.read_text(encoding="utf-8"))
+                        except (CommandError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+                            ambiguous_candidate = True
+                            continue
+                        if (
+                            not isinstance(payload, dict)
+                            or not isinstance(payload.get("analyzed_ref"), str)
+                            or not isinstance(payload.get("analyzed_sha"), str)
+                        ):
+                            ambiguous_candidate = True
+                            continue
+                        if payload["analyzed_ref"] == expected_ref and payload["analyzed_sha"] == head_sha:
+                            heartbeat = True
+                            break
+                    if not heartbeat and ambiguous_candidate:
+                        heartbeat = None
         except github.GitHubAPIError:
             pass  # ambiguous read → leave unknown (None)
         # R6-2-§17-PROBE: read the §17 remote-probeable items separately so a failure on one
@@ -632,14 +704,13 @@ class GitHubPlatform:
         except github.GitHubAPIError:
             for key in ("secret_scanning", "secret_scanning_push_protection", "dependabot_security_updates"):
                 remote.setdefault(key, None)
-        # R7-3-DOCTOR-NOISE: probe Pages only when the caller indicates a docs-bearing profile —
-        # otherwise the doctor surfaces a noisy "pages_source_actions: unknown / no" for repos that
-        # have no docs at all. The caller (cmd_doctor) sets `probe_pages` from `declaration.docs`.
-        if probe_pages:
+        # Probe Pages only for a declaration that both builds docs and opts into serving them.
+        # Branch-only docs publishers need no Pages configuration and must stay quiet in doctor.
+        if probe_pages_build_type:
             try:
-                remote["pages_source_actions"] = github.pages_source_is_actions(repo)
+                remote["pages_build_type_workflow"] = github.pages_build_type_is_workflow(repo)
             except github.GitHubAPIError:
-                remote["pages_source_actions"] = None
+                remote["pages_build_type_workflow"] = None
         # R7-3-APPSTORE-ENV: each environment name is plug-in DATA from the resolved profile (the
         # binding doesn't know WHICH capability needs it); probe each and surface under a `env:<name>`
         # key in `prerequisites_remote`.
@@ -658,6 +729,10 @@ class GitHubPlatform:
             remote["code_scanning"] = not isinstance(analyses, tuple)
         except github.GitHubAPIError:
             remote["code_scanning"] = None
+        try:
+            remote["codeql_merge_protection"] = github.codeql_merge_protection_present(repo)
+        except github.GitHubAPIError:
+            remote["codeql_merge_protection"] = None
         # findings 31/30: the drift automation's API state — a workflow disabled in the
         # GitHub UI (or persistently failing, e.g. silently throttled) previously read
         # "present: yes" from the local file alone, the exact state §5.4's probe exists
@@ -769,10 +844,10 @@ class GitHubPlatform:
         base = github.default_branch(repo) or "main"
         owner = repo.split("/", 1)[0]
 
+        for output_path in files:
+            confined_target(self.workdir, output_path, operation="write proposal")
         for output_path, content in files.items():
-            target = self.workdir / output_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+            atomic_write(self.workdir, output_path, content, operation="write proposal")
 
         self._git("switch", "-C", branch)
         self._git("add", "--", *files.keys())

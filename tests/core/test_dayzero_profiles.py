@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import pytest
+import yaml
 
 from aviato.core.composition import resolve_profile
 from aviato.core.registry import Registry
-from aviato.paths import MODULE_SOURCE_ROOT
+from aviato.paths import MODULE_SOURCE_ROOT, REPO_ROOT
 
 DAYZERO = ("python-library", "python-service", "python-component", "node-service", "swift-app")
 
@@ -43,7 +44,7 @@ def test_pipelines_resolve_to_typed_modules_with_privileges(registry: Registry, 
     assert "security-events: write" in by_name["security-baseline"].privileges
 
 
-def test_pypi_pipeline_declares_oidc_privilege(registry: Registry) -> None:
+def test_pypi_pipeline_declares_local_publisher_oidc_privilege(registry: Registry) -> None:
     rs = resolve_profile(registry, "python-library")
     pypi = next(m for m in rs.pipeline_modules if m.name == "pypi-publish")
     assert "id-token: write" in pypi.privileges
@@ -55,6 +56,8 @@ def test_app_store_pipeline_declares_secrets_and_macos(registry: Registry) -> No
     asc = next(m for m in rs.pipeline_modules if m.name == "app-store-connect")
     assert "APP_STORE_CONNECT_KEY_ID" in asc.secrets
     assert asc.runner == "macos"
+    assert asc.environment == "app-store-connect"
+    assert asc.environment_input == "environment-name"
 
 
 @pytest.mark.parametrize("name", DAYZERO)
@@ -80,6 +83,37 @@ def test_python_component_has_no_deploy(registry: Registry) -> None:
     assert "ghcr-publish" not in pipelines
 
 
+def test_python_scaffold_requires_supported_runtime_and_ruff_target(registry: Registry) -> None:
+    from aviato.core.onboarding import resolved_artifacts
+
+    artifacts = resolved_artifacts(
+        registry,
+        "python-component",
+        {"distribution-name": "acme", "import-name": "acme"},
+        pin="1.2.3",
+    )
+    bodies = {artifact.output: artifact.body for artifact in artifacts}
+    assert 'requires-python = ">=3.12"' in bodies["pyproject.toml"]
+    assert 'target-version = "py312"' in bodies["ruff.toml"]
+
+
+def test_python_component_custom_typecheck_command_is_rendered(registry: Registry) -> None:
+    from aviato.core.onboarding import resolved_artifacts
+
+    artifacts = resolved_artifacts(
+        registry,
+        "python-component",
+        {
+            "distribution-name": "acme",
+            "import-name": "acme",
+            "typecheck-command": "python -m mypy --strict src/acme",
+        },
+        pin="1.2.3",
+    )
+    ci = next(artifact.body for artifact in artifacts if artifact.output == ".github/workflows/aviato-ci.yml")
+    assert 'typecheck-command: "python -m mypy --strict src/acme"' in ci
+
+
 def test_services_deploy_ghcr(registry: Registry) -> None:
     assert "ghcr-publish" in resolve_profile(registry, "python-service").pipelines
     assert "ghcr-publish" in resolve_profile(registry, "node-service").pipelines
@@ -101,9 +135,11 @@ def test_python_service_is_a_container_service_not_a_library(registry: Registry)
         "owner",
         "repo",
         "project-name",
+        "serve-pages",
     }, var_names
     assert "distribution-name" not in var_names and "import-name" not in var_names
     assert "image-name" not in var_names
+    assert rs.version_source is not None
     assert rs.version_source.locations == ("VERSION",)
     # The scaffold seeds VERSION + requirements-dev.txt and does NOT seed a pyproject.toml.
     from aviato.core.onboarding import resolved_artifacts
@@ -124,7 +160,8 @@ def test_swift_app_requires_macos_and_deploys_app_store(registry: Registry) -> N
     assert "app-store-connect" in rs.pipelines
     # review #17: macOS-requirement is derived from the resolved pipelines' data-driven runner,
     # not a profile-level flag — swift-app composes at least one macos pipeline.
-    runners = {registry.pipeline_module(p).runner for p in rs.pipelines if registry.pipeline_module(p)}
+    modules = [registry.pipeline_module(p) for p in rs.pipelines]
+    runners = {module.runner for module in modules if module is not None}
     assert "macos" in runners
 
 
@@ -143,12 +180,16 @@ def test_node_ci_workflow_renders_typecheck_from_variant() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     js = next(
         i
-        for i in materialize_items(reg, "node-service", {"language-variant": "javascript"}, pin="0")
+        for i in materialize_items(
+            reg, "node-service", {"project-name": "acme", "language-variant": "javascript"}, pin="0"
+        )
         if i.output == ".github/workflows/aviato-ci.yml"
     )
     ts = next(
         i
-        for i in materialize_items(reg, "node-service", {"language-variant": "typescript"}, pin="0")
+        for i in materialize_items(
+            reg, "node-service", {"project-name": "acme", "language-variant": "typescript"}, pin="0"
+        )
         if i.output == ".github/workflows/aviato-ci.yml"
     )
     assert "run-typecheck: false" in js.body
@@ -381,6 +422,47 @@ def test_swift_caller_requires_workspace_or_project() -> None:
 def test_docs_opt_in_composes_docs_pipeline(registry: Registry, name: str) -> None:
     assert "docs-pages" not in resolve_profile(registry, name).pipelines
     assert "docs-pages" in resolve_profile(registry, name, docs=True).pipelines
+
+
+@pytest.mark.parametrize("name", DAYZERO)
+def test_docs_profiles_default_pages_serving_off(registry: Registry, name: str) -> None:
+    resolved = resolve_profile(registry, name)
+    serve = next(variable for variable in resolved.variables if variable.name == "serve-pages")
+    assert serve.type == "boolean"
+    assert serve.required is False
+    assert serve.default is False
+
+
+def test_aviato_library_enables_pages_in_rendered_docs_caller(registry: Registry) -> None:
+    from aviato.core.onboarding import resolved_artifacts
+
+    declaration = yaml.safe_load((REPO_ROOT / ".github" / "aviato.yaml").read_text(encoding="utf-8"))
+    assert declaration["variables"]["serve-pages"] is True
+    artifacts = resolved_artifacts(
+        registry,
+        "aviato-library",
+        declaration["variables"],
+        pin=declaration["version"],
+        docs=True,
+        bootstrap=True,
+    )
+    docs = next(artifact for artifact in artifacts if artifact.output == ".github/workflows/aviato-docs.yml")
+    rendered = yaml.safe_load(docs.body)
+    assert rendered["jobs"]["docs"]["with"]["serve-pages"] is True
+
+
+def test_serve_pages_rejects_non_boolean_declaration(registry: Registry) -> None:
+    from aviato.core.errors import DeclarationError
+    from aviato.core.onboarding import resolved_artifacts
+
+    with pytest.raises(DeclarationError, match="serve-pages.*not a boolean"):
+        resolved_artifacts(
+            registry,
+            "python-service",
+            {"serve-pages": "certainly"},
+            pin="0",
+            docs=True,
+        )
 
 
 def test_node_language_variant_is_enum(registry: Registry) -> None:

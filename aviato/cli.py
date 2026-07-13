@@ -9,9 +9,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 from urllib.parse import quote
 
 from . import __version__
@@ -21,27 +21,38 @@ from .core.bootstrap import is_library
 from .core.composition import resolve_profile
 from .core.declaration import Declaration, declaration_to_yaml, dump_declaration, load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
-from .core.errors import AviatoError, CompatibilityError, DeclarationError
+from .core.errors import AviatoError, CompatibilityError, CompositionError, DeclarationError
 from .core.file_drift_flow import _PROPOSABLE, FileDriftOutcome, run_file_drift
 from .core.fleet import RepoScan, scan_fleet
 from .core.marker import parse_marker_from_text
 from .core.model import ResolvedSet, VariableSpec
 from .core.offboarding import offboard as offboard_repo
 from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, resolved_artifacts
+from .core.pathguard import confined_target
+from .core.ports import Platform
 from .core.provision import provision_repo
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.repin import plan_repin
-from .core.scaffold import ScaffoldItem, render_managed, scaffold
+from .core.scaffold import (
+    MigrationProtection,
+    ScaffoldItem,
+    classify_migration_targets,
+    preflight_seed_integrity,
+    read_sidecar,
+    render_managed,
+    scaffold,
+)
 from .core.settings_drift_flow import run_settings_drift
-from .core.variables import resolve_variables, writeback_variables
+from .core.variables import resolve_declared_variables, resolve_variables, writeback_variables
 from .core.version import is_compatible, is_known_version_pin, most_restrictive_recorded, normalize_pin
 from .core.versioning import classify_commits, is_highest, next_version
 from .github import GitHubAPIError, SettingsReadError, gh_json_paginated_optional, is_archived
 from .github_platform import GitHubPlatform, UnmodeledProtectionError
+from .library_source import fetch_library_registry
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from .plugins.version_formats import bump_files
-from .policy import load_policy
+from .policy import library_repository, load_policy
 from .repos import git_root, is_owner_repo_slug, normalize_slug, remote_url, working_tree_clean
 from .rulesets import apply_rulesets, render_all_rulesets
 from .validation import validate
@@ -54,7 +65,43 @@ DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
 # last scheduled-run conclusion). A Library artifact name — passed to the binding as
 # data, like the markers above.
 DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
-LIBRARY_REMOTE_URL = "https://github.com/amattas/aviato.git"
+DECLARATION_RELATIVE_PATH = ".github/aviato.yaml"
+
+
+def _library_repository(policy: dict[str, Any] | None = None) -> str:
+    """Return the policy-owned Library slug at the GitHub binding boundary."""
+    return library_repository(load_policy() if policy is None else policy)
+
+
+def _library_remote_url(policy: dict[str, Any] | None = None) -> str:
+    """Format the Library's GitHub remote URL outside the agnostic core."""
+    return f"https://github.com/{_library_repository(policy)}.git"
+
+
+def _print_seed_integrity_error() -> None:
+    print(
+        "seed-once integrity state is missing, corrupt, or incomplete; review current seed files "
+        "and run `aviato sync <path> --rebaseline-seeds`",
+        file=sys.stderr,
+    )
+
+
+def _print_migration_protections(protections: Iterable[MigrationProtection]) -> None:
+    print("profile migration blocked by protected target(s):", file=sys.stderr)
+    for protection in protections:
+        print(f"- {protection.output}: {protection.reason}", file=sys.stderr)
+
+
+def _consumer_declaration_target(root: Path, *, operation: str) -> Path:
+    return confined_target(root, DECLARATION_RELATIVE_PATH, operation=operation)
+
+
+def _load_consumer_declaration(root: Path) -> Declaration:
+    return load_declaration(_consumer_declaration_target(root, operation="read declaration"))
+
+
+def _dump_consumer_declaration(declaration: Declaration, root: Path) -> None:
+    dump_declaration(declaration, root, DECLARATION_RELATIVE_PATH)
 
 
 def _non_negative_int(value: str) -> int:
@@ -136,7 +183,7 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
 
     # R3-5: validate each slug is a clean OWNER/REPO locally (like cmd_provision / the proposals),
     # so a malformed token fails loud here instead of as a confusing 404 after an API round-trip.
-    bad = [s for s in slugs if s.count("/") != 1 or not all(part for part in s.split("/"))]
+    bad = [slug for slug in slugs if not is_owner_repo_slug(slug)]
     if bad:
         print(f"invalid repository slug(s) {bad}; expected OWNER/REPO", file=sys.stderr)
         return 2
@@ -147,7 +194,13 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
     required_approvals = args.required_approvals
     try:
         if getattr(args, "declaration", None):
-            declaration = load_declaration(Path(args.declaration))
+            supplied_declaration = Path(args.declaration)
+            if supplied_declaration.name != "aviato.yaml" or supplied_declaration.parent.name != ".github":
+                raise DeclarationError(
+                    f"declaration must use the canonical {DECLARATION_RELATIVE_PATH} consumer path: "
+                    f"{supplied_declaration}"
+                )
+            declaration = _load_consumer_declaration(supplied_declaration.parent.parent)
             extra_checks = _profile_status_checks(declaration.profile, declaration.overrides)
             if required_approvals is None:
                 from .core.composition import resolve_profile
@@ -182,7 +235,18 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
             required_approvals=required_approvals,
             extra_status_checks=extra_checks,
         ):
-            print(message)
+            # Structured results keep a capability fallback visible to operators. Preserve string
+            # adapters used by integrations while they migrate to RulesetApplyResult.
+            if hasattr(message, "message") and hasattr(message, "degraded_rules"):
+                print(message.message)
+                if message.degraded_rules:
+                    print(
+                        f"DEGRADED: {message.message}; missing unsupported rule(s) "
+                        f"{list(message.degraded_rules)}; settings drift remains non-clean.",
+                        file=sys.stderr,
+                    )
+            else:
+                print(message)
         return 0
     except (GitHubAPIError, CommandError) as exc:
         # R3-2: the apply WRITE (upsert_ruleset PUT/POST) raises CommandError, not GitHubAPIError;
@@ -247,9 +311,10 @@ def _recorded_versions(root: Path, expected: list[ExpectedArtifact]) -> list[str
     for artifact in expected:
         if artifact.seed_once:
             continue
-        path = root / artifact.output_path
+        path = confined_target(root, artifact.output_path, operation="read managed marker")
         if path.is_file():
             try:
+                path = confined_target(root, artifact.output_path, operation="read managed marker")
                 text = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 # R3-4-1: a non-UTF-8 file at a managed output path carries no valid marker → no
@@ -320,9 +385,28 @@ def _desired_settings(resolved: ResolvedSet) -> dict[str, Any]:
     return {key: value for key, value in flat.items() if key in RECONCILABLE_SETTING_KEYS}
 
 
+def _deployment_environments(resolved: ResolvedSet, render_inputs: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return protected environments selected by the resolved pipeline render inputs.
+
+    Most deploy pipelines declare a fixed environment. A pipeline may instead bind
+    that default to a profile variable; in that case the same effective input rendered
+    into the caller workflow is authoritative for onboarding and remote health probes.
+    """
+    environments: set[str] = set()
+    for module in getattr(resolved, "pipeline_modules", ()):
+        environment = module.environment
+        if module.environment_input is not None:
+            selected = render_inputs.get(module.environment_input)
+            if selected is not None:
+                environment = str(selected)
+        if environment:
+            environments.add(environment)
+    return tuple(sorted(environments))
+
+
 def _drifted_rulesets(
     slug: str,
-    platform: GitHubPlatform,
+    platform: Platform,
     *,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,
@@ -355,7 +439,12 @@ def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[Ex
     drift expect exactly what sync would write.
     """
     return [
-        ExpectedArtifact(a.output, a.body if not a.seed_once else "", a.seed_once)
+        ExpectedArtifact(
+            a.output,
+            a.body if not a.seed_once else "",
+            a.seed_once,
+            input_hash=a.input_hash,
+        )
         for a in resolved_artifacts(
             registry,
             declaration.profile,
@@ -399,7 +488,7 @@ def _published_library_ref_exists(pin: str) -> bool:
     refs = [f"refs/tags/{pin}", f"refs/heads/{pin}"]
     try:
         result = subprocess.run(
-            ["git", "ls-remote", "--exit-code", LIBRARY_REMOTE_URL, *refs],
+            ["git", "ls-remote", "--exit-code", _library_remote_url(), *refs],
             capture_output=True,
             check=False,
             text=True,
@@ -414,8 +503,9 @@ def _require_published_pin(pin: str, *, allow_unresolved: bool) -> None:
     """Fail closed before writing consumer refs that GitHub cannot resolve (§2.6/§6.1)."""
     if allow_unresolved or _published_library_ref_exists(pin):
         return
+    remote_url = _library_remote_url()
     raise DeclarationError(
-        f"Library pin {pin!r} does not resolve to a published Aviato branch or tag at {LIBRARY_REMOTE_URL}; "
+        f"Library pin {pin!r} does not resolve to a published Aviato branch or tag at {remote_url}; "
         "refusing to write consumer workflows that would call a missing reusable workflow ref. "
         "Publish the ref first, or pass --allow-unresolved-pin only for an intentional offline/test scaffold."
     )
@@ -488,6 +578,19 @@ def _owner_repo_vars(slug: str) -> dict[str, str]:
     return {"owner": owner, "repo": repo}
 
 
+class _DiagnosisProbeInputs(TypedDict):
+    prerequisite_paths: Mapping[str, Sequence[str]]
+    drift_automation_markers: Sequence[str]
+
+
+def _diagnosis_probe_inputs(registry: Registry, profile: str) -> _DiagnosisProbeInputs:
+    """Profile-derived local health inputs shared by every diagnosis entrypoint."""
+    return {
+        "prerequisite_paths": registry.profile_doc(profile).get("prerequisites", {}),
+        "drift_automation_markers": DRIFT_AUTOMATION_MARKERS,
+    }
+
+
 def _resolve_onboard_declaration(
     args: argparse.Namespace, registry: Registry, resolved: ResolvedSet, existing: Declaration | None
 ) -> tuple[Declaration, dict[str, Any]]:
@@ -497,6 +600,22 @@ def _resolve_onboard_declaration(
     --migrate-profile, or an attempt to move the pin via onboarding; the caller maps
     that to a clean CLI error. Canonicalizes ``args.pin`` in place so the marker
     rendering downstream emits the same bare pin (§6.1)."""
+    resolved_identity = registry.profile(args.profile).identity
+    if existing is not None and existing.profile == args.profile:
+        if existing.profile_identity is None:
+            raise DeclarationError(
+                "existing declaration has no profile identity; run `aviato sync <path>` first so "
+                "the declaration's own pinned Library registry can migrate it safely"
+            )
+        if existing.profile_identity != resolved_identity:
+            raise DeclarationError(
+                f"existing declaration profile identity mismatch: records {existing.profile_identity!r}, "
+                f"but profile {args.profile!r} resolves to {resolved_identity!r}; refusing to re-onboard"
+            )
+        profile_identity = existing.profile_identity
+    else:
+        profile_identity = resolved_identity
+
     flags = _parse_var_flags(args.var)
     variables = resolve_variables(
         resolved.variables,
@@ -527,6 +646,7 @@ def _resolve_onboard_declaration(
     declaration = Declaration(
         profile=args.profile,
         version=pin,
+        profile_identity=profile_identity,
         docs=docs,
         variables=persisted,
         overrides=(existing.overrides if existing else {}),
@@ -550,18 +670,17 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         )
         return 2
 
-    declaration_path = target / ".github" / "aviato.yaml"
-    existing = load_declaration(declaration_path) if declaration_path.is_file() else None
+    declaration_path = _consumer_declaration_target(target, operation="inspect declaration")
+    existing = _load_consumer_declaration(target) if declaration_path.is_file() else None
+    if existing is None and read_sidecar(target).status != "missing":
+        _print_seed_integrity_error()
+        return 2
 
     try:
         declaration, variables = _resolve_onboard_declaration(args, registry, resolved, existing)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-
-    declaration_path.parent.mkdir(parents=True, exist_ok=True)
-    dump_declaration(declaration, declaration_path)
-    print(f"wrote {declaration_path.relative_to(target)}")
 
     # Scaffold with the RESOLVED declaration.docs (the preserved/effective value), so the docs
     # artifacts always match what the declaration records (§5.2/§6.1/§13.3) — never args.docs.
@@ -574,7 +693,41 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         bootstrap=declaration.bootstrap,
         overrides=declaration.overrides,
     )
-    result = scaffold(target, items, profile=args.profile, version=args.pin)
+    fresh_onboarding = existing is None
+    migrating_from = existing.profile if existing is not None and existing.profile != args.profile else None
+    if migrating_from is not None:
+        protections = classify_migration_targets(target, items, migrating_from=migrating_from)
+        if protections:
+            _print_migration_protections(protections)
+            return 2
+    if fresh_onboarding:
+        baselined = [
+            item.output
+            for item in items
+            if item.seed_once and confined_target(target, item.output, operation="inspect seed baseline").exists()
+        ]
+        for output in baselined:
+            print(f"baselined {output}")
+
+    result = scaffold(
+        target,
+        items,
+        profile=args.profile,
+        version=args.pin,
+        baseline_existing_seeds=fresh_onboarding,
+        allow_fresh_seed_initialization=fresh_onboarding,
+        allow_seed_set_expansion=migrating_from is not None,
+        migrating_from=migrating_from,
+    )
+    if result.seed_integrity_unknown:
+        _print_seed_integrity_error()
+        return 2
+    if result.migration_protections:
+        _print_migration_protections(result.migration_protections)
+        return 2
+
+    _dump_consumer_declaration(declaration, target)
+    print(f"wrote {declaration_path.relative_to(target)}")
     for output in result.written:
         print(f"wrote {output}")
     for output in result.seeded:
@@ -622,8 +775,8 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
         print(f"could not clone {slug}: {exc}", file=sys.stderr)
         return 1
 
-    declaration_path = clone / ".github" / "aviato.yaml"
-    existing = load_declaration(declaration_path) if declaration_path.is_file() else None
+    declaration_path = _consumer_declaration_target(clone, operation="inspect declaration")
+    existing = _load_consumer_declaration(clone) if declaration_path.is_file() else None
     try:
         declaration, variables = _resolve_onboard_declaration(args, registry, resolved, existing)
     except AviatoError as exc:
@@ -635,6 +788,7 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
     # files are left untouched and enumerated (§5.2).
     files: dict[str, str] = {".github/aviato.yaml": declaration_to_yaml(declaration)}
     untouched: list[str] = []
+    managed_items: list[ScaffoldItem] = []
     # Use the RESOLVED declaration.docs (preserved from the clone's existing declaration), so the
     # proposed docs artifacts match the declaration written above — never the raw args.docs (§13.3).
     for artifact in resolved_artifacts(
@@ -646,15 +800,28 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
         bootstrap=declaration.bootstrap,
         overrides=declaration.overrides,
     ):
-        present = (clone / artifact.output).exists()
+        present = confined_target(clone, artifact.output, operation="probe proposal artifact").exists()
         if artifact.seed_once:
             if present:
                 untouched.append(artifact.output)
                 continue
             files[artifact.output] = artifact.body
         else:
-            item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+            item = ScaffoldItem(
+                output=artifact.output,
+                body=artifact.body,
+                comment=artifact.comment,
+                input_hash=artifact.input_hash,
+            )
+            managed_items.append(item)
             files[artifact.output] = render_managed(item, profile=args.profile, version=args.pin)
+
+    migrating_from = existing.profile if existing is not None and existing.profile != args.profile else None
+    if migrating_from is not None:
+        protections = classify_migration_targets(clone, managed_items, migrating_from=migrating_from)
+        if protections:
+            _print_migration_protections(protections)
+            return 2
 
     body_lines = [
         "Aviato onboarding proposal (§5.2 adopt-existing).",
@@ -693,10 +860,11 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     # declaration with no docs artifacts). Apply it to the resolved set + plan here for a LOCAL
     # target; the --open-pr path reads the existing from its clone and uses declaration.docs.
     if not args.docs:
-        decl_path = Path(args.target) / ".github" / "aviato.yaml"
+        target_root = Path(args.target)
+        decl_path = _consumer_declaration_target(target_root, operation="inspect declaration")
         if decl_path.is_file():
             with contextlib.suppress(AviatoError):
-                args.docs = load_declaration(decl_path).docs
+                args.docs = _load_consumer_declaration(target_root).docs
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
         resolved = resolve_profile(registry, args.profile, docs=args.docs)
@@ -713,16 +881,24 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     # write/proposal paths use BEFORE emitting any plan, so the dry-run never prints a partial plan
     # for an invalid --var/--pin, nor a plan for an action --write would refuse (a profile change
     # without --migrate-profile).
-    known_vars = _parse_var_flags(args.var)
+    flag_vars = _parse_var_flags(args.var)
     canonical_pin = normalize_pin(args.pin) if args.pin is not None else None
-    decl_path = Path(args.target) / ".github" / "aviato.yaml"
+    target_root = Path(args.target)
+    decl_path = _consumer_declaration_target(target_root, operation="inspect declaration")
+    existing: Declaration | None = None
     if decl_path.is_file():
-        existing = load_declaration(decl_path)
-        if existing.profile != args.profile and not getattr(args, "migrate_profile", False):
-            raise AviatoError(
-                f"repository already declares profile {existing.profile!r}; pass --migrate-profile "
-                f"to change it to {args.profile!r} (the plan mirrors what --write would refuse)"
-            )
+        existing = _load_consumer_declaration(target_root)
+        # Resolve through the exact write-path precedence and guards, but discard the
+        # declaration value: this is a pure plan and must not mutate the target. Saved
+        # declaration values therefore beat defaults, while explicit --var values beat
+        # both, exactly as they do for --write.
+        _, known = _resolve_onboard_declaration(args, registry, resolved, existing)
+    else:
+        # A fresh plan intentionally remains usable before required variables and a pin
+        # are known. Resolve the subset available to preview conditional artifacts and
+        # configurable environments without weakening the stricter --write preflight.
+        known = {spec.name: spec.default for spec in resolved.variables if spec.default is not None}
+        known.update(flag_vars)
 
     print(f"Onboarding plan for {args.target}")
     print(f"profile: {resolved.profile}")
@@ -736,11 +912,10 @@ def cmd_onboard(args: argparse.Namespace) -> int:
 
     print("templates:")
     # Apply the §12.2/§6.1 conditional filter so the preview lists the *exact* artifacts
-    # --write would materialize — no over-reporting. The known variables are the profile's
-    # defaults plus any supplied --var (the same set --write resolves from), so a template
-    # gated on an unsupplied/unmatched variant is excluded, not shown alongside its sibling.
-    known: dict[str, Any] = {spec.name: spec.default for spec in resolved.variables if spec.default is not None}
-    known.update(known_vars)
+    # --write would materialize — no over-reporting. For an existing declaration these are
+    # the exact effective variables resolved by the write path; for a fresh preview they are
+    # the known defaults plus supplied --var values. An unsupplied/unmatched variant is
+    # excluded, not shown alongside its sibling.
     known["docs"] = "true" if args.docs else "false"
     for template in applicable_templates(resolved, known):
         kind = "seed-once" if template.seed_once else "managed"
@@ -749,9 +924,9 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     if resolved.variables:
         print("variables:")
         for variable in resolved.variables:
-            secret = ", secret" if variable.secret else ""
+            classification_marker = ", secret" if variable.secret else ""
             optional = "" if variable.required else ", optional"
-            print(f"- {variable.name} ({variable.type}{optional}{secret})")
+            print(f"- {variable.name} ({variable.type}{optional}{classification_marker})")
 
     print("settings:")
     # List the rulesets `apply-rulesets` will actually apply — the rendered MANIFEST, the single
@@ -762,6 +937,14 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     for payload in render_all_rulesets(extra_status_checks=_profile_status_checks(args.profile)):
         print(f"- ruleset: {payload['name']}")
 
+    environments = _deployment_environments(resolved, known)
+    if environments:
+        print("protected deployment environments:")
+        for environment in environments:
+            print(f"- {environment}: must exist with at least one required reviewer before deploy")
+    else:
+        print("protected deployment environments: none")
+
     print("next command:")
     print(f"aviato apply-rulesets {args.target} --apply --profile {args.profile}")
     return 0
@@ -769,20 +952,19 @@ def cmd_onboard(args: argparse.Namespace) -> int:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
         expected = _expected_artifacts(registry, declaration)
         secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
-        prerequisite_paths = registry.profile_doc(declaration.profile).get("prerequisites", {})
         # diagnose() rejects a bootstrap declaration in a non-Library repo (§5.4/§5.10); keep it
         # inside the handler so that rejection surfaces as a clean operator error, not a traceback.
         report = diagnose(
@@ -790,8 +972,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             expected,
             declaration_variables=declaration.variables,
             secret_var_names=secret_names,
-            prerequisite_paths=prerequisite_paths,
-            drift_automation_markers=DRIFT_AUTOMATION_MARKERS,
+            **_diagnosis_probe_inputs(registry, declaration.profile),
             profile=declaration.profile,
             is_library=is_library(root),
             bootstrap_declared=declaration.bootstrap,
@@ -804,23 +985,34 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     # per-run scan heartbeat. Best-effort — populated only if a repo slug resolves.
     slug = normalize_slug(remote_url(root))
     if slug and not args.no_remote_probe:
-        # R7-3-APPSTORE-ENV: derive the list of environments to probe from the resolved profile's
-        # pipelines (plug-in DATA, §9b — the binding/core stay agnostic to which capability requires
-        # which env name). Today only app-store-connect declares one; future deploy pipelines that
-        # require a protected environment can add the field without code changes here.
-        environments = tuple(sorted({p.environment for p in resolved.pipeline_modules if p.environment}))
+        # R7-3-APPSTORE-ENV: derive the environments from resolved pipeline DATA and the same
+        # effective variable inputs rendered into configurable callers. The binding remains
+        # agnostic to both capability and environment names, while fixed environments remain fixed.
+        effective_variables = resolve_declared_variables(resolved.variables, declaration.variables)
+        environments = _deployment_environments(resolved, effective_variables)
+        serve_pages = effective_variables.get("serve-pages") is True
+        default_branch_settings = resolved.settings.get("default_branch", {})
+        desired_rulesets = tuple(
+            render_all_rulesets(
+                required_approvals=default_branch_settings.get("required_reviews"),
+                extra_status_checks=list(default_branch_settings.get("required_status_checks", [])),
+            )
+        )
         (
             report.issue_channel_available,
             report.scan_heartbeat_present,
-            report.prerequisites_remote,
+            remote_health,
         ) = GitHubPlatform().probe_health(
             slug,
             environments=environments,
-            probe_pages=declaration.docs,
+            probe_pages_build_type=declaration.docs and serve_pages,
             # findings 30/31/32: API-state probes — drift caller enabled + last-run
             # conclusion, and code-scanning enablement (§2.13/§17 "probeable").
             drift_workflow_path=DRIFT_CALLER_PATH,
+            desired_rulesets=desired_rulesets,
         )
+        report.prerequisites_remote = dict(remote_health)
+        report.drift_automation_enabled = report.prerequisites_remote.pop("drift_automation_enabled", None)
 
     print(f"doctor: {declaration.profile} @ {declaration.version} ({root})")
     for output_path, status in sorted(report.statuses.items()):
@@ -831,7 +1023,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print(f"- {path}")
     if report.secret_in_declaration:
         print("WARNING: secret-typed variable present in declaration (§6.6/§8.15)")
-    print(f"drift automation present: {'yes' if report.drift_automation_present else 'no'}")
+    print(f"drift automation present locally: {'yes' if report.drift_automation_present else 'no'}")
+    print(f"drift automation enabled remotely: {_tri(report.drift_automation_enabled)}")
     print("prerequisites:")
     for name, ok in sorted(report.prerequisites.items()):
         print(f"- {name}: {'ok' if ok else 'missing'}")
@@ -843,37 +1036,76 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print("remote prerequisites (§17):")
         for name, value in sorted(report.prerequisites_remote.items()):
             print(f"- {name}: {_tri(value)}")
-    return 0
+    return 0 if report.drift_automation_healthy else 1
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
+    installed_registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
-        items = materialize_items(
-            registry,
-            declaration.profile,
-            declaration.variables,
-            pin=declaration.version,
-            docs=declaration.docs,
-            bootstrap=declaration.bootstrap,
-            overrides=declaration.overrides,
-        )
+        declaration = _load_consumer_declaration(root)
+        backfilled: Declaration | None = None
+        if declaration.profile_identity is None:
+            with fetch_library_registry(_library_repository(), declaration.version) as pinned_registry:
+                installed_identity = installed_registry.profile(declaration.profile).identity
+                pinned_identity = pinned_registry.profile(declaration.profile).identity
+                if pinned_identity != installed_identity:
+                    raise CompositionError(
+                        f"legacy declaration profile {declaration.profile!r} has identity {pinned_identity!r} "
+                        f"at its current pin, not the installed identity {installed_identity!r}; refusing to "
+                        "backfill or mutate the repository (§6.5)"
+                    )
+                backfilled = Declaration(
+                    profile=declaration.profile,
+                    version=declaration.version,
+                    profile_identity=pinned_identity,
+                    docs=declaration.docs,
+                    bootstrap=declaration.bootstrap,
+                    variables=declaration.variables,
+                    overrides=declaration.overrides,
+                )
+                items = materialize_items(
+                    pinned_registry,
+                    backfilled.profile,
+                    backfilled.variables,
+                    pin=backfilled.version,
+                    docs=backfilled.docs,
+                    bootstrap=backfilled.bootstrap,
+                    overrides=backfilled.overrides,
+                )
+        else:
+            items = materialize_items(
+                installed_registry,
+                declaration.profile,
+                declaration.variables,
+                pin=declaration.version,
+                docs=declaration.docs,
+                bootstrap=declaration.bootstrap,
+                overrides=declaration.overrides,
+            )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
-    expected = [ExpectedArtifact(i.output, i.body, i.seed_once) for i in items]
+    expected = [ExpectedArtifact(i.output, i.body, i.seed_once, input_hash=i.input_hash) for i in items]
     pin_error = _version_pin_error(root, declaration, expected, args.override_version_pin)
     if pin_error:
         print(pin_error, file=sys.stderr)
         return 2
+
+    baselined = [
+        item.output
+        for item in items
+        if item.seed_once and confined_target(root, item.output, operation="inspect seed baseline").exists()
+    ]
+    if args.rebaseline_seeds:
+        for output in baselined:
+            print(f"baselined {output}")
 
     result = scaffold(
         root,
@@ -881,7 +1113,15 @@ def cmd_sync(args: argparse.Namespace) -> int:
         profile=declaration.profile,
         version=declaration.version,
         force=args.force,
+        baseline_existing_seeds=args.rebaseline_seeds,
+        allow_fresh_seed_initialization=False,
     )
+    if result.seed_integrity_unknown:
+        _print_seed_integrity_error()
+        return 2
+    if backfilled is not None:
+        _dump_consumer_declaration(backfilled, root)
+        print(f"wrote profile-identity {backfilled.profile_identity} to {declaration_path.relative_to(root)}")
     for output in result.written:
         print(f"wrote {output}")
     for output in result.seeded:
@@ -941,7 +1181,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
             # `aviato scan` over a fleet, and an all-errors run reporting success would mask a
             # broken fleet. Error rows go to stderr so the stdout TSV stays machine-parseable.
             print(f"{scan.path}\tERROR: {scan.error}", file=sys.stderr)
-            rc = 1
+            rc = max(rc, 2 if scan.invalid_declaration else 1)
             continue
         summary = ", ".join(f"{output}={status}" for output, status in sorted(scan.statuses.items())) or "—"
         flags = " [secret-in-declaration]" if scan.secret_in_declaration else ""
@@ -950,7 +1190,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
         # not only in `doctor` — otherwise the scale-out command silently drops the one signal
         # seed-once tracking exists to provide.
         if scan.seed_divergence:
-            print(f"  seed divergence: {', '.join(sorted(scan.seed_divergence))}", file=sys.stderr)
+            for output in sorted(scan.seed_divergence):
+                print(f"  seed divergence: {output}", file=sys.stderr)
         # finding 33: the §5.4 probes the sweep previously dropped.
         if scan.drift_automation_present is False:
             print("  drift automation: MISSING", file=sys.stderr)
@@ -967,7 +1208,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 # R3-1: open_or_update_proposal's git/gh writes raise CommandError; without it in
                 # the tuple a push failure escapes to main() and aborts the whole fleet sweep.
                 print(f"  fix ERROR: {exc}", file=sys.stderr)
-                rc = 1
+                rc = max(rc, 1)
     return rc
 
 
@@ -1005,11 +1246,11 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
     — exactly like ``drift-report``/``sync`` — so an incompatible local tool cannot
     regenerate a consumer's files (unless the operator passes --override-version-pin).
     """
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         raise AviatoError(f"no declaration at {declaration_path}")
 
-    declaration = load_declaration(declaration_path)
+    declaration = _load_consumer_declaration(root)
     expected = _expected_artifacts(registry, declaration)
     # §2.6 pin gate before any remote/proposal work (matches drift-report/sync): an
     # incompatible local tool must not regenerate a consumer's files via scan --fix.
@@ -1027,6 +1268,7 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
         expected,
         declaration_variables=declaration.variables,
         secret_var_names=secret_names,
+        **_diagnosis_probe_inputs(registry, declaration.profile),
         profile=declaration.profile,
         is_library=is_library(root),
         bootstrap_declared=declaration.bootstrap,
@@ -1044,7 +1286,12 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
     ):
         if artifact.seed_once:
             continue
-        item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+        item = ScaffoldItem(
+            output=artifact.output,
+            body=artifact.body,
+            comment=artifact.comment,
+            input_hash=artifact.input_hash,
+        )
         managed_bodies[artifact.output] = render_managed(item, profile=declaration.profile, version=declaration.version)
 
     # review #5: drift is DIAGNOSED against the operator's local tree (above), but the proposal
@@ -1112,15 +1359,30 @@ def cmd_repin(args: argparse.Namespace) -> int:
         return _repin_proposal(args)
 
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
-        plan = plan_repin(registry, declaration, args.version)
+        declaration = _load_consumer_declaration(root)
+        base_resolved = resolve_profile(Registry(MODULE_SOURCE_ROOT), declaration.profile)
+        resolve_declared_variables(base_resolved.variables, declaration.variables)
+        with fetch_library_registry(_library_repository(), normalize_pin(args.version)) as target_registry:
+            plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
+            items = (
+                materialize_items(
+                    target_registry,
+                    declaration.profile,
+                    declaration.variables,
+                    pin=plan.target_version,
+                    docs=declaration.docs,
+                    bootstrap=declaration.bootstrap,
+                    overrides=declaration.overrides,
+                )
+                if plan.ok and args.write
+                else None
+            )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -1152,10 +1414,13 @@ def cmd_repin(args: argparse.Namespace) -> int:
     if (gate_error := _gate_repin_target(root, plan.target_version, args)) is not None:
         print(gate_error, file=sys.stderr)
         return 2
+    if items is None:
+        raise AssertionError("writeable re-pin plan did not materialize target-registry items")
 
     updated = Declaration(
         profile=declaration.profile,
         version=plan.target_version,
+        profile_identity=declaration.profile_identity,
         docs=declaration.docs,
         bootstrap=declaration.bootstrap,
         variables=declaration.variables,
@@ -1164,18 +1429,21 @@ def cmd_repin(args: argparse.Namespace) -> int:
     # R3-4-3: render the new-pin artifacts BEFORE persisting the pin, so a render-time failure aborts
     # the re-pin without leaving the declaration moved to the new pin but the managed files still at
     # the old one (a non-transactional state that a re-run would report as `X -> X` and re-fail).
-    items = materialize_items(
-        registry,
-        updated.profile,
-        updated.variables,
-        pin=updated.version,
-        docs=updated.docs,
-        bootstrap=updated.bootstrap,
-        overrides=updated.overrides,
-    )
-    dump_declaration(updated, declaration_path)
+    if preflight_seed_integrity(root, items, allow_fresh_seed_initialization=False).unknown:
+        _print_seed_integrity_error()
+        return 2
+    _dump_consumer_declaration(updated, root)
     print(f"wrote pin {plan.target_version} to {declaration_path.relative_to(root)}")
-    result = scaffold(root, items, profile=updated.profile, version=updated.version)
+    result = scaffold(
+        root,
+        items,
+        profile=updated.profile,
+        version=updated.version,
+        allow_fresh_seed_initialization=False,
+    )
+    if result.seed_integrity_unknown:
+        _print_seed_integrity_error()
+        return 2
     for output in result.written:
         print(f"rewrote {output}")
     # §5.12: surface files the no-clobber guard left at the OLD pin so the operator
@@ -1216,25 +1484,42 @@ def _repin_proposal(args: argparse.Namespace) -> int:
         print(f"could not clone {slug}: {exc}", file=sys.stderr)
         return 1
 
-    declaration_path = clone / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(clone, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}; onboard first", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
-        plan = plan_repin(registry, declaration, args.version)
+        declaration = _load_consumer_declaration(clone)
+        with fetch_library_registry(_library_repository(), normalize_pin(args.version)) as target_registry:
+            plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
+            items = (
+                materialize_items(
+                    target_registry,
+                    declaration.profile,
+                    declaration.variables,
+                    pin=plan.target_version,
+                    docs=declaration.docs,
+                    bootstrap=declaration.bootstrap,
+                    overrides=declaration.overrides,
+                )
+                if plan.ok
+                else None
+            )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     if not plan.ok:
         for name in plan.newly_required:
             print(f"newly-required variable (set before re-pinning): {name}", file=sys.stderr)
+        for name in plan.orphaned_overrides:
+            print(f"orphaned override (no longer in the profile): {name}", file=sys.stderr)
         for name in plan.conflicting_overrides:
             print(f"conflicting pipelines.add override (now bundled at the target): {name}", file=sys.stderr)
         print("re-pin blocked; resolve the above first (§5.12).", file=sys.stderr)
         return 1
+    if items is None:
+        raise AssertionError("writeable re-pin proposal did not materialize target-registry items")
     if (gate_error := _gate_repin_target(clone, plan.target_version, args)) is not None:
         print(gate_error, file=sys.stderr)
         return 2
@@ -1242,26 +1527,26 @@ def _repin_proposal(args: argparse.Namespace) -> int:
     updated = Declaration(
         profile=declaration.profile,
         version=plan.target_version,
+        profile_identity=declaration.profile_identity,
         docs=declaration.docs,
         bootstrap=declaration.bootstrap,
         variables=declaration.variables,
         overrides=declaration.overrides,
     )
-    try:
-        items = materialize_items(
-            registry,
-            updated.profile,
-            updated.variables,
-            pin=updated.version,
-            docs=updated.docs,
-            bootstrap=updated.bootstrap,
-            overrides=updated.overrides,
-        )
-    except AviatoError as exc:
-        print(str(exc), file=sys.stderr)
+    if preflight_seed_integrity(clone, items, allow_fresh_seed_initialization=False).unknown:
+        _print_seed_integrity_error()
         return 2
-    dump_declaration(updated, declaration_path)
-    result = scaffold(clone, items, profile=updated.profile, version=updated.version)
+    _dump_consumer_declaration(updated, clone)
+    result = scaffold(
+        clone,
+        items,
+        profile=updated.profile,
+        version=updated.version,
+        allow_fresh_seed_initialization=False,
+    )
+    if result.seed_integrity_unknown:
+        _print_seed_integrity_error()
+        return 2
 
     body_lines = [
         f"Aviato re-pin proposal (§5.12): {declaration.version} -> {plan.target_version}.",
@@ -1295,14 +1580,14 @@ def cmd_offboard(args: argparse.Namespace) -> int:
         return _offboard_proposal(args)
 
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         expected = _expected_artifacts(registry, declaration)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -1361,14 +1646,14 @@ def _offboard_proposal(args: argparse.Namespace) -> int:
         print(f"could not clone {slug}: {exc}", file=sys.stderr)
         return 1
 
-    declaration_path = clone / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(clone, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}; nothing to offboard", file=sys.stderr)
         return 2
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(clone)
         expected = _expected_artifacts(registry, declaration)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -1408,7 +1693,7 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
     not the gated §5.7 drift/consent flow.
     """
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
@@ -1420,7 +1705,7 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
@@ -1470,7 +1755,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
     the idempotent `complete-protection` recovery (§8.7). Operator-DIRECT (§2.3).
     """
     slug = args.slug
-    if "/" not in slug:
+    if not is_owner_repo_slug(slug):
         print("provide the new repository as OWNER/REPO", file=sys.stderr)
         return 2
 
@@ -1500,7 +1785,13 @@ def cmd_provision(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    declaration = Declaration(profile=args.profile, version=args.pin, docs=args.docs, variables=persisted)
+    declaration = Declaration(
+        profile=args.profile,
+        version=args.pin,
+        profile_identity=registry.profile(args.profile).identity,
+        docs=args.docs,
+        variables=persisted,
+    )
     desired = _desired_settings(resolved)
     items = materialize_items(registry, args.profile, variables, pin=args.pin, docs=args.docs)
 
@@ -1512,9 +1803,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
         atexit.register(shutil.rmtree, workdir, True)  # clean the clone at exit (one command per process)
         clone = workdir / "repo"
         run(["gh", "repo", "clone", slug, str(clone)])
-        decl_path = clone / ".github" / "aviato.yaml"
-        decl_path.parent.mkdir(parents=True, exist_ok=True)
-        dump_declaration(declaration, decl_path)
+        _dump_consumer_declaration(declaration, clone)
         scaffold(clone, items, profile=args.profile, version=args.pin)
         run(["git", "-C", str(clone), "config", "user.name", "aviato-bot"])
         run(["git", "-C", str(clone), "config", "user.email", "aviato-bot@users.noreply.github.com"])
@@ -1608,7 +1897,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         return 2
 
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
@@ -1620,7 +1909,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
@@ -1653,6 +1942,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
                 expected,
                 declaration_variables=declaration.variables,
                 secret_var_names=secret_names,
+                **_diagnosis_probe_inputs(registry, declaration.profile),
                 profile=declaration.profile,
                 is_library=is_library(root),
                 bootstrap_declared=declaration.bootstrap,
@@ -1674,7 +1964,12 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         ):
             if artifact.seed_once:
                 continue
-            item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+            item = ScaffoldItem(
+                output=artifact.output,
+                body=artifact.body,
+                comment=artifact.comment,
+                input_hash=artifact.input_hash,
+            )
             managed_bodies[artifact.output] = render_managed(
                 item, profile=declaration.profile, version=declaration.version
             )
@@ -1836,13 +2131,13 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
         return 2
     args.version = bare
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -1851,7 +2146,7 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
     if not locations:
         print("profile declares no version-source locations", file=sys.stderr)
         return 2
-    present = [loc for loc in locations if (root / loc).is_file()]
+    present = [loc for loc in locations if confined_target(root, loc, operation="probe version source").is_file()]
     try:
         changed = bump_files(root, locations, args.version, args.build_number)
     except AviatoError as exc:
@@ -1881,7 +2176,7 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
 
 def cmd_reconcile(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
@@ -1893,7 +2188,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 
     registry = Registry(MODULE_SOURCE_ROOT)
     try:
-        declaration = load_declaration(declaration_path)
+        declaration = _load_consumer_declaration(root)
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
@@ -2057,6 +2352,11 @@ def build_parser() -> argparse.ArgumentParser:
     sync = subparsers.add_parser("sync", help="Materialize managed artifacts into a consumer repository.")
     sync.add_argument("path", help="Path to the consumer repository.")
     sync.add_argument("--force", action="store_true", help="Overwrite unmanaged/malformed-marker files.")
+    sync.add_argument(
+        "--rebaseline-seeds",
+        action="store_true",
+        help="Explicitly adopt current seed-once contents and replace the integrity sidecar.",
+    )
     sync.add_argument(
         "--override-version-pin", action="store_true", help="Proceed despite a version-pin mismatch (§2.6)."
     )

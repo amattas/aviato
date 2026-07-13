@@ -169,11 +169,14 @@ evaluated against the deployed code, not a stale PR head); **published-artifact
 scans gate the publish itself** (§11.7). **Where each gate lives (GitHub binding):**
 the **dependency** and **secret** scans gate **in-workflow** (the scanner's
 exit-code fails the job on high/critical / any secret), and report **all severities**
-as SARIF (medium/low surfaced, not blocked); the **SAST (CodeQL)** high/critical gate
-is realized by the platform's **code-scanning check** evaluated against the uploaded
-SARIF (CodeQL has no in-workflow fail-on-severity input), which the operator enables
-at the high/critical threshold as a §17 prerequisite (probeable, §5.4) — the workflow
-proves CodeQL **ran**, the platform check enforces the **severity gate**.
+as SARIF (medium/low surfaced, not blocked); **SAST (CodeQL)** is enforced twice after
+the uploaded SARIF finishes processing: the workflow queries every page of open alerts
+for the exact analyzed ref and CodeQL tool and fails on high/critical, while the branch
+ruleset carries a CodeQL `code_scanning` rule with `alerts_threshold=none` and
+`security_alerts_threshold=high_or_higher`. Doctor probes both code-scanning availability
+and this exact merge-protection threshold. The required heartbeat remains an independent
+freshness/availability signal and is uploaded only after all scan gates pass; it is not a
+substitute for CodeQL severity enforcement.
 **Enforcement is fail-closed:** a scan
 whose required upload privilege is absent at runtime, or that cannot run, **fails
 the pipeline** — it never passes silently (§5.14, §5.4, §8.16). **No external

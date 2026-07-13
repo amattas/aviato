@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,47 @@ def repo_copy(tmp_path: Path) -> Path:
 def test_clean_copy_validates(repo_copy: Path) -> None:
     # Baseline: an untouched copy validates, so the negative tests below isolate the drift.
     assert validate(repo_copy) == []
+
+
+def test_pypi_privilege_split_drift_is_detected(repo_copy: Path) -> None:
+    pipelines = repo_copy / "aviato" / "library" / "pipelines.yaml"
+    text = pipelines.read_text(encoding="utf-8")
+    drifted = text.replace(
+        'local_publisher_privileges: ["contents: read", "id-token: write", "attestations: write"]',
+        'local_publisher_privileges: ["contents: read"]',
+    )
+    assert drifted != text, "fixture did not contain the PyPI local publisher privilege split"
+    pipelines.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("PyPI" in error and "local publisher privileges" in error for error in errors)
+
+
+def test_status_bridge_context_drift_is_detected(repo_copy: Path) -> None:
+    caller = repo_copy / "aviato" / "library" / "scaffold" / "files" / "wf-python-library.yml"
+    text = caller.read_text(encoding="utf-8")
+    drifted = text.replace("ci / Python CI", "ci / Drifted Python CI", 1)
+    assert drifted != text, "fixture did not contain the expected Python verify context"
+    caller.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any(
+        "wf-python-library.yml" in error and "ci / Python CI" in error and "status bridge" in error for error in errors
+    )
+
+
+def test_project_version_drift_from_runtime_metadata_is_detected(repo_copy: Path) -> None:
+    pyproject = repo_copy / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+    drifted = text.replace('version = "0.3.0"', 'version = "9.9.9"', 1)
+    assert drifted != text, "fixture did not contain the expected project version"
+    pyproject.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("project version" in error and "runtime" in error for error in errors)
 
 
 def test_tag_pattern_drift_in_release_workflow_is_detected(repo_copy: Path) -> None:
@@ -149,9 +191,20 @@ def test_library_bootstrap_profile_mismatch_is_detected(repo_copy: Path) -> None
     # expected managed files instead of checking only the two workflow callers.
     decl = repo_copy / ".github" / "aviato.yaml"
     text = decl.read_text(encoding="utf-8").replace("profile: aviato-library", "profile: python-library")
+    text = text.replace("variables:\n", "variables:\n  distribution-name: aviato\n")
     decl.write_text(text, encoding="utf-8")
     errors = validate(repo_copy)
     assert any("missing Library bootstrap managed artifact" in e for e in errors)
+
+
+def test_library_seed_sidecar_exactly_matches_resolved_seed_outputs(repo_copy: Path) -> None:
+    sidecar = repo_copy / ".github" / "aviato.seed.json"
+    stale_hash = "0" * 64
+    sidecar.write_text(f'{{"website/docusaurus.config.js": "{stale_hash}"}}\n', encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("Library seed sidecar" in error and "website/zensical.toml" in error for error in errors)
 
 
 def test_static_ruleset_pattern_drift_is_detected(repo_copy: Path) -> None:
@@ -289,6 +342,85 @@ def test_scaffold_reference_to_missing_reusable_workflow_is_detected(repo_copy: 
     assert any("references missing reusable workflow reusable-missing-ci.yml" in e for e in errors)
 
 
+def test_rendered_scaffold_wrong_repository_is_detected_with_placeholder_ref(repo_copy: Path) -> None:
+    body = repo_copy / "aviato/library/scaffold/files/wf-python-library.yml"
+    text = body.read_text(encoding="utf-8")
+    drifted = text.replace(
+        "{{ aviato-workflow-prefix }}reusable-python-ci.yml{{ aviato-workflow-suffix }}",
+        "wrong/repository/.github/workflows/reusable-python-ci.yml@{{ aviato-ref }}",
+        1,
+    )
+    assert drifted != text, "fixture did not contain the rendered reusable-workflow reference"
+    body.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any(
+        "rendered scaffold workflow" in error and "wrong/repository" in error and "amattas/aviato" in error
+        for error in errors
+    )
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "amattas/aviato/.github/workflows/reusable-python-ci.yml",
+        "amattas/aviato/.github/workflows/reusable-python-ci.yml@",
+    ],
+)
+def test_rendered_scaffold_requires_one_nonempty_ref(repo_copy: Path, replacement: str) -> None:
+    body = repo_copy / "aviato/library/scaffold/files/wf-python-library.yml"
+    text = body.read_text(encoding="utf-8")
+    drifted = text.replace(
+        "{{ aviato-workflow-prefix }}reusable-python-ci.yml{{ aviato-workflow-suffix }}",
+        replacement,
+        1,
+    )
+    assert drifted != text
+    body.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any(
+        "rendered scaffold workflow" in error and "reusable-python-ci.yml" in error and "nonempty @ref" in error
+        for error in errors
+    )
+
+
+def test_remote_workflow_reference_accepts_placeholder_ref() -> None:
+    import aviato.validation as validation
+
+    errors: list[str] = []
+    validation._check_remote_reusable_reference(
+        "amattas/aviato/.github/workflows/reusable-python-ci.yml@{{ aviato-ref }}",
+        source="fixture",
+        repository="amattas/aviato",
+        workflow_files={"reusable-python-ci.yml"},
+        errors=errors,
+    )
+
+    assert errors == []
+
+
+def test_documented_template_wrong_repository_is_detected(repo_copy: Path) -> None:
+    template = repo_copy / "templates/profile-python-library.yml"
+    text = template.read_text(encoding="utf-8")
+    drifted = text.replace(
+        "amattas/aviato/.github/workflows/reusable-python-ci.yml@EXAMPLE_PIN",
+        "wrong/repository/.github/workflows/reusable-python-ci.yml@EXAMPLE_PIN",
+        1,
+    )
+    assert drifted != text, "fixture did not contain the documented reusable-workflow reference"
+    template.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any(
+        "templates/profile-python-library.yml" in error and "wrong/repository" in error and "amattas/aviato" in error
+        for error in errors
+    )
+
+
 def test_docs_caller_grep_pattern_drift_is_detected(repo_copy: Path) -> None:
     # finding 39 — pattern-agnostic: reads the policy literal from the copy at test
     # time, so a future policy change does not rewrite this fixture.
@@ -316,6 +448,56 @@ def test_docs_caller_workflow_run_name_drift_is_detected(repo_copy: Path) -> Non
     assert any("finding 40" in e for e in validate(repo_copy))
 
 
+def test_rendered_library_docs_caller_name_drift_is_detected(repo_copy: Path) -> None:
+    ci = repo_copy / ".github/workflows/aviato-ci.yml"
+    text = ci.read_text(encoding="utf-8")
+    ci.write_text(text.replace("name: Aviato Python Library\n", "name: Renamed Library CI\n", 1), encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any(".github/workflows/aviato-docs.yml" in e and "Renamed Library CI" in e for e in errors)
+
+
+def test_missing_docs_name_parity_source_is_an_error(repo_copy: Path) -> None:
+    missing = repo_copy / "aviato/library/scaffold/files/wf-python-library.yml"
+    missing.unlink()
+
+    errors = validate(repo_copy)
+
+    assert any("wf-docs-python-library.yml" in e and "missing" in e and "name parity" in e for e in errors)
+
+
+def test_monotonic_alias_timeout_is_one_actionable_error(repo_copy: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import aviato.validation as validation
+
+    monkeypatch.setattr(validation, "_MONOTONIC_ALIAS_WORKFLOWS", ["starter/docs-site/docs.yml"])
+
+    def timeout(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        timeout_value = kwargs.get("timeout", 0)
+        assert isinstance(timeout_value, int | float)
+        raise subprocess.TimeoutExpired(cmd=str(args[0]), timeout=timeout_value)
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    errors: list[str] = []
+
+    validation._check_monotonic_alias_parity(repo_copy, errors)
+
+    assert len(errors) == 1
+    assert "starter/docs-site/docs.yml" in errors[0]
+    assert "timed out" in errors[0]
+    assert "monotonic-alias" in errors[0]
+
+
+def test_root_pyproject_floating_dev_extra_is_detected(repo_copy: Path) -> None:
+    manifest = repo_copy / "pyproject.toml"
+    text = manifest.read_text(encoding="utf-8")
+    manifest.write_text(text.replace('"ruff==0.15.16"', '"ruff>=0.15.16"'), encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("pyproject.toml" in e and "ruff>=0.15.16" in e and "exact version" in e for e in errors)
+
+
 def test_library_slug_copy_drift_is_detected(repo_copy: Path) -> None:
     # finding 41: a desynced Library-slug copy (here: the zizmor ref-pin exemption)
     # must be flagged so a rename/transfer moves every site together.
@@ -325,6 +507,97 @@ def test_library_slug_copy_drift_is_detected(repo_copy: Path) -> None:
     assert drifted != text, "fixture did not contain the zizmor slug exemption"
     z.write_text(drifted, encoding="utf-8")
     assert any("finding 41" in e for e in validate(repo_copy))
+
+
+def test_every_release_install_url_copy_must_match_policy(repo_copy: Path) -> None:
+    workflow = repo_copy / ".github/workflows/reusable-release.yml"
+    text = workflow.read_text(encoding="utf-8")
+    drifted = text.replace(
+        "git+https://github.com/amattas/aviato@${AVIATO_REF}",
+        "git+https://github.com/wrong/repository@${AVIATO_REF}",
+        1,
+    )
+    assert drifted != text
+    assert "git+https://github.com/amattas/aviato@${AVIATO_REF}" in drifted
+    workflow.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("reusable-release.yml" in error and "wrong/repository" in error for error in errors)
+
+
+def test_every_zizmor_repository_policy_copy_must_match(repo_copy: Path) -> None:
+    config = repo_copy / "aviato/library/zizmor.yml"
+    text = config.read_text(encoding="utf-8")
+    text += "\n        wrong/repository/*: ref-pin\n"
+    config.write_text(text, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("zizmor.yml" in error and "wrong/repository" in error for error in errors)
+
+
+@pytest.mark.parametrize("replacement", ["hash-pin", "ref-pin-with-typo"])
+def test_policy_zizmor_repository_exemption_must_be_ref_pin(repo_copy: Path, replacement: str) -> None:
+    config = repo_copy / "aviato/library/zizmor.yml"
+    text = config.read_text(encoding="utf-8")
+    drifted = text.replace("amattas/aviato/*: ref-pin", f"amattas/aviato/*: {replacement}", 1)
+    assert drifted != text
+    config.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("zizmor.yml" in error and "amattas/aviato" in error and "ref-pin" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    [
+        ("github/*: ref-pin", "github/*: ref-pin\n        evil/*: ref-pin"),
+        ("github/*: ref-pin", "github/*: ref-pin\n        evil/repository: ref-pin"),
+        ("github/*: ref-pin", "github/*: ref-pin\n        evil/repository/*: hash-pin"),
+        ('"*": hash-pin', '"*": ref-pin'),
+        ("        actions/*: ref-pin          # first-party GitHub — branch/tag allowed\n", ""),
+        ("        amattas/aviato/*: ref-pin\n", ""),
+    ],
+)
+def test_zizmor_unpinned_uses_policy_map_is_closed(
+    repo_copy: Path,
+    needle: str,
+    replacement: str,
+) -> None:
+    config = repo_copy / "aviato/library/zizmor.yml"
+    text = config.read_text(encoding="utf-8")
+    drifted = text.replace(needle, replacement, 1)
+    assert drifted != text
+    config.write_text(drifted, encoding="utf-8")
+
+    errors = validate(repo_copy)
+
+    assert any("zizmor.yml" in error and "exactly equal" in error for error in errors)
+
+
+def test_library_repository_policy_mutation_binds_validation_and_remote(repo_copy: Path) -> None:
+    from aviato import cli
+    from aviato.policy import library_repository, load_policy
+
+    policy_path = repo_copy / "aviato/library/policy.yml"
+    text = policy_path.read_text(encoding="utf-8")
+    policy_path.write_text(
+        text.replace(
+            "library:\n  repository: amattas/aviato",
+            "library:\n  repository: example/library",
+        ),
+        encoding="utf-8",
+    )
+    policy = load_policy(repo_copy / "aviato/library")
+
+    assert library_repository(policy) == "example/library"
+    assert cli._library_remote_url(policy) == "https://github.com/example/library.git"
+    errors = validate(repo_copy)
+    assert any("reusable-release.yml" in error and "example/library" in error for error in errors)
+    assert any("zizmor.yml" in error and "example/library" in error for error in errors)
+    assert any("templates/profile-python-library.yml" in error and "example/library" in error for error in errors)
 
 
 def test_scaffold_cron_drift_is_detected(repo_copy: Path) -> None:

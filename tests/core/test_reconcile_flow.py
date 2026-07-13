@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
@@ -11,7 +13,7 @@ from aviato.core.settingsdrift import classify_settings
 from .fakeplatform import FakePlatform
 
 
-def _current_diff_id(desired, live) -> str:
+def _current_diff_id(desired: dict[str, Any], live: dict[str, Any]) -> str:
     return diff_identity(classify_settings(desired=desired, live=live))
 
 
@@ -77,7 +79,7 @@ def test_merge_method_drift_detected_and_reconciled() -> None:
     assert platform.settings["allow_merge_commit"] is True  # converged
 
 
-def test_apply_succeeds_even_if_audit_comment_fails(capsys) -> None:
+def test_apply_succeeds_even_if_audit_comment_fails(capsys: pytest.CaptureFixture[str]) -> None:
     # §5.7 audit breadcrumb is best-effort: once apply_settings has landed, a transient failure
     # posting the "Applied" comment must NOT raise out (which would make the operator think the
     # privileged change failed and re-run it). The apply outcome is still returned; a warning is
@@ -172,7 +174,7 @@ def test_apply_audit_comment_includes_destructive_removals() -> None:
         confirmed_diff_id=diff_id,
     )
     assert outcome.action == "apply"
-    comments = [args[2] for name, args in platform.calls if name == "comment_issue"]
+    comments = [args[2] for name, args in platform.calls if name == "comment_issue" and isinstance(args[2], str)]
     assert any("legacy_restriction" in body for body in comments), comments
 
 
@@ -203,7 +205,7 @@ def test_apply_failure_is_recorded_on_issue_then_reraised() -> None:
             recorded_version="1.0.0",
             confirmed_diff_id=diff_id,
         )
-    comments = [args[2] for name, args in platform.calls if name == "comment_issue"]
+    comments = [args[2] for name, args in platform.calls if name == "comment_issue" and isinstance(args[2], str)]
     assert any("fail" in body.lower() for body in comments), comments
 
 
@@ -303,6 +305,7 @@ def test_apply_audit_reports_skipped_unavailable_security_toggle() -> None:
         confirmed_diff_id=diff_id,
     )
     audit = next(args[2] for name, args in platform.calls if name == "comment_issue")
+    assert isinstance(audit, str)
     assert "Applied diff" in audit
     assert "SKIPPED unavailable" in audit and "secret_scanning" in audit
 
@@ -328,7 +331,7 @@ def test_apply_reads_consent_again_and_aborts_if_revoked_before_apply() -> None:
             super().__init__(settings=dict(live), issues={"k": granted})
             self._issue_reads = 0
 
-        def get_issue(self, repo: str, key: str):
+        def get_issue(self, repo: str, key: str) -> Issue | None:
             self._issue_reads += 1
             return granted if self._issue_reads == 1 else revoked  # consent revoked before apply
 

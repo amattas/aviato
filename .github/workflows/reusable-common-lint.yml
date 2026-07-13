@@ -125,6 +125,7 @@ jobs:
               echo "::error::aviato-ref '${AVIATO_REF}' is not a pinned version (expected X.Y.Z, X.Y.Z-alphaN/-betaN, or a floating major N)."
               exit 1
             fi
+            # library.repository copy; aviato validate binds this URL to packaged policy.yml.
             python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
           fi
           aviato lint-actions .

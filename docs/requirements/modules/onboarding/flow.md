@@ -37,6 +37,11 @@ only for intentional offline/test scaffolds and must be named as such.
 **Guards:** never change an already-declared profile to a different one without
 an explicit migrate override; enumerate files left untouched (seed-once,
 unmanaged) in the proposal.
+For `python-library`, the managed CI caller includes the consumer-local `pypi`
+environment job required by PyPI Trusted Publishing. Register that exact caller
+path and environment with PyPI/TestPyPI after onboarding. The reusable build
+workflow requires `consumer-publisher-present: true`; older callers fail loudly
+with an `aviato sync` instruction instead of completing without publishing.
 **Partially-provisioned state & recovery (normative):** between minimal and full
 protection the repo is in a defined **partially-provisioned** state. Minimal
 protection (no force-push, no deletion; no PR-required gate that would block the
@@ -44,6 +49,13 @@ first commit) is **safe to persist** indefinitely. If full protection fails afte
 the first commit, the process reports the partial state and exposes an
 **idempotent `complete-protection` recovery operation** that re-applies full
 protection and is safe to re-run any number of times.
+When GitHub rejects the `tag_name_pattern` metadata restriction with an explicit
+HTTP 422 unsupported-rule response, full-protection application retries exactly
+once with only that rule omitted. The CLI reports the repository and omitted rule
+as **DEGRADED**; deletion and non-fast-forward protections, conditions,
+enforcement, and the no-bypass posture remain intact. No other API, authentication,
+network, malformed-response, or validation failure is downgraded. A later failure
+does not roll back earlier successful mutations, which are reported as they occur.
 
 ```mermaid
 flowchart TD

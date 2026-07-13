@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
+import pytest
+
+from aviato.core.errors import PathConfinementError
 from aviato.core.offboarding import offboard
-from aviato.core.scaffold import ScaffoldItem, scaffold
+from aviato.core.pathguard import confined_target
+from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
+from aviato.core.scaffold import scaffold
+
+ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 
 
 def _setup_consumer(root: Path) -> None:
@@ -11,6 +19,31 @@ def _setup_consumer(root: Path) -> None:
     github.mkdir()
     (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
     scaffold(root, [ScaffoldItem("ruff.toml", "line-length = 120\n", "#", False)], profile="p", version="v1")
+
+
+def test_offboard_preflights_symlinked_workflow_leaf_before_mutation(tmp_path: Path) -> None:
+    _setup_consumer(tmp_path)
+    passive_before = (tmp_path / "ruff.toml").read_bytes()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.yml"
+    scaffold(
+        outside.parent,
+        [ScaffoldItem(outside.name, "name: outside\n", "#", False)],
+        profile="p",
+        version="v1",
+    )
+    outside_before = outside.read_bytes()
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir()
+    leaf = workflows / "ci.yml"
+    leaf.symlink_to(outside)
+
+    with pytest.raises(PathConfinementError, match=r"offboard.*\.github/workflows/ci\.yml"):
+        offboard(tmp_path, ["ruff.toml", ".github/workflows/ci.yml"], keep_files=False)
+
+    assert (tmp_path / "ruff.toml").read_bytes() == passive_before
+    assert outside.read_bytes() == outside_before
+    assert leaf.is_symlink()
+    assert (tmp_path / ".github" / "aviato.yaml").is_file()
 
 
 def test_offboard_skips_non_utf8_file_instead_of_crashing(tmp_path: Path) -> None:
@@ -32,6 +65,34 @@ def test_keep_files_strips_markers_and_deletes_declaration(tmp_path: Path) -> No
     assert result.stripped == ["ruff.toml"]
     assert result.declaration_removed is True
     assert not (tmp_path / ".github" / "aviato.yaml").exists()
+
+
+def test_offboard_rechecks_static_targets_before_metadata_and_unlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import aviato.core.offboarding as offboarding_module
+
+    _setup_consumer(tmp_path)
+    original_guard = confined_target
+    calls: dict[str, list[str]] = {".github/aviato.yaml": [], ".github/aviato.seed.json": []}
+
+    def tracking_guard(root: Path, relative: str, *, operation: str) -> Path:
+        if relative in calls:
+            calls[relative].append(operation)
+        return original_guard(root, relative, operation=operation)
+
+    monkeypatch.setattr(offboarding_module, "confined_target", tracking_guard)
+    offboard(tmp_path, [], keep_files=True)
+
+    assert calls[".github/aviato.yaml"] == [
+        "preflight offboard declaration",
+        "inspect offboard declaration",
+        "delete offboard declaration",
+    ]
+    assert calls[".github/aviato.seed.json"] == [
+        "preflight offboard sidecar",
+        "inspect offboard sidecar",
+    ]
 
 
 def test_remove_files_deletes_managed_files(tmp_path: Path) -> None:

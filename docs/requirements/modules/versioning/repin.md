@@ -4,9 +4,10 @@
 
 **Trigger:** operator moves a Consumer to a different Library version.
 **Actor:** operator (local CLI).
-**Steps:** read the current pin → confirm the **profile exists and has the same
-identity** at the target version (a profile name is a stable public identity;
-§6.5) → set the new pin → re-resolve at the target version → **migrate variables
+**Steps:** read the current pin and persisted `profile-identity` → resolve the
+published target ref to one commit and safely fetch that commit's Library registry
+→ confirm the **profile exists and has the same explicit identity** at the target
+version (§6.5) → set the new pin → re-resolve using that same fetched registry → **migrate variables
 and overrides**: detect newly-**required** variables and prompt/fail with
 guidance, detect **orphaned** overrides (keys no longer meaningful) and report
 them → re-scaffold (§5.3, updating markers) → surface changes as a reviewable
@@ -14,17 +15,17 @@ proposal.
 **Downgrade:** moving to a **lower** version is allowed but routed through this
 same propose/review path **with an explicit "you are moving backward — protection
 or behavior may be reduced" warning**.
-**Failure handling:** if the target profile no longer exists, **or its name has
-been repurposed to a different composition** (identity change), refuse and report.
+**Failure handling:** if the target profile no longer exists, **or its manifest has
+a different explicit identity** (the name was repurposed), refuse and report before
+changing the pin. Changes to templates, variables, settings, privileges, or version
+sources with the same identity are legitimate evolution and proceed to migration checks.
 The upgrade/downgrade path is the **only** sanctioned way a pin moves; drift
 (§5.5) never advances it.
-**Day-zero limitation:** the repurpose (identity-change) refusal requires resolving
-the profile **at the target version**, which needs that version's definitions
-present. The operator's installed CLI carries **one** Library version, so the
-shipped re-pin confirms the profile still **resolves** but cannot compare its
-identity *across* versions; cross-version repurpose detection (fetching the target
-version's registry) is a post-day-zero refinement. The decision logic is implemented
-and tested against a second registry; it is dormant in the single-installed-CLI flow.
+The fetched target registry is the sole source for identity verification, newly
+required variables, orphaned overrides, and materialization in local and proposal
+flows. A legacy declaration without `profile-identity` must first sync using the
+registry fetched at its current declared pin; an unresolved pin or identity mismatch
+must leave the declaration and managed files unchanged.
 
 ```mermaid
 flowchart TD

@@ -1,9 +1,11 @@
 name: python-component
+identity: aviato-profile/python-component/v1
 # Zero-deploy profile (§10.3): GitHub release is the only output, no deploy plug-in.
 workflows: python-component-wf
 scaffold: python-component-sc
 settings: baseline
 variables:
+  - {name: serve-pages, type: boolean, required: false, default: false}
   # finding 28: read (never guessed) from the git remote / provision slug by the CLI
   # auto-detection tier; seeds the LICENSE/CODEOWNERS owner. Optional, NO default —
   # an unset optional is omitted from render vars so seed-once templates keep the
@@ -23,6 +25,7 @@ variables:
   # Same strict-mypy default as python-library; a consumer can disable without
   # hand-editing the managed caller (review finding 49).
   - {name: run-typecheck, type: string, required: false, default: "true"}
+  - {name: typecheck-command, type: string, required: false, default: "python -m mypy --strict ."}
 version_source:
   locations: [pyproject.toml]
 toolchain:

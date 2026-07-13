@@ -11,6 +11,13 @@ on:
         required: false
         type: string
         default: ""
+      sha:
+        description: >-
+          Exact commit expected for ref. Empty is permitted for ordinary event-driven runs;
+          out-of-band release/docs callers must supply the gated commit SHA.
+        required: false
+        type: string
+        default: ""
       codeql-languages:
         description: Comma-separated CodeQL languages, for example python or javascript-typescript.
         required: false
@@ -41,10 +48,68 @@ permissions:
   actions: read
 
 jobs:
+  # Resolve the requested target exactly once before any scanner initializes. The checkout action
+  # performs the authenticated ref resolution (including annotated-tag peeling); every scan then
+  # checks out the emitted commit and every SARIF producer uploads against the emitted ref/SHA.
+  resolve-target:
+    name: Resolve analyzed target
+    runs-on: ubuntu-latest
+    outputs:
+      canonical-ref: ${{ steps.canonicalize.outputs.canonical-ref }}
+      analyzed-sha: ${{ steps.resolve.outputs.analyzed-sha }}
+    steps:
+      # Canonicalize BEFORE checkout. Passing a bare release tag directly to checkout lets a
+      # same-named branch win Git's ambiguous DWIM resolution while later evidence claims a tag.
+      - name: Canonicalize requested ref
+        id: canonicalize
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          canonical_ref="${REQUESTED_REF:-${EVENT_REF}}"
+          if [[ -n "${REQUESTED_REF}" && "${REQUESTED_REF}" != refs/* ]]; then
+            canonical_ref="refs/tags/${REQUESTED_REF}"
+          fi
+          echo "canonical-ref=${canonical_ref}" >> "${GITHUB_OUTPUT}"
+
+      - name: Fetch requested ref and tags
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ steps.canonicalize.outputs.canonical-ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve canonical ref and commit
+        id: resolve
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+          EVENT_SHA: ${{ github.sha }}
+          CUSTOM_REF: ${{ inputs.ref }}
+          CANONICAL_REF: ${{ steps.canonicalize.outputs.canonical-ref }}
+        run: |
+          set -euo pipefail
+          # actions/checkout resolved CANONICAL_REF and fetched tags. Peeling
+          # HEAD^{commit} makes annotated and lightweight tags converge on the commit scanners use.
+          analyzed_sha="$(git rev-parse 'HEAD^{commit}')"
+          expected_sha="${REQUESTED_SHA}"
+          if [[ -z "${CUSTOM_REF}" && -z "${expected_sha}" ]]; then
+            expected_sha="${EVENT_SHA}"
+          fi
+          if [[ -n "${expected_sha}" && "${analyzed_sha}" != "${expected_sha}" ]]; then
+            echo "::error::Requested ref ${CANONICAL_REF} resolved to ${analyzed_sha}, expected ${expected_sha}."
+            exit 1
+          fi
+          echo "analyzed-sha=${analyzed_sha}" >> "${GITHUB_OUTPUT}"
+
   # §8.16/§5.14: probe the findings-upload privilege at runtime and HARD-FAIL if a
   # caller did not grant it — a missing scope must fail loud, never pass silently.
   privilege-probe:
     name: Probe findings-upload privilege
+    needs: resolve-target
     runs-on: ubuntu-latest
     steps:
       # §5.14/§5.5: scheduled scans are jittered so a fleet of consumers on the same weekly
@@ -85,7 +150,7 @@ jobs:
 
   codeql:
     name: CodeQL
-    needs: privilege-probe
+    needs: [privilege-probe, resolve-target]
     if: ${{ inputs.run-codeql && inputs.codeql-languages != '' }}
     runs-on: ${{ inputs.codeql-runner }}
     steps:
@@ -93,7 +158,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -103,20 +168,98 @@ jobs:
       - name: Autobuild
         uses: github/codeql-action/autobuild@v4
 
-      # §2.13 SAST gate (note): `analyze` uploads SARIF and SUCCEEDS even with high/critical
-      # alerts — CodeQL has no in-workflow fail-on-severity input. The high/critical SAST gate
-      # is therefore realized by the platform's **code-scanning check** (configured to fail PR
-      # checks at the high/critical threshold), a §17 operator prerequisite ("enable code
-      # scanning", probeable by §5.4). The heartbeat gate below only proves CodeQL RAN (not that
-      # it found nothing); severity gating for SAST is the platform check, unlike the dependency/
-      # secret scans which gate in-workflow via Trivy exit-code.
       - name: Analyze
         uses: github/codeql-action/analyze@v4
+        with:
+          ref: ${{ needs.resolve-target.outputs.canonical-ref }}
+          sha: ${{ needs.resolve-target.outputs.analyzed-sha }}
+          wait-for-processing: true
+
+      # Defense in depth with the branch ruleset's CodeQL threshold: analyze has finished
+      # processing before this exact-ref/tool query runs. The API response is paginated and
+      # validated before an empty result is accepted; auth, rate-limit, schema, or JSON ambiguity
+      # fails closed. Do not print alert bodies or source-bearing instances.
+      - name: Gate CodeQL high/critical alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANALYZED_REF: ${{ needs.resolve-target.outputs.canonical-ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="$(python - <<'PY'
+          import os
+          from urllib.parse import quote
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          ref = quote(os.environ["ANALYZED_REF"], safe="")
+          print(f"repos/{repo}/code-scanning/alerts?state=open&ref={ref}&tool_name=CodeQL&per_page=100")
+          PY
+          )"
+          response="$(mktemp)"
+          trap 'rm -f "${response}"' EXIT
+          if ! gh api --paginate --slurp "${endpoint}" > "${response}"; then
+            echo "::error::CodeQL alert query failed; refusing to treat an ambiguous result as clean."
+            exit 1
+          fi
+          python - "${response}" <<'PY'
+          import json
+          import sys
+
+          try:
+              pages = json.load(open(sys.argv[1], encoding="utf-8"))
+          except (OSError, json.JSONDecodeError) as exc:
+              print(f"::error::CodeQL alert response was unreadable: {exc}")
+              raise SystemExit(1) from exc
+          if not pages or not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+              print("::error::CodeQL alert response did not contain an unambiguous paginated result.")
+              raise SystemExit(1)
+
+          blocking = []
+          for page in pages:
+              for alert in page:
+                  if not isinstance(alert, dict) or not isinstance(alert.get("rule"), dict):
+                      print("::error::CodeQL alert response contained an invalid alert shape.")
+                      raise SystemExit(1)
+                  rule = alert["rule"]
+                  if "security_severity_level" not in rule:
+                      print("::error::CodeQL alert response omitted security_severity_level.")
+                      raise SystemExit(1)
+                  severity = rule.get("security_severity_level")
+                  if severity not in (None, "low", "medium", "high", "critical"):
+                      print("::error::CodeQL alert response contained an unknown security severity.")
+                      raise SystemExit(1)
+                  number = alert.get("number")
+                  rule_id = rule.get("id")
+                  url = alert.get("html_url")
+                  if (
+                      not isinstance(number, int)
+                      or isinstance(number, bool)
+                      or not isinstance(rule_id, str)
+                      or not rule_id
+                      or "\n" in rule_id
+                      or "\r" in rule_id
+                      or not isinstance(url, str)
+                      or not url.startswith(("https://", "http://"))
+                      or "\n" in url
+                      or "\r" in url
+                  ):
+                      print("::error::CodeQL alert response contained unsafe or missing display fields.")
+                      raise SystemExit(1)
+                  if severity in ("high", "critical"):
+                      blocking.append((number, rule_id, severity, url))
+
+          for number, rule_id, severity, url in blocking:
+              print(f"::error::CodeQL alert #{number}: rule={rule_id} severity={severity} url={url}")
+          if blocking:
+              print(f"::error::{len(blocking)} open high/critical CodeQL alert(s) block this ref.")
+              raise SystemExit(1)
+          print("No open high/critical CodeQL alerts for the analyzed ref and CodeQL tool.")
+          PY
 
   # PR-only diff-based review (richer signal on pull requests).
   dependency-review:
     name: Dependency Review
-    needs: privilege-probe
+    needs: [privilege-probe, resolve-target]
     if: ${{ inputs.run-dependency-review && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
@@ -124,7 +267,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
       - name: Dependency review
         uses: actions/dependency-review-action@v5
@@ -135,14 +278,14 @@ jobs:
   # gates high/critical and uploads SARIF to the Security surface.
   dependency-scan:
     name: Dependency vulnerability scan
-    needs: privilege-probe
+    needs: [privilege-probe, resolve-target]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
       # §2.13 report/gate split: REPORT all severities to the Security surface (no gate), then
       # GATE separately on high/critical. A single `severity: HIGH,CRITICAL` step would filter
@@ -166,6 +309,8 @@ jobs:
         with:
           sarif_file: trivy-deps.sarif
           category: aviato-dependency-scan
+          ref: ${{ needs.resolve-target.outputs.canonical-ref }}
+          sha: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
       - name: Gate on high/critical dependencies (§2.13)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -182,14 +327,14 @@ jobs:
   # protection, §2.13): any detected secret fails the pipeline; findings upload as SARIF.
   secret-scan:
     name: Secret scan
-    needs: privilege-probe
+    needs: [privilege-probe, resolve-target]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
       - name: Scan for secrets
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -207,6 +352,8 @@ jobs:
         with:
           sarif_file: trivy-secrets.sarif
           category: aviato-secret-scan
+          ref: ${{ needs.resolve-target.outputs.canonical-ref }}
+          sha: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
   # Per-run heartbeat (§5.14): emit a durable artifact (even on zero findings) so
   # diagnosis (§5.4) can distinguish "ran clean" from "never ran" by reading the
@@ -214,7 +361,7 @@ jobs:
   # secret) MUST have actually run; a skipped scan is treated as broken.
   heartbeat:
     name: Security baseline heartbeat
-    needs: [codeql, dependency-review, dependency-scan, secret-scan]
+    needs: [resolve-target, codeql, dependency-review, dependency-scan, secret-scan]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     env:
@@ -224,13 +371,15 @@ jobs:
       DEPREVIEW_RESULT: ${{ needs.dependency-review.result }}
       RUN_CODEQL: ${{ inputs.run-codeql }}
       CODEQL_LANGUAGES: ${{ inputs.codeql-languages }}
+      ANALYZED_REF: ${{ needs.resolve-target.outputs.canonical-ref }}
+      ANALYZED_SHA: ${{ needs.resolve-target.outputs.analyzed-sha }}
     steps:
       - name: Emit heartbeat
         shell: bash
         run: |
           mkdir -p heartbeat
-          printf '{"tool":"aviato-security-baseline","sast":"%s","dependency":"%s","secret":"%s","review":"%s","completed":true}\n' \
-            "${CODEQL_RESULT}" "${DEPSCAN_RESULT}" "${SECRET_RESULT}" "${DEPREVIEW_RESULT}" \
+          printf '{"tool":"aviato-security-baseline","analyzed_ref":"%s","analyzed_sha":"%s","sast":"%s","dependency":"%s","secret":"%s","review":"%s","completed":true}\n' \
+            "${ANALYZED_REF}" "${ANALYZED_SHA}" "${CODEQL_RESULT}" "${DEPSCAN_RESULT}" "${SECRET_RESULT}" "${DEPREVIEW_RESULT}" \
             > heartbeat/aviato-security-heartbeat.json
           cat heartbeat/aviato-security-heartbeat.json
 
@@ -275,6 +424,6 @@ jobs:
       - name: Upload heartbeat
         uses: actions/upload-artifact@v7
         with:
-          name: aviato-security-heartbeat
+          name: aviato-security-heartbeat-${{ needs.resolve-target.outputs.analyzed-sha }}
           path: heartbeat/aviato-security-heartbeat.json
           retention-days: 30

@@ -26,7 +26,11 @@ runs **before** signing assets or App Store Connect private-key material are
 installed, so arbitrary versioning commands cannot read Apple credentials.
 
 #### 13.4.4 Required privileges
-`contents: read`; all platform authority comes from the App Store Connect API key.
+The secret-bearing deploy job has `actions: read` for the fail-closed environment
+reviewer probe and `contents: read` for the immutable gated source. A separate
+no-secret, no-consumer-code release-evidence job has only `contents: write` so it
+can persist the upload receipt on the existing GitHub Release. All Apple platform
+authority comes from the App Store Connect API key and remains confined to deploy.
 
 #### 13.4.5 Operator prerequisites (out-of-band)
 Enrolled Apple Developer account; app record; registered bundle identifier;
@@ -61,8 +65,11 @@ The system author cannot verify this. It is "done" only when the **operator**
 performs a **real upload to TestFlight** on their Apple account from the pipeline
 and confirms the build appears in App Store Connect. The verification must record a
 **checkable artifact** — the App Store Connect **build ID / upload receipt** (with
-the version + monotonic build number) into the release notes or declaration — so
-"operator-verified" is **evidenced**, not a bare attestation.
+the version + monotonic build number). After a successful upload, the pipeline
+publishes the receipt as a durable GitHub Release asset and idempotently updates a
+marked App Store receipt section in the release notes, so reruns replace evidence
+rather than duplicating it. "Operator-verified" is therefore **evidenced**, not a
+bare attestation.
 
 ```mermaid
 flowchart TD

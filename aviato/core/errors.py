@@ -5,6 +5,10 @@ class AviatoError(Exception):
     """Base class for all core engine errors."""
 
 
+class PathConfinementError(AviatoError):
+    """A filesystem operation would escape its trusted root."""
+
+
 class CompositionError(AviatoError):
     """A profile/bundle could not be resolved or composed (§5.1, §4.2)."""
 

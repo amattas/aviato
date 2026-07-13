@@ -64,8 +64,8 @@ The reusable workflow:
 - export a signed distributable;
 - upload to App Store Connect / TestFlight;
 - optionally submit for review when explicitly configured;
-- record an operator-checkable upload artifact such as the App Store Connect
-  build ID or upload receipt.
+- emit an upload receipt, then let a separate no-secret/no-consumer-code job
+  persist it as a GitHub Release asset and idempotent release-note section.
 
 The caller template collects repository-specific values such as
 scheme, workspace or project path, bundle identifier, team ID, export method,

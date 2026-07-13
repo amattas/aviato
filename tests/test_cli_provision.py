@@ -7,6 +7,7 @@ import pytest
 
 from aviato import __version__, cli
 from aviato.cli import main
+from aviato.core.ports import Issue, Platform
 from aviato.core.provision import ProvisionOutcome
 
 
@@ -16,15 +17,48 @@ class _FakePlatform:
         # R2-4-3: apply_settings now returns the §17 toggles it surfaced-and-skipped.
         self.skipped = skipped or []
 
-    def apply_settings(self, repo: str, payload: dict[str, Any]) -> list[str]:
+    def apply_settings(
+        self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
+    ) -> list[str]:
         self.applied.append((repo, payload))
         return list(self.skipped)
+
+    def read_settings(self, repo: str) -> dict[str, Any]:
+        return {}
+
+    def read_rulesets(self, repo: str) -> list[dict[str, Any]]:
+        return []
+
+    def get_issue(self, repo: str, key: str) -> Issue | None:
+        return None
+
+    def open_or_update_issue(self, repo: str, key: str, title: str, body: str) -> str:
+        return key
+
+    def comment_issue(self, repo: str, key: str, body: str) -> None:
+        pass
+
+    def revoke_consent(self, repo: str, key: str, diff_id: str) -> None:
+        pass
+
+    def open_or_update_proposal(self, repo: str, branch: str, title: str, files: dict[str, str], body: str) -> str:
+        return branch
+
+    def create_repo(self, repo: str, *, private: bool) -> None:
+        pass
+
+
+_platform_contract: Platform = _FakePlatform()
 
 
 def _consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text(f"profile: python-library\nversion: {__version__}\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text(
+        f"profile: python-library\nversion: {__version__}\nvariables:\n"
+        "  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
     return tmp_path
 
 
@@ -65,6 +99,28 @@ def test_complete_protection_missing_declaration_errors(tmp_path: Path) -> None:
 
 def test_provision_rejects_bad_slug() -> None:
     assert main(["provision", "no-slash", "--profile", "python-library"]) == 2
+
+
+@pytest.mark.parametrize(
+    "slug",
+    ["a/b/c", "a/b?x", "a/b#x", " a/b", "a/b ", "-a/b", "a/-b", "a\\b", "a/b\n", "a/", "/b"],
+)
+def test_provision_rejects_unsafe_slug_before_platform_calls(slug: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "provision_repo",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("provision must not run")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_published_library_ref_exists",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("pin probe must not run")),
+    )
+
+    argv = ["provision", "--profile", "python-library", "--pin", "0"]
+    if slug.startswith("-"):
+        argv.append("--")
+    assert main([*argv, slug]) == 2
 
 
 def test_provision_requires_explicit_pin(capsys: pytest.CaptureFixture[str]) -> None:

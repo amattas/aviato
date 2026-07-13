@@ -40,12 +40,18 @@ on:
         default: "requirements.txt"
       docs-branch:
         description: >-
-          Branch the versioned site is committed to. Pages serving from this branch
-          is a separate, optional operator toggle — this workflow only pushes the
-          branch and succeeds identically whether Pages is enabled or not.
+          Branch the versioned site is committed to and, when serve-pages is true,
+          exported as the exact Pages artifact tree.
         required: false
         type: string
         default: "gh-pages"
+      serve-pages:
+        description: >-
+          Deploy the exact docs-branch tree through GitHub Pages Actions after its
+          archival branch push succeeds. False still builds and pushes docs-branch.
+        required: false
+        type: boolean
+        default: false
       gated-sha:
         description: >-
           The commit SHA the release gate validated (reusable-release-gate.yml's
@@ -62,7 +68,8 @@ on:
         default: 0
 
 # C12-W4 (adapted for branch deploys): permissions are PER-JOB. The build job runs the
-# consumer's emit `eval` and holds ONLY `contents: read`; mike commits land on a LOCAL
+# consumer's emit `eval` and holds only read scopes (`contents` and Pages configuration);
+# mike commits land on a LOCAL
 # branch handed off as a git bundle artifact. Only the separate push job — which runs
 # no consumer code — holds `contents: write`.
 permissions: {}
@@ -77,6 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pages: read
     outputs:
       highest: ${{ steps.guard.outputs.highest }}
     defaults:
@@ -277,6 +285,42 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      - name: Materialize exact docs branch tree
+        if: ${{ inputs.serve-pages }}
+        shell: bash
+        env:
+          DOCS_BRANCH: ${{ inputs.docs-branch }}
+          PAGES_ROOT: /tmp/aviato-pages-site
+        run: |
+          set -euo pipefail
+          rm -rf "${PAGES_ROOT}"
+          mkdir -p "${PAGES_ROOT}"
+          git archive "refs/heads/${DOCS_BRANCH}" | tar -x -C "${PAGES_ROOT}"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["PAGES_ROOT"]).resolve()
+          for path in root.rglob("*"):
+              if not path.is_symlink():
+                  continue
+              try:
+                  target = (path.parent / os.readlink(path)).resolve(strict=False)
+                  target.relative_to(root)
+              except (OSError, RuntimeError, ValueError):
+                  raise SystemExit(f"refusing escaping symlink in Pages tree: {path.relative_to(root)}")
+          PY
+
+      - name: Configure GitHub Pages
+        if: ${{ inputs.serve-pages }}
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        if: ${{ inputs.serve-pages }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: /tmp/aviato-pages-site
+
   # C12-W4: the ONLY job with contents:write. Runs no consumer code — it verifies the
   # bundle and fast-forward-pushes the docs branch. Enabling Pages to SERVE this branch
   # is a separate operator toggle; this job neither reads nor mutates Pages settings.
@@ -315,3 +359,21 @@ jobs:
             fi
           fi
           git push origin "refs/remotes/bundle/${DOCS_BRANCH}:refs/heads/${DOCS_BRANCH}"
+
+  # The Pages/OIDC token is isolated from all consumer commands. It consumes only
+  # the read-only build job's exact branch artifact after the archival push succeeds.
+  deploy:
+    name: Deploy GitHub Pages
+    needs: [build, push]
+    if: ${{ inputs.serve-pages && success() }}
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

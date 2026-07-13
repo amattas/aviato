@@ -18,6 +18,15 @@ gates the move within the major line). The release process must not depend on a 
 in bootstrap, the release pipeline resolves its own module/action references
 locally.
 
+The release gate derives its immutable commit identity from the release tag. When a
+caller supplies `release-tag` (including in-run and `workflow_run` contexts), the gate
+peels `refs/tags/<release-tag>^{commit}`; only a classic tag-triggered run falls back to
+peeling the event `GITHUB_SHA^{commit}`. Every default-branch ancestry check, tag
+equality check, merged-PR lookup, and required-workflow lookup uses that one resolved
+commit. Default-branch membership remains an ancestry invariant
+(`merge-base --is-ancestor`), not branch-tip equality, so a later mainline commit does
+not invalidate an otherwise valid release.
+
 The release proposal must be mergeable under the policy's own branch
 protection: a branch pushed with the platform's automation token never triggers
 CI on its own (the platform suppresses events from that token), so the propose
@@ -28,6 +37,14 @@ therefore stay enforceable with **no bypass actors**. A caller that has not yet
 adopted the dispatch trigger fails soft: the dispatch step warns, the PR's
 checks stay visibly pending, and the operator remediates by re-syncing the
 caller (§5.3).
+
+Because dispatch-run checks are not themselves attached to the release PR, every
+managed caller also runs a dispatch-only, no-checkout status bridge after its
+verify, security, and common-lint jobs. The bridge has only `statuses: write` and
+publishes success or failure for the profile's resolved required-check contexts
+to the dispatched `github.sha`; skipped, cancelled, and failed dependencies all
+publish failure. Context names are validated against pipeline-module
+`status_check` data so caller text and branch protection cannot drift apart.
 
 ```mermaid
 flowchart TD
@@ -40,6 +57,6 @@ flowchart TD
     Min --> D
     Pat --> D
     D --> E["Produce release (version bump · changelog · tag)"]
-    E --> F["Advance floating major reference UNCONDITIONALLY"]
+    E --> F["Advance floating major reference only if highest in major line (§8.14)"]
     F --> G["Done"]
 ```

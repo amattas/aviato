@@ -9,6 +9,11 @@ security-baseline:
   privileges: ["contents: read", "pull-requests: read", "security-events: write", "actions: read"]
   runner: linux
   status_check: "security / Security baseline heartbeat"
+  # Kept in parity with the branch ruleset and GitHub doctor's live threshold probe.
+  code_scanning_tool:
+    tool: CodeQL
+    alerts_threshold: none
+    security_alerts_threshold: high_or_higher
 release-gate:
   privileges: ["actions: read", "contents: read", "pull-requests: read"]
   runner: linux
@@ -23,8 +28,9 @@ release:
   # (actions: write — workflow_dispatch is exempt from GITHUB_TOKEN event
   # suppression). Mirrors reusable-release.yml, which is privilege-SPLIT (C12-W1):
   # derive runs under contents:read, only the propose/tag job holds the writes —
-  # the union across jobs is declared here.
-  privileges: ["contents: read", "contents: write", "pull-requests: write", "actions: write"]
+  # the union across jobs is declared here. statuses:write belongs only to the
+  # caller's no-code dispatch status bridge, not to reusable-release itself.
+  privileges: ["contents: read", "contents: write", "pull-requests: write", "actions: write", "statuses: write"]
   runner: linux
 python-verify:
   privileges: ["contents: read"]
@@ -40,6 +46,10 @@ swift-verify:
   status_check: "ci / Swift CI"
 pypi-publish:
   privileges: ["contents: read", "id-token: write", "attestations: write"]
+  # Trusted Publishing is split across two workflow identities. The reusable
+  # workflow only builds/vets; the registered consumer caller alone publishes.
+  reusable_privileges: ["contents: read"]
+  local_publisher_privileges: ["contents: read", "id-token: write", "attestations: write"]
   # finding 7: the publish job runs in a deployment environment (workflow default
   # `pypi`); doctor probes existence + reviewer protection like app-store-connect.
   environment: pypi
@@ -50,16 +60,21 @@ ghcr-publish:
   environment: ghcr
   runner: linux
 docs-pages:
-  # Zensical/mike branch deploy: read-only build job + contents:write push job; no Pages/OIDC scopes.
-  privileges: ["contents: read", "contents: write"]
+  # Read-only build + isolated branch push + optional no-consumer-code Pages deploy.
+  privileges: ["contents: read", "contents: write", "pages: read", "pages: write", "id-token: write"]
   runner: linux
 app-store-connect:
   # actions: read — the §11.4 environment-reviewer probe reads environment protection rules.
-  privileges: ["contents: read", "actions: read"]
+  # contents: write is isolated to the no-secret release-evidence job, which persists the
+  # receipt as a GitHub Release asset and updates an idempotent release-notes section.
+  privileges: ["contents: read", "contents: write", "actions: read"]
   # R7-3-APPSTORE-ENV: §17 declares the deploy MUST run in a protected GitHub Environment with at
   # least one required reviewer. The environment name is plug-in DATA (not core knowledge); doctor
   # reads it from the resolved pipeline modules to probe existence + reviewer count.
   environment: app-store-connect
+  # The Swift caller renders this profile variable into the reusable workflow input;
+  # onboarding and doctor must protect/probe that effective name, not only the default.
+  environment_input: environment-name
   secrets:
     - APP_STORE_CONNECT_ISSUER_ID
     - APP_STORE_CONNECT_KEY_ID

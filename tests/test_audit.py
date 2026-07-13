@@ -65,10 +65,9 @@ def test_audit_repo_api_error_when_reads_fail(monkeypatch: pytest.MonkeyPatch, t
     monkeypatch.setattr(audit, "tags", lambda repo: [])
     monkeypatch.setattr(audit, "current_branch", lambda repo: "main")
     monkeypatch.setattr(audit, "workflow_files", lambda repo: "ci.yml")
-    monkeypatch.setattr(audit.github, "default_branch", lambda slug: "main")
+    monkeypatch.setattr("aviato.audit.github.default_branch", lambda slug: "main")
     monkeypatch.setattr(
-        audit.github,
-        "active_branch_rules",
+        "aviato.audit.github.active_branch_rules",
         lambda slug, branch: (_ for _ in ()).throw(GitHubAPIError("rules", 1, "boom")),
     )
     row = audit_repo(tmp_path, root=tmp_path, policy=_POLICY)

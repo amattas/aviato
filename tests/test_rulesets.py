@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import copy
+from typing import Any
+
+import yaml
+
+from aviato import github
+from aviato.paths import POLICY_DATA_ROOT
 from aviato.policy import load_policy, release_tag_pattern
-from aviato.rulesets import render_all_rulesets
+from aviato.rulesets import render_all_rulesets, ruleset_content_drift
+
+Ruleset = dict[str, Any]
 
 
 def test_rendered_tag_ruleset_uses_policy_pattern() -> None:
@@ -40,7 +49,7 @@ def test_tag_ruleset_excludes_floating_major_aliases_for_realistic_widths() -> N
     assert "refs/tags/v[0-9]" not in exclude
 
 
-def _status_contexts(payloads: list) -> set[str]:
+def _status_contexts(payloads: list[Ruleset]) -> set[str]:
     contexts: set[str] = set()
     for payload in payloads:
         for rule in payload.get("rules", []):
@@ -68,7 +77,34 @@ def test_ruleset_with_profile_injects_language_verify_check() -> None:
     assert len(common) == 1
 
 
-def _approval_counts(payloads: list) -> list[int]:
+def test_every_rendered_branch_ruleset_has_exact_codeql_merge_gate() -> None:
+    pipeline = yaml.safe_load((POLICY_DATA_ROOT / "pipelines.yaml").read_text(encoding="utf-8"))["security-baseline"]
+    expected_tool = pipeline["code_scanning_tool"]
+    assert expected_tool == github.EXPECTED_CODEQL_RULE
+    payloads = render_all_rulesets()
+    branches = [payload for payload in payloads if payload["target"] == "branch"]
+    assert branches
+    for branch in branches:
+        rules = [rule for rule in branch["rules"] if rule["type"] == "code_scanning"]
+        assert len(rules) == 1
+        assert rules[0]["parameters"]["code_scanning_tools"] == [expected_tool]
+
+
+def test_codeql_ruleset_threshold_removal_or_weakening_is_drift() -> None:
+    branch = next(payload for payload in render_all_rulesets() if payload["target"] == "branch")
+    assert ruleset_content_drift(branch, copy.deepcopy(branch)) is False
+
+    missing = copy.deepcopy(branch)
+    missing["rules"] = [rule for rule in missing["rules"] if rule["type"] != "code_scanning"]
+    assert ruleset_content_drift(branch, missing) is True
+
+    weakened = copy.deepcopy(branch)
+    codeql = next(rule for rule in weakened["rules"] if rule["type"] == "code_scanning")
+    codeql["parameters"]["code_scanning_tools"][0]["security_alerts_threshold"] = "critical"
+    assert ruleset_content_drift(branch, weakened) is True
+
+
+def _approval_counts(payloads: list[Ruleset]) -> list[int]:
     counts: list[int] = []
     for payload in payloads:
         for rule in payload.get("rules", []):
@@ -95,7 +131,7 @@ def test_required_approvals_default_uses_policy() -> None:
     assert all(c == expected for c in counts)
 
 
-def _branch_and_tag():
+def _branch_and_tag() -> tuple[Ruleset, Ruleset]:
     import copy
 
     from aviato.rulesets import render_all_rulesets
@@ -251,3 +287,13 @@ def test_render_rejects_unknown_patch_key() -> None:
         render_ruleset(
             {"file": "rulesets/release-tag-format.json", "target": "tag", "patch": {"tag_naem_pattern": "x"}}
         )
+
+
+def test_missing_tag_metadata_rule_is_non_clean_drift() -> None:
+    from aviato.rulesets import drifted_ruleset_names
+
+    desired = next(payload for payload in render_all_rulesets() if payload["target"] == "tag")
+    degraded = copy.deepcopy(desired)
+    degraded["rules"] = [rule for rule in degraded["rules"] if rule["type"] != "tag_name_pattern"]
+
+    assert drifted_ruleset_names([desired], [degraded]) == [desired["name"]]

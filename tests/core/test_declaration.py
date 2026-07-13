@@ -9,7 +9,7 @@ from aviato.core.declaration import Declaration, dump_declaration, load_declarat
 from aviato.core.errors import DeclarationError
 
 
-def _write(path: Path, data: dict) -> None:
+def _write(path: Path, data: dict[str, object]) -> None:
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
 
 
@@ -52,10 +52,32 @@ def test_non_mapping_is_error(tmp_path: Path) -> None:
 
 
 def test_round_trip(tmp_path: Path) -> None:
-    decl = Declaration(profile="p", version="2", docs=True, variables={"a": "b"}, overrides={"settings": {}})
+    decl = Declaration(
+        profile="p",
+        version="2",
+        profile_identity="aviato-profile/p/v1",
+        docs=True,
+        variables={"a": "b"},
+        overrides={"settings": {}},
+    )
     path = tmp_path / "aviato.yaml"
-    dump_declaration(decl, path)
+    dump_declaration(decl, tmp_path, "aviato.yaml")
     assert load_declaration(path) == decl
+    assert yaml.safe_load(path.read_text())["profile-identity"] == "aviato-profile/p/v1"
+
+
+def test_profile_identity_is_optional_for_legacy_declarations(tmp_path: Path) -> None:
+    path = tmp_path / "aviato.yaml"
+    _write(path, {"profile": "p", "version": "2"})
+    assert load_declaration(path).profile_identity is None
+
+
+@pytest.mark.parametrize("identity", ["", "   ", 3])
+def test_profile_identity_must_be_a_non_empty_string_when_present(tmp_path: Path, identity: object) -> None:
+    path = tmp_path / "aviato.yaml"
+    _write(path, {"profile": "p", "profile-identity": identity, "version": "2"})
+    with pytest.raises(DeclarationError, match="profile-identity"):
+        load_declaration(path)
 
 
 def test_unquoted_float_version_is_rejected_not_silently_corrupted(tmp_path: Path) -> None:
@@ -129,10 +151,9 @@ def test_bootstrap_field_parses_round_trips_and_omitted_when_false(tmp_path: Pat
     # declaration omits it (defaults False) so the field never appears as noise on adopted repos.
     from aviato.core.declaration import declaration_to_yaml
 
-    assert load_declaration  # imported
     lib = Declaration(profile="p", version="2", bootstrap=True)
     path = tmp_path / "aviato.yaml"
-    dump_declaration(lib, path)
+    dump_declaration(lib, tmp_path, "aviato.yaml")
     assert load_declaration(path) == lib  # round-trips bootstrap: true
     assert yaml.safe_load(path.read_text())["bootstrap"] is True
     # default-False declaration must NOT emit the key at all
@@ -155,7 +176,7 @@ def test_legacy_v_prefix_is_tolerated_on_read_but_never_emitted(tmp_path: Path) 
     assert yaml.safe_load(declaration_to_yaml(Declaration(profile="p", version="vegetable")))["version"] == "vegetable"
 
 
-def test_non_utf8_declaration_raises_declaration_error_not_raw_unicode(tmp_path) -> None:
+def test_non_utf8_declaration_raises_declaration_error_not_raw_unicode(tmp_path: Path) -> None:
     # R5-4-DECL: a non-UTF-8 aviato.yaml must map to DeclarationError (an AviatoError), not leak a
     # raw UnicodeDecodeError past main()'s net / abort a fleet scan.
     import pytest

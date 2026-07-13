@@ -6,6 +6,7 @@ from typing import Any
 import yaml
 
 from .paths import POLICY_DATA_ROOT
+from .repos import is_owner_repo_slug
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -43,6 +44,14 @@ def release_tag_pattern(policy: dict[str, Any]) -> str:
     value = get_path(policy, "release.tag_pattern")
     if not isinstance(value, str) or not value:
         raise ValueError("release.tag_pattern must be a non-empty string")
+    return value
+
+
+def library_repository(policy: dict[str, Any]) -> str:
+    """Return the canonical GitHub ``owner/repository`` identity for the Library."""
+    value = get_path(policy, "library.repository")
+    if not isinstance(value, str) or not is_owner_repo_slug(value):
+        raise ValueError("library.repository must be a GitHub owner/repository slug")
     return value
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from aviato.core import marker as marker_module
 from aviato.core.marker import (
     content_hash,
     parse_marker,
@@ -11,17 +12,20 @@ from aviato.plugins.comment_syntax import COMMENT_SYNTAX, comment_for_path
 
 def test_render_and_parse_roundtrip_hash_comment() -> None:
     body = "line1\nline2\n"
-    line = render_marker(profile="python-library", version="v1", body=body, comment="#")
+    input_hash = "a" * 64
+    line = render_marker(profile="python-library", version="v1", body=body, comment="#", input_hash=input_hash)
     assert line.startswith("# aviato:managed profile=python-library version=v1 hash=")
+    assert line.endswith(f" inputs={input_hash}")
     info = parse_marker(line)
     assert info is not None
     assert info.profile == "python-library"
     assert info.version == "v1"
     assert info.hash == content_hash(body)
+    assert info.input_hash == input_hash
 
 
 def test_render_with_double_slash_comment() -> None:
-    line = render_marker(profile="p", version="v1", body="x\n", comment="//")
+    line = render_marker(profile="p", version="v1", body="x\n", comment="//", input_hash="b" * 64)
     assert line.startswith("// aviato:managed ")
     info = parse_marker(line)
     assert info is not None and info.profile == "p"
@@ -34,6 +38,25 @@ def test_hash_excludes_line_endings() -> None:
 def test_malformed_marker_returns_none() -> None:
     assert parse_marker("# aviato:managed profile=x") is None  # missing version/hash
     assert parse_marker("# just a comment") is None
+
+
+def test_marker_rejects_malformed_input_hash() -> None:
+    body_hash = content_hash("x\n")
+    assert parse_marker(f"# aviato:managed profile=p version=v1 hash={body_hash} inputs=abc") is None
+    assert parse_marker(f"# aviato:managed profile=p version=v1 hash={body_hash} inputs={'g' * 64}") is None
+
+
+def test_legacy_marker_parses_without_input_hash() -> None:
+    info = parse_marker(f"# aviato:managed profile=p version=v1 hash={content_hash('x\n')}")
+    assert info is not None
+    assert info.input_hash is None
+
+
+def test_canonical_input_hash_is_sorted_compact_json_sha256() -> None:
+    assert marker_module.canonical_input_hash({"z": True, "a": "x"}) == marker_module.canonical_input_hash(
+        {"a": "x", "z": True}
+    )
+    assert marker_module.canonical_input_hash({"a": "x", "z": True}) == content_hash('{"a":"x","z":true}')
 
 
 def test_token_in_prose_is_not_a_marker() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Any
 
-from aviato.core.ports import Issue
+from aviato.core.ports import Issue, Platform
 
 
 class FakePlatform:
@@ -42,7 +42,7 @@ class FakePlatform:
         # R5-4: desired security toggles apply_settings should report as SKIPPED (feature
         # unavailable). Empty by default → a clean, full apply.
         self.skipped_on_apply: list[str] = []
-        self.calls: list[tuple[str, tuple]] = []
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
 
     def read_settings(self, repo: str) -> dict[str, Any]:
         return dict(self.settings)
@@ -103,3 +103,6 @@ class FakePlatform:
 
     def call_names(self) -> list[str]:
         return [name for name, _ in self.calls]
+
+
+_platform_contract: Platform = FakePlatform()

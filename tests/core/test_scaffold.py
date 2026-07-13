@@ -1,18 +1,60 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
-from aviato.core.marker import content_hash
-from aviato.core.scaffold import ScaffoldItem, read_sidecar, scaffold
+import pytest
+
+from aviato.core.diagnosis import ExpectedArtifact, diagnose
+from aviato.core.errors import PathConfinementError
+from aviato.core.marker import content_hash, parse_marker_from_text
+from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
+from aviato.core.scaffold import SeedSidecar, read_sidecar, scaffold
+
+INPUT_HASH = "a" * 64
+ScaffoldItem = partial(_ScaffoldItem, input_hash=INPUT_HASH)
+
+
+def test_scaffold_rejects_symlinked_parent(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (tmp_path / ".github").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(PathConfinementError, match=r"write scaffold output.*\.github/workflows/ci\.yml"):
+        scaffold(
+            tmp_path,
+            [ScaffoldItem(".github/workflows/ci.yml", "name: ci\n", "#")],
+            profile="p",
+            version="1",
+        )
+    assert not (outside / "workflows/ci.yml").exists()
 
 
 def test_writes_managed_file_with_marker_atomically(tmp_path: Path) -> None:
-    plan = [ScaffoldItem(output="cfg.py", body="X = 1\n", comment="#", seed_once=False)]
+    plan = [ScaffoldItem(output="cfg.py", body="X = 1\n", comment="#", seed_once=False, input_hash=INPUT_HASH)]
     result = scaffold(tmp_path, plan, profile="p", version="v1")
     text = (tmp_path / "cfg.py").read_text()
     assert text.startswith("# aviato:managed profile=p version=v1 hash=")
     assert "X = 1" in text
     assert result.written == ["cfg.py"]
+
+
+def test_clean_legacy_marker_is_restamped_once_without_changing_body(tmp_path: Path) -> None:
+    body = "X = 1\n"
+    (tmp_path / "cfg.py").write_text(
+        f"# aviato:managed profile=p version=v1 hash={content_hash(body)}\n{body}", encoding="utf-8"
+    )
+    item = ScaffoldItem("cfg.py", body, "#", False, input_hash=INPUT_HASH)
+    expected = ExpectedArtifact("cfg.py", body, False, input_hash=INPUT_HASH)
+
+    assert diagnose(tmp_path, [expected], profile="p").statuses["cfg.py"] == "mergeable-drift"
+    result = scaffold(tmp_path, [item], profile="p", version="v1")
+
+    assert result.written == ["cfg.py"]
+    text = (tmp_path / "cfg.py").read_text(encoding="utf-8")
+    assert text.endswith(body)
+    marker = parse_marker_from_text(text)
+    assert marker is not None and marker.input_hash == INPUT_HASH
+    assert diagnose(tmp_path, [expected], profile="p").statuses["cfg.py"] == "clean"
 
 
 def test_creates_parent_directories(tmp_path: Path) -> None:
@@ -147,7 +189,7 @@ def test_seed_once_writes_when_absent_records_sidecar_and_never_overwrites(tmp_p
     assert result.seeded == ["Dockerfile"]
 
     sidecar = read_sidecar(tmp_path)
-    assert sidecar["Dockerfile"] == content_hash("FROM x\n")  # report-only integrity hash
+    assert sidecar == SeedSidecar("ok", {"Dockerfile": content_hash("FROM x\n")})
 
     (tmp_path / "Dockerfile").write_text("FROM y\n")
     result2 = scaffold(tmp_path, plan, profile="p", version="v1")
@@ -155,29 +197,118 @@ def test_seed_once_writes_when_absent_records_sidecar_and_never_overwrites(tmp_p
     assert result2.seeded == []
 
 
-def test_seed_once_heals_lost_sidecar_entry_so_future_tamper_is_visible(tmp_path: Path) -> None:
-    # §6.3/§5.14 (review #1): the sidecar is the SOLE seed-once integrity record. If it is
-    # deleted/lost, a re-scaffold must re-establish the baseline from the current file so a
-    # deleted sidecar SELF-HEALS and future tamper is again detectable — never silently leave the
-    # file unprotected forever. (Cannot retroactively detect tamper before the heal — advisory.)
+def test_seed_once_missing_sidecar_fails_closed_before_any_managed_write(tmp_path: Path) -> None:
     plan = [ScaffoldItem("Dockerfile", "FROM x\n", "#", seed_once=True)]
     scaffold(tmp_path, plan, profile="p", version="v1")
     (tmp_path / ".github" / "aviato.seed.json").unlink()  # operator/attacker deletes the record
-    assert read_sidecar(tmp_path) == {}
+    assert read_sidecar(tmp_path) == SeedSidecar("missing", {})
 
-    result = scaffold(tmp_path, plan, profile="p", version="v1")
-    assert result.seeded == []  # existing file is NEVER overwritten
-    assert read_sidecar(tmp_path)["Dockerfile"] == content_hash("FROM x\n")  # baseline recovered
+    result = scaffold(
+        tmp_path,
+        [ScaffoldItem("managed.txt", "managed\n", "#"), *plan],
+        profile="p",
+        version="v1",
+    )
+    assert result.seed_integrity_unknown is True
+    assert not (tmp_path / "managed.txt").exists()
+    assert not (tmp_path / ".github" / "aviato.seed.json").exists()
 
 
-def test_corrupt_sidecar_does_not_crash_scaffold_or_read(tmp_path: Path) -> None:
-    # review #7: a truncated/corrupt report-only sidecar must degrade to "no recorded hashes",
-    # never raise (a raw JSONDecodeError would escape scan_fleet's AviatoError-only guard).
+def test_corrupt_sidecar_fails_closed_before_any_managed_write(tmp_path: Path) -> None:
     (tmp_path / ".github").mkdir()
     (tmp_path / ".github" / "aviato.seed.json").write_text("{ this is not json", encoding="utf-8")
-    assert read_sidecar(tmp_path) == {}
-    result = scaffold(tmp_path, [ScaffoldItem("cfg.py", "X = 1\n", "#", False)], profile="p", version="v1")
-    assert result.written == ["cfg.py"]
+    (tmp_path / "Dockerfile").write_text("FROM operator\n", encoding="utf-8")
+    assert read_sidecar(tmp_path) == SeedSidecar("corrupt", {})
+    result = scaffold(
+        tmp_path,
+        [ScaffoldItem("cfg.py", "X = 1\n", "#"), ScaffoldItem("Dockerfile", "FROM x\n", "#", True)],
+        profile="p",
+        version="v1",
+    )
+    assert result.seed_integrity_unknown is True
+    assert not (tmp_path / "cfg.py").exists()
+    assert (tmp_path / ".github" / "aviato.seed.json").read_text() == "{ this is not json"
+
+
+def test_sidecar_with_invalid_hash_record_is_corrupt(tmp_path: Path) -> None:
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "aviato.seed.json").write_text('{"Dockerfile": "not-a-sha256"}\n', encoding="utf-8")
+
+    assert read_sidecar(tmp_path) == SeedSidecar("corrupt", {})
+
+
+def test_sidecar_with_duplicate_path_record_is_corrupt(tmp_path: Path) -> None:
+    digest = content_hash("FROM x\n")
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "aviato.seed.json").write_text(
+        f'{{"Dockerfile": "{digest}", "Dockerfile": "{digest}"}}\n', encoding="utf-8"
+    )
+
+    assert read_sidecar(tmp_path) == SeedSidecar("corrupt", {})
+
+
+def test_incomplete_sidecar_fails_closed_before_any_write(tmp_path: Path) -> None:
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "aviato.seed.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "Dockerfile").write_text("FROM operator\n", encoding="utf-8")
+
+    result = scaffold(
+        tmp_path,
+        [ScaffoldItem("managed.txt", "managed\n", "#"), ScaffoldItem("Dockerfile", "FROM x\n", "#", True)],
+        profile="p",
+        version="v1",
+    )
+
+    assert result.seed_integrity_unknown is True
+    assert not (tmp_path / "managed.txt").exists()
+    assert read_sidecar(tmp_path) == SeedSidecar("ok", {})
+
+
+@pytest.mark.parametrize("sidecar_body", ["{ corrupt", "{}\n"])
+def test_unknown_sidecar_with_absent_expected_seed_fails_closed(tmp_path: Path, sidecar_body: str) -> None:
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "aviato.seed.json").write_text(sidecar_body, encoding="utf-8")
+
+    result = scaffold(
+        tmp_path,
+        [ScaffoldItem("managed.txt", "managed\n", "#"), ScaffoldItem("Dockerfile", "FROM x\n", "#", True)],
+        profile="p",
+        version="v1",
+    )
+
+    assert result.seed_integrity_unknown is True
+    assert not (tmp_path / "managed.txt").exists()
+    assert not (tmp_path / "Dockerfile").exists()
+    assert (tmp_path / ".github" / "aviato.seed.json").read_text(encoding="utf-8") == sidecar_body
+
+
+def test_missing_sidecar_with_absent_seed_creates_seed_and_initial_record(tmp_path: Path) -> None:
+    result = scaffold(
+        tmp_path,
+        [ScaffoldItem("Dockerfile", "FROM x\n", "#", True)],
+        profile="p",
+        version="v1",
+    )
+    assert result.seed_integrity_unknown is False
+    assert result.seeded == ["Dockerfile"]
+    assert read_sidecar(tmp_path) == SeedSidecar("ok", {"Dockerfile": content_hash("FROM x\n")})
+
+
+def test_explicit_rebaseline_replaces_obsolete_records_with_current_seed_set(tmp_path: Path) -> None:
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "aviato.seed.json").write_text('{"obsolete": "old"}\n', encoding="utf-8")
+    (tmp_path / "Dockerfile").write_text("FROM operator\n", encoding="utf-8")
+
+    result = scaffold(
+        tmp_path,
+        [ScaffoldItem("Dockerfile", "FROM x\n", "#", True)],
+        profile="p",
+        version="v1",
+        baseline_existing_seeds=True,
+    )
+
+    assert result.baselined == ["Dockerfile"]
+    assert read_sidecar(tmp_path) == SeedSidecar("ok", {"Dockerfile": content_hash("FROM operator\n")})
 
 
 def test_non_utf8_managed_file_is_skipped_not_crashed(tmp_path: Path) -> None:
@@ -197,7 +328,7 @@ def test_atomic_write_preserves_existing_mode(tmp_path: Path) -> None:
     target = tmp_path / "script.sh"
     target.write_text("old", encoding="utf-8")
     target.chmod(0o755)
-    atomic_write(target, "new")
+    atomic_write(tmp_path, "script.sh", "new")
     assert target.read_text(encoding="utf-8") == "new"
     assert target.stat().st_mode & 0o777 == 0o755
 
@@ -210,7 +341,7 @@ def test_atomic_write_new_files_honor_umask(tmp_path: Path) -> None:
     previous = os.umask(0o022)
     try:
         target = tmp_path / "fresh.txt"
-        atomic_write(target, "x")
+        atomic_write(tmp_path, "fresh.txt", "x")
         assert target.stat().st_mode & 0o777 == 0o644
     finally:
         os.umask(previous)

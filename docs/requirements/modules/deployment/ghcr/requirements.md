@@ -14,8 +14,8 @@ concurrency group** so a slower older-release deploy cannot regress `latest`
 (§8.14).
 **Auth:** platform token, `packages: write` + `contents: read`; **no stored
 secret**.
-**Prerequisites:** a container build definition present (operator-provided and PROBED — R5-6: Aviato never seeds one; so the
-operator owns it after seeding); package visibility/permissions set so the package
+**Prerequisites:** a container build definition present (operator-provided and
+PROBED — R5-6: Aviato never seeds one); package visibility/permissions set so the package
 links to the repository.
 **DoD:** a real push of a test image (dedicated test namespace, §11.6) and a real
 release image on a production tag.

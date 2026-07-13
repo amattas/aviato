@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, Never, Protocol
 
 import pytest
 
 from aviato import github
 from aviato.command import CommandError
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
+from aviato.core.errors import PathConfinementError
 from aviato.core.ports import Platform
 from aviato.github_platform import (
     GitHubPlatform,
@@ -20,6 +24,38 @@ from aviato.github_platform import (
     nonhuman_edit_after_grant,
     to_branch_protection_payload,
 )
+
+
+class _Run(Protocol):
+    def __call__(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: str | Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
+def _record_run(calls: list[list[str]]) -> _Run:
+    def fake_run(
+        command: Sequence[str],
+        *,
+        cwd: str | Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        cmd = list(command)
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    return fake_run
+
+
+@pytest.fixture(autouse=True)
+def _codeql_merge_protection_probe_is_unknown_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unrelated platform tests isolated from the new remote ruleset read."""
+    monkeypatch.setattr(github, "codeql_merge_protection_present", lambda repo: None)
 
 
 def test_apply_settings_fails_closed_on_unresolved_default_branch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -88,7 +124,9 @@ def test_get_issue_fails_closed_on_timeline_read_error(monkeypatch: pytest.Monke
         GitHubPlatform().get_issue("o/r", "k")
 
 
-def test_get_issue_warns_when_multiple_issues_share_label(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+def test_get_issue_warns_when_multiple_issues_share_label(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     # Two open issues carrying the consent/drift label is an anomaly: the three issue reads
     # (list/open/all) could otherwise each take a different issues[0]. Pick deterministically
     # (oldest = lowest number) and warn, so consent is read/updated/audited on ONE issue.
@@ -105,7 +143,7 @@ def test_get_issue_prefers_open_over_older_closed(monkeypatch: pytest.MonkeyPatc
     # so its timeline (and open state) is what reconcile acts on.
     seen: list[str] = []
 
-    def _paginated(endpoint: str, **__):
+    def _paginated(endpoint: str, **__: object) -> list[dict[str, object]]:
         seen.append(endpoint)
         if "issues?" in endpoint:
             return [{"number": 4, "state": "closed"}, {"number": 9, "state": "open"}]
@@ -159,7 +197,7 @@ def test_apply_settings_ignores_disabled_classic_flags(monkeypatch: pytest.Monke
         "classic_branch_protection",
         lambda repo, branch: {"required_linear_history": {"enabled": False}, "lock_branch": {"enabled": False}},
     )
-    puts: list = []
+    puts: list[list[str]] = []
     monkeypatch.setattr(GitHubPlatform, "_gh_input", lambda self, args, payload: puts.append(args))
     monkeypatch.setattr(github, "run", lambda *a, **k: None)
     GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True})
@@ -184,7 +222,7 @@ def test_apply_settings_proceeds_when_modeled_state_matches_decision(monkeypatch
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
     monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
-    puts: list = []
+    puts: list[list[str]] = []
     monkeypatch.setattr(GitHubPlatform, "_gh_input", lambda self, args, payload: puts.append(args))
     monkeypatch.setattr(github, "run", lambda *a, **k: None)
     matching = dict(map_branch_settings([], {}))  # exactly the live snapshot the decision used
@@ -215,9 +253,7 @@ def test_apply_settings_puts_classic_protection_when_no_ruleset_rules(monkeypatc
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
     monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
-    )
+    monkeypatch.setattr(github, "run", _record_run(calls))
     GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "required_reviews": 1})
     assert any("PUT" in c and "protection" in " ".join(c) for c in calls)
 
@@ -238,9 +274,7 @@ def test_apply_settings_fails_closed_when_ruleset_owns_protection_and_desired_di
         lambda repo, branch: [{"type": "pull_request", "parameters": {"required_approving_review_count": 1}}],
     )
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
-    )
+    monkeypatch.setattr(github, "run", _record_run(calls))
     with pytest.raises(UnmodeledProtectionError):
         GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "required_reviews": 2})
     assert not any("PUT" in c for c in calls), "must not write the wrong (classic) surface"
@@ -254,9 +288,7 @@ def test_apply_settings_skips_classic_put_when_ruleset_already_matches(monkeypat
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
     monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [{"type": "pull_request"}])
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
-    )
+    monkeypatch.setattr(github, "run", _record_run(calls))
     GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "secret_scanning": True})
     assert not any("protection" in " ".join(c) for c in calls), "must not PUT classic protection"
     assert any("PATCH" in c for c in calls), "security toggle (separate surface) must still apply"
@@ -271,7 +303,7 @@ def test_apply_settings_tolerates_unavailable_security_feature(monkeypatch: pyte
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
 
-    def fake_run(cmd, **__):
+    def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if "PATCH" in cmd:  # the security_and_analysis toggle
             raise CommandError(cmd, 1, "gh: Secret scanning is not available for this repository. (HTTP 422)")
         return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -289,7 +321,7 @@ def test_apply_settings_reraises_non_feature_security_error(monkeypatch: pytest.
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
 
-    def fake_run(cmd, **__):
+    def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if "PATCH" in cmd:
             raise CommandError(cmd, 1, "gh: Server Error (HTTP 500)")
         return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -300,7 +332,7 @@ def test_apply_settings_reraises_non_feature_security_error(monkeypatch: pytest.
 
 
 def test_nonhuman_edit_after_grant_detects_bot() -> None:
-    timeline = [
+    timeline: list[dict[str, Any]] = [
         {"event": "labeled", "label": {"name": "aviato-consent:abc"}, "actor": {"type": "User"}},
         {"event": "commented", "actor": {"type": "Bot"}},
     ]
@@ -308,7 +340,7 @@ def test_nonhuman_edit_after_grant_detects_bot() -> None:
 
 
 def test_nonhuman_edit_after_grant_false_when_only_humans_after() -> None:
-    timeline = [
+    timeline: list[dict[str, Any]] = [
         {"event": "labeled", "label": {"name": "aviato-consent:abc"}, "actor": {"type": "User"}},
         {"event": "commented", "actor": {"type": "User"}},
         {"event": "renamed"},  # actorless system event ignored
@@ -317,7 +349,7 @@ def test_nonhuman_edit_after_grant_false_when_only_humans_after() -> None:
 
 
 def test_nonhuman_edit_unknown_actor_type_fails_closed() -> None:
-    timeline = [
+    timeline: list[dict[str, Any]] = [
         {"event": "labeled", "label": {"name": "aviato-consent:abc"}, "actor": {"type": "User"}},
         {"event": "commented", "actor": {"login": "x"}},  # actor present, type unknown → fail closed
     ]
@@ -335,6 +367,7 @@ def test_nonhuman_edit_before_grant_does_not_count() -> None:
 def test_current_consent_returns_active_grant() -> None:
     events = [{"action": "labeled", "label": "aviato-consent:abc", "actor_type": "User", "actor_login": "al"}]
     grant = current_consent(events)
+    assert grant is not None
     assert grant is not None
     assert grant.diff_id == "abc"
     assert grant.actor_type == "User"
@@ -365,6 +398,7 @@ def test_current_consent_most_recent_grant_wins() -> None:
         {"action": "labeled", "label": "aviato-consent:new", "actor_type": "User", "actor_login": "bo"},
     ]
     grant = current_consent(events)
+    assert grant is not None
     assert grant.diff_id == "new"
 
 
@@ -373,7 +407,7 @@ def test_current_consent_ignores_non_consent_labels() -> None:
 
 
 def test_label_events_normalizes_timeline() -> None:
-    timeline = [
+    timeline: list[dict[str, Any]] = [
         {"event": "labeled", "label": {"name": "aviato-consent:x"}, "actor": {"login": "al", "type": "User"}},
         {"event": "commented", "body": "hi"},
     ]
@@ -481,7 +515,7 @@ def test_adapter_satisfies_platform_protocol() -> None:
 
 
 def test_map_branch_settings_from_rules_matches_desired_shape() -> None:
-    rules = [
+    rules: list[dict[str, Any]] = [
         {"type": "deletion"},
         {"type": "non_fast_forward"},
         {
@@ -514,7 +548,7 @@ def test_map_branch_settings_reads_required_status_checks() -> None:
 def test_map_branch_settings_reads_status_checks_from_ruleset() -> None:
     # #2: a repo protected by the branch RULESET (not classic protection) must still
     # surface its required checks — otherwise it maps to [] and shows false drift.
-    rules = [
+    rules: list[dict[str, Any]] = [
         {
             "type": "required_status_checks",
             "parameters": {
@@ -549,7 +583,7 @@ def test_map_branch_settings_tolerates_present_but_null_payload() -> None:
         "allow_force_pushes": None,
         "allow_deletions": None,
     }
-    rules = [
+    rules: list[dict[str, Any]] = [
         {"type": "pull_request", "parameters": None},
         {"type": "required_status_checks", "parameters": {"required_status_checks": None}},
     ]
@@ -611,7 +645,7 @@ def test_enforce_admins_satisfied_by_ruleset_no_false_drift_or_lockout() -> None
     # "protect default branch" ruleset, empty classic), enforce_admins must read True — the
     # ruleset enforces on admins. Otherwise it phantom-drifts and the ruleset-owned guard would
     # lock out complete-protection/reconcile (apply-rulesets can't set a classic-only toggle).
-    ruleset_rules = [
+    ruleset_rules: list[dict[str, Any]] = [
         {"type": "pull_request", "parameters": {"required_approving_review_count": 1}},
         {"type": "non_fast_forward"},
         {"type": "deletion"},
@@ -726,8 +760,12 @@ def test_to_repository_payload_subset_and_shape() -> None:
     assert to_repository_payload({}) == {}
 
 
-def _probe_optional(*, has_issues, head_sha, artifacts):
-    def optional(endpoint, **__):
+class _OptionalJSON(Protocol):
+    def __call__(self, endpoint: str, *, default: object = None) -> object | None: ...
+
+
+def _probe_optional(*, has_issues: bool, head_sha: str | None, artifacts: list[dict[str, Any]]) -> _OptionalJSON:
+    def optional(endpoint: str, **__: object) -> object | None:
         if endpoint == "repos/o/r":
             return {"has_issues": has_issues, "default_branch": "main"}
         if endpoint == "repos/o/r/commits/main":
@@ -746,9 +784,29 @@ def test_probe_health_heartbeat_true_only_for_current_head(monkeypatch: pytest.M
         github,
         "gh_json_optional",
         _probe_optional(
-            has_issues=True, head_sha="abc", artifacts=[{"expired": False, "workflow_run": {"head_sha": "abc"}}]
+            has_issues=True,
+            head_sha="abc",
+            artifacts=[
+                {
+                    "id": 7,
+                    "name": "aviato-security-heartbeat-abc",
+                    "expired": False,
+                    "workflow_run": {"id": 70, "head_sha": "abc"},
+                }
+            ],
         ),
     )
+
+    def download(
+        command: list[str], *, cwd: str | Path | None = None, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        assert cwd is not None
+        Path(cwd, "aviato-security-heartbeat.json").write_text(
+            '{"analyzed_ref":"refs/heads/main","analyzed_sha":"abc"}\n'
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(github, "run", download)
     issue_channel, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
     assert issue_channel is True
     assert heartbeat is True
@@ -768,6 +826,23 @@ def test_probe_health_heartbeat_false_when_stale_for_old_head(monkeypatch: pytes
     assert heartbeat is False
 
 
+def test_probe_health_pages_build_type_only_when_serve_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github, "gh_json_optional", _probe_optional(has_issues=True, head_sha=None, artifacts=[]))
+    calls: list[str] = []
+
+    def pages(repo: str) -> bool:
+        calls.append(repo)
+        return True
+
+    monkeypatch.setattr(github, "pages_build_type_is_workflow", pages)
+    _, _, without = GitHubPlatform().probe_health("o/r", probe_pages_build_type=False)
+    assert "pages_build_type_workflow" not in without
+    assert calls == []
+    _, _, with_pages = GitHubPlatform().probe_health("o/r", probe_pages_build_type=True)
+    assert with_pages["pages_build_type_workflow"] is True
+    assert calls == ["o/r"]
+
+
 def test_probe_health_heartbeat_false_when_no_artifact_or_expired(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "gh_json_optional", _probe_optional(has_issues=False, head_sha="abc", artifacts=[]))
     issue_channel, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
@@ -782,6 +857,205 @@ def test_probe_health_heartbeat_false_when_no_artifact_or_expired(monkeypatch: p
     )
     _, heartbeat, _remote = GitHubPlatform().probe_health("o/r")
     assert heartbeat is False  # expired heartbeat for HEAD → broken
+
+
+def test_probe_health_heartbeat_sha_rejects_mismatched_name_and_content(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifact = {
+        "id": 7,
+        "name": "aviato-security-heartbeat-oldsha",
+        "expired": False,
+        "workflow_run": {"id": 70, "head_sha": "newsha"},
+    }
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha="newsha", artifacts=[artifact]),
+    )
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("mismatched artifact name must not download")),
+    )
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is False
+
+    artifact["name"] = "aviato-security-heartbeat-newsha"
+
+    def download_bad_content(
+        command: list[str], *, cwd: str | Path | None = None, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        assert cwd is not None
+        Path(cwd, "aviato-security-heartbeat.json").write_text(
+            '{"analyzed_ref":"refs/heads/main","analyzed_sha":"oldsha"}\n'
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(github, "run", download_bad_content)
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is False
+
+
+def test_probe_health_heartbeat_sha_accepts_exact_name_run_and_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    head_sha = "abc123"
+    artifact = {
+        "id": 7,
+        "name": f"aviato-security-heartbeat-{head_sha}",
+        "expired": False,
+        "workflow_run": {"id": 70, "head_sha": head_sha},
+    }
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha=head_sha, artifacts=[artifact]),
+    )
+
+    def download(
+        command: list[str], *, cwd: str | Path | None = None, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        assert command[:3] == ["gh", "run", "download"]
+        assert cwd is not None
+        Path(cwd, "aviato-security-heartbeat.json").write_text(
+            f'{{"analyzed_ref":"refs/heads/main","analyzed_sha":"{head_sha}"}}\n'
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(github, "run", download)
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is True
+
+
+def test_probe_health_heartbeat_sha_download_failure_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    head_sha = "abc123"
+    artifact = {
+        "id": 7,
+        "name": f"aviato-security-heartbeat-{head_sha}",
+        "expired": False,
+        "workflow_run": {"id": 70, "head_sha": head_sha},
+    }
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha=head_sha, artifacts=[artifact]),
+    )
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(CommandError(["gh"], 1, "HTTP 503")),
+    )
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is None
+
+
+@pytest.mark.parametrize(
+    "artifacts_payload",
+    [None, {"artifacts": None}, {"artifacts": {"bad": "shape"}}, {"artifacts": ["bad-item"]}],
+)
+def test_probe_health_heartbeat_sha_malformed_artifact_listing_is_unknown(
+    monkeypatch: pytest.MonkeyPatch, artifacts_payload: object
+) -> None:
+    def optional(endpoint: str, **__: object) -> object:
+        if endpoint == "repos/o/r":
+            return {"has_issues": True, "default_branch": "main"}
+        if endpoint == "repos/o/r/commits/main":
+            return {"sha": "abc"}
+        if endpoint.startswith("repos/o/r/actions/artifacts"):
+            return artifacts_payload
+        return None
+
+    monkeypatch.setattr(github, "gh_json_optional", optional)
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is None
+
+
+def test_probe_health_heartbeat_sha_valid_empty_artifact_listing_is_unhealthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha="abc", artifacts=[]),
+    )
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is False
+
+
+def test_probe_health_heartbeat_sha_malformed_candidate_id_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    artifact = {
+        "name": "aviato-security-heartbeat-abc",
+        "expired": False,
+        "workflow_run": {"head_sha": "abc"},
+    }
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha="abc", artifacts=[artifact]),
+    )
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        7,
+        {},
+        {"analyzed_ref": "refs/heads/main"},
+        {"analyzed_sha": "abc"},
+        {"analyzed_ref": 7, "analyzed_sha": "abc"},
+        {"analyzed_ref": "refs/heads/main", "analyzed_sha": None},
+    ],
+)
+def test_probe_health_heartbeat_sha_malformed_json_payload_is_unknown(
+    monkeypatch: pytest.MonkeyPatch, payload: object
+) -> None:
+    artifact = {
+        "name": "aviato-security-heartbeat-abc",
+        "expired": False,
+        "workflow_run": {"id": 70, "head_sha": "abc"},
+    }
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha="abc", artifacts=[artifact]),
+    )
+
+    def download(
+        command: list[str], *, cwd: str | Path | None = None, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        assert cwd is not None
+        Path(cwd, "aviato-security-heartbeat.json").write_text(json.dumps(payload))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(github, "run", download)
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is None
+
+
+def test_probe_health_heartbeat_sha_invalid_utf8_payload_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    artifact = {
+        "name": "aviato-security-heartbeat-abc",
+        "expired": False,
+        "workflow_run": {"id": 70, "head_sha": "abc"},
+    }
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        _probe_optional(has_issues=True, head_sha="abc", artifacts=[artifact]),
+    )
+
+    def download(
+        command: list[str], *, cwd: str | Path | None = None, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        assert cwd is not None
+        Path(cwd, "aviato-security-heartbeat.json").write_bytes(b"\xff\xfe")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(github, "run", download)
+    _, heartbeat, _ = GitHubPlatform().probe_health("o/r")
+    assert heartbeat is None
 
 
 def test_read_settings_includes_security(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -858,7 +1132,7 @@ def test_get_issue_populates_consent_from_paginated_timeline(monkeypatch: pytest
     assert issue.consent_role_lookup_ok is True
 
 
-def _route_gh_json(endpoint: str):
+def _route_gh_json(endpoint: str) -> object | None:
     if endpoint.startswith("repos/o/r/issues?"):
         return [{"number": 7, "state": "open"}]
     if endpoint.endswith("/permission"):
@@ -879,6 +1153,7 @@ def test_get_issue_maps_nonhuman_grantor_to_denied_sentinel(monkeypatch: pytest.
         ],
     )
     issue = GitHubPlatform().get_issue("o/r", "k")
+    assert issue is not None
     assert issue.consent_actor_type != ACTOR_HUMAN  # mapped to the non-human sentinel
     assert issue.consent_role != ROLE_PRIVILEGED  # non-admin → not privileged
 
@@ -895,13 +1170,14 @@ def test_get_issue_role_lookup_failure_is_not_authorized(monkeypatch: pytest.Mon
         ],
     )
     issue = GitHubPlatform().get_issue("o/r", "k")
+    assert issue is not None
     assert issue.consent_role_lookup_ok is False
 
 
-def test_open_or_update_proposal_writes_files_and_pushes(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_open_or_update_proposal_writes_files_and_pushes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
 
-    def fake_run(cmd, **__):
+    def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -923,12 +1199,44 @@ def test_open_or_update_proposal_writes_files_and_pushes(tmp_path, monkeypatch: 
     assert any("gh pr create" in j for j in joined)
 
 
-def test_open_or_update_proposal_skips_pr_create_when_pr_exists(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("symlink_leaf", [False, True])
+def test_open_or_update_proposal_rejects_symlink_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, symlink_leaf: bool
+) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    original = b"outside remains unchanged\n"
+    if symlink_leaf:
+        outside_target = outside / "proposal.yml"
+        outside_target.write_bytes(original)
+        workflows = tmp_path / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        (workflows / "proposal.yml").symlink_to(outside_target)
+    else:
+        outside_target = outside / "workflows" / "proposal.yml"
+        outside_target.parent.mkdir()
+        outside_target.write_bytes(original)
+        (tmp_path / ".github").symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    with pytest.raises(PathConfinementError, match=r"write proposal.*\.github/workflows/proposal\.yml"):
+        GitHubPlatform(workdir=tmp_path).open_or_update_proposal(
+            "owner/repo",
+            "aviato/sync/x",
+            "Aviato sync",
+            {".github/workflows/proposal.yml": "name: proposal\n"},
+            "body",
+        )
+
+    assert outside_target.read_bytes() == original
+
+
+def test_open_or_update_proposal_skips_pr_create_when_pr_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls: list[list[str]] = []
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
-    monkeypatch.setattr(
-        github, "run", lambda cmd, **__: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
-    )
+    monkeypatch.setattr(github, "run", _record_run(calls))
     # The PR-existence read is fail-closed (gh_json_optional): a 404 means "no PR",
     # an auth/5xx error raises rather than silently creating a duplicate.
     monkeypatch.setattr(github, "gh_json_optional", lambda endpoint, **__: [{"number": 5}])  # PR already open
@@ -945,7 +1253,7 @@ def test_apply_settings_issues_put_with_payload(monkeypatch: pytest.MonkeyPatch)
 
     written: dict[str, object] = {}
 
-    def fake_run2(cmd, **__):
+    def fake_run2(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         captured["cmd"] = cmd
         if "--input" not in cmd:
             return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -962,12 +1270,17 @@ def test_apply_settings_issues_put_with_payload(monkeypatch: pytest.MonkeyPatch)
         "o/r", {"requires_pull_request": True, "required_reviews": 2, "block_force_push": True}
     )
     cmd = captured["cmd"]
+    assert isinstance(cmd, list)
     assert "PUT" in cmd
     assert "repos/o/r/branches/main/protection" in cmd
     # translated to the branch-protection API shape, not the internal keys
-    assert "required_reviews" not in written["payload"]
-    assert written["payload"]["required_pull_request_reviews"]["required_approving_review_count"] == 2
-    assert written["payload"]["allow_force_pushes"] is False
+    payload = written["payload"]
+    assert isinstance(payload, dict)
+    assert "required_reviews" not in payload
+    reviews = payload["required_pull_request_reviews"]
+    assert isinstance(reviews, dict)
+    assert reviews["required_approving_review_count"] == 2
+    assert payload["allow_force_pushes"] is False
 
 
 def test_read_settings_raises_settings_read_error_on_admin_scope_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -976,7 +1289,7 @@ def test_read_settings_raises_settings_read_error_on_admin_scope_failure(monkeyp
     # empty/"unprotected" read. A regression that returned {} here would pass every other test.
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
 
-    def _forbidden(repo: str, branch: str) -> list:
+    def _forbidden(repo: str, branch: str) -> list[dict[str, Any]]:
         raise github.GitHubAPIError(f"repos/{repo}/rules/branches/{branch}", 1, "HTTP 403")
 
     monkeypatch.setattr(github, "active_branch_rules", _forbidden)
@@ -989,7 +1302,7 @@ def test_read_rulesets_fails_closed_on_per_id_get_error(monkeypatch: pytest.Monk
     # caller SKIPS settings drift fail-closed — never read a partial/empty ruleset set as "clean".
     monkeypatch.setattr(github, "repository_rulesets", lambda repo: [{"id": 7, "name": "X"}])
 
-    def _boom(repo, ruleset_id):
+    def _boom(repo: str, ruleset_id: int) -> Never:
         raise github.GitHubAPIError(f"repos/{repo}/rulesets/{ruleset_id}", 1, "HTTP 403")
 
     monkeypatch.setattr(github, "repository_ruleset", _boom)
@@ -1002,6 +1315,37 @@ def test_read_rulesets_returns_full_payloads(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(github, "repository_ruleset", lambda repo, rid: {"id": rid, "name": "X", "rules": []})
     payloads = GitHubPlatform().read_rulesets("o/r")
     assert payloads == [{"id": 7, "name": "X", "rules": []}]  # the id-less summary is skipped
+
+
+def test_read_rulesets_preserves_degraded_payload_for_non_clean_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    degraded = {
+        "id": 7,
+        "name": "Common: release tag format",
+        "target": "tag",
+        "enforcement": "active",
+        "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}},
+        "bypass_actors": [],
+        "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
+    }
+    monkeypatch.setattr(github, "repository_rulesets", lambda repo: [{"id": 7}])
+    monkeypatch.setattr(github, "repository_ruleset", lambda repo, rid: degraded)
+
+    assert GitHubPlatform().read_rulesets("o/r") == [degraded]
+
+
+def test_probe_health_reports_degraded_ruleset_as_non_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aviato.rulesets import render_all_rulesets
+
+    desired = next(payload for payload in render_all_rulesets() if payload["target"] == "tag")
+    degraded = json.loads(json.dumps(desired))
+    degraded["rules"] = [rule for rule in degraded["rules"] if rule["type"] != "tag_name_pattern"]
+    monkeypatch.setattr(GitHubPlatform, "read_rulesets", lambda self, repo: [degraded])
+    monkeypatch.setattr(github, "gh_json_optional", lambda *args, **kwargs: None)
+    monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
+
+    _, _, remote = GitHubPlatform().probe_health("o/r", desired_rulesets=(desired,))
+
+    assert remote["ruleset_protection_full"] is False
 
 
 def test_is_feature_unavailable_requires_security_context() -> None:
@@ -1025,7 +1369,7 @@ def test_apply_settings_reraises_security_patch_error_without_security_context(m
     monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
 
-    def fake_gh_input(self, args, payload):
+    def fake_gh_input(self: GitHubPlatform, args: list[str], payload: dict[str, object]) -> None:
         if any("PATCH" in a for a in args):
             raise CommandError(["gh"], 1, "Repository is not enabled for this operation")
         # the branch-protection PUT succeeds
@@ -1111,7 +1455,7 @@ def test_probe_health_reports_code_scanning_and_drift_state(monkeypatch: pytest.
     # and the drift caller's API state (enabled + last scheduled-run conclusion) —
     # local file presence alone read a UI-disabled or persistently-failing workflow
     # as healthy.
-    def fake_optional(endpoint: str, *, default=None):
+    def fake_optional(endpoint: str, *, default: object | None = None) -> object:
         if "code-scanning/analyses" in endpoint:
             return []  # 200 with no analyses yet ⇒ enabled
         if "actions/workflows/5/runs" in endpoint:
@@ -1120,7 +1464,7 @@ def test_probe_health_reports_code_scanning_and_drift_state(monkeypatch: pytest.
             return {"has_issues": True, "default_branch": "main"}
         return default
 
-    def fake_paginated_optional(endpoint: str, *, default=None):
+    def fake_paginated_optional(endpoint: str, *, default: object | None = None) -> object:
         # the workflow listing is PAGINATED (--slurp → one page-object per page)
         if endpoint.endswith("actions/workflows?per_page=100"):
             wf = {"id": 5, "path": ".github/workflows/aviato-drift.yml", "state": "disabled_manually"}
@@ -1130,21 +1474,23 @@ def test_probe_health_reports_code_scanning_and_drift_state(monkeypatch: pytest.
     monkeypatch.setattr(github, "gh_json_optional", fake_optional)
     monkeypatch.setattr(github, "gh_json_paginated_optional", fake_paginated_optional)
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
+    monkeypatch.setattr(github, "codeql_merge_protection_present", lambda repo: True)
     _, _, remote = GitHubPlatform().probe_health("o/r", drift_workflow_path=".github/workflows/aviato-drift.yml")
     assert remote["code_scanning"] is True
+    assert remote["codeql_merge_protection"] is True
     assert remote["drift_automation_enabled"] is False  # disabled in the UI ⇒ flagged
     assert remote["drift_automation_last_run_ok"] is False  # last run failed ⇒ flagged
 
 
 def test_probe_health_drift_workflow_absent_reads_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_optional(endpoint: str, *, default=None):
+    def fake_optional(endpoint: str, *, default: object | None = None) -> object:
         if "code-scanning/analyses" in endpoint:
             return default  # genuine 404 ⇒ not enabled
         if endpoint.startswith("repos/o/r"):
             return {"has_issues": True, "default_branch": "main"}
         return default
 
-    def fake_paginated_optional(endpoint: str, *, default=None):
+    def fake_paginated_optional(endpoint: str, *, default: object | None = None) -> object:
         if endpoint.endswith("actions/workflows?per_page=100"):
             return [{"workflows": []}]
         return default
@@ -1152,7 +1498,9 @@ def test_probe_health_drift_workflow_absent_reads_disabled(monkeypatch: pytest.M
     monkeypatch.setattr(github, "gh_json_optional", fake_optional)
     monkeypatch.setattr(github, "gh_json_paginated_optional", fake_paginated_optional)
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
+    monkeypatch.setattr(github, "codeql_merge_protection_present", lambda repo: False)
     _, _, remote = GitHubPlatform().probe_health("o/r", drift_workflow_path=".github/workflows/aviato-drift.yml")
     assert remote["code_scanning"] is False
+    assert remote["codeql_merge_protection"] is False
     assert remote["drift_automation_enabled"] is False
     assert remote["drift_automation_last_run_ok"] is None

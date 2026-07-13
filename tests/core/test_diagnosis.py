@@ -1,16 +1,52 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 import pytest
 
-from aviato.core.diagnosis import ExpectedArtifact, diagnose
-from aviato.core.errors import BootstrapError
-from aviato.core.scaffold import ScaffoldItem, scaffold
+from aviato.core.diagnosis import (
+    DiagnosisReport,
+    diagnose,
+)
+from aviato.core.diagnosis import (
+    ExpectedArtifact as _ExpectedArtifact,
+)
+from aviato.core.errors import BootstrapError, PathConfinementError
+from aviato.core.onboarding import materialize_items
+from aviato.core.registry import Registry
+from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
+from aviato.core.scaffold import scaffold
+from aviato.paths import MODULE_SOURCE_ROOT
+
+INPUT_A = "a" * 64
+INPUT_B = "b" * 64
+ExpectedArtifact = partial(_ExpectedArtifact, input_hash="0" * 64)
+ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 
 
 def _scaffold_one(root: Path, output: str, body: str) -> None:
-    scaffold(root, [ScaffoldItem(output, body, "#", False)], profile="p", version="v1")
+    scaffold(
+        root,
+        [ScaffoldItem(output, body, "#", False, input_hash=INPUT_A)],
+        profile="p",
+        version="v1",
+    )
+
+
+def test_diagnose_rejects_nested_symlinked_parent(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    outside_target = outside / "cfg.py"
+    original = b"outside remains unchanged\n"
+    outside_target.write_bytes(original)
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "managed").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(PathConfinementError, match=r"diagnose artifact.*nested/managed/cfg\.py"):
+        diagnose(tmp_path, [ExpectedArtifact("nested/managed/cfg.py", "expected\n")])
+
+    assert outside_target.read_bytes() == original
 
 
 def test_diagnose_tolerates_non_utf8_workflow_file(tmp_path: Path) -> None:
@@ -33,8 +69,65 @@ def test_diagnose_tolerates_non_utf8_workflow_file(tmp_path: Path) -> None:
 
 def test_clean_when_body_matches(tmp_path: Path) -> None:
     _scaffold_one(tmp_path, "cfg.py", "X = 1\n")
-    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n", False, input_hash=INPUT_A)])
     assert report.statuses["cfg.py"] == "clean"
+
+
+def test_equal_body_with_changed_resolved_inputs_is_mergeable_drift(tmp_path: Path) -> None:
+    # The template body intentionally does not reference the optional variable.
+    _scaffold_one(tmp_path, "cfg.py", "constant body\n")
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "constant body\n", False, input_hash=INPUT_B)])
+    assert report.statuses["cfg.py"] == "mergeable-drift"
+
+
+def test_renderer_tracks_unused_optional_variable_and_docs_but_not_pin(tmp_path: Path) -> None:
+    registry = Registry(MODULE_SOURCE_ROOT)
+    base = {"distribution-name": "acme", "import-name": "acme"}
+
+    def editorconfig(*, owner: str, pin: str, docs: bool = False) -> _ScaffoldItem:
+        items = materialize_items(registry, "python-library", {**base, "owner": owner}, pin=pin, docs=docs)
+        return next(item for item in items if item.output == ".editorconfig")
+
+    original = editorconfig(owner="A", pin="v1")
+    pin_only = editorconfig(owner="A", pin="v2")
+    variable_change = editorconfig(owner="B", pin="v2")
+    docs_change = editorconfig(owner="A", pin="v2", docs=True)
+    assert original.body == pin_only.body == variable_change.body == docs_change.body
+    assert original.input_hash == pin_only.input_hash
+    assert original.input_hash != variable_change.input_hash
+    assert original.input_hash != docs_change.input_hash
+
+    scaffold(tmp_path, [original], profile="python-library", version="v1")
+    assert (
+        diagnose(
+            tmp_path,
+            [
+                ExpectedArtifact(
+                    pin_only.output,
+                    pin_only.body,
+                    pin_only.seed_once,
+                    input_hash=pin_only.input_hash,
+                )
+            ],
+            profile="python-library",
+        ).statuses[pin_only.output]
+        == "clean"
+    )
+    assert (
+        diagnose(
+            tmp_path,
+            [
+                ExpectedArtifact(
+                    variable_change.output,
+                    variable_change.body,
+                    variable_change.seed_once,
+                    input_hash=variable_change.input_hash,
+                )
+            ],
+            profile="python-library",
+        ).statuses[variable_change.output]
+        == "mergeable-drift"
+    )
 
 
 def test_marker_for_different_profile_is_dirty_drift(tmp_path: Path) -> None:
@@ -42,10 +135,18 @@ def test_marker_for_different_profile_is_dirty_drift(tmp_path: Path) -> None:
     # for profile "p" must not read clean under a declaration for profile "other" —
     # even when the body matches — it needs human review (dirty-drift, §5.4).
     _scaffold_one(tmp_path, "cfg.py", "X = 1\n")  # stamped profile="p"
-    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")], profile="other")
+    report = diagnose(
+        tmp_path,
+        [ExpectedArtifact("cfg.py", "X = 1\n", False, input_hash=INPUT_A)],
+        profile="other",
+    )
     assert report.statuses["cfg.py"] == "dirty-drift"
     # ...and matches clean when the profile agrees.
-    report_ok = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")], profile="p")
+    report_ok = diagnose(
+        tmp_path,
+        [ExpectedArtifact("cfg.py", "X = 1\n", False, input_hash=INPUT_A)],
+        profile="p",
+    )
     assert report_ok.statuses["cfg.py"] == "clean"
 
 
@@ -59,7 +160,7 @@ def test_mergeable_drift_when_body_diverges_with_valid_marker(tmp_path: Path) ->
 def test_clean_ignores_marker_version_change(tmp_path: Path) -> None:
     # file stamped v1; resolved set is now v2 but body identical → still clean (§5.5)
     _scaffold_one(tmp_path, "cfg.py", "X = 1\n")
-    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])
+    report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n", False, input_hash=INPUT_A)])
     assert report.statuses["cfg.py"] == "clean"
 
 
@@ -133,12 +234,59 @@ def test_no_secret_flag_when_clean(tmp_path: Path) -> None:
     assert report.secret_in_declaration is False
 
 
+def test_unset_secret_typed_var_in_declaration_is_not_flagged(tmp_path: Path) -> None:
+    report = diagnose(tmp_path, [], declaration_variables={"token": None}, secret_var_names=("token",))
+    assert report.secret_in_declaration is False
+
+
 def test_seed_once_integrity_divergence_is_reported_not_overwritten(tmp_path: Path) -> None:
     scaffold(tmp_path, [ScaffoldItem("Dockerfile", "FROM x\n", "#", True)], profile="p", version="v1")
     (tmp_path / "Dockerfile").write_text("FROM tampered\n")
     report = diagnose(tmp_path, [ExpectedArtifact("Dockerfile", "", seed_once=True)])
     assert "Dockerfile" in report.seed_divergence
     assert (tmp_path / "Dockerfile").read_text() == "FROM tampered\n"  # never overwritten
+
+
+@pytest.mark.parametrize("sidecar_body", [None, "{ corrupt"])
+def test_unknown_seed_sidecar_is_reported_broken_without_crashing(tmp_path: Path, sidecar_body: str | None) -> None:
+    (tmp_path / "Dockerfile").write_text("FROM operator\n", encoding="utf-8")
+    if sidecar_body is not None:
+        (tmp_path / ".github").mkdir()
+        (tmp_path / ".github" / "aviato.seed.json").write_text(sidecar_body, encoding="utf-8")
+
+    report = diagnose(tmp_path, [ExpectedArtifact("Dockerfile", "", seed_once=True)])
+
+    assert report.seed_divergence == ["Dockerfile"]
+
+
+def test_missing_expected_seed_record_is_reported_broken(tmp_path: Path) -> None:
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "aviato.seed.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "Dockerfile").write_text("FROM operator\n", encoding="utf-8")
+
+    report = diagnose(tmp_path, [ExpectedArtifact("Dockerfile", "", seed_once=True)])
+
+    assert report.seed_divergence == ["Dockerfile"]
+
+
+def test_seed_once_rechecks_confinement_at_read_and_final_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import aviato.core.diagnosis as diagnosis_module
+    from aviato.core.pathguard import confined_target as original_guard
+
+    scaffold(tmp_path, [ScaffoldItem("Dockerfile", "FROM x\n", "#", True)], profile="p", version="v1")
+    calls: list[str] = []
+
+    def tracking_guard(root: Path, relative: str, *, operation: str) -> Path:
+        if relative == "Dockerfile":
+            calls.append(operation)
+        return original_guard(root, relative, operation=operation)
+
+    monkeypatch.setattr(diagnosis_module, "confined_target", tracking_guard)
+    diagnose(tmp_path, [ExpectedArtifact("Dockerfile", "", seed_once=True)])
+
+    assert calls == ["diagnose artifact", "diagnose seed artifact", "diagnose seed artifact"]
 
 
 def test_seed_once_deletion_is_reported_as_divergence(tmp_path: Path) -> None:
@@ -191,6 +339,27 @@ def test_platform_probes_default_unknown(tmp_path: Path) -> None:
     assert report.scan_heartbeat_present is None
 
 
+@pytest.mark.parametrize(
+    ("local_present", "remote_enabled", "healthy"),
+    [
+        (True, True, True),
+        (True, False, False),
+        (False, True, False),
+        (True, None, False),
+        (False, None, False),
+    ],
+)
+def test_drift_automation_health_requires_local_and_remote(
+    local_present: bool, remote_enabled: bool | None, healthy: bool
+) -> None:
+    report = DiagnosisReport(
+        drift_automation_present=local_present,
+        drift_automation_enabled=remote_enabled,
+    )
+
+    assert report.drift_automation_healthy is healthy
+
+
 def test_non_utf8_managed_file_classifies_dirty_drift_without_crashing(tmp_path: Path) -> None:
     # review #6: a non-UTF-8 file at a managed path must classify dirty-drift (operator-owned,
     # never silently regenerated), NOT raise a UnicodeDecodeError that escapes scan_fleet's
@@ -210,11 +379,11 @@ def test_bootstrap_declaration_allowed_in_library(tmp_path: Path) -> None:
     assert report.statuses == {}
 
 
-def test_directory_at_managed_path_classifies_dirty_drift_without_crashing(tmp_path) -> None:
+def test_directory_at_managed_path_classifies_dirty_drift_without_crashing(tmp_path: Path) -> None:
     # R5-3-DIAG-OS: a DIRECTORY (or other unreadable path) at a managed output path raises
     # IsADirectoryError (an OSError, not UnicodeDecodeError); diagnosis must catch it and classify
     # dirty-drift, never leak a raw OSError that would abort a fleet scan.
-    from aviato.core.diagnosis import ExpectedArtifact, diagnose
+    from aviato.core.diagnosis import diagnose
 
     (tmp_path / "cfg.py").mkdir()
     report = diagnose(tmp_path, [ExpectedArtifact("cfg.py", "X = 1\n")])

@@ -6,7 +6,11 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- [low] §6.3/§13.2 (and a "seed-once prerequisite" line) still describe Dockerfile seeding despite the R5-6 decision that Dockerfiles are probe-only, never seeded. Amend the requirements text. — FINDINGS #56 · docs/requirements/core/consumer-contract.md (§6.3) + docs/requirements/modules/deployment/ghcr/requirements.md (§13.2)
+- (none)
+
+## Resolved by 2026-07-12 hardening plan
+
+- §6.3 and §13.2 now state that container build definitions are operator-provided, probed, and never seeded.
 
 ## Settled — do not reopen
 

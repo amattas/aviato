@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
+from aviato.core.diagnosis import diagnose as original_diagnose
 from aviato.core.fleet import scan_fleet
 from aviato.core.onboarding import materialize_items
 from aviato.core.registry import Registry
@@ -9,15 +13,31 @@ from aviato.core.scaffold import scaffold
 from aviato.paths import MODULE_SOURCE_ROOT
 
 
+def _record_keyword_arguments[**P, R](fn: Callable[P, R], calls: list[dict[str, object]]) -> Callable[P, R]:
+    def recording(*args: P.args, **kwargs: P.kwargs) -> R:
+        calls.append(dict(kwargs))
+        return fn(*args, **kwargs)
+
+    return recording
+
+
 def _make_consumer(root: Path, *, scaffold_all: bool) -> None:
     github = root / ".github"
     github.mkdir(parents=True)
-    (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text(
+        "profile: python-library\nversion: v1\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
     if scaffold_all:
         reg = Registry(MODULE_SOURCE_ROOT)
         # Scaffold with the same pin the declaration records, so the embedded
         # workflow refs match what fleet expects (parity, §5.11).
-        items = materialize_items(reg, "python-library", variables={}, pin="v1")
+        items = materialize_items(
+            reg,
+            "python-library",
+            variables={"distribution-name": "acme", "import-name": "acme"},
+            pin="v1",
+        )
         scaffold(root, items, profile="python-library", version="v1")
 
 
@@ -56,6 +76,22 @@ def test_scan_aggregates_per_repo_status(tmp_path: Path) -> None:
     assert any(status == "missing" for status in by_path["b"].statuses.values())
 
 
+def test_fleet_passes_profile_derived_health_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from aviato.core import fleet
+
+    consumer = tmp_path / "consumer"
+    _make_consumer(consumer, scaffold_all=False)
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(fleet, "diagnose", _record_keyword_arguments(original_diagnose, calls))
+    markers = ("reusable-consumer-automation",)
+    registry = Registry(MODULE_SOURCE_ROOT)
+    scan_fleet([consumer], registry, drift_automation_markers=markers)
+
+    assert calls[0]["prerequisite_paths"] == registry.profile_doc("python-library").get("prerequisites", {})
+    assert calls[0]["drift_automation_markers"] == markers
+
+
 def test_scan_reports_repo_without_declaration(tmp_path: Path) -> None:
     plain = tmp_path / "plain"
     plain.mkdir()
@@ -75,6 +111,29 @@ def test_scan_reports_malformed_declaration_as_error_not_crash(tmp_path: Path) -
     scans = scan_fleet([bad, good], Registry(MODULE_SOURCE_ROOT))
     assert len(scans) == 2
     assert scans[0].error is not None  # malformed YAML reported, not raised
+
+
+def test_scan_contains_unserializable_variable_to_one_repository(tmp_path: Path) -> None:
+    bad = tmp_path / "bad-variable"
+    (bad / ".github").mkdir(parents=True)
+    (bad / ".github" / "aviato.yaml").write_text(
+        "profile: python-library\n"
+        "version: 1\n"
+        "variables:\n"
+        "  distribution-name: !!set {not-a-scalar: null}\n"
+        "  import-name: acme\n",
+        encoding="utf-8",
+    )
+    good = tmp_path / "good-variable"
+    _make_consumer(good, scaffold_all=False)
+
+    scans = scan_fleet([bad, good], Registry(MODULE_SOURCE_ROOT))
+
+    assert len(scans) == 2
+    assert scans[0].invalid_declaration is True
+    assert scans[0].error is not None and "distribution-name" in scans[0].error
+    assert scans[1].error is None
+    assert scans[1].statuses
 
 
 def test_scan_is_read_only(tmp_path: Path) -> None:

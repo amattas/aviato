@@ -2,6 +2,19 @@ name: Reusable PyPI Publish
 
 on:
   workflow_call:
+    outputs:
+      resolved-tag:
+        description: Validated release tag built into the artifact.
+        value: ${{ jobs.build.outputs.resolved-tag }}
+      artifact-name:
+        description: Fixed name of the vetted distribution and SBOM artifact.
+        value: ${{ jobs.build.outputs.artifact-name }}
+      distribution-name:
+        description: Distribution name read from every built archive's core metadata.
+        value: ${{ jobs.build.outputs.distribution-name }}
+      package-version:
+        description: Package version proven to match the release tag.
+        value: ${{ jobs.build.outputs.package-version }}
     inputs:
       aviato-ref:
         description: Deprecated. Release validation is embedded in this pinned workflow.
@@ -31,6 +44,13 @@ on:
           before publishing, so a tag moved between gate and publish aborts.
         required: true
         type: string
+      consumer-publisher-present:
+        description: >-
+          Compatibility marker set only by callers that include the consumer-local
+          trusted-publisher job. Run `aviato sync` if this guard fails.
+        required: false
+        type: boolean
+        default: false
       install-command:
         required: false
         type: string
@@ -45,11 +65,6 @@ on:
         required: false
         type: string
         default: "dist"
-      repository-url:
-        description: Optional alternate repository URL, for example TestPyPI.
-        required: false
-        type: string
-        default: ""
       twine-version:
         description: Exact twine version to install (§11.3 — package index has no digest).
         required: false
@@ -63,14 +78,6 @@ on:
         required: false
         type: string
         default: "2.7.3"
-      environment-name:
-        description: >-
-          GitHub deployment environment for the publish job (finding 7). Non-breaking
-          default: GitHub auto-creates it unprotected; the operator adds reviewer/
-          branch rules and binds the PyPI trusted publisher to this environment name.
-        required: false
-        type: string
-        default: pypi
 
 # review #26: serialize publishes per repo for parity with the GHCR/Pages deploys — a re-run or
 # two near-simultaneous in-run deploys for the same tag should queue, not race. Bounded anyway by
@@ -79,21 +86,26 @@ concurrency:
   group: aviato-pypi-${{ github.repository }}
   cancel-in-progress: false
 
-# Top-level permissions are the UNION the caller must grant the reusable workflow (§8.9 — the
-# pipeline module's declared privileges mirror this). R3-2-PYPIJOB: the build job DOWNGRADES to
-# contents:read (see its job-level `permissions:`) so the operator-supplied install/build commands —
-# which execute arbitrary build-TIME dependencies — never run with the OIDC/attestation token; only
-# the separate PUBLISH job (which runs no build code) keeps id-token/attestations. Artifacts cross
-# the job boundary via upload/download (PyPI trusted-publishing isolation guidance).
+# This reusable half can only build and vet artifacts. PyPI requires the OIDC token's
+# workflow identity to be the registered consumer workflow, so publishing lives there.
 permissions:
   contents: read
-  id-token: write
-  # attestations: write lets the publish attach keyless build provenance (§11.7).
-  attestations: write
 
 jobs:
+  require-consumer-publisher:
+    name: Require consumer-local PyPI publisher
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Reject stale caller without trusted publisher
+        if: ${{ inputs.consumer-publisher-present != true }}
+        run: |
+          echo "::error::This caller predates the required consumer-local PyPI trusted publisher. Run 'aviato sync .' and commit the updated workflow."
+          exit 1
+
   build:
     name: Build Python package
+    needs: require-consumer-publisher
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -102,6 +114,9 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
     outputs:
       resolved-tag: ${{ steps.tag.outputs.resolved-tag }}
+      artifact-name: aviato-pypi-dist
+      distribution-name: ${{ steps.metadata.outputs.distribution-name }}
+      package-version: ${{ steps.metadata.outputs.package-version }}
     steps:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
@@ -169,6 +184,63 @@ jobs:
         env:
           BUILD_COMMAND: ${{ inputs.build-command }}
         run: eval "$BUILD_COMMAND"
+
+      - name: Verify archive name and version contract
+        id: metadata
+        shell: bash
+        env:
+          PACKAGES_DIR: ${{ inputs.packages-dir }}
+          RELEASE_TAG: ${{ steps.tag.outputs.resolved-tag }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import email.parser
+          import os
+          import pathlib
+          import re
+          import tarfile
+          import zipfile
+
+          dist = pathlib.Path(os.environ["PACKAGES_DIR"])
+          archives = sorted(path for path in dist.iterdir() if path.is_file())
+          if not archives:
+              raise SystemExit("no distribution archives were built")
+
+          def core_metadata(path: pathlib.Path) -> bytes:
+              if path.suffix == ".whl" or path.suffix == ".zip":
+                  with zipfile.ZipFile(path) as archive:
+                      candidates = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA") or (name.endswith("/PKG-INFO") and name.count("/") == 1)]
+                      if len(candidates) != 1:
+                          raise SystemExit(f"{path.name}: expected exactly one core metadata file")
+                      return archive.read(candidates[0])
+              if path.name.endswith((".tar.gz", ".tar.bz2", ".tar.xz")):
+                  with tarfile.open(path, "r:*") as archive:
+                      candidates = [member for member in archive.getmembers() if member.isfile() and member.name.endswith("/PKG-INFO") and member.name.count("/") == 1]
+                      if len(candidates) != 1:
+                          raise SystemExit(f"{path.name}: expected exactly one PKG-INFO")
+                      handle = archive.extractfile(candidates[0])
+                      if handle is None:
+                          raise SystemExit(f"{path.name}: could not read PKG-INFO")
+                      return handle.read()
+              raise SystemExit(f"unsupported distribution archive: {path.name}")
+
+          expected_version = re.sub(r"-(alpha|beta)([0-9]+)$", lambda m: {"alpha": "a", "beta": "b"}[m.group(1)] + m.group(2), os.environ["RELEASE_TAG"])
+          identities = set()
+          for path in archives:
+              metadata = email.parser.BytesParser().parsebytes(core_metadata(path))
+              name, version = metadata.get("Name"), metadata.get("Version")
+              if not name or not version:
+                  raise SystemExit(f"{path.name}: core metadata is missing Name or Version")
+              identities.add((name, version))
+          if len(identities) != 1:
+              raise SystemExit(f"distribution archives disagree on name/version: {sorted(identities)}")
+          name, version = identities.pop()
+          if version != expected_version:
+              raise SystemExit(f"package version {version!r} does not match release tag {os.environ['RELEASE_TAG']!r} (expected {expected_version!r})")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"distribution-name={name}", file=output)
+              print(f"package-version={version}", file=output)
+          PY
 
       # §13.1: verify metadata + scan dependencies (gate on high/critical) + generate the SBOM
       # before the artifacts ever leave this job. The attestation/publish (which need the OIDC
@@ -241,8 +313,7 @@ jobs:
           format: cyclonedx-json
           output-file: "${{ inputs.working-directory }}/sbom.cyclonedx.json"
 
-      # Hand the built distributions + SBOM to the publish job. if-no-files-found:error so a broken
-      # build can never silently produce an empty publish.
+      # Hand the built distributions + SBOM back to the consumer-local publisher.
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -252,109 +323,3 @@ jobs:
             ${{ inputs.working-directory }}/sbom.cyclonedx.json
           if-no-files-found: error
           retention-days: 1
-
-  publish:
-    name: Publish Python package
-    needs: build
-    runs-on: ubuntu-latest
-    # finding 7: platform-level gate on the registry publish — parity with the Pages
-    # and App Store deploys; also lets PyPI trusted publishing bind to the env name.
-    environment:
-      name: ${{ inputs.environment-name }}
-    # R3-2-PYPIJOB: ONLY this job holds the OIDC/attestation token, and it runs NO operator build
-    # code — just download the vetted artifacts, attest them, and publish. No `eval` here.
-    permissions:
-      contents: read
-      id-token: write
-      # attestations: write lets the publish attach keyless build provenance (§11.7).
-      attestations: write
-    defaults:
-      run:
-        working-directory: ${{ inputs.working-directory }}
-    steps:
-      - name: Checkout consumer repository
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          # Reads pyproject.toml for "confirm resolvable" and re-verifies the tag right
-          # before the upload (C12-W2) — checkout the gated commit, with tags for the check.
-          ref: ${{ inputs.gated-sha }}
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Verify tag still points at the gated commit (C12-W2)
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ needs.build.outputs.resolved-tag }}
-          GATED_SHA: ${{ inputs.gated-sha }}
-        run: |
-          set -euo pipefail
-          # LAST-MOMENT re-verify, in the job that actually uploads: a tag force-moved
-          # after the gate (or after the build job) must abort the publish.
-          actual="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
-          if [ -z "${actual}" ] || [ "${actual}" != "${GATED_SHA}" ]; then
-            echo "::error::Tag ${RELEASE_TAG} no longer points at the gated commit ${GATED_SHA} (now: ${actual:-missing}) — refusing to publish (C12-W2)."
-            exit 1
-          fi
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: aviato-pypi-dist
-          path: ${{ inputs.working-directory }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ inputs.python-version }}
-
-      # §11.7: build provenance AND the SBOM are attested to the published artifacts
-      # (keyless OIDC), not just generated as loose files.
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: "${{ inputs.working-directory }}/${{ inputs.packages-dir }}/*"
-
-      - name: Attest SBOM
-        uses: actions/attest-sbom@v4
-        with:
-          subject-path: "${{ inputs.working-directory }}/${{ inputs.packages-dir }}/*"
-          sbom-path: "${{ inputs.working-directory }}/sbom.cyclonedx.json"
-
-      - name: Publish distributions
-        if: ${{ inputs.repository-url == '' }}
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
-        with:
-          packages-dir: ${{ inputs.working-directory }}/${{ inputs.packages-dir }}
-
-      - name: Publish distributions to alternate repository
-        if: ${{ inputs.repository-url != '' }}
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
-        with:
-          packages-dir: ${{ inputs.working-directory }}/${{ inputs.packages-dir }}
-          repository-url: ${{ inputs.repository-url }}
-
-      # §13.1: confirm the published version is resolvable on the index.
-      - name: Confirm version resolvable
-        shell: bash
-        env:
-          INDEX_URL: ${{ inputs.repository-url }}
-          RESOLVED_TAG: ${{ needs.build.outputs.resolved-tag }}
-        run: |
-          set -euo pipefail
-          # Package version is the bare SemVer (strip the leading v from the tag).
-          version="${RESOLVED_TAG#v}"
-          name="$(python -c 'import tomllib,glob; print(tomllib.load(open("pyproject.toml","rb"))["project"]["name"])')"
-          extra=()
-          if [ -n "${INDEX_URL}" ]; then extra=(--index-url "${INDEX_URL%/}/simple/"); fi
-          # C12-W7 (§13.1): a published version that never becomes resolvable is a FAILED release, not a
-          # warning — a green run that left an uninstallable upload is worse than a loud failure. Retry
-          # generously for real index-propagation delay (≈8 min total), then FAIL CLOSED.
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if python -m pip download --no-deps --no-binary :all: "${extra[@]}" "${name}==${version}" -d /tmp/confirm 2>/dev/null; then
-              echo "Confirmed ${name}==${version} resolvable."; exit 0
-            fi
-            echo "Not yet resolvable (attempt ${attempt}/10); waiting..."; sleep 30
-          done
-          echo "::error::Published ${name}==${version} did not become resolvable on the index after retries; failing the release (§13.1)." >&2
-          exit 1

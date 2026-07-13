@@ -10,6 +10,8 @@ SKIPPED=()
 
 python3 -m compileall aviato >/dev/null
 python3 -m aviato.cli validate
+python3 scripts/sync-docs-toolchain-pins.py --check
+python3 scripts/regen-templates.py --check
 
 if command -v ruff >/dev/null 2>&1; then
   ruff check .
@@ -30,7 +32,7 @@ else
   SKIPPED+=("pytest (test suite)")
 fi
 
-if python3 -c "import build" >/dev/null 2>&1; then
+if python3 -c "from importlib.metadata import version; version('build')" >/dev/null 2>&1; then
   rm -rf _wheelout
   # --no-isolation: the local gate must work offline (no pip fetch of setuptools);
   # the ambient env carries the build backend via the [dev] install.
@@ -40,17 +42,53 @@ if python3 -c "import build" >/dev/null 2>&1; then
   # packaging regression dropping aviato/library/** breaks every consumer install
   # while building "successfully" — assert the data is actually inside the wheel.
   python3 - <<'PY'
+import email.parser
 import glob
+import importlib.util
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import zipfile
 
 wheel = sorted(glob.glob("_wheelout/*.whl"))[-1]
-names = zipfile.ZipFile(wheel).namelist()
+with zipfile.ZipFile(wheel) as archive:
+    names = archive.namelist()
+    metadata_name = next((name for name in names if name.endswith(".dist-info/METADATA")), None)
+    if metadata_name is None:
+        sys.exit(f"wheel {wheel} is missing dist-info/METADATA")
+    metadata = email.parser.Parser().parsestr(archive.read(metadata_name).decode("utf-8"))
+wheel_version = metadata["Version"]
+if not wheel_version:
+    sys.exit(f"wheel {wheel} METADATA is missing Version")
 required = ["aviato/library/policy.yml", "aviato/plugins/denylist.txt"]
 missing = [r for r in required if r not in names]
 if missing:
     sys.exit(f"wheel {wheel} is missing packaged data: {missing}")
 print(f"wheel package-data OK: {wheel}")
+
+with tempfile.TemporaryDirectory(prefix="aviato-wheel-") as target:
+    if importlib.util.find_spec("pip") is not None:
+        installer = [sys.executable, "-m", "pip", "install", "--quiet", "--no-deps", "--target", target, wheel]
+    elif (uv := shutil.which("uv")) is not None:
+        installer = [uv, "pip", "install", "--quiet", "--no-deps", "--target", target, wheel]
+    else:
+        sys.exit("wheel parity requires either the pip module or the uv executable")
+    subprocess.run(installer, check=True)
+    code = "from aviato import __version__; print(__version__)"
+    installed_version = subprocess.run(
+        [sys.executable, "-c", f"import sys; sys.path.insert(0, {target!r}); {code}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=os.path.dirname(target),
+    ).stdout.strip()
+if installed_version != wheel_version:
+    sys.exit(
+        f"wheel runtime version {installed_version!r} differs from METADATA Version {wheel_version!r}"
+    )
+print(f"wheel runtime version OK: {installed_version}")
 PY
 else
   SKIPPED+=("build (wheel packaging + package-data)")

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Literal
 
 from .marker import content_hash, parse_marker_from_text, render_marker, strip_marker_from_text
+from .pathguard import confined_target
 from .version import is_known_version_pin
 
 SIDECAR_PATH = ".github/aviato.seed.json"
@@ -20,6 +23,26 @@ class ScaffoldItem:
     body: str
     comment: str
     seed_once: bool = False
+    input_hash: str = field(kw_only=True)
+
+
+@dataclass(frozen=True)
+class SeedSidecar:
+    status: Literal["ok", "missing", "corrupt"]
+    hashes: dict[str, str]
+
+
+@dataclass(frozen=True)
+class SeedIntegrityPreflight:
+    sidecar: SeedSidecar
+    existing_hashes: dict[str, str]
+    unknown: bool
+
+
+@dataclass(frozen=True)
+class MigrationProtection:
+    output: str
+    reason: str
 
 
 @dataclass
@@ -33,10 +56,68 @@ class ScaffoldResult:
     # diagnosis dirty-drift — never silently regenerated (§5.3/§5.4 one posture).
     skipped_foreign: list[str] = field(default_factory=list)
     seeded: list[str] = field(default_factory=list)
+    baselined: list[str] = field(default_factory=list)
+    seed_integrity_unknown: bool = False
+    migration_protections: list[MigrationProtection] = field(default_factory=list)
 
 
-def atomic_write(path: Path, text: str) -> None:
+def classify_migration_targets(
+    root: Path, items: list[ScaffoldItem], *, migrating_from: str
+) -> list[MigrationProtection]:
+    """Return managed target paths an authorized profile migration must not replace.
+
+    Only a clean, known-version marker owned by ``migrating_from`` may transition to
+    the requested profile. Seed-once targets remain operator-owned and are never
+    overwritten, so they are outside this managed-target classification.
+    """
+    protections: list[MigrationProtection] = []
+    for item in items:
+        if item.seed_once:
+            continue
+        target = confined_target(root, item.output, operation="classify profile migration target")
+        if not target.exists():
+            continue
+        try:
+            target = confined_target(root, item.output, operation="classify profile migration target")
+            existing = target.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            protections.append(MigrationProtection(item.output, "target is unreadable"))
+            continue
+        marker = parse_marker_from_text(existing)
+        if marker is None:
+            kind = "malformed managed marker" if "aviato:managed" in existing else "unmanaged target"
+            protections.append(MigrationProtection(item.output, kind))
+            continue
+        if marker.profile != migrating_from:
+            protections.append(
+                MigrationProtection(
+                    item.output,
+                    f"marker profile {marker.profile!r} does not match existing profile {migrating_from!r}",
+                )
+            )
+            continue
+        if not is_known_version_pin(marker.version):
+            protections.append(MigrationProtection(item.output, f"marker records unknown version {marker.version!r}"))
+            continue
+        if content_hash(strip_marker_from_text(existing)) != marker.hash:
+            protections.append(MigrationProtection(item.output, "managed target is hand-edited"))
+    return protections
+
+
+def atomic_write(root: Path, relative: str, text: str | None = None, *, operation: str = "write file") -> None:
+    # Keep the original path/text form for non-consumer callers while consumer
+    # operations use the root/relative/text form and are re-guarded at replace.
+    if text is not None:
+        confined = True
+        path = confined_target(root, relative, operation=operation)
+        rendered = text
+    else:
+        confined = False
+        path = Path(root)
+        rendered = relative
     path.parent.mkdir(parents=True, exist_ok=True)
+    if confined:
+        path = confined_target(root, relative, operation=operation)
     # finding 22: mkstemp creates the temp file 0600 and os.replace carries that mode to
     # the destination — silently DEMOTING an existing file's permissions (group-read,
     # +x) and creating new files stricter than the umask. Preserve an existing file's
@@ -52,28 +133,47 @@ def atomic_write(path: Path, text: str) -> None:
         # newline="" disables platform newline translation so the bytes on disk are exactly
         # the rendered string — byte-identical output across platforms (§5.3 determinism).
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            handle.write(text)
+            handle.write(rendered)
         os.chmod(tmp_name, mode)
+        if confined:
+            path = confined_target(root, relative, operation=operation)
         os.replace(tmp_name, path)
     except BaseException:
         Path(tmp_name).unlink(missing_ok=True)
         raise
 
 
-def read_sidecar(root: Path) -> dict[str, str]:
-    path = Path(root) / SIDECAR_PATH
+def read_sidecar(root: Path) -> SeedSidecar:
+    path = confined_target(root, SIDECAR_PATH, operation="read sidecar")
+    if not path.exists():
+        return SeedSidecar("missing", {})
     if not path.is_file():
-        return {}
+        return SeedSidecar("corrupt", {})
     # The sidecar is a report-only advisory record (§6.3); a corrupt/truncated/non-UTF-8 one
     # (manual edit, half-written, merge-conflict markers) must degrade to "no recorded hashes",
     # never crash diagnosis/scaffold — and thus never abort a whole fleet scan (the per-repo
     # guard in scan_fleet catches only AviatoError, so a raw JSONDecodeError would escape).
     try:
+
+        def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate sidecar key: {key}")
+                result[key] = value
+            return result
+
+        path = confined_target(root, SIDECAR_PATH, operation="read sidecar")
         with path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-        return {}
-    return data if isinstance(data, dict) else {}
+            data = json.load(handle, object_pairs_hook=unique_object)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError):
+        return SeedSidecar("corrupt", {})
+    if not isinstance(data, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+        for key, value in data.items()
+    ):
+        return SeedSidecar("corrupt", {})
+    return SeedSidecar("ok", data)
 
 
 def _write_sidecar(root: Path, data: dict[str, str]) -> None:
@@ -83,9 +183,66 @@ def _write_sidecar(root: Path, data: dict[str, str]) -> None:
     # process against an operator's local checkout, so concurrent scaffolds of one tree are not an
     # expected workflow; the sidecar is report-only, so the worst case is a stale/incomplete record
     # (no file is ever half-written), recovered on the next single-writer sync.
-    path = Path(root) / SIDECAR_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+    atomic_write(
+        root,
+        SIDECAR_PATH,
+        json.dumps(data, indent=2, sort_keys=True) + "\n",
+        operation="write sidecar",
+    )
+
+
+def preflight_seed_integrity(
+    root: Path,
+    items: list[ScaffoldItem],
+    *,
+    baseline_existing_seeds: bool = False,
+    allow_fresh_seed_initialization: bool = True,
+    allow_seed_set_expansion: bool = False,
+) -> SeedIntegrityPreflight:
+    """Read and validate all seed integrity state without mutating the repository."""
+    root = Path(root)
+    overlay = {item.output: item for item in items}
+    for output in overlay:
+        confined_target(root, output, operation="preflight scaffold output")
+
+    sidecar = read_sidecar(root)
+    seed_outputs = [output for output, item in overlay.items() if item.seed_once]
+    if not seed_outputs:
+        return SeedIntegrityPreflight(sidecar, {}, False)
+
+    existing_hashes: dict[str, str] = {}
+    existing_outputs: set[str] = set()
+    for output in seed_outputs:
+        target = confined_target(root, output, operation="read scaffold output")
+        if not target.exists():
+            continue
+        existing_outputs.add(output)
+        if baseline_existing_seeds:
+            try:
+                target = confined_target(root, output, operation="read scaffold output")
+                existing_hashes[output] = content_hash(target.read_text(encoding="utf-8"))
+            except (UnicodeDecodeError, OSError):
+                return SeedIntegrityPreflight(sidecar, {}, True)
+
+    if baseline_existing_seeds:
+        return SeedIntegrityPreflight(sidecar, existing_hashes, False)
+    if sidecar.status == "corrupt":
+        return SeedIntegrityPreflight(sidecar, {}, True)
+    if sidecar.status == "ok":
+        incomplete = any(
+            output not in sidecar.hashes
+            and (
+                not allow_seed_set_expansion or confined_target(root, output, operation="read scaffold output").exists()
+            )
+            for output in seed_outputs
+        )
+        return SeedIntegrityPreflight(sidecar, {}, incomplete)
+
+    # A missing sidecar is safe only for a caller that has established truly fresh
+    # state and only while every resolved seed is absent, so its initial record can
+    # be created together with the file.
+    unknown = bool(existing_outputs) or not allow_fresh_seed_initialization
+    return SeedIntegrityPreflight(sidecar, {}, unknown)
 
 
 def render_managed(item: ScaffoldItem, *, profile: str, version: str) -> str:
@@ -95,7 +252,13 @@ def render_managed(item: ScaffoldItem, *, profile: str, version: str) -> str:
     that uses it produces a merge that diagnosis classifies clean (not dirty for a
     missing marker).
     """
-    marker = render_marker(profile=profile, version=version, body=item.body, comment=item.comment)
+    marker = render_marker(
+        profile=profile,
+        version=version,
+        body=item.body,
+        comment=item.comment,
+        input_hash=item.input_hash,
+    )
     return f"{marker}\n{item.body}"
 
 
@@ -106,6 +269,10 @@ def scaffold(
     profile: str,
     version: str,
     force: bool = False,
+    baseline_existing_seeds: bool = False,
+    allow_fresh_seed_initialization: bool = True,
+    allow_seed_set_expansion: bool = False,
+    migrating_from: str | None = None,
 ) -> ScaffoldResult:
     """Materialize managed and seed-once artifacts (§5.3, §6.3).
 
@@ -122,30 +289,44 @@ def scaffold(
     for item in items:
         overlay[item.output] = item
 
-    sidecar = read_sidecar(root)
+    # Reject a hostile output before advisory sidecar access can obscure which
+    # managed artifact made the requested scaffold unsafe.
+    for output in overlay:
+        confined_target(root, output, operation="write scaffold output")
+
+    if migrating_from is not None:
+        result.migration_protections = classify_migration_targets(
+            root, list(overlay.values()), migrating_from=migrating_from
+        )
+        if result.migration_protections:
+            return result
+
+    preflight = preflight_seed_integrity(
+        root,
+        list(overlay.values()),
+        baseline_existing_seeds=baseline_existing_seeds,
+        allow_fresh_seed_initialization=allow_fresh_seed_initialization,
+        allow_seed_set_expansion=allow_seed_set_expansion,
+    )
+    if preflight.unknown:
+        result.seed_integrity_unknown = True
+        return result
+
+    # Explicit rebaseline is a reviewed replacement, not a merge: obsolete records
+    # must disappear and the resulting sidecar must describe exactly this resolved set.
+    sidecar = {} if baseline_existing_seeds else dict(preflight.sidecar.hashes)
+    if baseline_existing_seeds:
+        sidecar.update(preflight.existing_hashes)
+        result.baselined.extend(preflight.existing_hashes)
     sidecar_changed = False
 
     for output, item in overlay.items():
-        target = root / output
+        target = confined_target(root, output, operation="read scaffold output")
 
         if item.seed_once:
             if target.exists():
-                # §6.3 seed-once: never overwrite an existing operator-owned file. But if the
-                # sidecar has NO recorded hash for it (the report-only integrity record was
-                # deleted/lost, or the file pre-existed adoption), re-establish the baseline from
-                # the file's CURRENT content so a deleted sidecar self-heals on the next sync and
-                # FUTURE tamper is again visible (§5.14 "absence reads as broken, never clean").
-                # This cannot retroactively detect tampering that happened before the heal — the
-                # sidecar is an advisory record, not a security boundary; once deleted, prior
-                # content is unknowable.
-                if output not in sidecar:
-                    try:
-                        sidecar[output] = content_hash(target.read_text(encoding="utf-8"))
-                        sidecar_changed = True
-                    except (UnicodeDecodeError, OSError):
-                        pass  # binary seed-once file (§6.3), or a directory/unreadable path (N4) — no text hash
                 continue
-            atomic_write(target, item.body)
+            atomic_write(root, output, item.body, operation="write scaffold output")
             sidecar[output] = content_hash(item.body)
             sidecar_changed = True
             result.seeded.append(output)
@@ -155,6 +336,7 @@ def scaffold(
         expected_hash = content_hash(item.body)
         if target.exists():
             try:
+                target = confined_target(root, output, operation="read scaffold output")
                 existing = target.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 # A non-UTF-8 file (or a DIRECTORY / otherwise-unreadable path at the managed output,
@@ -172,7 +354,7 @@ def scaffold(
                     result.skipped_unmanaged.append(output)
                     continue
             else:
-                if not force and marker.profile != profile:
+                if not force and marker.profile != profile and marker.profile != migrating_from:
                     # Marker stamped for a DIFFERENT profile (one profile per repo, §3): not a
                     # trustworthy managed artifact under this declaration. Mirror diagnosis
                     # dirty-drift — never silently regenerate; require human review or --force
@@ -199,6 +381,7 @@ def scaffold(
                     and marker.hash == expected_hash
                     and marker.profile == profile
                     and marker.version == version
+                    and marker.input_hash == item.input_hash
                 ):
                     result.unchanged.append(output)
                     continue
@@ -209,10 +392,14 @@ def scaffold(
                     result.skipped_modified.append(output)
                     continue
                 # else: template moved or marker stale → regenerate (diagnosis "mergeable").
-        atomic_write(target, rendered)
+        atomic_write(root, output, rendered, operation="write scaffold output")
         result.written.append(output)
 
-    if sidecar_changed:
+    if baseline_existing_seeds:
+        # Even an empty resolved seed set is meaningful during explicit rebaseline:
+        # it removes every obsolete key from a prior sidecar.
+        _write_sidecar(root, sidecar)
+    elif sidecar_changed:
         _write_sidecar(root, sidecar)
 
     return result

@@ -1,15 +1,50 @@
 from __future__ import annotations
 
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
 import yaml
 
-from aviato.paths import REPO_ROOT
+from aviato.core.composition import resolve_profile
+from aviato.core.onboarding import resolved_artifacts
+from aviato.core.registry import Registry
+from aviato.paths import MODULE_SOURCE_ROOT, REPO_ROOT
+from aviato.validation import _TEMPLATE_EXAMPLE_VARS
 
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 SCAFFOLD_FILES = REPO_ROOT / "aviato" / "library" / "scaffold" / "files"
+JsonDict = dict[str, Any]
 
 
-def _load(name: str) -> dict:
-    return yaml.safe_load((WORKFLOWS / name).read_text())
+def _load(name: str) -> JsonDict:
+    loaded = yaml.safe_load((WORKFLOWS / name).read_text())
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+def _on(workflow: JsonDict) -> JsonDict:
+    block = workflow.get("on") or cast(dict[object, Any], workflow).get(True)
+    assert isinstance(block, dict)
+    return block
+
+
+def _rendered_python_library_workflow() -> JsonDict:
+    artifacts = resolved_artifacts(
+        Registry(MODULE_SOURCE_ROOT),
+        "python-library",
+        _TEMPLATE_EXAMPLE_VARS["python-library"],
+        pin="1",
+        docs=False,
+    )
+    body = next(a.body for a in artifacts if a.output == ".github/workflows/aviato-ci.yml")
+    loaded = yaml.safe_load(body)
+    assert isinstance(loaded, dict)
+    return loaded
 
 
 def test_serializing_workflows_declare_per_repo_concurrency() -> None:
@@ -135,11 +170,11 @@ def test_deploys_consume_the_gated_sha() -> None:
     # not the mutable tag — checkout by gated-sha plus a pre-publish tag→gated-sha
     # re-verify, so a tag force-moved between gate and publish aborts the deploy.
     gate = _load("reusable-release-gate.yml")
-    gate_on = gate.get("on") or gate.get(True)
+    gate_on = _on(gate)
     assert "gated-sha" in (gate_on["workflow_call"].get("outputs") or {}), "gate must export gated-sha"
     for name in _DEPLOY_WORKFLOWS:
         wf = _load(name)
-        on_block = wf.get("on") or wf.get(True)
+        on_block = _on(wf)
         inputs = on_block["workflow_call"]["inputs"]
         assert inputs.get("gated-sha", {}).get("required") is True, f"{name} must require gated-sha"
         body = (WORKFLOWS / name).read_text(encoding="utf-8")
@@ -157,6 +192,88 @@ def test_callers_pass_gated_sha_to_deploys() -> None:
             continue
         threaded = "gated-sha: ${{ needs.release-gate.outputs.gated-sha }}" in body
         assert threaded, f"{caller.name} wires a deploy without threading the gated SHA (C12-W2)"
+
+
+def _release_gate_step(name: str) -> JsonDict:
+    workflow = _load("reusable-release-gate.yml")
+    return next(step for step in workflow["jobs"]["gate"]["steps"] if step.get("name") == name)
+
+
+def test_release_gate_resolves_release_tag_commit_for_descendant_event_sha(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    remote = tmp_path / "remote.git"
+    repository.mkdir()
+    subprocess.run(["git", "init", "--initial-branch=main"], cwd=repository, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Aviato Test"], cwd=repository, check=True)
+    subprocess.run(["git", "config", "user.email", "aviato@example.invalid"], cwd=repository, check=True)
+
+    tracked = repository / "tracked.txt"
+    tracked.write_text("release\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-m", "release"], cwd=repository, check=True, capture_output=True)
+    release_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repository, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    subprocess.run(["git", "tag", "1.2.3"], cwd=repository, check=True)
+
+    tracked.write_text("release\ndescendant\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-am", "descendant"], cwd=repository, check=True, capture_output=True)
+    event_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repository, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    assert event_sha != release_sha
+
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repository, check=True)
+    subprocess.run(["git", "push", "--set-upstream", "origin", "main", "--tags"], cwd=repository, check=True)
+
+    output = tmp_path / "github-output"
+    resolve = _release_gate_step("Resolve gated commit")
+    resolve_env = {
+        **os.environ,
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_SHA": event_sha,
+        "RELEASE_TAG_INPUT": "1.2.3",
+        "RESOLVED_TAG": "1.2.3",
+    }
+    subprocess.run(["bash", "-c", resolve["run"]], cwd=repository, env=resolve_env, check=True)
+    gated_sha = dict(line.split("=", 1) for line in output.read_text().splitlines())["gated-sha"]
+    assert gated_sha == release_sha
+
+    verify = _release_gate_step("Verify tag points at default branch")
+    verify_env = {
+        **os.environ,
+        "DEFAULT_BRANCH": "main",
+        "GATED_SHA": gated_sha,
+        "RESOLVED_TAG": "1.2.3",
+    }
+    subprocess.run(["bash", "-c", verify["run"]], cwd=repository, env=verify_env, check=True)
+
+
+def test_release_gate_threads_resolved_sha_through_later_queries() -> None:
+    workflow = _load("reusable-release-gate.yml")
+    steps = workflow["jobs"]["gate"]["steps"]
+    resolve_index = next(i for i, step in enumerate(steps) if step.get("name") == "Resolve gated commit")
+    later_steps = steps[resolve_index + 1 :]
+    for step in later_steps:
+        assert "GITHUB_SHA" not in step.get("run", ""), f"{step.get('name')} reuses raw event identity"
+
+    output_expression = "${{ steps.resolve-gated-sha.outputs.gated-sha }}"
+    for name in (
+        "Verify tag points at default branch",
+        "Require merged pull request",
+        "Require successful workflow",
+    ):
+        step = next(candidate for candidate in later_steps if candidate.get("name") == name)
+        assert step.get("env", {}).get("GATED_SHA") == output_expression, f"{name} must consume gated-sha"
+
+
+def test_release_gate_gated_sha_shell_names_do_not_trigger_shellcheck_sc2153() -> None:
+    verify = _release_gate_step("Verify tag points at default branch")
+    script = str(verify["run"])
+
+    assert 'gated_sha="$(git rev-parse "${GATED_SHA}^{commit}")"' not in script
+    assert 'gated_commit="$(git rev-parse "${GATED_SHA}^{commit}")"' in script
 
 
 def test_language_ci_contract_parity() -> None:
@@ -179,7 +296,7 @@ def test_language_ci_contract_parity() -> None:
     }
     for name in ("reusable-python-ci.yml", "reusable-node-ci.yml", "reusable-swift-ci.yml"):
         wf = _load(name)
-        on_block = wf.get("on") or wf.get(True)
+        on_block = _on(wf)
         inputs = set(on_block["workflow_call"]["inputs"])
         missing = expected - inputs
         assert not missing, f"{name} missing shared-contract inputs: {sorted(missing)}"
@@ -189,7 +306,7 @@ def test_node_ci_gates_fail_loud_without_if_present() -> None:
     # finding 29: a consumer deleting the lint/test script from the operator-owned
     # manifest must FAIL the verify gate, not silently skip it.
     wf = _load("reusable-node-ci.yml")
-    on_block = wf.get("on") or wf.get(True)
+    on_block = _on(wf)
     inputs = on_block["workflow_call"]["inputs"]
     assert inputs["lint-command"]["default"] == "npm run lint"
     assert inputs["test-command"]["default"] == "npm test"
@@ -201,7 +318,7 @@ def test_docs_retention_defaults_to_keep_all() -> None:
     # rather than special-casing cap<=0 inside the python pruner — 0 (the default) means
     # the prune step never runs at all, so no version is ever removed.
     wf = _load("reusable-docs-pages.yml")
-    on_block = wf.get("on") or wf.get(True)
+    on_block = _on(wf)
     assert on_block["workflow_call"]["inputs"]["docs-retention"]["default"] == 0
     body = (WORKFLOWS / "reusable-docs-pages.yml").read_text(encoding="utf-8")
     assert 'if [ "${RETENTION}" -gt 0 ]' in body, "prune snippet must be gated on RETENTION -gt 0"
@@ -210,13 +327,260 @@ def test_docs_retention_defaults_to_keep_all() -> None:
     assert guard_pos < prune_pos, "the -gt 0 keep-all guard must precede the prune logic"
 
 
+def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> None:
+    wf = _load("reusable-docs-pages.yml")
+    on_block = _on(wf)
+    serve = on_block["workflow_call"]["inputs"]["serve-pages"]
+    assert serve["required"] is False
+    assert serve["type"] == "boolean"
+    assert serve["default"] is False
+
+    build = wf["jobs"]["build"]
+    push = wf["jobs"]["push"]
+    deploy = wf["jobs"]["deploy"]
+    assert build["permissions"] == {"contents": "read", "pages": "read"}
+    assert push["permissions"] == {"contents": "write"}
+    assert "if" not in push, "serve-pages=false must still push the canonical docs branch"
+    assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
+    assert set(deploy["needs"]) == {"build", "push"}
+    assert "inputs.serve-pages" in str(deploy["if"])
+    assert "success()" in str(deploy["if"])
+    assert deploy["environment"] == {
+        "name": "github-pages",
+        "url": "${{ steps.deployment.outputs.page_url }}",
+    }
+    assert deploy["steps"] == [
+        {
+            "name": "Deploy GitHub Pages",
+            "id": "deployment",
+            "uses": "actions/deploy-pages@v4",
+        }
+    ], "the privileged deploy job must execute no consumer commands"
+
+    steps = build["steps"]
+    materialize = next(step for step in steps if step.get("name") == "Materialize exact docs branch tree")
+    body = materialize["run"]
+    assert "refs/heads/${DOCS_BRANCH}" in body
+    assert "git archive" in body
+    assert "symlink" in body.lower()
+    configure = next(step for step in steps if str(step.get("uses", "")).startswith("actions/configure-pages@"))
+    upload = next(step for step in steps if str(step.get("uses", "")).startswith("actions/upload-pages-artifact@"))
+    assert "inputs.serve-pages" in str(configure["if"])
+    assert "inputs.serve-pages" in str(upload["if"])
+    assert upload["with"]["path"] == "/tmp/aviato-pages-site"
+
+    assert wf["concurrency"]["cancel-in-progress"] is False
+
+
+def test_rendered_library_docs_caller_enables_pages_and_grants_only_call_union() -> None:
+    caller = _load("aviato-docs.yml")
+    docs = caller["jobs"]["docs"]
+    assert docs["with"]["serve-pages"] is True
+    assert docs["permissions"] == {
+        "contents": "write",
+        "pages": "write",
+        "id-token": "write",
+    }
+
+
+def test_starter_docs_deploys_exact_branch_artifact_after_push() -> None:
+    starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
+    assert starter["permissions"] == {}
+    assert starter["concurrency"]["cancel-in-progress"] is False
+    assert "${{ github.repository }}" in starter["concurrency"]["group"]
+    assert starter["jobs"]["build"]["permissions"] == {"contents": "read", "pages": "read"}
+    assert starter["jobs"]["push"]["permissions"] == {"contents": "write"}
+    deploy = starter["jobs"]["deploy"]
+    assert set(deploy["needs"]) == {"build", "push"}
+    assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
+    assert all("run" not in step for step in deploy["steps"])
+    body = (REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8")
+    assert 'git archive "refs/heads/${DOCS_BRANCH}"' in body
+    assert "refusing escaping symlink" in body
+    assert "actions/upload-pages-artifact@" in body
+
+
+def test_starter_invalid_tag_skips_every_publish_stage(tmp_path: Path) -> None:
+    starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
+    build = starter["jobs"]["build"]
+    assert build["outputs"]["publish"] == "${{ steps.release.outputs.publish }}"
+    steps = build["steps"]
+    release_index = next(i for i, step in enumerate(steps) if step.get("id") == "release")
+    release = steps[release_index]
+    for step in steps[release_index + 1 :]:
+        assert "steps.release.outputs.publish == 'true'" in str(step.get("if", "")), step
+    assert "needs.build.outputs.publish == 'true'" in str(starter["jobs"]["push"]["if"])
+    deploy_if = str(starter["jobs"]["deploy"]["if"])
+    assert "needs.build.outputs.publish == 'true'" in deploy_if
+    assert "needs.push.result == 'success'" in deploy_if
+
+    output = tmp_path / "github-output"
+    env = os.environ | {
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_REF_TYPE": "tag",
+        "GITHUB_REF_NAME": "1foo.2bar.3baz",
+    }
+    result = subprocess.run(["bash", "-c", release["run"]], env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == ["publish=false"]
+
+
+@pytest.mark.parametrize(
+    ("ref_type", "ref_name", "expected"),
+    [("tag", "1.2.3", ["publish=true", "tag=1.2.3"]), ("branch", "main", ["publish=true", "tag="])],
+)
+def test_starter_valid_refs_publish(ref_type: str, ref_name: str, expected: list[str], tmp_path: Path) -> None:
+    starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
+    release = next(step for step in starter["jobs"]["build"]["steps"] if step.get("id") == "release")
+    output = tmp_path / "github-output"
+    env = os.environ | {
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_REF_TYPE": ref_type,
+        "GITHUB_REF_NAME": ref_name,
+    }
+    result = subprocess.run(["bash", "-c", release["run"]], env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == expected
+
+
 def test_registry_publishes_run_in_deployment_environments() -> None:
     # finding 7: PyPI/GHCR publishes get the same platform-level environment gate the
     # Pages/App Store deploys already have.
-    pypi = _load("reusable-pypi-publish.yml")
-    assert pypi["jobs"]["publish"]["environment"]["name"] == "${{ inputs.environment-name }}"
+    caller = _rendered_python_library_workflow()
+    assert caller["jobs"]["pypi-publish"]["environment"] == "pypi"
     ghcr = _load("reusable-docker-ghcr.yml")
     assert ghcr["jobs"]["docker"]["environment"]["name"] == "${{ inputs.environment-name }}"
+
+
+def test_pypi_reusable_only_builds_vetted_artifact_and_local_caller_publishes() -> None:
+    reusable = _load("reusable-pypi-publish.yml")
+    reusable_body = (WORKFLOWS / "reusable-pypi-publish.yml").read_text(encoding="utf-8")
+    assert set(reusable["jobs"]) == {"require-consumer-publisher", "build"}
+    assert "pypa/gh-action-pypi-publish" not in reusable_body
+    assert "id-token: write" not in reusable_body
+    assert "attest-build-provenance" not in reusable_body
+    assert reusable["jobs"]["build"]["permissions"] == {"contents": "read"}
+    upload = next(step for step in reusable["jobs"]["build"]["steps"] if step.get("name") == "Upload build artifacts")
+    assert upload["uses"] == "actions/upload-artifact@v7"
+    assert upload["with"]["name"] == "aviato-pypi-dist"
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["retention-days"] == 1
+
+    caller_body = (SCAFFOLD_FILES / "wf-python-library.yml").read_text(encoding="utf-8")
+    assert "consumer-publisher-present: true" in caller_body
+    assert "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b" in caller_body
+    assert "actions/download-artifact@v7" in caller_body
+    assert "environment: pypi" in caller_body
+    assert "id-token: write" in caller_body and "attestations: write" in caller_body
+    caller = _rendered_python_library_workflow()
+    assert "id-token" not in (caller.get("permissions") or {})
+    assert "attestations" not in (caller.get("permissions") or {})
+    for job_name, job in caller["jobs"].items():
+        if job_name == "pypi-publish" or not isinstance(job, dict):
+            continue
+        permissions = job.get("permissions") or {}
+        assert permissions.get("id-token") != "write", job_name
+        assert permissions.get("attestations") != "write", job_name
+    publish_body = caller_body[caller_body.index("  pypi-publish:") :]
+    assert '"repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}"' in publish_body
+    assert "${{ needs.release-gate.outputs.gated-sha }}" in publish_body
+    assert "eval " not in publish_body
+    assert "pip install" not in publish_body
+    assert "python -m build" not in publish_body
+
+
+def test_pypi_stale_caller_fails_before_build_with_sync_instruction() -> None:
+    reusable = _load("reusable-pypi-publish.yml")
+    on_block = _on(reusable)
+    marker = on_block["workflow_call"]["inputs"]["consumer-publisher-present"]
+    assert marker["required"] is False
+    assert marker["type"] == "boolean"
+    assert marker["default"] is False
+    guard = reusable["jobs"]["require-consumer-publisher"]
+    reject = guard["steps"][0]
+    assert reject["if"] == "${{ inputs.consumer-publisher-present != true }}"
+    assert "aviato sync" in reject["run"]
+    assert reusable["jobs"]["build"]["needs"] == "require-consumer-publisher"
+
+
+def _single_python_heredoc(run: str) -> str:
+    match = re.search(r"<<'PY'\n(?P<body>.*?)\nPY", run, flags=re.DOTALL)
+    assert match is not None, "step does not contain a quoted Python heredoc"
+    return match.group("body")
+
+
+def test_pypi_simple_index_endpoint_mapping_is_validated_and_testpypi_safe() -> None:
+    caller = _rendered_python_library_workflow()
+    steps = caller["jobs"]["pypi-publish"]["steps"]
+    resolver = next(step for step in steps if step.get("name") == "Resolve simple index endpoint")
+    script = _single_python_heredoc(resolver["run"])
+
+    testpypi = subprocess.run(
+        ["python", "-c", script, "https://test.pypi.org/legacy/", ""],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert testpypi.stdout.strip() == "https://test.pypi.org/simple/"
+
+    for upload, simple in (
+        ("http://test.pypi.org/legacy/", ""),
+        ("https://user:secret@test.pypi.org/legacy/", ""),
+        ("https://test.pypi.org/unsupported/", ""),
+        ("", "https://test.pypi.org/not-simple/"),
+    ):
+        result = subprocess.run(["python", "-c", script, upload, simple], text=True, capture_output=True)
+        assert result.returncode != 0, (upload, simple)
+
+
+def test_pypi_publisher_uses_pep691_hash_confirmation_without_package_execution() -> None:
+    caller = _rendered_python_library_workflow()
+    publisher = caller["jobs"]["pypi-publish"]
+    shell = "\n".join(str(step.get("run", "")) for step in publisher["steps"])
+    for forbidden in (
+        "python -m pip",
+        "pip download",
+        "pip install",
+        "python -m build",
+        "setup.py",
+        "pyproject.toml",
+        "eval ",
+        " uv ",
+        "poetry ",
+        "npm ",
+        "yarn ",
+        "pnpm ",
+    ):
+        assert forbidden not in shell, f"publisher shell executes forbidden command/content: {forbidden!r}"
+    confirm = next(step for step in publisher["steps"] if step.get("name") == "Confirm published artifacts")
+    run = confirm["run"]
+    assert "application/vnd.pypi.simple.v1+json" in run
+    assert "urllib.request" in run
+    assert "hashlib.sha256" in run
+    assert "files" in run and "filename" in run and "hashes" in run
+    assert "EXPECTED_VERSION" in confirm["env"]
+    assert "DISTRIBUTION_NAME" in confirm["env"]
+
+
+def test_pypi_publisher_rechecks_fresh_remote_tag_after_download_and_before_publish() -> None:
+    caller = _rendered_python_library_workflow()
+    steps = caller["jobs"]["pypi-publish"]["steps"]
+    names = [step["name"] for step in steps]
+    download = names.index("Download vetted build artifacts")
+    first = names.index("Verify fresh remote tag after artifact download")
+    attest = names.index("Attest build provenance")
+    final = names.index("Final fresh remote tag verification")
+    publish = names.index("Publish distributions")
+    alternate = names.index("Publish distributions to alternate repository")
+    assert download < first < attest < final < publish < alternate
+    assert final + 1 == publish
+    for index in (first, final):
+        step = steps[index]
+        assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+        assert "gh api" in step["run"]
+        assert "/git/ref/tags/" in step["run"]
+        assert "/git/tags/" in step["run"], "annotated tags must be peeled"
+        assert "git rev-parse" not in step["run"]
 
 
 def test_ghcr_publishes_only_scanned_digests() -> None:
@@ -234,28 +598,23 @@ def test_ghcr_publishes_only_scanned_digests() -> None:
 def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
     # finding 6: the job token must not sit in .git/config while consumer/build code
     # runs. Only workflows that legitimately push (or fetch) from the checkout keep
-    # credentials: the release write job (pushes tags/branches; its derive job is
-    # pinned to false by the split test), the gate (post-checkout `git fetch origin`),
-    # the drift automation (open_or_update_proposal pushes the proposal branch from the
-    # working tree), and — C12-W4 — the docs `push` job, which fast-forward-pushes the
-    # docs branch and holds contents:write; its sibling `build` job runs consumer code
-    # and must still checkout with persist-credentials: false.
-    exempt_workflows = {"reusable-release.yml", "reusable-release-gate.yml", "reusable-consumer-automation.yml"}
-    exempt_jobs = {("reusable-docs-pages.yml", "push")}
+    # credentials. Only the exact write jobs that deliberately push a known ref may
+    # retain them: the release write job and the isolated docs-branch push job.
+    credentialed_push_jobs = {
+        ("reusable-release.yml", "release"),
+        ("reusable-docs-pages.yml", "push"),
+    }
     for path in sorted(WORKFLOWS.glob("*.yml")):
-        if path.name in exempt_workflows:
-            continue
         wf = _load(path.name)
         for job_name, job in (wf.get("jobs") or {}).items():
             if not isinstance(job, dict):
-                continue
-            if (path.name, job_name) in exempt_jobs:
                 continue
             for step in job.get("steps", []) or []:
                 if not str(step.get("uses", "")).startswith("actions/checkout"):
                     continue
                 persist = (step.get("with") or {}).get("persist-credentials")
-                assert persist is False, f"{path.name}:{job_name}: checkout must set persist-credentials: false"
+                expected = (path.name, job_name) in credentialed_push_jobs
+                assert persist is expected, f"{path.name}:{job_name}: persist-credentials must be {expected}"
 
     # The exempted docs push job legitimately persists credentials to push.
     docs_wf = _load("reusable-docs-pages.yml")
@@ -263,6 +622,112 @@ def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
         s for s in docs_wf["jobs"]["push"]["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
     )
     assert push_checkout["with"]["persist-credentials"] is True
+
+
+@pytest.mark.parametrize(
+    ("environment", "helper_result", "workflow_result"),
+    [
+        ({}, None, False),
+        ({"protection_rules": []}, False, False),
+        ({"protection_rules": [{"type": "required_reviewers"}]}, False, False),
+        ({"protection_rules": [{"type": "required_reviewers", "reviewers": None}]}, False, False),
+        ({"protection_rules": [{"type": "required_reviewers", "reviewers": []}]}, False, False),
+        (
+            {
+                "protection_rules": [
+                    {"type": "required_reviewers", "reviewers": [{"type": "User", "reviewer": {"id": 1}}]}
+                ]
+            },
+            True,
+            True,
+        ),
+    ],
+)
+def test_app_store_reviewer_gate_matches_github_helper_fixtures(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: JsonDict,
+    helper_result: bool | None,
+    workflow_result: bool,
+) -> None:
+    from aviato import github as github_api
+
+    monkeypatch.setattr(github_api, "gh_json_optional", lambda *_args, **_kwargs: environment)
+    assert github_api.protected_environment_has_reviewers("owner/repo", "app-store-connect") is helper_result
+
+    workflow = _load("reusable-app-store-connect.yml")
+    probe = next(
+        step
+        for step in workflow["jobs"]["app-store-connect"]["steps"]
+        if "requires reviewers" in str(step.get("name", ""))
+    )
+    match = re.search(r"jq -e '([^']+)'", probe["run"])
+    assert match, "reviewer probe must use an inspectable jq predicate"
+    completed = subprocess.run(
+        ["jq", "-e", match.group(1)],
+        input=json.dumps(environment),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert (completed.returncode == 0) is workflow_result
+
+
+def test_app_store_receipt_is_persisted_by_isolated_release_evidence_job() -> None:
+    workflow = _load("reusable-app-store-connect.yml")
+    deploy = workflow["jobs"]["app-store-connect"]
+    evidence = workflow["jobs"]["release-evidence"]
+
+    assert deploy.get("permissions", {}).get("contents") != "write"
+    assert evidence["needs"] == "app-store-connect"
+    assert evidence["permissions"] == {"contents": "write"}
+
+    encoded = json.dumps(evidence)
+    assert "secrets." not in encoded
+    assert "actions/checkout" not in encoded
+    for consumer_command in ("xcodebuild", "pip install", "npm ", "eval "):
+        assert consumer_command not in encoded
+
+    steps = evidence["steps"]
+    download = next(step for step in steps if "actions/download-artifact" in str(step.get("uses", "")))
+    assert download["with"]["name"] == "app-store-connect-upload"
+    persist = next(step for step in steps if "gh release upload" in str(step.get("run", "")))
+    run = persist["run"]
+    assert "--clobber" in run, "receipt asset persistence must be rerun-safe"
+    assert "gh release edit" in run
+    assert "<!-- aviato:app-store-connect-receipt:start -->" in run
+    assert "<!-- aviato:app-store-connect-receipt:end -->" in run
+    assert "$0 == start { replacing = 1" in run
+    assert "$0 == end { replacing = 0" in run
+
+
+def test_app_store_release_evidence_sets_explicit_repository_context() -> None:
+    workflow = _load("reusable-app-store-connect.yml")
+    evidence = workflow["jobs"]["release-evidence"]
+    persist = next(step for step in evidence["steps"] if "gh release upload" in str(step.get("run", "")))
+
+    assert persist["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert persist["env"]["GH_REPO"] == "${{ github.repository }}"
+
+
+def test_app_store_receipt_asset_and_url_share_exact_basename() -> None:
+    workflow = _load("reusable-app-store-connect.yml")
+    evidence = workflow["jobs"]["release-evidence"]
+    persist = next(step for step in evidence["steps"] if "gh release upload" in str(step.get("run", "")))
+    run = persist["run"]
+
+    assert persist["env"]["ASSET_NAME"] == "app-store-connect-upload.log"
+    assert 'asset="receipt/${ASSET_NAME}"' in run
+    assert 'cp "${downloaded_receipt}" "${asset}"' in run
+    assert 'gh release upload "${RELEASE_TAG}" "${asset}" --clobber' in run
+    assert "/${ASSET_NAME})" in run
+    assert "#app-store-connect-upload.log" not in run
+
+
+def test_docs_deploy_callers_do_not_grant_inert_actions_read() -> None:
+    for caller in sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml")):
+        body = caller.read_text(encoding="utf-8")
+        docs_job = body[body.index("\n  docs:") :]
+        assert "      actions: read" not in docs_job, caller.name
 
 
 def test_release_workflow_splits_derive_from_write_job() -> None:
@@ -296,7 +761,7 @@ def test_npm_workflows_harden_installs_before_installing() -> None:
     # risk. npm 11+ is required because older npm rejects min-release-age.
     for name, job_name in (("reusable-node-ci.yml", "node-ci"),):
         wf = _load(name)
-        on_block = wf.get("on") or wf.get(True)
+        on_block = _on(wf)
         assert on_block["workflow_call"]["inputs"]["node-version"]["default"] == "24"
         steps = wf["jobs"][job_name]["steps"]
         harden = next(s for s in steps if s.get("name") == "Harden npm install behavior")
@@ -346,9 +811,9 @@ def test_docs_publish_installs_pinned_toolchain_fail_closed() -> None:
     assert "exit 1" in run
     assert 'python3 -m pip install --quiet -r "${DOCS_REQUIREMENTS}"' in run
 
-    # C12-W4: the consumer-eval emit step runs in `build`, which holds only contents:read;
-    # contents:write appears ONLY in the separate `push` job.
-    assert build["permissions"] == {"contents": "read"}
+    # C12-W4: consumer code runs under read-only scopes. configure-pages requires
+    # pages:read; contents:write appears ONLY in the separate push job.
+    assert build["permissions"] == {"contents": "read", "pages": "read"}
     emit = next(s for s in steps if s.get("name") == "Emit language API docs")
     assert steps.index(install) < steps.index(emit)
     assert wf["jobs"]["push"]["permissions"] == {"contents": "write"}
@@ -474,7 +939,7 @@ def test_security_baseline_jitters_scheduled_scans_at_the_chokepoint() -> None:
     for scan_job in ("codeql", "dependency-review", "dependency-scan", "secret-scan"):
         needs = jobs[scan_job].get("needs")
         message = f"{scan_job} must `needs: privilege-probe` so the jitter on that job defers it"
-        assert needs == "privilege-probe", message
+        assert "privilege-probe" in needs, message
 
     # (b) privilege-probe has a schedule-gated RANDOM sleep before it does any work.
     probe_steps = jobs["privilege-probe"]["steps"]
@@ -509,7 +974,7 @@ def test_consumer_automation_settings_drift_token_is_optional_and_read_only() ->
 
     # The optional admin token is declared (not required).
     # (YAML 1.1 parses the `on:` key as boolean True, hence wf.get(True).)
-    on_block = wf.get("on") or wf.get(True)
+    on_block = _on(wf)
     settings_secret = on_block["workflow_call"]["secrets"]["settings-token"]
     assert settings_secret.get("required") is False
 
@@ -568,7 +1033,7 @@ def test_security_baseline_retains_fail_closed_structure() -> None:
     scan_jobs = ["codeql", "dependency-review", "dependency-scan", "secret-scan"]
     for name in scan_jobs:
         assert name in jobs, f"missing scan job {name}"
-        assert jobs[name].get("needs") == "privilege-probe", f"{name} must run after the privilege probe"
+        assert "privilege-probe" in jobs[name].get("needs", []), f"{name} must run after the privilege probe"
 
     heartbeat_needs = jobs["heartbeat"].get("needs", [])
     for name in scan_jobs:
@@ -576,6 +1041,212 @@ def test_security_baseline_retains_fail_closed_structure() -> None:
 
     gate_steps = [step.get("name", "") for step in jobs["heartbeat"].get("steps", []) if isinstance(step, dict)]
     assert any("Gate" in name for name in gate_steps), "missing 'Gate on required scans' step"
+
+
+def _codeql_severity_gate() -> tuple[JsonDict, JsonDict]:
+    wf = _load("reusable-security-baseline.yml")
+    job = wf["jobs"]["codeql"]
+    step = next(s for s in job["steps"] if s.get("name") == "Gate CodeQL high/critical alerts")
+    return job, step
+
+
+def test_codeql_severity_gate_runs_after_processed_analysis_and_before_heartbeat() -> None:
+    job, gate = _codeql_severity_gate()
+    analyze_index = next(
+        i for i, step in enumerate(job["steps"]) if step.get("uses") == "github/codeql-action/analyze@v4"
+    )
+    gate_index = job["steps"].index(gate)
+
+    assert job["steps"][analyze_index]["with"]["wait-for-processing"] is True
+    assert analyze_index < gate_index
+    assert gate["env"]["ANALYZED_REF"] == "${{ needs.resolve-target.outputs.canonical-ref }}"
+    assert gate["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert all("GH_TOKEN" not in step.get("env", {}) for step in job["steps"] if step is not gate)
+
+    run = gate["run"]
+    assert "--paginate" in run and "--slurp" in run
+    assert "state=open" in run and "tool_name=CodeQL" in run and "ref=" in run
+    assert "security_severity_level" in run
+    assert 'alert.get("number")' in run and "most_recent_instance" not in run
+
+    heartbeat = _load("reusable-security-baseline.yml")["jobs"]["heartbeat"]
+    assert "codeql" in heartbeat["needs"]
+
+
+@pytest.mark.parametrize(
+    ("pages", "expected_returncode"),
+    [
+        ([[]], 0),
+        (
+            [[{"number": 1, "rule": {"id": "medium", "security_severity_level": "medium"}, "html_url": "https://e/1"}]],
+            0,
+        ),
+        (
+            [
+                [
+                    {
+                        "number": 5,
+                        "rule": {"id": "non-security", "security_severity_level": None},
+                        "html_url": "https://e/5",
+                    }
+                ]
+            ],
+            0,
+        ),
+        ([[{"number": 2, "rule": {"id": "high", "security_severity_level": "high"}, "html_url": "https://e/2"}]], 1),
+        (
+            [
+                [
+                    {
+                        "number": 3,
+                        "rule": {"id": "critical", "security_severity_level": "critical"},
+                        "html_url": "https://e/3",
+                    }
+                ]
+            ],
+            1,
+        ),
+        (
+            [
+                [],
+                [{"number": 4, "rule": {"id": "later", "security_severity_level": "high"}, "html_url": "https://e/4"}],
+            ],
+            1,
+        ),
+    ],
+)
+def test_codeql_severity_gate_deterministic_alert_fixtures(
+    tmp_path: Path, pages: list[list[JsonDict]], expected_returncode: int
+) -> None:
+    """Exercise the operative gate with deterministic alert pages (the local SARIF canary)."""
+    _, gate = _codeql_severity_gate()
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text('#!/bin/sh\nprintf "%s\\n" "$GH_RESPONSE"\n', encoding="utf-8")
+    fake_gh.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "GH_RESPONSE": json.dumps(pages),
+        "GH_TOKEN": "fixture-token",
+        "GITHUB_REPOSITORY": "o/r",
+        "ANALYZED_REF": "refs/heads/canary",
+    }
+    result = subprocess.run(["bash", "-c", gate["run"]], env=env, text=True, capture_output=True, check=False)
+    assert result.returncode == expected_returncode, result.stdout + result.stderr
+    assert "fixture-token" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("response", "exit_code"),
+    [
+        ("not-json", 0),
+        ("[]", 0),
+        ("", 1),
+        (json.dumps([[{"number": 6, "rule": {"id": "missing"}, "html_url": "https://e/6"}]]), 0),
+        (
+            json.dumps(
+                [
+                    [
+                        {
+                            "number": "7",
+                            "rule": {"id": "unsafe\nrule", "security_severity_level": "high"},
+                            "html_url": "javascript:x",
+                        }
+                    ]
+                ]
+            ),
+            0,
+        ),
+    ],
+)
+def test_codeql_severity_gate_fails_closed_on_api_or_response_ambiguity(
+    tmp_path: Path, response: str, exit_code: int
+) -> None:
+    _, gate = _codeql_severity_gate()
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$GH_RESPONSE"\nexit "$GH_EXIT"\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "GH_RESPONSE": response,
+        "GH_EXIT": str(exit_code),
+        "GH_TOKEN": "fixture-token",
+        "GITHUB_REPOSITORY": "o/r",
+        "ANALYZED_REF": "refs/heads/canary",
+    }
+    result = subprocess.run(["bash", "-c", gate["run"]], env=env, text=True, capture_output=True, check=False)
+    assert result.returncode != 0, result.stdout + result.stderr
+
+
+def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
+    """Every source read and findings upload must bind to the same immutable commit."""
+    wf = _load("reusable-security-baseline.yml")
+    on_block = _on(wf)
+    inputs = on_block["workflow_call"]["inputs"]
+    assert inputs["ref"]["required"] is False
+    assert inputs["sha"]["required"] is False
+
+    jobs = wf["jobs"]
+    resolver = jobs["resolve-target"]
+    assert resolver["outputs"] == {
+        "canonical-ref": "${{ steps.canonicalize.outputs.canonical-ref }}",
+        "analyzed-sha": "${{ steps.resolve.outputs.analyzed-sha }}",
+    }
+    steps = resolver["steps"]
+    canonicalize_index = next(i for i, step in enumerate(steps) if step.get("id") == "canonicalize")
+    checkout_index = next(i for i, step in enumerate(steps) if step.get("uses") == "actions/checkout@v4")
+    assert canonicalize_index < checkout_index, "bare tags must be canonicalized before checkout resolves them"
+    canonicalize_script = steps[canonicalize_index]["run"]
+    assert 'canonical_ref="refs/tags/${REQUESTED_REF}"' in canonicalize_script
+    assert steps[checkout_index]["with"]["ref"] == "${{ steps.canonicalize.outputs.canonical-ref }}"
+    resolve_script = next(step["run"] for step in resolver["steps"] if step.get("id") == "resolve")
+    assert "^{commit}" in resolve_script
+    assert "inputs.sha" in str(resolver["steps"])
+
+    canonical_ref = "${{ needs.resolve-target.outputs.canonical-ref }}"
+    analyzed_sha = "${{ needs.resolve-target.outputs.analyzed-sha }}"
+    for job_name in ("codeql", "dependency-review", "dependency-scan", "secret-scan"):
+        checkout = next(step for step in jobs[job_name]["steps"] if step.get("uses") == "actions/checkout@v4")
+        assert checkout["with"]["ref"] == analyzed_sha, job_name
+
+    analyze = next(step for step in jobs["codeql"]["steps"] if step.get("uses") == "github/codeql-action/analyze@v4")
+    assert analyze["with"]["ref"] == canonical_ref
+    assert analyze["with"]["sha"] == analyzed_sha
+
+    uploads = [
+        step
+        for job_name in ("dependency-scan", "secret-scan")
+        for step in jobs[job_name]["steps"]
+        if step.get("uses") == "github/codeql-action/upload-sarif@v4"
+    ]
+    assert len(uploads) == 2
+    for upload in uploads:
+        assert upload["with"]["ref"] == canonical_ref
+        assert upload["with"]["sha"] == analyzed_sha
+
+    heartbeat = jobs["heartbeat"]
+    assert "resolve-target" in heartbeat["needs"]
+    upload = next(step for step in heartbeat["steps"] if step.get("uses") == "actions/upload-artifact@v7")
+    assert upload["with"]["name"] == "aviato-security-heartbeat-${{ needs.resolve-target.outputs.analyzed-sha }}"
+
+
+def test_docs_security_ref_uses_full_tag_and_release_gate_sha() -> None:
+    """Out-of-band docs scans must use the exact target already accepted by the release gate."""
+    local_security = _load("aviato-docs.yml")["jobs"]["security"]
+    assert "release-gate" in local_security["needs"]
+    assert local_security["with"]["ref"] == "refs/tags/${{ needs.resolve.outputs.tag }}"
+    assert local_security["with"]["sha"] == "${{ needs.release-gate.outputs.gated-sha }}"
+
+    for caller in sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml")):
+        body = caller.read_text(encoding="utf-8")
+        security_block = body[body.index("\n  security:") : body.index("\n  docs:")]
+        assert "needs: [resolve, release-gate]" in security_block, caller.name
+        assert "ref: refs/tags/${{ needs.resolve.outputs.tag }}" in security_block, caller.name
+        assert "sha: ${{ needs.release-gate.outputs.gated-sha }}" in security_block, caller.name
 
 
 def test_aviato_ref_pin_guard_present_and_regex_correct() -> None:
@@ -633,8 +1304,9 @@ def test_pypi_publish_isolates_build_from_oidc_token() -> None:
     wf = _load("reusable-pypi-publish.yml")
     top_perms = wf.get("permissions", {}) or {}
     jobs = wf["jobs"]
+    caller_jobs = _rendered_python_library_workflow()["jobs"]
 
-    def holds_token(perms: dict) -> bool:
+    def holds_token(perms: JsonDict) -> bool:
         return perms.get("id-token") == "write" or perms.get("attestations") == "write"
 
     for job_name, job in jobs.items():
@@ -650,9 +1322,12 @@ def test_pypi_publish_isolates_build_from_oidc_token() -> None:
     build_perms = jobs["build"].get("permissions")
     message = "build job must explicitly downgrade permissions to exclude id-token/attestations"
     assert build_perms is not None and not holds_token(build_perms), message
-    # The privileged publish job must depend on build (artifacts cross the boundary) and run NO eval.
-    assert jobs["publish"].get("needs") == "build" or "build" in (jobs["publish"].get("needs") or [])
-    assert "eval " not in _json.dumps(jobs["publish"].get("steps", [])), "publish job must run no build code"
+    # The privileged publish job is consumer-local, depends on the reusable builder,
+    # and runs no operator-selected build command.
+    publisher = caller_jobs["pypi-publish"]
+    assert "pypi" in publisher["needs"]
+    assert holds_token(publisher["permissions"])
+    assert "eval " not in _json.dumps(publisher.get("steps", [])), "publish job must run no build code"
 
 
 def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
@@ -663,26 +1338,27 @@ def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
     # re-roots there. The round-trip is exact IFF every uploaded path is under `<wd>` and download
     # extracts to exactly `<wd>` (a wrong download path would yield `<wd>/<wd>/...` or a missing dir).
     wf = _load("reusable-pypi-publish.yml")
-    steps = {
-        "build": wf["jobs"]["build"]["steps"],
-        "publish": wf["jobs"]["publish"]["steps"],
-    }
+    caller = _rendered_python_library_workflow()
+    steps = {"build": wf["jobs"]["build"]["steps"], "publish": caller["jobs"]["pypi-publish"]["steps"]}
 
-    def _step(job: str, action_substr: str) -> dict:
+    def _step(job: str, action_substr: str) -> JsonDict:
         return next(s for s in steps[job] if action_substr in (s.get("uses") or ""))
 
     up = _step("build", "upload-artifact")["with"]
     down = _step("publish", "download-artifact")["with"]
     wd = "${{ inputs.working-directory }}"
 
-    assert up["name"] == down["name"], "upload/download artifact names must match"
+    on_block = _on(wf)
+    assert on_block["workflow_call"]["outputs"]["artifact-name"]["value"] == "${{ jobs.build.outputs.artifact-name }}"
+    assert up["name"] == "aviato-pypi-dist"
+    assert down["name"] == "${{ needs.pypi.outputs.artifact-name }}"
     # Every uploaded path is under <wd> (so the least-common-ancestor is <wd>).
     upload_paths = [p for p in str(up["path"]).splitlines() if p.strip()]
     assert upload_paths, "upload step lists no paths"
     for p in upload_paths:
         assert p.strip().startswith(f"{wd}/"), f"upload path not under working-directory: {p!r}"
-    # Download must extract to exactly <wd> so the tree reconstructs at <wd>/<packages-dir>/... .
-    assert down["path"] == wd, f"download path {down['path']!r} must be exactly {wd!r}"
+    # The caller passes working-directory ".", so extraction at its root reconstructs dist/ + SBOM.
+    assert down["path"] == "."
 
 
 def test_pypi_audit_scope_is_exactly_the_wheel_dependency_closure() -> None:
@@ -739,6 +1415,42 @@ def test_ci_callers_enable_release_pr_check_dispatch() -> None:
         body = caller.read_text(encoding="utf-8")
         assert "workflow_dispatch:" in body, f"{caller.name}: release-branch check dispatch needs the trigger"
         assert "actions: write" in body, f"{caller.name}: caller ceiling must cover the release job's actions: write"
+
+
+def test_ci_callers_publish_dispatch_status_bridge_from_resolved_pipeline_contexts() -> None:
+    """Dispatch verification must report the profile's real required contexts on the PR SHA."""
+    registry = Registry(MODULE_SOURCE_ROOT)
+    for profile, variables in _TEMPLATE_EXAMPLE_VARS.items():
+        workflow_body = next(
+            artifact.body
+            for artifact in resolved_artifacts(registry, profile, variables, pin="EXAMPLE_PIN", docs=False)
+            if artifact.output == ".github/workflows/aviato-ci.yml"
+        )
+        workflow = yaml.safe_load(workflow_body)
+        bridge = workflow["jobs"]["status-bridge"]
+
+        resolved = resolve_profile(registry, profile)
+        expected_contexts = {
+            module.status_check for module in resolved.pipeline_modules if module.status_check is not None
+        }
+        steps = bridge["steps"]
+        actual_contexts = {step["env"]["STATUS_CONTEXT"] for step in steps}
+
+        assert bridge["if"] == "${{ always() && github.event_name == 'workflow_dispatch' }}", profile
+        assert set(bridge["needs"]) == {"ci", "security", "common-lint"}, profile
+        assert bridge["runs-on"] == "ubuntu-latest", profile
+        assert bridge["permissions"] == {"statuses": "write"}, profile
+        assert bridge["env"] == {"GH_TOKEN": "${{ github.token }}"}, profile
+        assert actual_contexts == expected_contexts, profile
+        assert len(steps) == len(expected_contexts), profile
+        for step in steps:
+            assert "uses" not in step, f"{profile}: status bridge must not check out or install code"
+            assert step["env"]["STATUS_STATE"].endswith("&& 'success' || 'failure' }}")
+            run = step["run"]
+            assert "gh api" in run and "statuses/${GITHUB_SHA}" in run
+            assert '-f state="${STATUS_STATE}"' in run
+            assert '-f context="${STATUS_CONTEXT}"' in run
+            assert "checkout" not in run.lower() and "install" not in run.lower()
 
 
 def test_release_propose_tolerates_preseeded_version_source() -> None:

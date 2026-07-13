@@ -1,24 +1,43 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from aviato import cli
+from aviato.core.diagnosis import diagnose
+from aviato.core.ports import Issue, Platform
+from aviato.core.registry import Registry
+from aviato.paths import MODULE_SOURCE_ROOT
+
+
+def _record_keyword_arguments[**P, R](fn: Callable[P, R], calls: list[dict[str, object]]) -> Callable[P, R]:
+    def recording(*args: P.args, **kwargs: P.kwargs) -> R:
+        calls.append(dict(kwargs))
+        return fn(*args, **kwargs)
+
+    return recording
 
 
 class FakePlatform:
-    def __init__(self, *, settings=None, rulesets=None):
+    def __init__(
+        self,
+        *,
+        settings: dict[str, Any] | None = None,
+        rulesets: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.settings = settings or {}
         # Default: live rulesets equal the rendered desired (no missing/drifted rulesets) so these
         # file/settings-drift tests aren't perturbed; a ruleset-drift test passes explicit payloads.
         self._rulesets = rulesets
-        self.calls: list[tuple] = []
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
 
-    def read_settings(self, repo):
+    def read_settings(self, repo: str) -> dict[str, Any]:
         return dict(self.settings)
 
-    def read_rulesets(self, repo):
+    def read_rulesets(self, repo: str) -> list[dict[str, Any]]:
         if self._rulesets is not None:
             return self._rulesets
         from aviato.cli import _profile_status_checks
@@ -26,32 +45,67 @@ class FakePlatform:
 
         return render_all_rulesets(extra_status_checks=_profile_status_checks("python-library"))
 
-    def get_issue(self, repo, key):
+    def get_issue(self, repo: str, key: str) -> Issue | None:
         return None
 
-    def open_or_update_issue(self, repo, key, title, body):
+    def open_or_update_issue(self, repo: str, key: str, title: str, body: str) -> str:
         self.calls.append(("open_or_update_issue", (repo, key, title, body)))
         return key
 
-    def comment_issue(self, repo, key, body):
+    def comment_issue(self, repo: str, key: str, body: str) -> None:
         self.calls.append(("comment_issue", (repo, key, body)))
 
-    def open_or_update_proposal(self, repo, branch, title, files, body):
+    def revoke_consent(self, repo: str, key: str, diff_id: str) -> None:
+        self.calls.append(("revoke_consent", (repo, key, diff_id)))
+
+    def open_or_update_proposal(self, repo: str, branch: str, title: str, files: dict[str, str], body: str) -> str:
         self.calls.append(("open_or_update_proposal", (repo, branch, title, files, body)))
         return branch
 
-    def apply_settings(self, repo, payload):
-        self.calls.append(("apply_settings", (repo, payload)))
+    def apply_settings(
+        self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
+    ) -> list[str]:
+        self.calls.append(("apply_settings", (repo, payload, expected_live)))
+        return []
 
-    def call_names(self):
+    def create_repo(self, repo: str, *, private: bool) -> None:
+        self.calls.append(("create_repo", (repo, private)))
+
+    def call_names(self) -> list[str]:
         return [name for name, _ in self.calls]
+
+
+_platform_contract: Platform = FakePlatform()
 
 
 def _consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text("profile: python-library\nversion: v0\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text(
+        "profile: python-library\nversion: v0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
     return tmp_path
+
+
+def test_drift_report_rejects_invalid_declared_enum_before_proposal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    consumer = _consumer(tmp_path)
+    (consumer / ".github" / "aviato.yaml").write_text(
+        "profile: node-service\nversion: v0\nvariables:\n  project-name: sample\n  language-variant: ruby\n",
+        encoding="utf-8",
+    )
+    fake = FakePlatform()
+    monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
+    monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:owner/repo.git")
+
+    rc = cli.main(["drift-report", str(consumer)])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "language-variant" in captured.err
+    assert fake.calls == []
 
 
 def test_drift_report_proposes_missing_files_and_reports_settings(
@@ -72,6 +126,7 @@ def test_drift_report_proposes_missing_files_and_reports_settings(
     # the proposed files carry the managed marker (so a merged PR is not dirty-drift)
     _, args = next(c for c in fake.calls if c[0] == "open_or_update_proposal")
     files = args[3]
+    assert isinstance(files, dict)
     assert files, "proposal had no files"
     assert all("aviato:managed" in body for body in files.values())
     # settings drift reported (never applied)
@@ -115,11 +170,15 @@ def test_drift_report_file_only_skips_settings(
     fake = FakePlatform(settings={"required_reviews": 1})
     monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
     monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:owner/repo.git")
+    diagnosis_calls: list[dict[str, object]] = []
+    monkeypatch.setattr("aviato.cli.diagnose", _record_keyword_arguments(diagnose, diagnosis_calls))
     rc = cli.main(["drift-report", str(consumer), "--file-only"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "open_or_update_proposal" in fake.call_names()  # file drift ran
     assert "settings drift" not in out  # settings never attempted
+    expected_inputs = cli._diagnosis_probe_inputs(Registry(MODULE_SOURCE_ROOT), "python-library")
+    assert {key: diagnosis_calls[0][key] for key in expected_inputs} == expected_inputs
 
 
 def test_drift_report_settings_only_skips_file_drift(
@@ -156,7 +215,7 @@ def test_drift_report_skips_settings_when_unreadable(
     consumer = _consumer(tmp_path)
 
     class NoAdminPlatform(FakePlatform):
-        def read_settings(self, repo):
+        def read_settings(self, repo: str) -> dict[str, Any]:
             raise SettingsReadError(f"repos/{repo}/branches/main/protection", 1, "HTTP 403: Forbidden")
 
     fake = NoAdminPlatform()
@@ -181,7 +240,7 @@ def test_drift_report_require_settings_fails_on_unreadable_settings(
     consumer = _consumer(tmp_path)
 
     class NoAdminPlatform(FakePlatform):
-        def read_settings(self, repo):
+        def read_settings(self, repo: str) -> dict[str, Any]:
             raise SettingsReadError(f"repos/{repo}/branches/main/protection", 1, "HTTP 403: Forbidden")
 
     fake = NoAdminPlatform()
@@ -206,7 +265,7 @@ def test_drift_report_fails_loud_when_issue_channel_unavailable(
     consumer = _consumer(tmp_path)
 
     class IssueChannelDownPlatform(FakePlatform):
-        def open_or_update_issue(self, repo, key, title, body):
+        def open_or_update_issue(self, repo: str, key: str, title: str, body: str) -> str:
             raise GitHubAPIError(f"repos/{repo}/issues", 1, "HTTP 410: Issues are disabled")
 
     # Non-empty live settings that differ from desired → a real diff that must be reported.
@@ -222,7 +281,7 @@ def test_drift_report_fails_loud_when_issue_channel_unavailable(
     assert "apply_settings" not in fake.call_names()  # never mutates
 
 
-def test_drift_report_rejects_file_only_with_require_settings(tmp_path) -> None:
+def test_drift_report_rejects_file_only_with_require_settings(tmp_path: Path) -> None:
     # §5.6: --require-settings is a silent no-op under --file-only; reject the contradiction
     # so a CI gate is not misled into thinking it enforces a settings read.
     from aviato.cli import main

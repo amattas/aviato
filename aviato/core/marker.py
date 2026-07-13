@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 # The marker uses a caller-supplied comment prefix; the per-filetype mapping is
 # plug-in data (see aviato.plugins.comment_syntax), keeping this module agnostic.
@@ -26,7 +29,7 @@ _LEAD = _PUNCT
 _CLOSE = rf"(?:\s+{_PUNCT})?"
 _MARKER_RE = re.compile(
     rf"^\s*{_LEAD}\s+aviato:managed\s+profile=(?P<profile>\S+)\s+version=(?P<version>\S+)"
-    rf"\s+hash=(?P<hash>[0-9a-fA-F]+){_CLOSE}\s*$"
+    rf"\s+hash=(?P<hash>[0-9a-fA-F]+)(?:\s+inputs=(?P<input_hash>[0-9a-fA-F]{{64}}))?{_CLOSE}\s*$"
 )
 
 
@@ -35,6 +38,7 @@ class MarkerInfo:
     profile: str
     version: str
     hash: str
+    input_hash: str | None
 
 
 def content_hash(body: str) -> str:
@@ -43,9 +47,15 @@ def content_hash(body: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def render_marker(*, profile: str, version: str, body: str, comment: str) -> str:
+def canonical_input_hash(values: Mapping[str, Any]) -> str:
+    """SHA-256 identity of canonical resolved, non-secret inputs."""
+    payload = json.dumps(values, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def render_marker(*, profile: str, version: str, body: str, comment: str, input_hash: str) -> str:
     """Render the canonical managed-marker line (§6.2) for ``body``."""
-    return f"{comment} {_TOKEN} profile={profile} version={version} hash={content_hash(body)}"
+    return f"{comment} {_TOKEN} profile={profile} version={version} hash={content_hash(body)} inputs={input_hash}"
 
 
 def parse_marker(line: str) -> MarkerInfo | None:
@@ -59,7 +69,12 @@ def parse_marker(line: str) -> MarkerInfo | None:
     match = _MARKER_RE.search(line)
     if not match:
         return None
-    return MarkerInfo(profile=match.group("profile"), version=match.group("version"), hash=match.group("hash"))
+    return MarkerInfo(
+        profile=match.group("profile"),
+        version=match.group("version"),
+        hash=match.group("hash"),
+        input_hash=match.group("input_hash"),
+    )
 
 
 def parse_marker_from_text(text: str) -> MarkerInfo | None:

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 import pytest
 import yaml
 
 from aviato.cli import main
-from aviato.core.scaffold import ScaffoldItem, scaffold
+from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
+from aviato.core.scaffold import scaffold
+
+ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 
 
 def _adopt(tmp_path: Path, *extra: str) -> int:
@@ -112,6 +116,102 @@ def test_onboard_plan_does_not_list_conflicting_variant_templates(capsys: pytest
     assert len(pkg_lines) <= 1, pkg_lines
 
 
+@pytest.mark.parametrize(
+    ("profile", "expected_environment"),
+    [
+        ("python-library", "pypi"),
+        ("node-service", "ghcr"),
+        ("swift-app", "app-store-connect"),
+        ("python-component", None),
+    ],
+)
+def test_onboard_plan_lists_protected_deployment_environment_requirements(
+    profile: str, expected_environment: str | None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["onboard", "owner/repo", "--profile", profile]) == 0
+    output = capsys.readouterr().out
+
+    if expected_environment is None:
+        assert "protected deployment environments: none" in output
+    else:
+        assert "protected deployment environments:" in output
+        assert f"- {expected_environment}: must exist with at least one required reviewer before deploy" in output
+
+
+def test_swift_onboard_plan_uses_resolved_environment_name_override(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert (
+        main(
+            [
+                "onboard",
+                "owner/repo",
+                "--profile",
+                "swift-app",
+                "--var",
+                "environment-name=production",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+
+    assert "- production: must exist with at least one required reviewer before deploy" in output
+    assert "- app-store-connect:" not in output
+
+
+@pytest.mark.parametrize(
+    ("saved_environment", "cli_environment", "expected_environment"),
+    [
+        ("production", None, "production"),
+        ("production", "staging", "staging"),
+        (None, None, "app-store-connect"),
+    ],
+)
+def test_swift_reonboard_plan_uses_write_precedence_without_mutating_declaration(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    saved_environment: str | None,
+    cli_environment: str | None,
+    expected_environment: str,
+) -> None:
+    variables = {
+        "product-scheme": "Acme",
+        "workspace": "Acme.xcworkspace",
+        "bundle-identifier": "com.acme.app",
+        "team-id": "ABCDE12345",
+        "export-method": "app-store",
+    }
+    if saved_environment is not None:
+        variables["environment-name"] = saved_environment
+    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration.parent.mkdir(parents=True)
+    declaration.write_text(
+        yaml.safe_dump(
+            {
+                "profile": "swift-app",
+                "profile-identity": "aviato-profile/swift-app/v1",
+                "version": "0",
+                "variables": variables,
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    original = declaration.read_text(encoding="utf-8")
+    args = ["onboard", str(tmp_path), "--profile", "swift-app"]
+    if cli_environment is not None:
+        args += ["--var", f"environment-name={cli_environment}"]
+
+    assert main(args) == 0
+    output = capsys.readouterr().out
+
+    assert f"- {expected_environment}: must exist with at least one required reviewer before deploy" in output
+    for other in {"app-store-connect", "production", "staging"} - {expected_environment}:
+        assert f"- {other}:" not in output
+    assert declaration.read_text(encoding="utf-8") == original
+
+
 def test_reonboard_without_pin_preserves_existing(tmp_path: Path) -> None:
     # §5.12: onboarding is not a re-pin. A fresh adopt with a legacy ``v2.0.0`` is
     # canonicalized to bare on write (§6.1); re-onboarding without --pin must preserve it.
@@ -148,7 +248,10 @@ def test_doctor_reports_clean_and_missing(tmp_path: Path, capsys: pytest.Capture
     # A consumer repo declaring python-library with one matching managed file present.
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text(
+        "profile: python-library\nversion: v1\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
     # scaffold the editorconfig body exactly as the resolved set expects
     from aviato.core.composition import resolve_profile
     from aviato.core.registry import Registry
@@ -162,10 +265,11 @@ def test_doctor_reports_clean_and_missing(tmp_path: Path, capsys: pytest.Capture
 
     rc = main(["doctor", str(tmp_path)])
     out = capsys.readouterr().out
-    assert rc == 0
+    assert rc == 1  # remote automation state is unknown without a GitHub remote (§5.14)
     assert ".editorconfig" in out
     assert "clean" in out
     assert "missing" in out  # other managed files are absent
+    assert "drift automation enabled remotely: unknown" in out
 
 
 def test_doctor_rejects_bootstrap_declaration_in_non_library(
@@ -177,7 +281,11 @@ def test_doctor_rejects_bootstrap_declaration_in_non_library(
     # tmp_path repo has no aviato/library structure, so is_library(root) is False.
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\nbootstrap: true\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text(
+        "profile: python-library\nversion: v1\nbootstrap: true\nvariables:\n"
+        "  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
     rc = main(["doctor", str(tmp_path)])
     err = capsys.readouterr().err
     assert rc == 2

@@ -13,6 +13,23 @@ def test_loads_profile(module_root: Path) -> None:
     profile = Registry(module_root).profile("child")
     assert isinstance(profile, Profile)
     assert profile.workflows == "child-wf"
+    assert profile.identity == "aviato-profile/child/v1"
+
+
+@pytest.mark.parametrize("identity", [None, "", "   "])
+def test_profile_requires_non_empty_stable_identity(module_root: Path, identity: str | None) -> None:
+    import yaml
+
+    path = module_root / "child.yaml"
+    doc = yaml.safe_load(path.read_text())
+    if identity is None:
+        doc.pop("identity", None)
+    else:
+        doc["identity"] = identity
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+
+    with pytest.raises(CompositionError, match="identity"):
+        Registry(module_root).profile("child")
 
 
 def test_loads_workflows_bundle(module_root: Path) -> None:

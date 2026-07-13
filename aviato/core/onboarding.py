@@ -8,10 +8,12 @@ from typing import Any
 from .composition import resolve_profile
 from .declaration import Declaration
 from .errors import CompositionError, DeclarationError
+from .marker import canonical_input_hash
 from .model import ResolvedSet, TemplateModule
 from .registry import Registry
 from .render import render
 from .scaffold import ScaffoldItem
+from .variables import resolve_declared_variables
 
 
 def _canon(value: Any) -> str:
@@ -38,6 +40,7 @@ def render_variables(
     pin: str,
     docs: bool = False,
     bootstrap: bool = False,
+    library_repository: str | None = None,
     derived_rules: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Augment the resolved variables with derived render values.
@@ -53,12 +56,15 @@ def render_variables(
     """
     derived = dict(variables)
     derived["aviato-ref"] = pin
+    if library_repository is None:
+        raise CompositionError("library_repository is required for Library rendering")
+    derived["aviato-library-repository"] = library_repository
     if bootstrap:
         derived["aviato-workflow-prefix"] = "./.github/workflows/"
         derived["aviato-workflow-suffix"] = ""
         derived["aviato-local-install"] = "true"
     else:
-        derived["aviato-workflow-prefix"] = "amattas/aviato/.github/workflows/"
+        derived["aviato-workflow-prefix"] = f"{library_repository}/.github/workflows/"
         derived["aviato-workflow-suffix"] = f"@{pin}"
         derived["aviato-local-install"] = "false"
     derived["docs"] = "true" if docs else "false"
@@ -124,6 +130,7 @@ class ResolvedArtifact:
     body: str  # rendered, without the managed marker
     comment: str
     seed_once: bool
+    input_hash: str
 
 
 def resolved_artifacts(
@@ -145,8 +152,7 @@ def resolved_artifacts(
     """
     resolved = resolve_profile(registry, profile, overrides=dict(overrides or {}), docs=docs)
     derived_rules = registry.profile_doc(profile).get("derived_variables", [])
-    effective_variables = {spec.name: spec.default for spec in resolved.variables if spec.default is not None}
-    effective_variables.update(variables)
+    effective_variables = resolve_declared_variables(resolved.variables, variables)
     validate_variable_constraints(registry, profile, effective_variables)
     # finding 28: resolve_variables emits None for unset OPTIONAL variables; render()
     # substitutes str(value) for any present key, so a None entry would bake the
@@ -159,11 +165,19 @@ def resolved_artifacts(
     # template referencing it fails strict render (managed) or keeps the
     # placeholder (seed-once) instead of leaking the value.
     secret_names = {spec.name for spec in resolved.variables if spec.secret}
+    input_values = {name: value for name, value in effective_variables.items() if name not in secret_names}
+    input_values["docs"] = docs
+    input_hash = canonical_input_hash(input_values)
     effective_variables = {
         name: value for name, value in effective_variables.items() if value is not None and name not in secret_names
     }
     render_vars = render_variables(
-        effective_variables, pin=pin, docs=docs, bootstrap=bootstrap, derived_rules=derived_rules
+        effective_variables,
+        pin=pin,
+        docs=docs,
+        bootstrap=bootstrap,
+        library_repository=registry.library_repository(),
+        derived_rules=derived_rules,
     )
     applicable = applicable_templates(resolved, render_vars)
     check_output_collisions(applicable)
@@ -173,7 +187,9 @@ def resolved_artifacts(
         # Seed-once starter files are rendered once (leniently — the developer owns
         # and completes them); managed files are re-rendered strictly every sync.
         rendered = render(body, render_vars, strict=not template.seed_once)
-        artifacts.append(ResolvedArtifact(template.output_path, rendered, template.comment or "#", template.seed_once))
+        artifacts.append(
+            ResolvedArtifact(template.output_path, rendered, template.comment or "#", template.seed_once, input_hash)
+        )
     return artifacts
 
 
@@ -193,7 +209,13 @@ def materialize_items(
     so the materialized set matches what diagnosis/drift expect for the same repo.
     """
     return [
-        ScaffoldItem(output=a.output, body=a.body, comment=a.comment, seed_once=a.seed_once)
+        ScaffoldItem(
+            output=a.output,
+            body=a.body,
+            comment=a.comment,
+            seed_once=a.seed_once,
+            input_hash=a.input_hash,
+        )
         for a in resolved_artifacts(
             registry, profile, variables, pin=pin, docs=docs, bootstrap=bootstrap, overrides=overrides
         )
@@ -227,7 +249,7 @@ def plan_onboarding(
         if not allow_migrate:
             raise DeclarationError(
                 f"repository already declares profile {existing_declaration.profile!r}; "
-                f"pass allow_migrate to change it to {profile!r}"
+                f"pass --migrate-profile (allow_migrate) to change it to {profile!r}"
             )
         migrating_from = existing_declaration.profile
 

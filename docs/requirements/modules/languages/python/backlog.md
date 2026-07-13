@@ -6,8 +6,13 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- [low] Profile asymmetry: python-component.yaml:30 adds `run-typecheck` but lacks the `typecheck-command` variable python-library.yaml:14 has, so wf-python-component.yml:35-42 never passes `typecheck-command` to reusable-python-ci.yml — a consumer needing a custom typecheck command must hand-edit. Add the variable and thread it. — FINDINGS #49 (narrowed) · aviato/library/python-component.yaml:30; wf-python-component.yml:35-42
+- (none)
+
+## Resolved by 2026-07-12 hardening plan
+
+- The Python component profile exposes and forwards the same optional `typecheck-command` contract as the library profile.
 
 ## Settled — do not reopen
 
 - (none)
+- Numeric coverage remains opt-in and measure-only unless a consumer chooses a threshold; Aviato does not invent one universal percentage for heterogeneous repositories.

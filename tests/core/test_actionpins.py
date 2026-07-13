@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from aviato.plugins.actionpins import (
@@ -13,36 +15,44 @@ _SHA = "a" * 40
 # --- uses: SHA check (kept for scaffold bodies; placeholder-aware in action_pin_violations) ---
 
 
-def test_flags_third_party_mutable_tag():
+def test_flags_third_party_mutable_tag() -> None:
     assert unpinned_third_party_uses("      - uses: docker/build-push-action@v5\n") == ["docker/build-push-action@v5"]
 
 
-def test_third_party_pinned_to_sha_is_ok():
+def test_third_party_pinned_to_sha_is_ok() -> None:
     assert unpinned_third_party_uses(f"      - uses: a/b@{_SHA}\n") == []
 
 
-def test_first_party_and_library_self_ref_exempt():
+def test_first_party_and_library_self_ref_exempt() -> None:
     assert unpinned_third_party_uses("      - uses: actions/checkout@v4\n") == []
     assert unpinned_third_party_uses("      - uses: amattas/aviato/.github/workflows/x.yml@v1\n") == []
 
 
-def test_uses_with_space_before_colon_still_checked():
+def test_library_self_ref_exemption_accepts_policy_repository() -> None:
+    text = "      - uses: example/library/.github/workflows/x.yml@v1\n"
+    assert unpinned_third_party_uses(text, library_repository="example/library") == []
+    assert unpinned_third_party_uses(text, library_repository="someone/else") == [
+        "example/library/.github/workflows/x.yml@v1"
+    ]
+
+
+def test_uses_with_space_before_colon_still_checked() -> None:
     assert unpinned_third_party_uses("      - uses : third/action@main\n") == ["third/action@main"]
 
 
 # --- pip exact-version (kept) ---
 
 
-def test_flags_floating_pip_install():
+def test_flags_floating_pip_install() -> None:
     out = unpinned_tool_invocations("          pip install build pytest>=8\n")
     assert "build" in str(out) and "pytest>=8" in str(out)
 
 
-def test_exact_pip_pin_is_ok():
+def test_exact_pip_pin_is_ok() -> None:
     assert unpinned_tool_invocations("          pip install build==1.2.3\n") == []
 
 
-def test_pip_local_vcs_wheel_requirements_skipped():
+def test_pip_local_vcs_wheel_requirements_skipped() -> None:
     # §11.3: local paths, -r requirements files, and wheels stay exempt. A VCS token now
     # requires a full commit SHA (see test_vcs_pip_installs_require_full_commit_sha below),
     # so the VCS token here is pinned to a 40-hex SHA rather than the old bare `git+https://x`.
@@ -54,7 +64,7 @@ def test_pip_local_vcs_wheel_requirements_skipped():
     assert unpinned_tool_invocations(text) == []
 
 
-def test_unpinned_requirements_lines_flags_floors_not_exact():
+def test_unpinned_requirements_lines_flags_floors_not_exact() -> None:
     body = "pytest>=8.0\nruff==0.8.0\n# comment\nbuild\n"
     flagged = unpinned_requirements_lines(body)
     assert "pytest>=8.0" in flagged and "build" in flagged and "ruff==0.8.0" not in flagged
@@ -63,7 +73,7 @@ def test_unpinned_requirements_lines_flags_floors_not_exact():
 # --- end-to-end (zizmor stubbed so the unit suite is hermetic) ---
 
 
-def test_action_pin_scan_flags_floor_seeded_requirements(tmp_path, monkeypatch):
+def test_action_pin_scan_flags_floor_seeded_requirements(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from aviato.plugins import zizmor_scan
 
     monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: [])
@@ -74,7 +84,7 @@ def test_action_pin_scan_flags_floor_seeded_requirements(tmp_path, monkeypatch):
     assert any("pytest>=8.0" in v for v in out)
 
 
-def test_action_pin_scan_flags_fetch_execute_in_workflow(tmp_path, monkeypatch):
+def test_action_pin_scan_flags_fetch_execute_in_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from aviato.plugins import zizmor_scan
 
     monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: [])
@@ -120,7 +130,7 @@ def test_flags_npx_package_fetch_without_exact_version() -> None:
     assert out == [expected]
 
 
-def test_action_pin_scan_surfaces_zizmor_uses_finding(tmp_path, monkeypatch):
+def test_action_pin_scan_surfaces_zizmor_uses_finding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from aviato.plugins import zizmor_scan
 
     monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: ["unpinned-uses: ci.yml"])
@@ -131,7 +141,7 @@ def test_action_pin_scan_surfaces_zizmor_uses_finding(tmp_path, monkeypatch):
     assert any("unpinned-uses" in v for v in out)
 
 
-def test_action_pin_scan_tolerates_non_utf8_workflow(tmp_path, monkeypatch):
+def test_action_pin_scan_tolerates_non_utf8_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from aviato.plugins import zizmor_scan
 
     monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: [])
@@ -141,7 +151,7 @@ def test_action_pin_scan_tolerates_non_utf8_workflow(tmp_path, monkeypatch):
     action_pin_violations(tmp_path)  # must not raise
 
 
-def test_seeded_pyproject_dev_extras_must_be_exact_pinned():
+def test_seeded_pyproject_dev_extras_must_be_exact_pinned() -> None:
     """finding 12: floors in the seeded pyproject's extras floated invisibly — CI installs
     them via `pip install -e .[dev]`, which the pip-token scan correctly exempts."""
     from aviato.plugins.actionpins import unpinned_pyproject_extra_lines
@@ -161,7 +171,7 @@ def test_seeded_pyproject_dev_extras_must_be_exact_pinned():
     assert unpinned_pyproject_extra_lines(text) == ["pytest>=8.0"]
 
 
-def test_pyproject_extras_scanner_covers_inline_arrays_and_single_quotes():
+def test_pyproject_extras_scanner_covers_inline_arrays_and_single_quotes() -> None:
     """second-review fix: a valid-TOML reformat (inline array, single quotes, nested
     extras table) must not disable the §11.3 extras gate."""
     from aviato.plugins.actionpins import unpinned_pyproject_extra_lines
@@ -178,6 +188,26 @@ def test_pyproject_extras_scanner_covers_inline_arrays_and_single_quotes():
         'y = ["quoted-but-outside>=1"]\n'
     )
     assert unpinned_pyproject_extra_lines(text) == ["black>=24.1.0", "ruff>=0.8.0", "sphinx>=7"]
+
+
+def test_root_pyproject_extras_are_scanned_but_build_system_floor_is_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from aviato.plugins import actionpins
+
+    (tmp_path / ".github/workflows").mkdir(parents=True)
+    (tmp_path / "aviato/library/scaffold/files").mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text(
+        '[build-system]\nrequires = ["setuptools>=69", "pytest>=9"]\n'
+        '[project.optional-dependencies]\ndev = ["setuptools>=69", "pytest>=9", "ruff==1.0"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch_target = __import__("aviato.plugins.zizmor_scan", fromlist=["zizmor_uses_image_violations"])
+    monkeypatch.setattr(monkeypatch_target, "zizmor_uses_image_violations", lambda _d: [])
+    violations = actionpins.action_pin_violations(tmp_path)
+
+    assert any("pyproject.toml" in item and "pytest>=9" in item for item in violations)
+    assert not any("setuptools>=69" in item for item in violations)
 
 
 _MIKE_SHA = "2d4ad799442f4592db8ad53b179bfb33db8c69ac"

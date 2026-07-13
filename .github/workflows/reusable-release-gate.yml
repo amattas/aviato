@@ -34,7 +34,8 @@ on:
     outputs:
       gated-sha:
         description: >-
-          The commit this gate validated (the tag commit, or the in-run merge commit).
+          The immutable release commit this gate validated: the commit peeled from
+          release-tag, or from GITHUB_SHA in the classic tag-ref context.
           C12-W2: deploys must check out THIS immutable SHA and re-verify the release
           tag still points at it before publishing — a tag force-moved between gate
           and publish must abort the deploy, never ship.
@@ -50,11 +51,12 @@ jobs:
     name: Validate release tag
     runs-on: ubuntu-latest
     outputs:
-      gated-sha: ${{ steps.verify.outputs.gated-sha }}
+      gated-sha: ${{ steps.resolve-gated-sha.outputs.gated-sha }}
     steps:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
           fetch-tags: true
 
@@ -83,38 +85,64 @@ jobs:
           fi
           echo "RESOLVED_TAG=${tag}" >> "${GITHUB_ENV}"
 
-      - name: Verify tag points at default branch
-        id: verify
+      - name: Resolve gated commit
+        id: resolve-gated-sha
         shell: bash
         env:
-          DEFAULT_BRANCH: ${{ inputs.default-branch }}
+          RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
         run: |
           set -euo pipefail
-          git fetch origin "${DEFAULT_BRANCH}" --tags
-          # In both contexts GITHUB_SHA is the commit being gated: the tag commit (tag ref) or the
-          # merge commit we are deploying (in-run). It must be REACHABLE FROM the default branch.
+          if [ -n "${RELEASE_TAG_INPUT}" ]; then
+            # workflow_run and in-run callers execute in a branch/event context. The
+            # release tag, not that event SHA, is the immutable release identity.
+            gated_sha="$(git rev-parse "refs/tags/${RESOLVED_TAG}^{commit}")"
+          else
+            # A classic tag-triggered workflow already carries the release commit.
+            gated_sha="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          fi
+          echo "gated-sha=${gated_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify tag points at default branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ inputs.default-branch }}
+          GATED_SHA: ${{ steps.resolve-gated-sha.outputs.gated-sha }}
+        run: |
+          set -euo pipefail
+          # Checkout deliberately does not persist the token. Scope authentication
+          # to this one trusted fetch through process-local git config variables.
+          if [ -n "${GH_TOKEN:-}" ]; then
+            basic_auth="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+            GIT_CONFIG_COUNT=1 \
+              GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+              GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic_auth}" \
+              git fetch origin "${DEFAULT_BRANCH}" --tags
+          else
+            # Supports the executable workflow fixture's local-file remote.
+            git fetch origin "${DEFAULT_BRANCH}" --tags
+          fi
+          # The resolved tag commit must be REACHABLE FROM the default branch. The event
+          # SHA may be a later descendant when this gate runs from workflow_run.
           # R6-4-DOCSGATE: the previous strict equality (gated_sha == branch_tip) caused docs deploy
           # (which runs on workflow_run minutes after the main CI) to fail valid releases whenever
           # ANY unrelated push landed on the default branch in that window. The §5.9 invariant is
           # "the gated commit IS on the default branch's history" — is-ancestor is the correct check
           # (handles tip-equality AND the post-CI-push case). Reject only when off the branch.
-          gated_sha="$(git rev-parse "${GITHUB_SHA}")"
+          gated_commit="$(git rev-parse "${GATED_SHA}^{commit}")"
           branch_sha="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
 
-          if ! git merge-base --is-ancestor "${gated_sha}" "${branch_sha}"; then
-            echo "::error::${RESOLVED_TAG} (${gated_sha}) is not reachable from origin/${DEFAULT_BRANCH} (${branch_sha})."
+          if ! git merge-base --is-ancestor "${gated_commit}" "${branch_sha}"; then
+            echo "::error::${RESOLVED_TAG} (${gated_commit}) is not reachable from origin/${DEFAULT_BRANCH} (${branch_sha})."
             exit 1
           fi
           if git rev-parse -q --verify "refs/tags/${RESOLVED_TAG}" >/dev/null; then
             tag_sha="$(git rev-parse "refs/tags/${RESOLVED_TAG}^{commit}")"
-            if [ "${tag_sha}" != "${gated_sha}" ]; then
-              echo "::error::Tag ${RESOLVED_TAG} (${tag_sha}) does not point at the gated commit ${gated_sha}."
+            if [ "${tag_sha}" != "${gated_commit}" ]; then
+              echo "::error::Tag ${RESOLVED_TAG} (${tag_sha}) does not point at the gated commit ${gated_commit}."
               exit 1
             fi
           fi
-          # C12-W2: export the validated commit so deploys consume the immutable SHA,
-          # not the mutable tag name this gate happened to observe.
-          echo "gated-sha=${gated_sha}" >> "${GITHUB_OUTPUT}"
 
       - name: Require merged pull request
         if: ${{ inputs.require-merged-pr }}
@@ -122,6 +150,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ inputs.default-branch }}
+          GATED_SHA: ${{ steps.resolve-gated-sha.outputs.gated-sha }}
         run: |
           set -euo pipefail
           owner="${GITHUB_REPOSITORY%%/*}"
@@ -132,7 +161,7 @@ jobs:
           response="$(gh api graphql \
             -f owner="${owner}" \
             -f repo="${repo}" \
-            -f sha="${GITHUB_SHA}" \
+            -f sha="${GATED_SHA}" \
             -f query='
               query($owner: String!, $repo: String!, $sha: GitObjectID!) {
                 repository(owner: $owner, name: $repo) {
@@ -154,7 +183,7 @@ jobs:
                 }
               }')"
 
-          pr_json="$(jq -c --arg sha "${GITHUB_SHA}" --arg base "${DEFAULT_BRANCH}" '
+          pr_json="$(jq -c --arg sha "${GATED_SHA}" --arg base "${DEFAULT_BRANCH}" '
             .data.repository.object.associatedPullRequests.nodes[]
             | select(.merged == true and .baseRefName == $base and ((.mergeCommit.oid // $sha) == $sha))
           ' <<<"${response}" | head -n1)"
@@ -173,15 +202,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REQUIRED_WORKFLOW: ${{ inputs.required-workflow }}
           DEFAULT_BRANCH: ${{ inputs.default-branch }}
+          GATED_SHA: ${{ steps.resolve-gated-sha.outputs.gated-sha }}
         run: |
           set -euo pipefail
           for _ in $(seq 1 60); do
-            response="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${REQUIRED_WORKFLOW}/runs?head_sha=${GITHUB_SHA}&event=push&per_page=20")"
+            response="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${REQUIRED_WORKFLOW}/runs?head_sha=${GATED_SHA}&event=push&per_page=20")"
             matching_runs="$(jq --arg branch "${DEFAULT_BRANCH}" '[.workflow_runs[] | select(.head_branch == $branch)]' <<<"${response}")"
             run_count="$(jq 'length' <<<"${matching_runs}")"
 
             if [ "${run_count}" = "0" ]; then
-              echo "Waiting for ${REQUIRED_WORKFLOW} on ${DEFAULT_BRANCH} for ${GITHUB_SHA}..."
+              echo "Waiting for ${REQUIRED_WORKFLOW} on ${DEFAULT_BRANCH} for ${GATED_SHA}..."
               sleep 15
               continue
             fi
@@ -194,7 +224,7 @@ jobs:
 
             if [ "${successful_run}" != "null" ]; then
               run_id="$(jq -r '.id' <<<"${successful_run}")"
-              echo "${REQUIRED_WORKFLOW} run ${run_id} succeeded for ${GITHUB_SHA}."
+              echo "${REQUIRED_WORKFLOW} run ${run_id} succeeded for ${GATED_SHA}."
               exit 0
             fi
 
@@ -206,7 +236,7 @@ jobs:
             fi
 
             failed_runs="$(jq -r '[.[] | "\(.id):\(.conclusion // "unknown")"] | join(", ")' <<<"${matching_runs}")"
-            echo "::error::${REQUIRED_WORKFLOW} did not succeed on ${DEFAULT_BRANCH} for ${GITHUB_SHA}. Runs: ${failed_runs}"
+            echo "::error::${REQUIRED_WORKFLOW} did not succeed on ${DEFAULT_BRANCH} for ${GATED_SHA}. Runs: ${failed_runs}"
             exit 1
           done
 

@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 
-def _write(path: Path, data: dict) -> None:
+def _write(path: Path, data: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
@@ -48,6 +48,7 @@ def module_root(tmp_path: Path) -> Path:
         root / "child.yaml",
         {
             "name": "child",
+            "identity": "aviato-profile/child/v1",
             "workflows": "child-wf",
             "scaffold": "child-sc",
             "settings": "child-set",

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from aviato.paths import REPO_ROOT
 from aviato.validation import validate
 
@@ -9,7 +13,7 @@ def test_repository_validates_clean() -> None:
     assert errors == [], errors
 
 
-def test_validate_flags_core_agnosticism_violation(tmp_path, monkeypatch) -> None:
+def test_validate_flags_core_agnosticism_violation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Build a throwaway core dir with a denylisted token and point the check at it.
     from aviato import validation
 

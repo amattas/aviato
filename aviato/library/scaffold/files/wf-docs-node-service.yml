@@ -83,7 +83,7 @@ jobs:
       release-tag: ${{ needs.resolve.outputs.tag }}
 
   security:
-    needs: [resolve]
+    needs: [resolve, release-gate]
     if: ${{ needs.resolve.outputs.release == 'true' }}
     permissions:
       actions: read
@@ -92,20 +92,23 @@ jobs:
       security-events: write
     uses: {{ aviato-workflow-prefix }}reusable-security-baseline.yml{{ aviato-workflow-suffix }}
     with:
-      ref: ${{ needs.resolve.outputs.tag }}
+      ref: refs/tags/${{ needs.resolve.outputs.tag }}
+      sha: ${{ needs.release-gate.outputs.gated-sha }}
       codeql-languages: "javascript-typescript"
 
   docs:
     needs: [resolve, release-gate, security]
     if: ${{ needs.resolve.outputs.release == 'true' }}
     permissions:
-      actions: read
       contents: write
+      pages: write
+      id-token: write
     uses: {{ aviato-workflow-prefix }}reusable-docs-pages.yml{{ aviato-workflow-suffix }}
     with:
       working-directory: website
       release-tag: ${{ needs.resolve.outputs.tag }}
       gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
+      serve-pages: {{ serve-pages }}
       docs-source-directory: "."
       docs-emit-command: |
         # §12.2 Node API reference (TypeDoc -> markdown) into the docs source tree.

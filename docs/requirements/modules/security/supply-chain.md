@@ -63,7 +63,7 @@ of a tainted file is a violation **unless a real verify *command*** (`sha256sum 
 and **download → verify → use**. **Do NOT re-introduce interpreter enumeration — it fails open and
 flapped for eight commits (cycle-9 R9-1…R9-5);** the taint rule enumerates only obviously-safe data
 sinks, so new executors are caught by default. The in-CI gate runs the *same* `aviato lint-actions`
-(no grep mirror — the two-implementation drift was R9-5), installing the pinned Aviato Library
+(one implementation; no independent workflow-side detector), installing the pinned Aviato Library
 (which carries the pinned zizmor) at the caller's `aviato-ref`.
 **Scope note:** `docker run`/`docker pull`/`docker image pull`/`docker container run` of a mutable
 `img:tag` inside a shell `run:` block is intentionally **not** gated (use a `container:`/`services:`

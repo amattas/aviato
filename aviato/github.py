@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -14,6 +16,7 @@ from urllib.parse import quote
 # Explicit re-export (`as run`): github_platform (and test monkeypatches) access this
 # helper as a real `aviato.github.run` module attribute.
 from .command import run as run
+from .core.ports import RulesetApplyResult
 
 # §5.5 (finding 30): rate-limit responses are tolerated and RETRIED (bounded), so a
 # scheduled fleet run doesn't fail outright on the first 403/429 throttle; a
@@ -51,6 +54,14 @@ def _branch_seg(branch: str) -> str:
 # what keeps the §11.2/§14 "no write-capable stored secret" posture honest (the stored secret
 # performs no mutation; apply is the separate §5.7 operator-gated path).
 SETTINGS_READ_TOKEN_ENV = "AVIATO_SETTINGS_READ_TOKEN"
+
+# Canonical GitHub CodeQL merge threshold, mirrored by pipelines.yaml and the rendered
+# branch-ruleset payload. Tests bind those data surfaces to this live probe contract.
+EXPECTED_CODEQL_RULE: dict[str, str] = {
+    "tool": "CodeQL",
+    "alerts_threshold": "none",
+    "security_alerts_threshold": "high_or_higher",
+}
 
 
 @contextmanager
@@ -248,8 +259,8 @@ def protected_environment_has_reviewers(slug: str, environment: str) -> bool | N
     return False  # environment exists + parseable rules but no required-reviewer rule (real "no")
 
 
-def pages_source_is_actions(slug: str) -> bool | None:
-    """True iff the repo has Pages enabled with the GitHub Actions source (§13.3).
+def pages_build_type_is_workflow(slug: str) -> bool | None:
+    """True iff the repo's Pages build type is ``workflow`` (§13.3).
 
     R6-2-§17-PROBE: §17 lists this as remote-probeable. Returns None on an ambiguous read so
     `doctor` can surface "unable to determine" rather than mis-report "absent" (§5.14).
@@ -266,9 +277,11 @@ def pages_source_is_actions(slug: str) -> bool | None:
     if not isinstance(pages, dict):
         return None  # 404 (ambiguous: off vs no-perms vs invisible) or non-dict response
     build_type = pages.get("build_type")
-    if build_type is None:
-        return None  # field absent — unknown, never a determinate "no"
-    return bool(build_type == "workflow")
+    if build_type == "workflow":
+        return True
+    if build_type == "legacy":
+        return False
+    return None  # missing, malformed, or a new enum value is unknown, never a determinate "no"
 
 
 def active_branch_rules(slug: str, branch: str) -> list[dict[str, Any]]:
@@ -311,7 +324,127 @@ def repository_rulesets(slug: str) -> list[dict[str, Any]]:
     return response if isinstance(response, list) else []
 
 
-def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> str:
+def codeql_merge_protection_present(slug: str) -> bool:
+    """Whether the default branch's effective rules carry the exact CodeQL threshold.
+
+    GitHub evaluates ruleset targeting/conditions and returns only rules effective for
+    this branch. This avoids locally emulating fnmatch/ref-condition semantics. API or
+    successful-response schema ambiguity raises so doctor maps it to unknown.
+    """
+    branch = default_branch(slug)
+    if not branch:
+        raise GitHubAPIError(f"repos/{slug}", 0, "repository response omitted default_branch")
+    endpoint = f"repos/{slug}/rules/branches/{quote(branch, safe='')}"
+    rules = gh_json_paginated(endpoint, default=[])
+    if not isinstance(rules, list):
+        raise GitHubAPIError(endpoint, 0, "effective branch rules response was not an array")
+
+    for rule in rules:
+        if not isinstance(rule, dict) or not isinstance(rule.get("type"), str):
+            raise GitHubAPIError(endpoint, 0, "effective branch rules contained a malformed rule")
+        if rule.get("type") != "code_scanning":
+            continue
+        parameters = rule.get("parameters")
+        if not isinstance(parameters, dict):
+            raise GitHubAPIError(endpoint, 0, "code_scanning rule parameters was not an object")
+        tools = parameters.get("code_scanning_tools")
+        if not isinstance(tools, list):
+            raise GitHubAPIError(endpoint, 0, "code_scanning_tools was not an array")
+        if not all(
+            isinstance(tool, dict) and all(isinstance(tool.get(key), str) for key in EXPECTED_CODEQL_RULE)
+            for tool in tools
+        ):
+            raise GitHubAPIError(endpoint, 0, "code_scanning_tools contained a malformed tool")
+        if any(all(tool.get(key) == value for key, value in EXPECTED_CODEQL_RULE.items()) for tool in tools):
+            return True
+    return False
+
+
+def _unsupported_tag_metadata_rule(stderr: str) -> bool:
+    """Recognize only GitHub's explicit unsupported tag metadata-rule rejection."""
+
+    if "http 422" not in stderr.lower():
+        return False
+
+    rejection = r"(?:not\s+(?:a\s+)?(?:valid|supported|permitted)|an?\s+unsupported|unsupported|invalid)"
+    tag = r'["\']?tag_name_pattern["\']?'
+    repository_rule_type = r"repository\s+rule\s+type"
+    exact_type_rejections = (
+        re.compile(rf"{tag}[^\n;]{{0,80}}{rejection}[^\n;]{{0,40}}{repository_rule_type}", re.IGNORECASE),
+        re.compile(rf"{repository_rule_type}[^\n;]{{0,80}}{tag}[^\n;]{{0,40}}{rejection}", re.IGNORECASE),
+    )
+    path_rejection = re.compile(rf"rules/\d+/type\b[^\n;]{{0,80}}{tag}[^\n;]{{0,50}}{rejection}", re.IGNORECASE)
+
+    def text_entry_matches(entry: str) -> bool:
+        return bool(path_rejection.search(entry) or any(pattern.search(entry) for pattern in exact_type_rejections))
+
+    # When GitHub returns structured errors, correlate field/value/code within each individual
+    # error object. Never scan the serialized parent object as one blob: two unrelated entries
+    # must not combine into permission for a degraded retry.
+    json_start = stderr.find("{")
+    if json_start >= 0:
+        try:
+            parsed, _ = json.JSONDecoder().raw_decode(stderr[json_start:])
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("errors"), list):
+            for error in parsed["errors"]:
+                if not isinstance(error, dict):
+                    continue
+                field = error.get("field")
+                value = error.get("value")
+                code = error.get("code")
+                if (
+                    isinstance(field, str)
+                    and re.fullmatch(r"rules/\d+/type", field, re.IGNORECASE)
+                    and value == "tag_name_pattern"
+                    and isinstance(code, str)
+                    and code.lower() in {"invalid", "unsupported", "not_supported", "not supported"}
+                ):
+                    return True
+                message = error.get("message")
+                if isinstance(message, str) and text_entry_matches(message):
+                    return True
+            return False
+
+    return any(text_entry_matches(line) for line in stderr.splitlines())
+
+
+def _without_tag_name_pattern(payload: dict[str, Any]) -> dict[str, Any] | None:
+    degraded = deepcopy(payload)
+    rules = degraded.get("rules")
+    if not isinstance(rules, list):
+        return None
+    kept = [rule for rule in rules if not (isinstance(rule, dict) and rule.get("type") == "tag_name_pattern")]
+    if len(kept) == len(rules):
+        return None
+    degraded["rules"] = kept
+    return degraded
+
+
+def _submit_ruleset(endpoint: str, method: str, payload: dict[str, Any]) -> None:
+    """Submit one private temporary payload and always remove it."""
+
+    payload_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:
+            payload_path = Path(handle.name)
+            os.chmod(handle.name, 0o600)
+            json.dump(payload, handle)
+            handle.write("\n")
+        assert payload_path is not None
+        result = run(
+            ["gh", "api", "--method", method, endpoint, "--input", str(payload_path)],
+            check=False,
+        )
+    finally:
+        if payload_path is not None:
+            payload_path.unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise GitHubAPIError(endpoint, result.returncode, result.stderr)
+
+
+def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> RulesetApplyResult:
     name = payload.get("name")
     if not isinstance(name, str) or not name:
         raise ValueError("ruleset payload must include a non-empty name")
@@ -339,19 +472,21 @@ def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> str:
 
     if not apply:
         if existing_id:
-            return f"DRY RUN: would update {name} on {slug} (ruleset {existing_id})"
-        return f"DRY RUN: would create {name} on {slug}"
+            message = f"DRY RUN: would update full ruleset {name} on {slug} (ruleset {existing_id})"
+        else:
+            message = f"DRY RUN: would create full ruleset {name} on {slug}"
+        return RulesetApplyResult(message)
 
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:
-        json.dump(payload, handle)
-        handle.write("\n")
-        payload_path = Path(handle.name)
-
+    method = "PUT" if existing_id else "POST"
+    endpoint = f"repos/{slug}/rulesets/{existing_id}" if existing_id else f"repos/{slug}/rulesets"
     try:
-        if existing_id:
-            run(["gh", "api", "--method", "PUT", f"repos/{slug}/rulesets/{existing_id}", "--input", str(payload_path)])
-            return f"Updated {name} on {slug}"
-        run(["gh", "api", "--method", "POST", f"repos/{slug}/rulesets", "--input", str(payload_path)])
-        return f"Created {name} on {slug}"
-    finally:
-        payload_path.unlink(missing_ok=True)
+        _submit_ruleset(endpoint, method, payload)
+    except GitHubAPIError as exc:
+        degraded = _without_tag_name_pattern(payload)
+        if degraded is None or not _unsupported_tag_metadata_rule(exc.stderr):
+            raise
+        _submit_ruleset(endpoint, method, degraded)
+        verb = "Updated" if existing_id else "Created"
+        return RulesetApplyResult(f"{verb} {name} on {slug}", ("tag_name_pattern",))
+    verb = "Updated" if existing_id else "Created"
+    return RulesetApplyResult(f"{verb} {name} on {slug}")

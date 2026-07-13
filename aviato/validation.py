@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,7 @@ from .paths import DENYLIST_FILE, REPO_ROOT
 from .policy import (
     default_required_approvals,
     get_path,
+    library_repository,
     load_policy,
     load_ruleset_manifest,
     load_yaml,
@@ -64,10 +67,37 @@ RELEASE_WORKFLOWS = [
     ".github/workflows/reusable-app-store-connect.yml",
 ]
 
-# This Library's own GitHub slug. Centralized (was duplicated as literals across the
-# template-reference and release-workflow-contract checks); it is the Library's own
-# repository identity, not consumer data, so a single constant is the source of truth.
-LIBRARY_SLUG = "amattas/aviato"
+
+def _check_project_version_parity(root: Path, errors: list[str]) -> None:
+    pyproject = root / "pyproject.toml"
+    try:
+        project = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("project")
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        errors.append(f"could not read project version from pyproject.toml: {exc}")
+        return
+    project_version = project.get("version") if isinstance(project, dict) else None
+    if not isinstance(project_version, str):
+        errors.append("pyproject.toml does not define project.version")
+        return
+
+    try:
+        runtime_metadata_version = metadata.version("aviato")
+    except metadata.PackageNotFoundError:
+        errors.append("installed Aviato distribution metadata is unavailable; cannot verify runtime version parity")
+        return
+
+    from . import __version__
+
+    if project_version != runtime_metadata_version:
+        errors.append(
+            f"project version {project_version!r} differs from runtime distribution metadata "
+            f"{runtime_metadata_version!r}"
+        )
+    if __version__ != runtime_metadata_version:
+        errors.append(
+            f"runtime __version__ {__version__!r} differs from runtime distribution metadata "
+            f"{runtime_metadata_version!r}"
+        )
 
 
 def _check_policy_examples(policy: dict[str, Any], errors: list[str]) -> None:
@@ -166,10 +196,42 @@ def _check_workflow_yaml(root: Path, errors: list[str]) -> None:
                 errors.append(f"invalid YAML in {path.relative_to(root)}: {exc}")
 
 
-def _check_template_references(root: Path, errors: list[str]) -> None:
+_REMOTE_WORKFLOW_MARKER = "/.github/workflows/"
+
+
+def _check_remote_reusable_reference(
+    value: str,
+    *,
+    source: str,
+    repository: str,
+    workflow_files: set[str],
+    errors: list[str],
+    reject_main: bool = False,
+) -> None:
+    """Validate every remote reusable-workflow reference, independent of expected prefix."""
+    # Identify the workflow-shaped value BEFORE parsing `@ref`. Matching only an already-valid
+    # shape would let a missing/trailing `@` bypass every subsequent identity/file check.
+    if value.startswith("./") or _REMOTE_WORKFLOW_MARKER not in value:
+        return
+    actual_repository, workflow_and_ref = value.split(_REMOTE_WORKFLOW_MARKER, 1)
+    workflow_file, separator, ref = workflow_and_ref.partition("@")
+    if separator != "@" or not ref.strip() or workflow_and_ref.count("@") != 1:
+        errors.append(f"{source} reference {value!r} requires exactly one nonempty @ref")
+    if actual_repository != repository:
+        errors.append(
+            f"{source} references Library repository {actual_repository!r}; policy.yml requires {repository!r}"
+        )
+    if not workflow_file:
+        errors.append(f"{source} does not name a reusable workflow file")
+    elif workflow_file not in workflow_files:
+        errors.append(f"{source} references missing reusable workflow {workflow_file}")
+    if reject_main and ref == "main":
+        errors.append(f"{source} advertises @{ref}; template examples must use a placeholder pin")
+
+
+def _check_template_references(root: Path, repository: str, errors: list[str]) -> None:
     workflow_dir = root / ".github/workflows"
     workflow_files = {path.name for path in _yaml_files(workflow_dir)}
-    reference_re = re.compile(rf"^{re.escape(LIBRARY_SLUG)}/\.github/workflows/([^@]+)@(.+)$")
 
     for path in _yaml_files(root / "templates"):
         data = load_yaml(path)
@@ -177,26 +239,22 @@ def _check_template_references(root: Path, errors: list[str]) -> None:
             value = job.get("uses")
             if not isinstance(value, str):
                 continue
-            match = reference_re.match(value)
-            if not match:
-                continue
-            workflow_file, ref = match.groups()
-            if workflow_file not in workflow_files:
-                errors.append(f"{path.relative_to(root)} references missing workflow {workflow_file}")
-            if not ref:
-                errors.append(f"{path.relative_to(root)} references {workflow_file} without a ref")
-            if ref == "main":
-                errors.append(
-                    f"{path.relative_to(root)} advertises @{ref}; template examples must use a placeholder pin"
-                )
+            _check_remote_reusable_reference(
+                value,
+                source=str(path.relative_to(root)),
+                repository=repository,
+                workflow_files=workflow_files,
+                errors=errors,
+                reject_main=True,
+            )
 
 
-def _check_release_workflow_contract(root: Path, errors: list[str]) -> None:
+def _check_release_workflow_contract(root: Path, repository: str, errors: list[str]) -> None:
     for rel_path in RELEASE_WORKFLOWS:
         text = (root / rel_path).read_text(encoding="utf-8")
         if "release/*" in text or "release/latest" in text:
             errors.append(f"{rel_path} contains legacy release branch support")
-        if f"repository: {LIBRARY_SLUG}" in text:
+        if f"repository: {repository}" in text:
             errors.append(
                 f"{rel_path} checks out Aviato by repository name; this can drift from the pinned workflow ref"
             )
@@ -241,53 +299,139 @@ def _check_docs_caller_name_parity(root: Path, errors: list[str]) -> None:
     silently kill every consumer's docs deploys (the trigger simply never fires — no
     error anywhere). Pin each pair together.
     """
-    scaffold_dir = root / "aviato" / "library" / "scaffold" / "files"
-    for docs_body in sorted(scaffold_dir.glob("wf-docs-*.yml")):
-        profile = docs_body.name[len("wf-docs-") : -len(".yml")]
-        ci_body = scaffold_dir / f"wf-{profile}.yml"
-        if not ci_body.exists():
-            errors.append(f"{docs_body.name} has no sibling CI caller wf-{profile}.yml (finding 40)")
-            continue
+
+    def compare(docs_rel: str, ci_rel: str) -> None:
+        docs_body = root / docs_rel
+        ci_body = root / ci_rel
+        missing = [rel for rel, path in ((docs_rel, docs_body), (ci_rel, ci_body)) if not path.is_file()]
+        if missing:
+            errors.append(
+                f"docs caller name parity sources missing for {docs_rel}/{ci_rel}: {', '.join(missing)} (finding 40)"
+            )
+            return
         ci_name = re.search(r"^name:\s*(.+?)\s*$", ci_body.read_text(encoding="utf-8"), re.MULTILINE)
         trigger = re.search(r'workflows:\s*\[\s*"([^"]+)"\s*\]', docs_body.read_text(encoding="utf-8"))
         if ci_name is None or trigger is None:
-            errors.append(
-                f"{docs_body.name}/{ci_body.name}: could not extract workflow_run trigger or name (finding 40)"
-            )
-            continue
+            errors.append(f"{docs_rel}/{ci_rel}: could not extract workflow_run trigger or name (finding 40)")
+            return
         if trigger.group(1) != ci_name.group(1):
             errors.append(
-                f"{docs_body.name} workflow_run trigger {trigger.group(1)!r} != {ci_body.name} "
+                f"{docs_rel} workflow_run trigger {trigger.group(1)!r} != {ci_rel} "
                 f"display name {ci_name.group(1)!r} — a rename silently kills docs deploys (finding 40)"
             )
 
+    scaffold = "aviato/library/scaffold/files"
+    for profile in _PROFILE_TEMPLATE_FILES:
+        docs_rel = f"{scaffold}/wf-docs-{profile}.yml"
+        compare(docs_rel, f"{scaffold}/wf-{profile}.yml")
+        compare(docs_rel, _PROFILE_TEMPLATE_FILES[profile])
 
-# finding 41: every site that names the Library's own slug, anchored on LIBRARY_SLUG.
+    # The Library is also a rendered consumer of its own scaffold. Keep the live
+    # workflow_run coupling checked rather than assuming marker/template parity catches it.
+    compare(".github/workflows/aviato-docs.yml", ".github/workflows/aviato-ci.yml")
+
+
+# finding 41: every unavoidable data/workflow copy of the Library repository is anchored on
+# policy.yml. Runtime code reads the policy accessor directly and is deliberately absent here.
 # A repo rename/transfer must update all of them together or the sites desync pairwise
 # (e.g. scaffolds render the new prefix while the pin-exemption still matches the old).
-_SLUG_COPY_SITES = [
-    ("aviato/cli.py", 'LIBRARY_REMOTE_URL = "https://github.com/{slug}.git"'),
-    ("aviato/plugins/actionpins.py", '_LIBRARY_SLUG = "{slug}"'),
-    ("aviato/core/onboarding.py", '"{slug}/.github/workflows/"'),
-    ("aviato/library/zizmor.yml", "{slug}/*: ref-pin"),
-    (".github/workflows/reusable-consumer-automation.yml", "git+https://github.com/{slug}@"),
-    (".github/workflows/reusable-common-lint.yml", "git+https://github.com/{slug}@"),
-    (".github/workflows/reusable-release.yml", "git+https://github.com/{slug}@"),
-]
+_INSTALL_URL_COPY_COUNTS = {
+    ".github/workflows/reusable-consumer-automation.yml": 1,
+    ".github/workflows/reusable-common-lint.yml": 1,
+    ".github/workflows/reusable-release.yml": 2,
+}
+_GITHUB_VCS_INSTALL_RE = re.compile(r"git\+https://github\.com/(?P<repository>[^@\s\"']+)@")
 
 
-def _check_library_slug_copies(root: Path, errors: list[str]) -> None:
-    """finding 41: the Library slug literals across code/data/workflows must all match."""
-    for rel_path, template in _SLUG_COPY_SITES:
-        expected = template.format(slug=LIBRARY_SLUG)
+def _check_library_repository_copies(root: Path, policy: dict[str, Any], repository: str, errors: list[str]) -> None:
+    """Every static and derived Library-repository binding must match policy.yml."""
+    for rel_path, expected_count in _INSTALL_URL_COPY_COUNTS.items():
         path = root / rel_path
         if not path.is_file():
-            errors.append(f"{rel_path} missing; cannot verify its Library-slug copy (finding 41)")
+            errors.append(f"{rel_path} missing; cannot verify its Library repository copies (finding 41)")
             continue
-        if expected not in path.read_text(encoding="utf-8", errors="replace"):
+        actual = _GITHUB_VCS_INSTALL_RE.findall(path.read_text(encoding="utf-8", errors="replace"))
+        if len(actual) != expected_count or any(value != repository for value in actual):
             errors.append(
-                f"{rel_path} no longer carries the Library slug site {expected!r}; "
-                f"every copy must move together on a rename/transfer (finding 41)"
+                f"{rel_path} Library install repositories {actual!r} do not equal {expected_count} "
+                f"copies of policy library.repository {repository!r} (finding 41)"
+            )
+
+    zizmor_path = root / "aviato/library/zizmor.yml"
+    if not zizmor_path.is_file():
+        errors.append("aviato/library/zizmor.yml missing; cannot verify its Library repository policy (finding 41)")
+    else:
+        try:
+            zizmor = load_yaml(zizmor_path)
+            policies = zizmor["rules"]["unpinned-uses"]["config"]["policies"]
+            if not isinstance(policies, dict):
+                raise TypeError("policies must be a mapping")
+        except (KeyError, OSError, TypeError, ValueError, yaml.YAMLError) as exc:
+            errors.append(f"aviato/library/zizmor.yml repository policies cannot be read: {exc} (finding 41)")
+        else:
+            expected_policies = {
+                "actions/*": "ref-pin",
+                "github/*": "ref-pin",
+                f"{repository}/*": "ref-pin",
+                "*": "hash-pin",
+            }
+            if policies != expected_policies:
+                errors.append(
+                    "aviato/library/zizmor.yml unpinned-uses policies must be exactly equal to "
+                    f"{expected_policies!r}; got {policies!r} (finding 41)"
+                )
+
+    contributing = root / "aviato/library/scaffold/files/contributing.md.txt"
+    contributing_binding = "https://github.com/{{ aviato-library-repository }}"
+    if contributing.is_file() and contributing.read_text(encoding="utf-8").count(contributing_binding) != 1:
+        errors.append(
+            "aviato/library/scaffold/files/contributing.md.txt must derive its GitHub link from "
+            "aviato-library-repository (finding 41)"
+        )
+
+    # Enumerate the runtime bindings as contracts too: a future refactor must not load policy yet
+    # accidentally ignore it in the plug-in exemption, CLI remote formatter, generated `uses:`
+    # references, or rendered contributing link.
+    from .cli import _library_remote_url
+    from .core.onboarding import resolved_artifacts
+    from .core.registry import Registry
+    from .plugins.actionpins import unpinned_third_party_uses
+
+    mutable_self_ref = f"uses: {repository}/.github/workflows/example.yml@1"
+    if unpinned_third_party_uses(mutable_self_ref, library_repository=repository):
+        errors.append("action-pin plug-in allowlist does not derive from policy library.repository (finding 41)")
+
+    expected_remote = f"https://github.com/{repository}.git"
+    if _library_remote_url(policy) != expected_remote:
+        errors.append(
+            f"CLI Library remote URL does not derive from policy library.repository; expected {expected_remote!r}"
+        )
+
+    try:
+        artifacts = resolved_artifacts(
+            Registry(root / "aviato/library"),
+            "python-library",
+            _TEMPLATE_EXAMPLE_VARS["python-library"],
+            pin=TEMPLATE_EXAMPLE_PIN,
+        )
+    except Exception as exc:  # noqa: BLE001 - validation reports malformed Library data
+        errors.append(f"could not validate rendered Library-repository bindings: {exc}")
+    else:
+        rendered = {artifact.output: artifact.body for artifact in artifacts}
+        callers = [
+            body
+            for output, body in rendered.items()
+            if output.startswith(".github/workflows/") and f"{repository}/.github/workflows/" in body
+        ]
+        if not callers:
+            errors.append(
+                f"generated uses references do not derive from policy library.repository {repository!r} (finding 41)"
+            )
+        contributing_body = rendered.get("CONTRIBUTING.md", "")
+        expected_link = f"https://github.com/{repository}"
+        if expected_link not in contributing_body:
+            errors.append(
+                f"rendered CONTRIBUTING.md does not link to policy Library repository {expected_link!r} (finding 41)"
             )
 
 
@@ -336,22 +480,43 @@ def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
             "byte-identical across docs callers (finding 43)"
         )
 
-    docs_pin_sources = [
-        root / "aviato" / "library" / "scaffold" / "files" / "docs-requirements.txt.txt",
-        root / "website" / "requirements.txt",
-        root / "starter" / "docs-site" / "requirements.txt",
-    ]
-    pin_sets = {
-        str(p.relative_to(root)): sorted(
-            line.split("#", 1)[0].strip()
-            for line in p.read_text(encoding="utf-8").splitlines()
-            if line.split("#", 1)[0].strip()
-        )
-        for p in docs_pin_sources
-        if p.is_file()
-    }
-    if len(set(map(tuple, pin_sets.values()))) > 1:
-        errors.append(f"docs toolchain pins differ across requirements sources: {pin_sets} (finding 43)")
+    toolchain_path = root / "aviato/library/docs-toolchain.yaml"
+    if not toolchain_path.is_file():
+        errors.append("missing docs toolchain pin source: aviato/library/docs-toolchain.yaml")
+    else:
+        try:
+            toolchain = load_yaml(toolchain_path)
+            pydoc_pin = str(toolchain["pydoc-markdown"])
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"invalid docs toolchain pin source: {exc}")
+        else:
+            pins = _values("wf-docs-*.yml", r"pydoc-markdown==([0-9.]+)")
+            actual = {pin for values in pins.values() for pin in values}
+            if actual != {pydoc_pin}:
+                errors.append(
+                    f"pydoc-markdown pins across docs callers {pins} differ from docs-toolchain.yaml "
+                    f"({pydoc_pin!r}) (finding 43)"
+                )
+            expected_requirements = [f"zensical=={toolchain['zensical']}", f"mike @ {toolchain['mike']}"]
+            for rel_path in (
+                "website/requirements.txt",
+                "starter/docs-site/requirements.txt",
+                "aviato/library/scaffold/files/docs-requirements.txt.txt",
+            ):
+                path = root / rel_path
+                if not path.is_file():
+                    errors.append(f"missing docs toolchain generated output: {rel_path}")
+                    continue
+                requirements = [
+                    line.split("#", 1)[0].strip()
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.split("#", 1)[0].strip()
+                ]
+                if requirements != expected_requirements:
+                    errors.append(
+                        f"docs toolchain pins differ in {rel_path} from aviato/library/docs-toolchain.yaml: "
+                        f"actual={requirements}, expected={expected_requirements} (finding 43)"
+                    )
 
 
 def _check_baseline_settings_keys(root: Path, errors: list[str]) -> None:
@@ -391,11 +556,11 @@ def _check_core_agnosticism(core_dir: Path, denylist_file: Path, errors: list[st
         errors.append(f"core names a denylisted identifier: {violation}")
 
 
-def _check_action_pins(root: Path, errors: list[str]) -> None:
+def _check_action_pins(root: Path, repository: str, errors: list[str]) -> None:
     """§11.3: third-party actions/tools invoked by any pipeline are pinned by digest."""
     from .plugins.actionpins import action_pin_violations
 
-    for violation in action_pin_violations(root):
+    for violation in action_pin_violations(root, library_repository=repository):
         errors.append(f"unpinned third-party action/tool (§11.3): {violation}")
 
 
@@ -439,7 +604,7 @@ def _rendered_caller(root: Path, profile: str, output: str) -> str | None:
     return next((a.body for a in artifacts if a.output == output), None)
 
 
-def _check_scaffold_workflow_yaml(root: Path, errors: list[str]) -> None:
+def _check_scaffold_workflow_yaml(root: Path, repository: str, errors: list[str]) -> None:
     """Each RENDERED scaffold workflow body must be valid YAML (§16).
 
     The scaffold ``wf-*.yml`` bodies carry ``{{ var }}`` placeholders, so they aren't valid YAML
@@ -455,8 +620,6 @@ def _check_scaffold_workflow_yaml(root: Path, errors: list[str]) -> None:
     # reusable-workflow ref in a rendered caller resolves to a workflow that actually exists, so a
     # renamed/deleted reusable workflow can't ship a broken caller to consumers undetected.
     workflow_files = {path.name for path in _yaml_files(root / ".github/workflows")}
-    reference_re = re.compile(rf"^{re.escape(LIBRARY_SLUG)}/\.github/workflows/([^@]+)@(.+)$")
-
     registry = Registry(root / "aviato" / "library")
     for profile, example_vars in _TEMPLATE_EXAMPLE_VARS.items():
         for docs in (False, True):
@@ -480,11 +643,13 @@ def _check_scaffold_workflow_yaml(root: Path, errors: list[str]) -> None:
                     continue
                 for job in _walk_jobs(doc if isinstance(doc, dict) else {}):
                     uses = job.get("uses")
-                    match = reference_re.match(uses) if isinstance(uses, str) else None
-                    if match and match.group(1) not in workflow_files:
-                        errors.append(
-                            f"rendered scaffold workflow {artifact.output} ({profile!r}, docs={docs}) "
-                            f"references missing reusable workflow {match.group(1)}"
+                    if isinstance(uses, str):
+                        _check_remote_reusable_reference(
+                            uses,
+                            source=f"rendered scaffold workflow {artifact.output} ({profile!r}, docs={docs})",
+                            repository=repository,
+                            workflow_files=workflow_files,
+                            errors=errors,
                         )
 
 
@@ -496,7 +661,11 @@ def _check_template_scaffold_parity(root: Path, errors: list[str]) -> None:
         path = root / rel_path
         if not path.exists():
             continue  # absence is already reported by the REQUIRED_FILES check
-        expected = _rendered_caller(root, profile, output)
+        try:
+            expected = _rendered_caller(root, profile, output)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{rel_path}: scaffold caller could not be rendered: {exc}")
+            continue
         if expected is None:
             errors.append(f"{rel_path}: profile {profile!r} no longer produces {output}")
         elif path.read_text(encoding="utf-8") != expected:
@@ -506,12 +675,55 @@ def _check_template_scaffold_parity(root: Path, errors: list[str]) -> None:
             )
 
 
-def _check_library_bootstrap(root: Path, errors: list[str]) -> None:
+def _check_status_bridge_contexts(root: Path, errors: list[str]) -> None:
+    """Keep caller bridge contexts derived from composed pipeline module data.
+
+    Release-branch CI is started with ``workflow_dispatch``. GitHub reports those
+    checks against the workflow run rather than the release PR, so each caller has a
+    no-code bridge that publishes the same required contexts to ``github.sha``. The
+    contexts must come from ``PipelineModule.status_check``; a copied string in one
+    caller must never silently diverge from branch protection.
+    """
+    from .core.composition import resolve_profile
+    from .core.registry import Registry
+
+    registry = Registry(root / "aviato" / "library")
+    for profile in _PROFILE_TEMPLATE_FILES:
+        source = f"aviato/library/scaffold/files/wf-{profile}.yml"
+        try:
+            expected = {
+                module.status_check
+                for module in resolve_profile(registry, profile).pipeline_modules
+                if module.status_check is not None
+            }
+            rendered = _rendered_caller(root, profile, ".github/workflows/aviato-ci.yml")
+            document = yaml.safe_load(rendered) if rendered is not None else None
+            bridge = document["jobs"]["status-bridge"] if isinstance(document, dict) else None
+            steps = bridge.get("steps", []) if isinstance(bridge, dict) else []
+            actual = [
+                context
+                for step in steps
+                if isinstance(step, dict)
+                and isinstance(step.get("env"), dict)
+                and isinstance((context := step["env"].get("STATUS_CONTEXT")), str)
+            ]
+        except Exception as exc:  # noqa: BLE001 - validation reports malformed source data
+            errors.append(f"{source} status bridge could not be validated: {exc}")
+            continue
+        if set(actual) != expected or len(actual) != len(expected):
+            errors.append(
+                f"{source} status bridge contexts {sorted(actual)} do not match resolved "
+                f"PipelineModule.status_check contexts; expected {sorted(expected)}"
+            )
+
+
+def _check_library_bootstrap(root: Path, repository: str, errors: list[str]) -> None:
     """The Library's own managed artifacts must bootstrap through local workflow refs (§5.10)."""
     from .core.declaration import load_declaration
     from .core.onboarding import resolved_artifacts
+    from .core.pathguard import confined_target
     from .core.registry import Registry
-    from .core.scaffold import ScaffoldItem, render_managed
+    from .core.scaffold import ScaffoldItem, read_sidecar, render_managed
 
     declaration_path = root / ".github" / "aviato.yaml"
     if not declaration_path.exists():
@@ -541,10 +753,17 @@ def _check_library_bootstrap(root: Path, errors: list[str]) -> None:
         return
 
     expected = {}
+    expected_seeds: set[str] = set()
     for artifact in artifacts:
         if artifact.seed_once:
+            expected_seeds.add(artifact.output)
             continue
-        item = ScaffoldItem(output=artifact.output, body=artifact.body, comment=artifact.comment)
+        item = ScaffoldItem(
+            output=artifact.output,
+            body=artifact.body,
+            comment=artifact.comment,
+            input_hash=artifact.input_hash,
+        )
         expected[artifact.output] = render_managed(item, profile=declaration.profile, version=declaration.version)
     if not expected:
         errors.append("Library bootstrap declaration resolves no managed artifacts (§5.10)")
@@ -556,9 +775,45 @@ def _check_library_bootstrap(root: Path, errors: list[str]) -> None:
             continue
         text = path.read_text(encoding="utf-8")
         if text != body:
+            # A pristine legacy marker is intentionally one safe sync away from the
+            # current marker grammar. Do not make the Library's own validation gate
+            # impossible to run during that migration, but accept only the legacy
+            # marker case: body/profile/version/hash safety must all still agree.
+            from .core.marker import content_hash, parse_marker_from_text, strip_marker_from_text
+
+            live_marker = parse_marker_from_text(text)
+            expected_marker = parse_marker_from_text(body)
+            live_body = strip_marker_from_text(text)
+            clean_legacy = (
+                live_marker is not None
+                and expected_marker is not None
+                and live_marker.input_hash is None
+                and live_marker.profile == expected_marker.profile
+                and live_marker.version == expected_marker.version
+                and live_marker.hash == content_hash(live_body)
+                and live_body == strip_marker_from_text(body)
+            )
+        else:
+            clean_legacy = True
+        if not clean_legacy:
             errors.append(f"{rel_path} is stale: it does not match the rendered Library bootstrap artifact (§5.10)")
-        if f"{LIBRARY_SLUG}/.github/workflows/" in text:
+        if f"{repository}/.github/workflows/" in text:
             errors.append(f"{rel_path} uses a released Aviato ref in bootstrap; use local workflow refs (§5.10)")
+
+    sidecar = read_sidecar(root)
+    if sidecar.status != "ok":
+        errors.append(f"Library seed sidecar is {sidecar.status}; explicitly rebaseline current seed outputs")
+    else:
+        missing_records = sorted(expected_seeds - sidecar.hashes.keys())
+        obsolete_records = sorted(sidecar.hashes.keys() - expected_seeds)
+        if missing_records or obsolete_records:
+            errors.append(
+                "Library seed sidecar does not exactly match resolved seed outputs: "
+                f"missing={missing_records}, obsolete={obsolete_records}"
+            )
+    for rel_path in sorted(expected_seeds):
+        if not confined_target(root, rel_path, operation="validate Library seed output").is_file():
+            errors.append(f"missing Library bootstrap seed artifact: {rel_path}")
 
 
 # Workflows that embed an inline `highest.py` reimplementation of the §8.14/§13.2 monotonic
@@ -661,12 +916,20 @@ def _check_monotonic_alias_parity(root: Path, errors: list[str]) -> None:
             )
             continue
         for candidate, existing in _MONOTONIC_CASES:
-            result = subprocess.run(
-                [sys.executable, "-c", snippet, candidate],
-                input="\n".join(existing),
-                capture_output=True,
-                text=True,
-            )
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-c", snippet, candidate],
+                    input="\n".join(existing),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            except subprocess.TimeoutExpired:
+                errors.append(
+                    f"{rel_path}: monotonic-alias parity snippet timed out after 5 seconds; "
+                    "inspect the inline highest.py guard for blocking or non-terminating code."
+                )
+                break
             inline = result.stdout.strip()
             expected = "true" if is_highest(candidate, existing) else "false"
             if inline != expected:
@@ -677,8 +940,51 @@ def _check_monotonic_alias_parity(root: Path, errors: list[str]) -> None:
                 )
 
 
+def _permission_set(block: object) -> set[str]:
+    if not isinstance(block, dict):
+        return set()
+    return {f"{key}: {value}" for key, value in block.items()}
+
+
+def _check_pypi_privilege_split(root: Path, errors: list[str]) -> None:
+    """Keep PyPI build and trusted-publisher privileges bound to their workflow identities."""
+    manifest = load_yaml(root / "aviato" / "library" / "pipelines.yaml")
+    module = manifest.get("pypi-publish")
+    if not isinstance(module, dict):
+        return
+
+    reusable_declared = set(module.get("reusable_privileges") or ())
+    publisher_declared = set(module.get("local_publisher_privileges") or ())
+    union_declared = set(module.get("privileges") or ())
+    reusable = load_yaml(root / ".github" / "workflows" / "reusable-pypi-publish.yml")
+    reusable_actual = _permission_set(reusable.get("permissions"))
+    try:
+        caller_body = _rendered_caller(root, "python-library", ".github/workflows/aviato-ci.yml")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"PyPI rendered consumer publisher caller could not be validated: {exc}")
+        return
+    caller = yaml.safe_load(caller_body) if caller_body is not None else {}
+    publish_job = (caller.get("jobs") or {}).get("pypi-publish") if isinstance(caller, dict) else None
+    publisher_actual = _permission_set(publish_job.get("permissions") if isinstance(publish_job, dict) else None)
+
+    if reusable_declared != reusable_actual:
+        errors.append(
+            "PyPI reusable build privileges do not match reusable-pypi-publish.yml "
+            f"(declared={sorted(reusable_declared)}, actual={sorted(reusable_actual)})"
+        )
+    if publisher_declared != publisher_actual:
+        errors.append(
+            "PyPI local publisher privileges do not match the rendered consumer publisher job "
+            f"(declared={sorted(publisher_declared)}, actual={sorted(publisher_actual)})"
+        )
+    if union_declared != reusable_declared | publisher_declared:
+        errors.append("PyPI pipeline privileges must equal reusable plus local publisher privileges")
+
+
 def validate(root: Path = REPO_ROOT) -> list[str]:
     errors: list[str] = []
+
+    _check_project_version_parity(root, errors)
 
     for rel_path in REQUIRED_FILES:
         if not (root / rel_path).exists():
@@ -689,6 +995,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     data_root = root / "aviato" / "library"
     try:
         policy = load_policy(data_root)
+        repository = library_repository(policy)
         load_ruleset_manifest(data_root)
     except Exception as exc:  # noqa: BLE001 - report validation failures without hiding context
         return [f"failed to load policy/manifest: {exc}"]
@@ -703,18 +1010,20 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_policy_examples(policy, errors)
     _check_release_pattern_drift(root, data_root, policy, errors)
     _check_workflow_yaml(root, errors)
-    _check_template_references(root, errors)
-    _check_release_workflow_contract(root, errors)
+    _check_template_references(root, repository, errors)
+    _check_release_workflow_contract(root, repository, errors)
     _check_baseline_settings_drift(root, policy, errors)
     _check_baseline_settings_keys(root, errors)
     _check_docs_caller_name_parity(root, errors)
-    _check_library_slug_copies(root, errors)
+    _check_library_repository_copies(root, policy, repository, errors)
     _check_scaffold_constant_parity(root, errors)
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
-    _check_action_pins(root, errors)
+    _check_action_pins(root, repository, errors)
     _check_template_scaffold_parity(root, errors)
-    _check_scaffold_workflow_yaml(root, errors)
-    _check_library_bootstrap(root, errors)
+    _check_status_bridge_contexts(root, errors)
+    _check_pypi_privilege_split(root, errors)
+    _check_scaffold_workflow_yaml(root, repository, errors)
+    _check_library_bootstrap(root, repository, errors)
     _check_monotonic_alias_parity(root, errors)
 
     return errors

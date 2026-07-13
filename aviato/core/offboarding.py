@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .errors import AviatoError
 from .marker import parse_marker_from_text, strip_marker_from_text
+from .pathguard import confined_target
 from .scaffold import atomic_write
 
 BASELINE_REMOVAL_WARNING = (
@@ -64,15 +65,29 @@ def offboard(root: Path, managed_outputs: Sequence[str], *, keep_files: bool) ->
     root = Path(root)
     result = OffboardingResult()
 
+    # Validate every prospective managed/static target before the first mutation.
+    # The guards are repeated immediately at each read/write/delete boundary below
+    # to avoid relying on this preflight as the only check.
+    preflight = {
+        output: confined_target(root, output, operation="preflight offboard target") for output in managed_outputs
+    }
+    declaration_output = ".github/aviato.yaml"
+    sidecar_output = ".github/aviato.seed.json"
+    preflight[declaration_output] = confined_target(
+        root, declaration_output, operation="preflight offboard declaration"
+    )
+    preflight[sidecar_output] = confined_target(root, sidecar_output, operation="preflight offboard sidecar")
+
     # Classify everything first (no mutation), so a read/parse problem aborts before
     # any file is changed rather than midway through (§2.5 managed-file safety).
     to_strip: list[tuple[str, Path, str]] = []
     to_remove: list[tuple[str, Path]] = []
     for output in managed_outputs:
-        target = root / output
+        target = confined_target(root, output, operation="read offboard target")
         if not target.is_file():
             continue
         try:
+            target = confined_target(root, output, operation="read offboard target")
             text = target.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             # N3: an AUTOMATION workflow that exists but can't be marker-verified must NOT be silently
@@ -100,20 +115,23 @@ def offboard(root: Path, managed_outputs: Sequence[str], *, keep_files: bool) ->
         else:
             to_remove.append((output, target))
 
-    for output, target, stripped in to_strip:
-        atomic_write(target, stripped)
+    for output, _target, stripped in to_strip:
+        atomic_write(root, output, stripped, operation="write offboard target")
         result.stripped.append(output)
-    for output, target in to_remove:
+    for output, _target in to_remove:
+        target = confined_target(root, output, operation="delete offboard target")
         target.unlink()
         result.removed.append(output)
 
-    declaration = root / ".github" / "aviato.yaml"
+    declaration = confined_target(root, declaration_output, operation="inspect offboard declaration")
     if declaration.is_file():
+        declaration = confined_target(root, declaration_output, operation="delete offboard declaration")
         declaration.unlink()
         result.declaration_removed = True
 
-    sidecar = root / ".github" / "aviato.seed.json"
+    sidecar = confined_target(root, sidecar_output, operation="inspect offboard sidecar")
     if sidecar.is_file():
+        sidecar = confined_target(root, sidecar_output, operation="delete offboard sidecar")
         sidecar.unlink()
         result.sidecar_removed = True
 

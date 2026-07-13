@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 import pytest
 
-from aviato.cli import main
+from aviato.cli import _recorded_versions, main
+from aviato.core.diagnosis import ExpectedArtifact as _ExpectedArtifact
+from aviato.core.errors import PathConfinementError
+
+ExpectedArtifact = partial(_ExpectedArtifact, input_hash="0" * 64)
 
 
 def _consumer(tmp_path: Path, pin: str) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text(f"profile: python-library\nversion: {pin}\n", encoding="utf-8")
+    (github / "aviato.yaml").write_text(
+        f"profile: python-library\nprofile-identity: aviato-profile/python-library/v1\nversion: {pin}\nvariables:\n"
+        "  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
     return tmp_path
 
 
@@ -24,13 +33,13 @@ def test_sync_refuses_incompatible_pin(tmp_path: Path, capsys: pytest.CaptureFix
 
 
 def test_sync_override_proceeds_despite_mismatch(tmp_path: Path) -> None:
-    rc = main(["sync", str(_consumer(tmp_path, "v1")), "--override-version-pin"])
+    rc = main(["sync", str(_consumer(tmp_path, "v1")), "--override-version-pin", "--rebaseline-seeds"])
     assert rc == 0
     assert (tmp_path / "ruff.toml").exists()
 
 
 def test_sync_compatible_pin_proceeds(tmp_path: Path) -> None:
-    rc = main(["sync", str(_consumer(tmp_path, "v0"))])
+    rc = main(["sync", str(_consumer(tmp_path, "v0")), "--rebaseline-seeds"])
     assert rc == 0
     assert (tmp_path / "ruff.toml").exists()
 
@@ -43,3 +52,13 @@ def test_sync_tolerates_non_utf8_managed_file(tmp_path: Path) -> None:
     (root / "ruff.toml").write_bytes(b"\xff\xfe# not valid utf-8 \x00\x80")
     rc = main(["sync", str(root)])  # must NOT raise UnicodeDecodeError
     assert rc in (0, 2)
+
+
+def test_recorded_versions_rejects_symlinked_artifact_parent(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "cfg.toml").write_text("outside\n", encoding="utf-8")
+    (tmp_path / "nested").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(PathConfinementError, match=r"read managed marker.*nested/cfg\.toml"):
+        _recorded_versions(tmp_path, [ExpectedArtifact("nested/cfg.toml", "expected\n")])

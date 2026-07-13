@@ -1,19 +1,26 @@
 from __future__ import annotations
 
-from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED, authorize
+from typing import cast
+
+from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED, Decision, authorize
 
 
-def _ok(**overrides):
+def _ok(
+    *,
+    actor_type: str | None = ACTOR_HUMAN,
+    consent_diff_id: str | None = "abc",
+    current_diff_id: str | None = "abc",
+    role_lookup_ok: bool = True,
+    role: str | None = ROLE_PRIVILEGED,
+) -> Decision:
     # review #16: core's authorize sees the NEUTRAL vocabulary the binding maps platform values to.
-    base = dict(
-        actor_type=ACTOR_HUMAN,
-        consent_diff_id="abc",
-        current_diff_id="abc",
-        role_lookup_ok=True,
-        role=ROLE_PRIVILEGED,
+    return authorize(
+        actor_type=actor_type,
+        consent_diff_id=consent_diff_id,
+        current_diff_id=cast(str, current_diff_id),
+        role_lookup_ok=role_lookup_ok,
+        role=role,
     )
-    base.update(overrides)
-    return authorize(**base)
 
 
 def test_allow_only_when_human_consent_current_and_admin() -> None:

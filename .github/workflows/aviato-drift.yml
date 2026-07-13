@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=5b416bda75a05aac385bef88c08766b80cd0b762c53a87f0e901f5e1b79c7578
+# aviato:managed profile=aviato-library version=0 hash=5b416bda75a05aac385bef88c08766b80cd0b762c53a87f0e901f5e1b79c7578 inputs=c87eec0cc6164b4a0fb591c6236ef87133960db010cc737ecb6d7c9680304085
 name: Aviato Drift Detection
 
 # Consumer-side scheduled automation (§5.5/§5.6). Detects file/settings drift and

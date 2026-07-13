@@ -6,8 +6,11 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- [med] The App Store environment reviewer gate (reusable-app-store-connect.yml:176) only checks that a `required_reviewers` rule EXISTS, not that its reviewers list is non-empty — an environment with an empty reviewers list passes the check but provides no protection. Match the Python check (`len(reviewers) > 0`). — FINDINGS #5 (narrowed) · .github/workflows/reusable-app-store-connect.yml:176; cf. aviato/github.py:228-232
-- [low] The App Store upload receipt is still a retention-limited (90-day) artifact; `if-no-files-found` now errors, but §13.4.7 wants the receipt in release notes/declaration for durable availability. — FINDINGS #34 · .github/workflows/reusable-app-store-connect.yml:474
+- (none)
+
+## Resolved by 2026-07-12 hardening plan
+
+- The environment gate requires a non-empty reviewer list, and a separate no-secret job persists the upload receipt as a release asset plus idempotent release-note evidence.
 
 ## Settled — do not reopen
 

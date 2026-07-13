@@ -17,6 +17,7 @@ def test_non_empty_diff_opens_issue_with_reconcile_command() -> None:
     assert "open_or_update_issue" in platform.call_names()
     _, args = next(c for c in platform.calls if c[0] == "open_or_update_issue")
     body = args[3]
+    assert isinstance(body, str)
     assert "reconcile" in body.lower()
 
 
@@ -67,7 +68,8 @@ def test_consent_oscillation_back_to_old_diff_requires_fresh_consent() -> None:
         issues={"k": Issue(key="k", open=True, consent_diff_id="STALE")},
     )
     run_settings_drift(platform, repo="o/r", desired_settings={"required_reviews": 2}, issue_key="k")
-    assert platform.get_issue("o/r", "k").consent_diff_id is None
+    issue = platform.get_issue("o/r", "k")
+    assert issue is not None and issue.consent_diff_id is None
 
 
 def test_drifted_ruleset_is_reported_even_with_clean_settings() -> None:
@@ -87,6 +89,7 @@ def test_drifted_ruleset_is_reported_even_with_clean_settings() -> None:
     assert outcome.diff_id is None  # no settings diff → no consent-bound id
     _, args = next(c for c in platform.calls if c[0] == "open_or_update_issue")
     body = args[3]
+    assert isinstance(body, str)
     assert "apply-rulesets o/r --apply --profile python-library" in body  # M-2: --profile included
     assert "Common: release tag format" in body
 
@@ -117,7 +120,8 @@ def test_resolved_empty_diff_voids_stale_consent() -> None:
     assert outcome.consent_voided is True
     assert "revoke_consent" in platform.call_names()
     # And the in-memory issue now carries no consent → a reappearance needs fresh consent.
-    assert platform.get_issue("o/r", "k").consent_diff_id is None
+    issue = platform.get_issue("o/r", "k")
+    assert issue is not None and issue.consent_diff_id is None
 
 
 def test_resolved_empty_diff_without_consent_does_not_revoke() -> None:

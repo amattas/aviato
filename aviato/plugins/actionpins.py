@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import re
 import shlex
+import tomllib
 from collections.abc import Set as AbstractSet
 from pathlib import Path
+
+from ..policy import library_repository as policy_library_repository
+from ..policy import load_policy
 
 # §11.3: third-party actions/tools must be pinned by commit digest (40-hex SHA).
 # GitHub's own namespaces are first-party and exempt.
@@ -12,31 +16,31 @@ _FIRST_PARTY_OWNERS = {"actions", "github"}
 # major advances on every release, §6.1/§11.3); its own reusable workflows are exempt.
 # Any OTHER org's reusable workflow is third-party and must be digest-pinned like an action
 # — a blanket `/.github/workflows/` exemption would let `other-org/repo/...@main` through.
-_LIBRARY_SLUG = "amattas/aviato"
-_LIBRARY_REUSABLE_PREFIX = f"{_LIBRARY_SLUG}/.github/workflows/"
 # R2-2-USES: `uses\s*:` — YAML accepts a space before the mapping colon (`uses : x`), so a literal
 # `uses:` match would let `uses : third/action@main` evade the digest-pin check.
 _USES_RE = re.compile(r"^\s*(?:-\s*)?uses\s*:\s*([^\s#]+)", re.MULTILINE)
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
-def _is_third_party(action_ref: str) -> bool:
+def _is_third_party(action_ref: str, library_repository: str) -> bool:
     # Local (``./...``) refs and the consumer's own Library reference are exempt; every other
     # owner — including a non-Library reusable-workflow ref — is third-party (§11.3).
-    if action_ref.startswith("./") or action_ref.startswith(_LIBRARY_REUSABLE_PREFIX):
+    library_reusable_prefix = f"{library_repository}/.github/workflows/"
+    if action_ref.startswith("./") or action_ref.startswith(library_reusable_prefix):
         return False
     owner = action_ref.split("/", 1)[0]
     return owner not in _FIRST_PARTY_OWNERS
 
 
-def unpinned_third_party_uses(text: str) -> list[str]:
+def unpinned_third_party_uses(text: str, *, library_repository: str | None = None) -> list[str]:
     """Return third-party ``uses:`` refs in a workflow not pinned to a commit SHA (§11.3)."""
+    repository = policy_library_repository(load_policy()) if library_repository is None else library_repository
     violations: list[str] = []
     for ref in _USES_RE.findall(text):
         if "@" not in ref:
             continue
         action, _, version = ref.partition("@")
-        if _is_third_party(action) and not _SHA_RE.match(version):
+        if _is_third_party(action, repository) and not _SHA_RE.match(version):
             violations.append(ref)
     return violations
 
@@ -907,7 +911,7 @@ def unpinned_tool_invocations(text: str) -> list[str]:
     return violations
 
 
-def action_pin_violations(root: Path) -> list[str]:
+def action_pin_violations(root: Path, *, library_repository: str | None = None) -> list[str]:
     """Scan a repo's workflows + scaffold bodies for §11.3 violations.
 
     Real `.github/workflows/` get zizmor (`unpinned-uses`/`unpinned-images`) for action/image
@@ -940,7 +944,7 @@ def action_pin_violations(root: Path) -> list[str]:
     scaffold_files = sorted(p for ext in ("wf-*.yml", "wf-*.yaml") for p in scaffold_dir.glob(ext))
     for path in scaffold_files:
         text = path.read_text(encoding="utf-8", errors="replace")
-        for ref in unpinned_third_party_uses(text):
+        for ref in unpinned_third_party_uses(text, library_repository=library_repository):
             if "{{" in ref:  # scaffold placeholder, resolved at scaffold time
                 continue
             violations.append(f"{path.name}: {ref}")
@@ -957,4 +961,19 @@ def action_pin_violations(root: Path) -> list[str]:
     for manifest in sorted(scaffold_dir.glob("pyproject*.toml.txt")):
         for pkg in unpinned_pyproject_extra_lines(manifest.read_text(encoding="utf-8", errors="replace")):
             violations.append(f"{manifest.name}: dev-extra requirement not pinned to an exact version: {pkg}")
+
+    # 6. The Library's own extras are installed by its CI just like the seeded manifests.
+    # Keep the build-system setuptools floor out of scope: the scanner is deliberately
+    # constrained to [project.optional-dependencies].
+    root_manifest = root / "pyproject.toml"
+    if root_manifest.is_file():
+        manifest_text = root_manifest.read_text(encoding="utf-8", errors="replace")
+        try:
+            build_requirements = set(tomllib.loads(manifest_text).get("build-system", {}).get("requires", []))
+        except (tomllib.TOMLDecodeError, AttributeError, TypeError):
+            build_requirements = set()
+        for pkg in unpinned_pyproject_extra_lines(manifest_text):
+            if pkg.startswith("setuptools") and pkg in build_requirements:
+                continue
+            violations.append(f"pyproject.toml: optional dependency not pinned to an exact version: {pkg}")
     return violations

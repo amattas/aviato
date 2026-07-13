@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=09aa9ec9067e5c2b9694408432f46d2c2090ce2ea9823267c51047e72f2eb4f3
+# aviato:managed profile=aviato-library version=0 hash=175fc56f10245391a3611008be0784d1caca98eb50bc3c1607f1fb3443a23fbe inputs=c87eec0cc6164b4a0fb591c6236ef87133960db010cc737ecb6d7c9680304085
 name: Aviato Docs
 
 # Multi-version Zensical docs publish (§13.3), versioned onto a docs branch by mike, opt-in via docs: true.
@@ -84,7 +84,7 @@ jobs:
       release-tag: ${{ needs.resolve.outputs.tag }}
 
   security:
-    needs: [resolve]
+    needs: [resolve, release-gate]
     if: ${{ needs.resolve.outputs.release == 'true' }}
     permissions:
       actions: read
@@ -93,20 +93,23 @@ jobs:
       security-events: write
     uses: ./.github/workflows/reusable-security-baseline.yml
     with:
-      ref: ${{ needs.resolve.outputs.tag }}
+      ref: refs/tags/${{ needs.resolve.outputs.tag }}
+      sha: ${{ needs.release-gate.outputs.gated-sha }}
       codeql-languages: "python"
 
   docs:
     needs: [resolve, release-gate, security]
     if: ${{ needs.resolve.outputs.release == 'true' }}
     permissions:
-      actions: read
       contents: write
+      pages: write
+      id-token: write
     uses: ./.github/workflows/reusable-docs-pages.yml
     with:
       working-directory: website
       release-tag: ${{ needs.resolve.outputs.tag }}
       gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
+      serve-pages: True
       docs-source-directory: "."
       docs-emit-command: |
         # §12.1 Python API reference (docstrings -> markdown) into the docs source tree.

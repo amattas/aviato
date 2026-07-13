@@ -35,6 +35,8 @@ def test_mergeable_drift_opens_identity_keyed_proposal() -> None:
     assert "open_or_update_proposal" in platform.call_names()
     _, args = next(c for c in platform.calls if c[0] == "open_or_update_proposal")
     branch, files = args[1], args[3]
+    assert isinstance(branch, str)
+    assert isinstance(files, dict)
     assert "ruff.toml" in files
     # §5.5/§8.11 convergence: the branch key is derived from the FULL expected output set
     # (so scan --fix and the scheduled job converge), NOT just the proposed subset. Pin both

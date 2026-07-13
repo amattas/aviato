@@ -1,18 +1,27 @@
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from pathlib import Path
+from typing import Never, cast
 
 import pytest
 
 from aviato import cli
+from aviato.core.ports import RulesetApplyResult
 from aviato.github import GitHubAPIError
 
 
-def _patch_apply(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+def _patch_apply(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
     """Capture every apply_rulesets call instead of touching GitHub."""
-    calls: list[dict] = []
+    calls: list[dict[str, object]] = []
 
-    def fake(slugs, *, apply, required_approvals=None, extra_status_checks=None):
+    def fake(
+        slugs: Sequence[str],
+        *,
+        apply: bool,
+        required_approvals: int | None = None,
+        extra_status_checks: Sequence[str] | None = None,
+    ) -> list[str]:
         calls.append(
             {"slugs": list(slugs), "apply": apply, "approvals": required_approvals, "checks": extra_status_checks}
         )
@@ -54,7 +63,7 @@ def test_apply_rulesets_warns_on_direct_apply(
 def test_apply_rulesets_maps_github_error_to_exit_1(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def boom(*a, **k):
+    def boom(*a: object, **k: object) -> Never:
         raise GitHubAPIError("repos/o/r/rulesets", 1, "nope")
 
     monkeypatch.setattr(cli, "apply_rulesets", boom)
@@ -68,7 +77,7 @@ def test_apply_rulesets_unknown_profile_exits_2(
 ) -> None:
     # A bad --profile fails composition (AviatoError) and must be a clean exit-2 operator
     # error, not an uncaught traceback — and must NOT reach apply_rulesets.
-    def must_not_run(*a, **k):
+    def must_not_run(*a: object, **k: object) -> Never:
         raise AssertionError("apply_rulesets must not be called when the profile is invalid")
 
     monkeypatch.setattr(cli, "apply_rulesets", must_not_run)
@@ -99,7 +108,24 @@ def test_apply_rulesets_rejects_malformed_slug(capsys: pytest.CaptureFixture[str
     assert "OWNER/REPO" in capsys.readouterr().err
 
 
-def test_apply_rulesets_missing_repos_file_is_clean_error(tmp_path, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize(
+    "slug",
+    ["a/b/c", "a/b?x", "a/b#x", " a/b", "a/b ", "-a/b", "a/-b", "a\\b", "a/b\n", "a/", "/b"],
+)
+def test_apply_rulesets_rejects_unsafe_slug_before_api(slug: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "apply_rulesets",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("API helper must not run")),
+    )
+
+    argv = ["apply-rulesets", "--apply"]
+    if slug.startswith("-"):
+        argv.append("--")
+    assert cli.main([*argv, slug]) == 2
+
+
+def test_apply_rulesets_missing_repos_file_is_clean_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # R3-13: a missing --repos-file is a clean operator error (exit 2 via main()), not a traceback.
     rc = cli.main(["apply-rulesets", "--repos-file", str(tmp_path / "nope.txt"), "--apply"])
     assert rc == 2
@@ -128,13 +154,13 @@ def test_apply_rulesets_streams_messages_before_a_later_failure(monkeypatch: pyt
     monkeypatch.setattr(rulesets, "render_all_rulesets", lambda **__: [{"name": "r"}])
     seen: list[str] = []
 
-    def fake_upsert(slug, payload, *, apply):
+    def fake_upsert(slug: str, payload: dict[str, object], *, apply: bool) -> str:
         if slug == "o/b":
             raise github.GitHubAPIError("rules", 500, "boom")
         return f"upserted on {slug}"
 
     monkeypatch.setattr(github, "upsert_ruleset", fake_upsert)
-    gen = rulesets.apply_rulesets(["o/a", "o/b"], apply=True)
+    gen = cast(Iterator[str], rulesets.apply_rulesets(["o/a", "o/b"], apply=True))
     with pytest.raises(github.GitHubAPIError):
         for msg in gen:
             seen.append(msg)
@@ -143,7 +169,7 @@ def test_apply_rulesets_streams_messages_before_a_later_failure(monkeypatch: pyt
 
 def test_apply_rulesets_value_error_is_clean_exit_not_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
     # R2-4-5: a malformed ruleset (ValueError from render) exits 1 with a clean message, not a traceback.
-    def boom(slugs, **__):
+    def boom(slugs: Sequence[str], **__: object) -> Never:
         raise ValueError("unknown patch key")
 
     monkeypatch.setattr(cli, "apply_rulesets", boom)
@@ -157,7 +183,7 @@ def test_command_run_missing_binary_raises_commanderror(monkeypatch: pytest.Monk
 
     from aviato import command
 
-    def boom(*a, **k):
+    def boom(*a: object, **k: object) -> Never:
         raise FileNotFoundError("gh")
 
     monkeypatch.setattr(subprocess, "run", boom)
@@ -171,7 +197,7 @@ def test_apply_rulesets_deferred_render_value_error_caught_through_real_path(mon
     # apply_rulesets (inside its try), so it's caught → clean exit 1, no traceback.
     from aviato import rulesets
 
-    def boom(**__):
+    def boom(**__: object) -> Never:
         raise ValueError("malformed ruleset manifest")
 
     monkeypatch.setattr(rulesets, "render_all_rulesets", boom)
@@ -184,9 +210,41 @@ def test_apply_rulesets_renders_eagerly_at_call_not_on_iteration(monkeypatch: py
     # hide behind a caller that forgets to iterate.
     from aviato import rulesets
 
-    def boom(**__):
+    def boom(**__: object) -> Never:
         raise ValueError("malformed")
 
     monkeypatch.setattr(rulesets, "render_all_rulesets", boom)
     with pytest.raises(ValueError):
         rulesets.apply_rulesets(["o/r"], apply=False)  # raises at call, before any iteration
+
+
+def test_apply_rulesets_prints_loud_degraded_warning_only_after_successful_fallback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "apply_rulesets",
+        lambda *_, **__: iter([RulesetApplyResult("Created Common: release tag format on o/r", ("tag_name_pattern",))]),
+    )
+
+    assert cli.main(["apply-rulesets", "o/r", "--apply"]) == 0
+    captured = capsys.readouterr()
+    assert "Created Common: release tag format on o/r" in captured.out
+    assert "DEGRADED" in captured.err
+    assert "o/r" in captured.err
+    assert "tag_name_pattern" in captured.err
+
+
+def test_apply_rulesets_reports_earlier_success_before_later_failure_with_structured_result(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def stream(*_: object, **__: object) -> Iterator[RulesetApplyResult]:
+        yield RulesetApplyResult("Created first on o/a", ())
+        raise GitHubAPIError("repos/o/b/rulesets", 1, "boom")
+
+    monkeypatch.setattr(cli, "apply_rulesets", stream)
+    assert cli.main(["apply-rulesets", "o/a", "--repo", "o/b", "--apply"]) == 1
+    captured = capsys.readouterr()
+    assert "Created first on o/a" in captured.out
+    assert "GitHub API error" in captured.err
+    assert "transaction" not in (captured.out + captured.err).lower()

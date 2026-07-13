@@ -1,9 +1,12 @@
 import argparse
+from pathlib import Path
+
+import pytest
 
 from aviato.cli import cmd_lint_actions
 
 
-def test_lint_actions_fails_closed_when_zizmor_missing(tmp_path, monkeypatch):
+def test_lint_actions_fails_closed_when_zizmor_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A missing zizmor must surface as a violation + non-zero exit, never a silent clean pass.
 
     Fail-closed (§5.14): an unrunnable pin gate reads as broken. action_pin_violations appends a
@@ -19,7 +22,7 @@ def test_lint_actions_fails_closed_when_zizmor_missing(tmp_path, monkeypatch):
     assert rc == 1
 
 
-def test_lint_actions_clean_repo_exits_zero(tmp_path, monkeypatch):
+def test_lint_actions_clean_repo_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from aviato.plugins import zizmor_scan
 
     monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: [])
