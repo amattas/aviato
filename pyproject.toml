@@ -58,12 +58,9 @@ testpaths = ["tests"]
 [tool.mypy]
 files = ["aviato", "tests"]
 strict = true
+mypy_path = ["typings"]
 # Local build litter must not alias the package (duplicate-module errors).
 exclude = ["^build/", "^_wheelout/", "^dist/"]
-
-[[tool.mypy.overrides]]
-module = "bashlex.*"
-ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 120

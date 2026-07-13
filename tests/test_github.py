@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import TextIO, cast
+from typing import Protocol, cast
 
 import pytest
 
@@ -14,6 +14,21 @@ from aviato.rulesets import render_all_rulesets
 
 JsonValue = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject = dict[str, JsonValue]
+
+
+class _NamedFile(Protocol):
+    name: str
+
+
+def _record_named_files[**P, TNamedFile: _NamedFile](
+    fn: Callable[P, TNamedFile], created: list[Path]
+) -> Callable[P, TNamedFile]:
+    def recording(*args: P.args, **kwargs: P.kwargs) -> TNamedFile:
+        handle = fn(*args, **kwargs)
+        created.append(Path(handle.name))
+        return handle
+
+    return recording
 
 
 def _tag_ruleset_payload() -> JsonObject:
@@ -301,14 +316,11 @@ def test_upsert_ruleset_removes_temp_file_when_json_serialization_fails(
     monkeypatch.setattr(github, "repository_rulesets", lambda slug: [])
     created: list[Path] = []
     tempfile_module = tempfile
-    original = cast(Callable[..., TextIO], tempfile_module.NamedTemporaryFile)
-
-    def tracking_tempfile(*args: object, **kwargs: object) -> TextIO:
-        handle = original(*args, **kwargs)
-        created.append(Path(handle.name))
-        return handle
-
-    monkeypatch.setattr(tempfile_module, "NamedTemporaryFile", tracking_tempfile)
+    monkeypatch.setattr(
+        tempfile_module,
+        "NamedTemporaryFile",
+        _record_named_files(tempfile_module.NamedTemporaryFile, created),
+    )
     monkeypatch.setattr(
         github,
         "run",

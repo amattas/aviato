@@ -4,19 +4,27 @@ from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
 
 import pytest
 
 from aviato import cli
 from aviato.cli import _scan_has_file_drift, main
-from aviato.core.diagnosis import DiagnosisReport, diagnose
+from aviato.core.diagnosis import diagnose
 from aviato.core.errors import AviatoError
 from aviato.core.file_drift_flow import _PROPOSABLE, FileDriftOutcome
 from aviato.core.fleet import RepoScan
 from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
 from aviato.core.scaffold import scaffold
 from aviato.github_platform import GitHubPlatform
+
+
+def _record_keyword_arguments[**P, R](fn: Callable[P, R], calls: list[dict[str, object]]) -> Callable[P, R]:
+    def recording(*args: P.args, **kwargs: P.kwargs) -> R:
+        calls.append(dict(kwargs))
+        return fn(*args, **kwargs)
+
+    return recording
+
 
 ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 
@@ -151,14 +159,8 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
 
     monkeypatch.setattr(cli, "_version_pin_error", lambda *a, **k: None)  # not under test here
     monkeypatch.setattr(cli, "remote_url", lambda root: "https://github.com/o/r.git")
-    original_diagnose = cast(Callable[..., DiagnosisReport], diagnose)
     diagnosis_calls: list[dict[str, object]] = []
-
-    def capture_diagnose(*args: object, **kwargs: object) -> DiagnosisReport:
-        diagnosis_calls.append(kwargs)
-        return original_diagnose(*args, **kwargs)
-
-    monkeypatch.setattr(cli, "diagnose", capture_diagnose)
+    monkeypatch.setattr(cli, "diagnose", _record_keyword_arguments(diagnose, diagnosis_calls))
 
     def fake_run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
         assert "clone" in cmd, f"scan --fix ran an unexpected command in/near the operator tree: {cmd}"

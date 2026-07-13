@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Never
+from typing import Any, Never, Protocol
 
 import pytest
 
@@ -26,8 +26,26 @@ from aviato.github_platform import (
 )
 
 
-def _record_run(calls: list[list[str]]) -> Callable[..., subprocess.CompletedProcess[str]]:
-    def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
+class _Run(Protocol):
+    def __call__(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: str | Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
+def _record_run(calls: list[list[str]]) -> _Run:
+    def fake_run(
+        command: Sequence[str],
+        *,
+        cwd: str | Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        cmd = list(command)
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -742,9 +760,11 @@ def test_to_repository_payload_subset_and_shape() -> None:
     assert to_repository_payload({}) == {}
 
 
-def _probe_optional(
-    *, has_issues: bool, head_sha: str | None, artifacts: list[dict[str, Any]]
-) -> Callable[..., object | None]:
+class _OptionalJSON(Protocol):
+    def __call__(self, endpoint: str, *, default: object = None) -> object | None: ...
+
+
+def _probe_optional(*, has_issues: bool, head_sha: str | None, artifacts: list[dict[str, Any]]) -> _OptionalJSON:
     def optional(endpoint: str, **__: object) -> object | None:
         if endpoint == "repos/o/r":
             return {"has_issues": has_issues, "default_branch": "main"}

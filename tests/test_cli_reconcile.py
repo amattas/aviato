@@ -10,7 +10,7 @@ from aviato.cli import _desired_settings, main
 from aviato.command import CommandError
 from aviato.core.composition import resolve_profile
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
-from aviato.core.ports import Issue
+from aviato.core.ports import Issue, Platform
 from aviato.core.registry import Registry
 from aviato.core.settings_drift_flow import diff_identity
 from aviato.core.settingsdrift import classify_settings
@@ -33,11 +33,30 @@ class _FakePlatform:
 
     def apply_settings(
         self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
-    ) -> None:
+    ) -> list[str]:
         self.applied.append(payload)
+        return []
 
     def comment_issue(self, repo: str, key: str, body: str) -> None:
         pass
+
+    def read_rulesets(self, repo: str) -> list[dict[str, Any]]:
+        return []
+
+    def open_or_update_issue(self, repo: str, key: str, title: str, body: str) -> str:
+        return key
+
+    def revoke_consent(self, repo: str, key: str, diff_id: str) -> None:
+        pass
+
+    def open_or_update_proposal(self, repo: str, branch: str, title: str, files: dict[str, str], body: str) -> str:
+        return branch
+
+    def create_repo(self, repo: str, *, private: bool) -> None:
+        pass
+
+
+_platform_contract: Platform = _FakePlatform(settings={}, issue=None)
 
 
 def _consumer(tmp_path: Path) -> Path:
@@ -148,12 +167,14 @@ def test_reconcile_apply_write_failure_is_clean_failure_not_traceback(
         consent_role=ROLE_PRIVILEGED,
         consent_role_lookup_ok=True,
     )
-    platform = _FakePlatform(settings=live, issue=issue)
 
-    def _boom(repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None) -> None:
-        raise CommandError(["gh", "api", "--method", "PUT", "..."], 1, "protection PUT rejected")
+    class FailingApplyPlatform(_FakePlatform):
+        def apply_settings(
+            self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
+        ) -> list[str]:
+            raise CommandError(["gh", "api", "--method", "PUT", "..."], 1, "protection PUT rejected")
 
-    platform.apply_settings = _boom  # type: ignore[method-assign]
+    platform = FailingApplyPlatform(settings=live, issue=issue)
     _wire(monkeypatch, platform)
 
     rc = main(["reconcile", str(root), "drift", "--confirm", current_id])

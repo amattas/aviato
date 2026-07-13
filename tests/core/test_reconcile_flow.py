@@ -174,7 +174,7 @@ def test_apply_audit_comment_includes_destructive_removals() -> None:
         confirmed_diff_id=diff_id,
     )
     assert outcome.action == "apply"
-    comments = [args[2] for name, args in platform.calls if name == "comment_issue"]
+    comments = [args[2] for name, args in platform.calls if name == "comment_issue" and isinstance(args[2], str)]
     assert any("legacy_restriction" in body for body in comments), comments
 
 
@@ -205,7 +205,7 @@ def test_apply_failure_is_recorded_on_issue_then_reraised() -> None:
             recorded_version="1.0.0",
             confirmed_diff_id=diff_id,
         )
-    comments = [args[2] for name, args in platform.calls if name == "comment_issue"]
+    comments = [args[2] for name, args in platform.calls if name == "comment_issue" and isinstance(args[2], str)]
     assert any("fail" in body.lower() for body in comments), comments
 
 
@@ -305,6 +305,7 @@ def test_apply_audit_reports_skipped_unavailable_security_toggle() -> None:
         confirmed_diff_id=diff_id,
     )
     audit = next(args[2] for name, args in platform.calls if name == "comment_issue")
+    assert isinstance(audit, str)
     assert "Applied diff" in audit
     assert "SKIPPED unavailable" in audit and "secret_scanning" in audit
 

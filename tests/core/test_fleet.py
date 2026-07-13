@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
 
@@ -11,6 +11,14 @@ from aviato.core.onboarding import materialize_items
 from aviato.core.registry import Registry
 from aviato.core.scaffold import scaffold
 from aviato.paths import MODULE_SOURCE_ROOT
+
+
+def _record_keyword_arguments[**P, R](fn: Callable[P, R], calls: list[dict[str, object]]) -> Callable[P, R]:
+    def recording(*args: P.args, **kwargs: P.kwargs) -> R:
+        calls.append(dict(kwargs))
+        return fn(*args, **kwargs)
+
+    return recording
 
 
 def _make_consumer(root: Path, *, scaffold_all: bool) -> None:
@@ -75,11 +83,7 @@ def test_fleet_passes_profile_derived_health_inputs(tmp_path: Path, monkeypatch:
     _make_consumer(consumer, scaffold_all=False)
     calls: list[dict[str, object]] = []
 
-    def capture(*args: object, **kwargs: object) -> object:
-        calls.append(kwargs)
-        return original_diagnose(*cast(tuple[Any, ...], args), **cast(dict[str, Any], kwargs))
-
-    monkeypatch.setattr(fleet, "diagnose", capture)
+    monkeypatch.setattr(fleet, "diagnose", _record_keyword_arguments(original_diagnose, calls))
     markers = ("reusable-consumer-automation",)
     registry = Registry(MODULE_SOURCE_ROOT)
     scan_fleet([consumer], registry, drift_automation_markers=markers)

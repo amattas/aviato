@@ -1,17 +1,33 @@
 import json
 import shutil as _shutil
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 
 from aviato.plugins import zizmor_scan
 
 
-def _fake_run(stdout: str, returncode: int = 0) -> Callable[..., subprocess.CompletedProcess[str]]:
+class _Run(Protocol):
+    def __call__(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: str | Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
+def _fake_run(stdout: str, returncode: int = 0) -> _Run:
     def _run(
-        command: Sequence[str], *, cwd: Path | None = None, check: bool = True
+        command: Sequence[str],
+        *,
+        cwd: str | Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, returncode, stdout, "")
 

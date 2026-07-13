@@ -2,15 +2,23 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
 from aviato import cli
-from aviato.core.diagnosis import DiagnosisReport, diagnose
+from aviato.core.diagnosis import diagnose
+from aviato.core.ports import Issue, Platform
 from aviato.core.registry import Registry
-from aviato.github_platform import GitHubPlatform
 from aviato.paths import MODULE_SOURCE_ROOT
+
+
+def _record_keyword_arguments[**P, R](fn: Callable[P, R], calls: list[dict[str, object]]) -> Callable[P, R]:
+    def recording(*args: P.args, **kwargs: P.kwargs) -> R:
+        calls.append(dict(kwargs))
+        return fn(*args, **kwargs)
+
+    return recording
 
 
 class FakePlatform:
@@ -37,7 +45,7 @@ class FakePlatform:
 
         return render_all_rulesets(extra_status_checks=_profile_status_checks("python-library"))
 
-    def get_issue(self, repo: str, key: str) -> None:
+    def get_issue(self, repo: str, key: str) -> Issue | None:
         return None
 
     def open_or_update_issue(self, repo: str, key: str, title: str, body: str) -> str:
@@ -47,15 +55,27 @@ class FakePlatform:
     def comment_issue(self, repo: str, key: str, body: str) -> None:
         self.calls.append(("comment_issue", (repo, key, body)))
 
+    def revoke_consent(self, repo: str, key: str, diff_id: str) -> None:
+        self.calls.append(("revoke_consent", (repo, key, diff_id)))
+
     def open_or_update_proposal(self, repo: str, branch: str, title: str, files: dict[str, str], body: str) -> str:
         self.calls.append(("open_or_update_proposal", (repo, branch, title, files, body)))
         return branch
 
-    def apply_settings(self, repo: str, payload: dict[str, Any]) -> None:
-        self.calls.append(("apply_settings", (repo, payload)))
+    def apply_settings(
+        self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
+    ) -> list[str]:
+        self.calls.append(("apply_settings", (repo, payload, expected_live)))
+        return []
+
+    def create_repo(self, repo: str, *, private: bool) -> None:
+        self.calls.append(("create_repo", (repo, private)))
 
     def call_names(self) -> list[str]:
         return [name for name, _ in self.calls]
+
+
+_platform_contract: Platform = FakePlatform()
 
 
 def _consumer(tmp_path: Path) -> Path:
@@ -150,14 +170,8 @@ def test_drift_report_file_only_skips_settings(
     fake = FakePlatform(settings={"required_reviews": 1})
     monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
     monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:owner/repo.git")
-    original_diagnose = cast(Callable[..., DiagnosisReport], diagnose)
     diagnosis_calls: list[dict[str, object]] = []
-
-    def capture_diagnose(*args: object, **kwargs: object) -> DiagnosisReport:
-        diagnosis_calls.append(kwargs)
-        return original_diagnose(*args, **kwargs)
-
-    monkeypatch.setattr("aviato.cli.diagnose", capture_diagnose)
+    monkeypatch.setattr("aviato.cli.diagnose", _record_keyword_arguments(diagnose, diagnosis_calls))
     rc = cli.main(["drift-report", str(consumer), "--file-only"])
     out = capsys.readouterr().out
     assert rc == 0
@@ -287,10 +301,9 @@ def test_drifted_rulesets_honors_required_reviews_override() -> None:
     live = render_all_rulesets(required_approvals=2, extra_status_checks=checks)
     platform = FakePlatform(rulesets=live)
     # With the override threaded through, desired==live → NO drift.
-    bound = cast(GitHubPlatform, platform)
-    assert _drifted_rulesets("o/r", bound, required_approvals=2, extra_status_checks=checks) == ()
+    assert _drifted_rulesets("o/r", platform, required_approvals=2, extra_status_checks=checks) == ()
     # Without it (policy default 1), desired (1) != live (2) → the branch ruleset reports drift.
-    assert _drifted_rulesets("o/r", bound, extra_status_checks=checks) != ()
+    assert _drifted_rulesets("o/r", platform, extra_status_checks=checks) != ()
 
 
 def test_drifted_rulesets_uses_resolved_checks_not_base_profile() -> None:
@@ -302,4 +315,4 @@ def test_drifted_rulesets_uses_resolved_checks_not_base_profile() -> None:
 
     live = render_all_rulesets(extra_status_checks=[])
     platform = FakePlatform(rulesets=live)
-    assert _drifted_rulesets("o/r", cast(GitHubPlatform, platform), extra_status_checks=[]) == ()
+    assert _drifted_rulesets("o/r", platform, extra_status_checks=[]) == ()

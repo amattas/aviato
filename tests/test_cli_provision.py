@@ -7,6 +7,7 @@ import pytest
 
 from aviato import __version__, cli
 from aviato.cli import main
+from aviato.core.ports import Issue, Platform
 from aviato.core.provision import ProvisionOutcome
 
 
@@ -16,9 +17,38 @@ class _FakePlatform:
         # R2-4-3: apply_settings now returns the §17 toggles it surfaced-and-skipped.
         self.skipped = skipped or []
 
-    def apply_settings(self, repo: str, payload: dict[str, Any]) -> list[str]:
+    def apply_settings(
+        self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
+    ) -> list[str]:
         self.applied.append((repo, payload))
         return list(self.skipped)
+
+    def read_settings(self, repo: str) -> dict[str, Any]:
+        return {}
+
+    def read_rulesets(self, repo: str) -> list[dict[str, Any]]:
+        return []
+
+    def get_issue(self, repo: str, key: str) -> Issue | None:
+        return None
+
+    def open_or_update_issue(self, repo: str, key: str, title: str, body: str) -> str:
+        return key
+
+    def comment_issue(self, repo: str, key: str, body: str) -> None:
+        pass
+
+    def revoke_consent(self, repo: str, key: str, diff_id: str) -> None:
+        pass
+
+    def open_or_update_proposal(self, repo: str, branch: str, title: str, files: dict[str, str], body: str) -> str:
+        return branch
+
+    def create_repo(self, repo: str, *, private: bool) -> None:
+        pass
+
+
+_platform_contract: Platform = _FakePlatform()
 
 
 def _consumer(tmp_path: Path) -> Path:

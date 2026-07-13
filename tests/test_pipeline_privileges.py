@@ -151,3 +151,10 @@ def test_library_typecheck_covers_package_and_tests_in_source_and_bootstrap() ->
     caller = _load_workflow("aviato-ci.yml")
     ci = _mapping(_mapping(caller["jobs"])["ci"])
     assert _mapping(ci["with"])["typecheck-command"] == expected
+
+
+def test_mypy_uses_local_bashlex_types_without_import_relaxation() -> None:
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "ignore_missing_imports" not in pyproject
+    assert 'mypy_path = ["typings"]' in pyproject
+    assert (REPO_ROOT / "typings" / "bashlex" / "__init__.pyi").is_file()

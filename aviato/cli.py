@@ -29,6 +29,7 @@ from .core.model import ResolvedSet, VariableSpec
 from .core.offboarding import offboard as offboard_repo
 from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, resolved_artifacts
 from .core.pathguard import confined_target
+from .core.ports import Platform
 from .core.provision import provision_repo
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
@@ -405,7 +406,7 @@ def _deployment_environments(resolved: ResolvedSet, render_inputs: Mapping[str, 
 
 def _drifted_rulesets(
     slug: str,
-    platform: GitHubPlatform,
+    platform: Platform,
     *,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,

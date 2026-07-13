@@ -17,6 +17,7 @@ def test_non_empty_diff_opens_issue_with_reconcile_command() -> None:
     assert "open_or_update_issue" in platform.call_names()
     _, args = next(c for c in platform.calls if c[0] == "open_or_update_issue")
     body = args[3]
+    assert isinstance(body, str)
     assert "reconcile" in body.lower()
 
 
@@ -88,6 +89,7 @@ def test_drifted_ruleset_is_reported_even_with_clean_settings() -> None:
     assert outcome.diff_id is None  # no settings diff → no consent-bound id
     _, args = next(c for c in platform.calls if c[0] == "open_or_update_issue")
     body = args[3]
+    assert isinstance(body, str)
     assert "apply-rulesets o/r --apply --profile python-library" in body  # M-2: --profile included
     assert "Common: release tag format" in body
 

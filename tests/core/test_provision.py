@@ -45,7 +45,9 @@ def test_provision_happy_path_orders_create_minimal_scaffold_full() -> None:
     assert order == ["scaffold"]
     # the first apply is minimal (no PR gate), the second is the full desired set.
     first_apply = next(args for name, args in platform.calls if name == "apply_settings")
-    assert first_apply[1]["requires_pull_request"] is False
+    payload = first_apply[1]
+    assert isinstance(payload, dict)
+    assert payload["requires_pull_request"] is False
 
 
 def test_provision_reports_partial_state_when_full_protection_fails() -> None:
