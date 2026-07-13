@@ -56,9 +56,13 @@ as **DEGRADED**; deletion and non-fast-forward protections, conditions,
 enforcement, and the no-bypass posture remain intact. No other API, authentication,
 network, malformed-response, or validation failure is downgraded. A later failure
 does not roll back earlier successful mutations, which are reported as they occur.
-The correlated response may be a structured type-error object or the exact
-whole-entry string `Invalid rule 'tag_name_pattern':` inside `errors`; string
-matching examines one error entry at a time and never combines entries.
+The correlated response may be a structured type-error object or a whole-entry
+string inside `errors`. The observed literal was
+`Invalid rule 'tag_name_pattern':`; the accepted whole-entry grammar is
+`^\s*invalid\s+rule\s+["']tag_name_pattern["']\s*:\s*$`. Matching is
+case-insensitive, accepts either single or double quotes, and permits
+surrounding whitespace, including terminal whitespace after the colon. Matching
+examines one error entry at a time and never combines entries.
 
 ```mermaid
 flowchart TD

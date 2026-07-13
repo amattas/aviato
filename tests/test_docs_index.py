@@ -208,7 +208,16 @@ def test_pr60_rollout_records_preserve_verified_live_rollout_boundary() -> None:
 
     onboarding = (ROOT / "docs/specifications/modules/onboarding/flow.md").read_text(encoding="utf-8")
     assert "Invalid rule 'tag_name_pattern':" in onboarding
-    assert "one error entry at a time" in onboarding
+    required_string_entry_contract = {
+        r"""^\s*invalid\s+rule\s+["']tag_name_pattern["']\s*:\s*$""",
+        "case-insensitive",
+        "either single or double quotes",
+        "surrounding whitespace",
+        "terminal whitespace after the colon",
+        "one error entry at a time",
+        "never combines entries",
+    }
+    assert sorted(term for term in required_string_entry_contract if term not in onboarding) == []
 
     plan = (ROOT / "docs/superpowers/plans/2026-07-12-repository-integrity-release-hardening.md").read_text(
         encoding="utf-8"
