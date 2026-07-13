@@ -1103,11 +1103,11 @@
         python scripts/regen-templates.py --check
         python scripts/sync-docs-toolchain-pins.py --check
         mypy --strict aviato tests
-        PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest --cov=aviato --cov-branch --cov-report=term-missing -q
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_cov.plugin --cov=aviato --cov-branch --cov-report=term-missing -q
         AVIATO_STRICT_TOOLS=1 ./scripts/validate.sh
         aviato doctor . --no-remote-probe
 
-  Expected: zero type errors, all tests pass, strict validation exits 0 with no skipped tools, package/wheel version parity passes, and local doctor has no broken artifact/integrity prerequisite.
+  Expected: zero type errors, all tests pass, strict validation exits 0 with no skipped tools, and package/wheel version parity passes. Local doctor must report every managed artifact clean and local drift automation present; with `--no-remote-probe`, remote health fields remain `unknown` and the command exits nonzero by design because unknown remote evidence is fail-closed.
 
 - [ ] **Step 3: Open the implementation PR and verify check topology.** Confirm normal PR runs create real check runs; dispatch-only bridge does not run on an ordinary PR; CodeQL high/critical, dependency, secret, and common lint gates all appear. Do not merge on a partial/ambiguous result.
 
