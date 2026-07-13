@@ -6,7 +6,7 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- (none)
+- [external verification] Complete the remaining process/profile definition-of-done and operator-prerequisite evidence across supported targets. — trace: §9, §16, §17
 
 
 ## Settled — do not reopen

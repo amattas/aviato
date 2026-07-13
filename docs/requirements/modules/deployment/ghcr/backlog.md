@@ -6,7 +6,7 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- (none)
+- [external verification] Publish a disposable multi-architecture image and verify scanned-byte digest identity, SBOM/provenance, and monotonic aliases in GHCR. — trace: §13.2, SEC-005
 
 
 ## Settled — do not reopen

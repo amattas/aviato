@@ -163,6 +163,31 @@ def test_completed_superpowers_artifacts_are_pruned_but_active_plan_remains() ->
     assert (root / "plans/2026-07-12-repository-integrity-release-hardening.md").is_file()
 
 
+def test_active_hardening_plan_matches_current_rollout_state() -> None:
+    path = ROOT / "docs/superpowers/plans/2026-07-12-repository-integrity-release-hardening.md"
+    text = path.read_text(encoding="utf-8")
+    required = {
+        "PR #60",
+        "PR #59",
+        "release PR #42",
+        "temporary admin bypass",
+        "docs: false",
+        "SEC-007",
+        "Dependabot",
+        "TestPyPI",
+    }
+    forbidden = {
+        ".github/aviato.seed.json",
+        ".github/workflows/aviato-docs.yml",
+        "website/zensical.toml",
+        "website/requirements.txt",
+        "docs/requirements/modules/onboarding/flow.md",
+        "docs/requirements/modules/security/scanning.md",
+    }
+    assert sorted(term for term in required if term not in text) == []
+    assert sorted(term for term in forbidden if term in text) == []
+
+
 SPECIFICATION_MOVES = (
     ("6", "core/consumer-contract.md", "core/consumer-contract.md"),
     ("5.2", "modules/onboarding/flow.md", "modules/onboarding/flow.md"),
@@ -275,3 +300,48 @@ def test_traceability_local_links_resolve() -> None:
             relative = target.split("#", 1)[0]
             assert relative, f"{identifier}: anchor-only evidence is not precise enough"
             assert (MATRIX.parent / relative).resolve().exists(), f"{identifier}: broken link {target}"
+
+
+@pytest.mark.parametrize(
+    ("identifier", "required_tokens"),
+    (
+        ("§2.1", ("aviato/core/composition.py", "tests/core/test_composition.py")),
+        ("§2.3", (".github/workflows/reusable-release.yml", "tests/test_pipeline_privileges.py")),
+        ("§2.7", ("aviato/core/consent.py", "tests/core/test_consent.py")),
+        ("§2.8", ("aviato/core/reconcile_flow.py", "tests/core/test_reconcile_flow.py")),
+        ("§2.11", ("aviato/core/provision.py", "tests/core/test_provision.py")),
+        ("§2.13", (".github/workflows/reusable-security-baseline.yml", "tests/test_workflow_guards.py")),
+        ("§2.14", ("aviato/core/ports.py", "tests/core/test_ports.py")),
+        ("SEC-003", ("actions/runs/29219938630",)),
+        ("SEC-010", ("pull/59",)),
+    ),
+)
+def test_high_risk_traceability_rows_use_precise_evidence(identifier: str, required_tokens: tuple[str, ...]) -> None:
+    row = " ".join(_matrix_rows()[identifier])
+    assert [token for token in required_tokens if token not in row] == []
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    (
+        "§9",
+        "§11.6",
+        "§13.1",
+        "§13.2",
+        "§13.3",
+        "§13.4",
+        "§13.5",
+        "§16",
+        "§17",
+        "SEC-001",
+        "SEC-005",
+        "SEC-007",
+        "SEC-010",
+    ),
+)
+def test_actionable_traceability_rows_link_to_an_owning_backlog(identifier: str) -> None:
+    notes = _matrix_rows()[identifier][6]
+    targets = [target for target in re.findall(r"\[[^]]+\]\(([^)]+backlog\.md)\)", notes)]
+    assert len(targets) == 1, f"{identifier}: expected one owning backlog link"
+    backlog = (MATRIX.parent / targets[0]).resolve()
+    assert identifier in backlog.read_text(encoding="utf-8"), f"{identifier}: owning backlog omits trace ID"

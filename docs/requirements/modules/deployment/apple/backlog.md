@@ -6,7 +6,7 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- (none)
+- [external verification] Prove required-reviewer protection, secret confinement, upload receipt persistence, and cleanup against App Store Connect. — trace: §13.4, SEC-001
 
 
 ## Settled — do not reopen

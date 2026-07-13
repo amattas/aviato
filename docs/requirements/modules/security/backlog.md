@@ -6,7 +6,9 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- (none)
+- [live rollout] Merge approved PR #60 using the temporary admin bypass only after explicit operator authorization, reapply rulesets, and verify zero bypass actors plus exact CodeQL/check thresholds. — trace: SEC-007
+- [live verification] Use canary PR #59 to prove the applied ruleset blocks the critical CodeQL alert, then record the durable run/alert evidence and clean up the canary at the authorized checkpoint. — trace: SEC-010
+- [live rollout] Enable Dependabot security updates and run `aviato doctor` after ruleset convergence. — trace: SEC-010
 
 
 ## Settled — do not reopen
