@@ -326,6 +326,7 @@ def _check_docs_caller_name_parity(root: Path, errors: list[str]) -> None:
         compare(docs_rel, f"{scaffold}/wf-{profile}.yml")
         compare(docs_rel, _PROFILE_TEMPLATE_FILES[profile])
 
+
 # finding 41: every unavoidable data/workflow copy of the Library repository is anchored on
 # policy.yml. Runtime code reads the policy accessor directly and is deliberately absent here.
 # A repo rename/transfer must update all of them together or the sites desync pairwise
