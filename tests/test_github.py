@@ -256,11 +256,19 @@ def test_upsert_ruleset_retries_precise_unsupported_tag_metadata_422_once(
     assert not any(path.exists() for path in payload_paths)
 
 
+@pytest.mark.parametrize(
+    "structured",
+    (
+        '{"message":"Validation Failed","errors":['
+        '{"field":"rules/2/type","value":"tag_name_pattern","code":"invalid"}]}',
+        '{"message":"Validation Failed","errors":["Invalid rule \'tag_name_pattern\': "]}',
+    ),
+    ids=("object-entry", "live-string-entry"),
+)
 def test_upsert_ruleset_reads_structured_unsupported_tag_error_from_stdout(
     monkeypatch: pytest.MonkeyPatch,
+    structured: str,
 ) -> None:
-    # Live `gh api` wrote only the generic HTTP status to stderr and the structured
-    # validation body to stdout. The fallback classifier needs both streams.
     payload = _tag_ruleset_payload()
     monkeypatch.setattr(
         github,
@@ -268,13 +276,16 @@ def test_upsert_ruleset_reads_structured_unsupported_tag_error_from_stdout(
         lambda slug: [{"name": "Common: release tag format", "target": "tag", "id": 42}],
     )
     calls: list[list[str]] = []
-    structured = (
-        '{"message":"Validation Failed","errors":['
-        '{"field":"rules/2/type","value":"tag_name_pattern","code":"invalid"}]}'
-    )
+    submitted: list[JsonObject] = []
+    payload_paths: list[Path] = []
+    payload_modes: list[int] = []
 
     def fake_run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
         calls.append(cmd)
+        submitted.append(_capture_payload(cmd))
+        path = Path(cmd[cmd.index("--input") + 1])
+        payload_paths.append(path)
+        payload_modes.append(path.stat().st_mode & 0o777)
         if len(calls) == 1:
             return subprocess.CompletedProcess(cmd, 1, structured, "gh: Validation Failed (HTTP 422)")
         return subprocess.CompletedProcess(cmd, 0, "{}", "")
@@ -285,6 +296,11 @@ def test_upsert_ruleset_reads_structured_unsupported_tag_error_from_stdout(
 
     assert result.degraded_rules == ("tag_name_pattern",)
     assert len(calls) == 2
+    assert submitted[0] == payload
+    rules = cast(list[JsonObject], payload["rules"])
+    assert submitted[1] == {**payload, "rules": [rule for rule in rules if rule["type"] != "tag_name_pattern"]}
+    assert payload_modes == [0o600, 0o600]
+    assert not any(path.exists() for path in payload_paths)
 
 
 @pytest.mark.parametrize(
@@ -335,6 +351,14 @@ def test_unsupported_tag_metadata_classifier_accepts_correlated_rule_type_reject
         '{"field":"rules/4/type","value":"deletion","code":"unsupported"}]} (HTTP 422)',
         'For rules/2/parameters/pattern, "tag_name_pattern" is not a valid value. (HTTP 422)',
         'For conditions/ref_name, "tag_name_pattern" is unsupported. (HTTP 422)',
+        'gh: Validation Failed (HTTP 422)\n{"message":"Validation Failed","errors":["Invalid rule \'deletion\': "]}',
+        "gh: Validation Failed (HTTP 422)\n"
+        '{"message":"Validation Failed","errors":["Invalid field \'tag_name_pattern\': "]}',
+        "gh: Validation Failed (HTTP 422)\n"
+        '{"message":"Validation Failed","errors":["Invalid rule \'tag_name_pattern\': malformed regex"]}',
+        "gh: Validation Failed (HTTP 422)\n"
+        '{"message":"Validation Failed","errors":["Invalid rule", "\'tag_name_pattern\': "]}',
+        '{"message":"Validation Failed","errors":["Invalid rule \'tag_name_pattern\': "]}',
     ],
 )
 def test_unsupported_tag_metadata_classifier_rejects_uncorrelated_or_non_type_errors(stderr: str) -> None:

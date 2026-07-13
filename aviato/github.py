@@ -374,6 +374,10 @@ def _unsupported_tag_metadata_rule(stderr: str) -> bool:
         re.compile(rf"{repository_rule_type}[^\n;]{{0,80}}{tag}[^\n;]{{0,40}}{rejection}", re.IGNORECASE),
     )
     path_rejection = re.compile(rf"rules/\d+/type\b[^\n;]{{0,80}}{tag}[^\n;]{{0,50}}{rejection}", re.IGNORECASE)
+    exact_string_rejection = re.compile(
+        r'\s*invalid\s+rule\s+["\']tag_name_pattern["\']\s*:\s*',
+        re.IGNORECASE,
+    )
 
     def text_entry_matches(entry: str) -> bool:
         return bool(path_rejection.search(entry) or any(pattern.search(entry) for pattern in exact_type_rejections))
@@ -389,6 +393,10 @@ def _unsupported_tag_metadata_rule(stderr: str) -> bool:
             parsed = None
         if isinstance(parsed, dict) and isinstance(parsed.get("errors"), list):
             for error in parsed["errors"]:
+                if isinstance(error, str):
+                    if exact_string_rejection.fullmatch(error):
+                        return True
+                    continue
                 if not isinstance(error, dict):
                     continue
                 field = error.get("field")
