@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "docs" / "requirements" / "README.md"
@@ -202,21 +203,62 @@ def test_active_hardening_plan_matches_current_rollout_state() -> None:
     assert "After PR #60 merges" not in normalized_plan
 
 
-def test_pr60_rollout_records_preserve_verified_live_rollout_boundary() -> None:
+def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
+    declaration = yaml.safe_load((ROOT / ".github/aviato.yaml").read_text(encoding="utf-8"))
+    assert declaration["overrides"]["settings"]["default_branch"] == {"required_reviews": 0}
+
     backlog = (ROOT / "docs/requirements/modules/security/backlog.md").read_text(encoding="utf-8")
     open_work = backlog.split("## Open", 1)[1].split("## Settled", 1)[0]
     assert "SEC-007" not in open_work
+    settled = backlog.split("## Settled — do not reopen", 1)[1]
+    assert "`required_reviews: 0`" in settled
+    assert "standing bypass actors" in settled
+    assert "recurring admin merges" in settled
 
     sec007 = _matrix_rows()["SEC-007"]
     assert sec007[2] == "verified"
+    assert ".github/aviato.yaml" in sec007[4]
     assert "rules/17482301" in sec007[5]
     assert "rules/17483804" in sec007[5]
+    assert "pull/62" in sec007[5]
+    assert "required review count of zero" in sec007[6]
+    assert "no independent eligible reviewer" in sec007[6]
 
     controls = (ROOT / "docs/security/controls.md").read_text(encoding="utf-8")
     control = controls.split("## SEC-007", 1)[1].split("\n## ", 1)[0]
     normalized_control = " ".join(control.split())
     assert "Live readback on 2026-07-13 verified zero bypass actors" in normalized_control
     assert "exact CodeQL and required-check thresholds" in normalized_control
+    assert "not bypass permission" in normalized_control
+    assert "exactly one eligible reviewer" in normalized_control
+    assert "required review count of zero" in normalized_control
+    assert "restore the default of one required approval" in normalized_control
+
+    threat_model = (ROOT / "docs/security/threat-model.md").read_text(encoding="utf-8")
+    threat006 = threat_model.split("## THREAT-006", 1)[1].split("\n## ", 1)[0]
+    assert "accepted absence of independent human review" in " ".join(threat006.split())
+
+    onboarding = (ROOT / "docs/specifications/modules/onboarding/flow.md").read_text(encoding="utf-8")
+    exception = onboarding.split("**Solo-maintainer review exception (normative):**", 1)[1].split(
+        "\nFor `python-library`", 1
+    )[0]
+    normalized_exception = " ".join(exception.split())
+    required_contract = {
+        "`required_reviews: 0`",
+        "no independent eligible reviewer",
+        "not bypass authority",
+        "pull-request",
+        "required-check",
+        "CodeQL",
+        "review-thread",
+        "stale-review",
+        "deletion",
+        "non-fast-forward",
+        "active-enforcement",
+        "no-bypass",
+        "before or in the same settings change that makes another reviewer eligible",
+    }
+    assert sorted(term for term in required_contract if term not in normalized_exception) == []
 
 
 def test_onboarding_documents_complete_tag_rejection_string_entry_contract() -> None:

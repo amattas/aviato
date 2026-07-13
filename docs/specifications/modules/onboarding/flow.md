@@ -37,6 +37,18 @@ only for intentional offline/test scaffolds and must be named as such.
 **Guards:** never change an already-declared profile to a different one without
 an explicit migrate override; enumerate files left untouched (seed-once,
 unmanaged) in the proposal.
+**Solo-maintainer review exception (normative):**
+Full protection resolves its required-review count from the profile plus the
+consumer declaration. The profile default remains one approval. A repository
+may declare `overrides.settings.default_branch.required_reviews` as
+`required_reviews: 0` only while it has no independent eligible reviewer and
+the sole eligible reviewer cannot approve their own proposal. This is a
+liveness exception, not bypass authority: the pull-request, required-check,
+CodeQL, review-thread, stale-review, deletion, non-fast-forward,
+active-enforcement, and no-bypass protections remain unchanged. Remove the
+override before or in the same settings change that makes another reviewer
+eligible, restoring the profile default of one approval without an unprotected
+interval.
 For `python-library`, the managed CI caller includes the consumer-local `pypi`
 environment job required by PyPI Trusted Publishing. Register that exact caller
 path and environment with PyPI/TestPyPI after onboarding. The reusable build

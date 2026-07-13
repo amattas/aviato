@@ -8,3 +8,9 @@ variables:
   # finding 38: strict type-check scoped to the package (the shared caller default
   # checks '.', which would pull the not-yet-strict tests into the gate).
   typecheck-command: python -m mypy --strict aviato tests
+overrides:
+  settings:
+    default_branch:
+      # Solo-maintainer liveness exception: remove this override before or in the
+      # same settings change that makes another independent reviewer eligible.
+      required_reviews: 0

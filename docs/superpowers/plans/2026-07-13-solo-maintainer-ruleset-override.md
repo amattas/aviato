@@ -26,6 +26,7 @@
 **Files:**
 - Modify: `.github/aviato.yaml`
 - Modify: `tests/test_docs_index.py`
+- Modify: `tests/test_cli_apply_rulesets.py`
 - Modify: `docs/specifications/modules/onboarding/flow.md`
 - Modify: `docs/security/threat-model.md`
 - Modify: `docs/security/controls.md`
@@ -47,7 +48,7 @@ that:
 
 ```python
 declaration = yaml.safe_load((ROOT / ".github/aviato.yaml").read_text(encoding="utf-8"))
-assert declaration["overrides"]["settings"]["default_branch"]["required_reviews"] == 0
+assert declaration["overrides"]["settings"]["default_branch"] == {"required_reviews": 0}
 ```
 
 The same test must require the onboarding specification to name
@@ -55,6 +56,9 @@ The same test must require the onboarding specification to name
 protections, and the reversal trigger; SEC-007 to distinguish the exception from
 bypass permission; THREAT-006 to record the accepted lack of independent human
 review; and the SEC-007 traceability row to link the declaration and PR #62.
+Add one distinct CLI integration test that passes Aviato's actual declaration to
+`apply-rulesets` and proves the resolved zero plus all three checks reach the
+ruleset apply boundary.
 
 - [ ] **Step 2: Run the focused test and verify RED**
 
@@ -98,26 +102,19 @@ PATH="/Users/amattas/GitHub/aviato/.venv/bin:$PATH" \
 Expected: all selected tests PASS, including the extended SEC-007 governance
 test and existing zero-approval propagation tests.
 
-- [ ] **Step 5: Reconcile and prune completed Superpowers artifacts**
+- [ ] **Step 5: Reconcile durable decisions**
 
-Add both temporary artifact paths to the completed-artifact guard in
-`tests/test_docs_index.py`, delete this plan and its design, and confirm every
-durable statement is present in the specification, threat model, control,
-traceability matrix, or active rollout plan. Preserve both existing SEC-010
-security backlog items unchanged.
+Record the rejected standing-bypass and recurring-admin-merge alternatives in
+the security backlog's settled decisions. Preserve both existing SEC-010 open
+items unchanged. Defer pruning until the live evidence is reconciled.
 
-- [ ] **Step 6: Run independent review and the strict local gate**
+- [ ] **Step 6: Run independent review and the focused pre-live gate**
 
 Have a fresh reviewer inspect the complete amendment for scope, security, test
 non-redundancy, documentation ownership, and exact retained ruleset fields.
-Resolve any Critical or Important finding, then run:
-
-```bash
-PATH="/Users/amattas/GitHub/aviato/.venv/bin:$PATH" \
-  AVIATO_STRICT_TOOLS=1 ./scripts/validate.sh
-```
-
-Expected: every tool runs, no skips are reported, and the full suite passes.
+Resolve any Critical or Important finding. The focused suite and exact render
+from Step 4 are the pre-live safety gate; the strict full gate runs after the
+final live evidence update so it is not repeated on stale inputs.
 
 - [ ] **Step 7: Apply from the declaration and verify exact live state**
 
@@ -135,7 +132,20 @@ conditions, required checks, CodeQL thresholds, thread resolution, stale-review
 dismissal, deletion, and non-fast-forward rules match the pre-change snapshot;
 and the tag ruleset remains immutable with no additional degradation.
 
-- [ ] **Step 8: Commit, push once, and merge normally**
+- [ ] **Step 8: Reconcile evidence, prune, verify, commit, push once, and merge normally**
+
+Update SEC-007 and the active hardening plan with the exact live zero-review
+readback. Add both temporary artifact paths to the completed-artifact guard,
+delete this plan and its design, and confirm every durable statement is present
+in the specification, threat model, control, traceability matrix, settled
+decision, or active rollout plan. Run a fresh final review and the strict gate:
+
+```bash
+PATH="/Users/amattas/GitHub/aviato/.venv/bin:$PATH" \
+  AVIATO_STRICT_TOOLS=1 ./scripts/validate.sh
+```
+
+Expected: every tool runs, no skips are reported, and the full suite passes.
 
 Commit the final amendment, push `codex/tag-ruleset-string-422` once, wait for
 all PR #62 checks, and confirm `reviewDecision` no longer blocks the PR. Merge

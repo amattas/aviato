@@ -62,6 +62,15 @@ verified zero bypass actors on the
 and required-check thresholds, and branch/tag immutability; tag metadata-pattern
 omission is the only degraded capability.
 
+Aviato's own declaration uses a required review count of zero because the
+repository currently has exactly one eligible reviewer, who cannot approve
+their own PR #62. This liveness exception is not bypass permission: the bypass
+actor list remains empty, and PR, required-check, CodeQL, review-thread,
+stale-review, deletion, non-fast-forward, and active-enforcement protections
+remain. Before or in the same settings change that makes another reviewer
+eligible, remove the declaration override to restore the default of one
+required approval.
+
 ## SEC-008 — Prevent secret persistence
 
 Addresses THREAT-007. Secret-typed variables cannot enter declarations or
