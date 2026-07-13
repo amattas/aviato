@@ -15,7 +15,6 @@ from aviato.paths import REPO_ROOT
 
 _SOURCE = Path("aviato/library/docs-toolchain.yaml")
 _OUTPUTS = (
-    Path("website/requirements.txt"),
     Path("starter/docs-site/requirements.txt"),
     Path("aviato/library/scaffold/files/docs-requirements.txt.txt"),
 )
@@ -57,9 +56,8 @@ def _render_outputs(source: Path) -> dict[Path, str]:
         f"# aviato:managed profile=aviato-library version=0 hash={content_hash(managed_body)} inputs={_INPUT_HASH}\n"
     )
     return {
-        _OUTPUTS[0]: marker + managed_body,
-        _OUTPUTS[1]: _requirements(pins, starter=True),
-        _OUTPUTS[2]: managed_body,
+        _OUTPUTS[0]: _requirements(pins, starter=True),
+        _OUTPUTS[1]: managed_body,
     }
 
 

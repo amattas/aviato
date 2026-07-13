@@ -4,10 +4,8 @@ name: aviato-library-sc
 templates:
   - wf-ci-python-library
   - wf-drift
-  # Self-docs (operator decision 2026-06): the Library publishes its own versioned
-  # Zensical site through the same §13.3 pipeline consumers get — one docs version
-  # per release, matching the §2.6 pin model. Bootstrap renders the docs caller
-  # through local workflow refs like the CI caller.
+  # Optional §13.3 capability for a Library-profile consumer. Aviato's own
+  # declaration sets docs:false, so these conditional artifacts are not rendered.
   - wf-docs-python-library
   - zensical-config
   - docs-intro

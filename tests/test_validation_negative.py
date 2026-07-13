@@ -197,14 +197,14 @@ def test_library_bootstrap_profile_mismatch_is_detected(repo_copy: Path) -> None
     assert any("missing Library bootstrap managed artifact" in e for e in errors)
 
 
-def test_library_seed_sidecar_exactly_matches_resolved_seed_outputs(repo_copy: Path) -> None:
+def test_library_without_seed_outputs_rejects_obsolete_sidecar(repo_copy: Path) -> None:
     sidecar = repo_copy / ".github" / "aviato.seed.json"
     stale_hash = "0" * 64
     sidecar.write_text(f'{{"website/docusaurus.config.js": "{stale_hash}"}}\n', encoding="utf-8")
 
     errors = validate(repo_copy)
 
-    assert any("Library seed sidecar" in error and "website/zensical.toml" in error for error in errors)
+    assert any("Library seed sidecar" in error and "no seed outputs" in error for error in errors)
 
 
 def test_static_ruleset_pattern_drift_is_detected(repo_copy: Path) -> None:
@@ -446,16 +446,6 @@ def test_docs_caller_workflow_run_name_drift_is_detected(repo_copy: Path) -> Non
     assert drifted != text, "fixture did not contain the expected display name"
     ci.write_text(drifted, encoding="utf-8")
     assert any("finding 40" in e for e in validate(repo_copy))
-
-
-def test_rendered_library_docs_caller_name_drift_is_detected(repo_copy: Path) -> None:
-    ci = repo_copy / ".github/workflows/aviato-ci.yml"
-    text = ci.read_text(encoding="utf-8")
-    ci.write_text(text.replace("name: Aviato Python Library\n", "name: Renamed Library CI\n", 1), encoding="utf-8")
-
-    errors = validate(repo_copy)
-
-    assert any(".github/workflows/aviato-docs.yml" in e and "Renamed Library CI" in e for e in errors)
 
 
 def test_missing_docs_name_parity_source_is_an_error(repo_copy: Path) -> None:

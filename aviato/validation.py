@@ -326,11 +326,6 @@ def _check_docs_caller_name_parity(root: Path, errors: list[str]) -> None:
         compare(docs_rel, f"{scaffold}/wf-{profile}.yml")
         compare(docs_rel, _PROFILE_TEMPLATE_FILES[profile])
 
-    # The Library is also a rendered consumer of its own scaffold. Keep the live
-    # workflow_run coupling checked rather than assuming marker/template parity catches it.
-    compare(".github/workflows/aviato-docs.yml", ".github/workflows/aviato-ci.yml")
-
-
 # finding 41: every unavoidable data/workflow copy of the Library repository is anchored on
 # policy.yml. Runtime code reads the policy accessor directly and is deliberately absent here.
 # A repo rename/transfer must update all of them together or the sites desync pairwise
@@ -499,7 +494,6 @@ def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
                 )
             expected_requirements = [f"zensical=={toolchain['zensical']}", f"mike @ {toolchain['mike']}"]
             for rel_path in (
-                "website/requirements.txt",
                 "starter/docs-site/requirements.txt",
                 "aviato/library/scaffold/files/docs-requirements.txt.txt",
             ):
@@ -801,9 +795,11 @@ def _check_library_bootstrap(root: Path, repository: str, errors: list[str]) -> 
             errors.append(f"{rel_path} uses a released Aviato ref in bootstrap; use local workflow refs (§5.10)")
 
     sidecar = read_sidecar(root)
-    if sidecar.status != "ok":
+    if not expected_seeds and sidecar.status != "missing":
+        errors.append("Library seed sidecar exists but the declaration resolves no seed outputs")
+    elif expected_seeds and sidecar.status != "ok":
         errors.append(f"Library seed sidecar is {sidecar.status}; explicitly rebaseline current seed outputs")
-    else:
+    elif expected_seeds:
         missing_records = sorted(expected_seeds - sidecar.hashes.keys())
         obsolete_records = sorted(sidecar.hashes.keys() - expected_seeds)
         if missing_records or obsolete_records:

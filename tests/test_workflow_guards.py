@@ -47,6 +47,20 @@ def _rendered_python_library_workflow() -> JsonDict:
     return loaded
 
 
+def _rendered_python_library_docs_workflow() -> JsonDict:
+    artifacts = resolved_artifacts(
+        Registry(MODULE_SOURCE_ROOT),
+        "python-library",
+        _TEMPLATE_EXAMPLE_VARS["python-library"],
+        pin="1",
+        docs=True,
+    )
+    body = next(a.body for a in artifacts if a.output == ".github/workflows/aviato-docs.yml")
+    loaded = yaml.safe_load(body)
+    assert isinstance(loaded, dict)
+    return loaded
+
+
 def test_serializing_workflows_declare_per_repo_concurrency() -> None:
     # review #4/#26: the scheduled drift run, the release run, and the deploy publishes must
     # SERIALIZE per repo (queue, never cancel) so concurrent runs can't race a force-push / alias
@@ -372,10 +386,10 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
     assert wf["concurrency"]["cancel-in-progress"] is False
 
 
-def test_rendered_library_docs_caller_enables_pages_and_grants_only_call_union() -> None:
-    caller = _load("aviato-docs.yml")
+def test_rendered_consumer_docs_caller_defaults_pages_off_and_grants_only_call_union() -> None:
+    caller = _rendered_python_library_docs_workflow()
     docs = caller["jobs"]["docs"]
-    assert docs["with"]["serve-pages"] is True
+    assert docs["with"]["serve-pages"] is False
     assert docs["permissions"] == {
         "contents": "write",
         "pages": "write",
@@ -1236,11 +1250,6 @@ def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
 
 def test_docs_security_ref_uses_full_tag_and_release_gate_sha() -> None:
     """Out-of-band docs scans must use the exact target already accepted by the release gate."""
-    local_security = _load("aviato-docs.yml")["jobs"]["security"]
-    assert "release-gate" in local_security["needs"]
-    assert local_security["with"]["ref"] == "refs/tags/${{ needs.resolve.outputs.tag }}"
-    assert local_security["with"]["sha"] == "${{ needs.release-gate.outputs.gated-sha }}"
-
     for caller in sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml")):
         body = caller.read_text(encoding="utf-8")
         security_block = body[body.index("\n  security:") : body.index("\n  docs:")]
