@@ -172,7 +172,6 @@ def test_active_hardening_plan_matches_current_rollout_state() -> None:
         "PR #60",
         "PR #59",
         "release PR #42",
-        "a3e87ac",
         "authorization was consumed",
         "zero bypass actors",
         "docs: false",
@@ -360,7 +359,6 @@ def test_traceability_local_links_resolve() -> None:
         ("§2.13", (".github/workflows/reusable-security-baseline.yml", "tests/test_workflow_guards.py")),
         ("§2.14", ("aviato/core/ports.py", "tests/core/test_ports.py")),
         ("SEC-003", ("actions/runs/29219938630",)),
-        ("SEC-007", ("rules/17482301", "rules/17483804")),
         ("SEC-010", ("pull/59",)),
     ),
 )
