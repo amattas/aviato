@@ -268,6 +268,14 @@ def test_release_gate_threads_resolved_sha_through_later_queries() -> None:
         assert step.get("env", {}).get("GATED_SHA") == output_expression, f"{name} must consume gated-sha"
 
 
+def test_release_gate_gated_sha_shell_names_do_not_trigger_shellcheck_sc2153() -> None:
+    verify = _release_gate_step("Verify tag points at default branch")
+    script = str(verify["run"])
+
+    assert 'gated_sha="$(git rev-parse "${GATED_SHA}^{commit}")"' not in script
+    assert 'gated_commit="$(git rev-parse "${GATED_SHA}^{commit}")"' in script
+
+
 def test_language_ci_contract_parity() -> None:
     # §2.14 (finding 27): every language CI exposes the SAME command contract —
     # unsupported steps carry an empty command + disabled default, never a missing input.

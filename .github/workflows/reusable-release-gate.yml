@@ -129,17 +129,17 @@ jobs:
           # ANY unrelated push landed on the default branch in that window. The §5.9 invariant is
           # "the gated commit IS on the default branch's history" — is-ancestor is the correct check
           # (handles tip-equality AND the post-CI-push case). Reject only when off the branch.
-          gated_sha="$(git rev-parse "${GATED_SHA}^{commit}")"
+          gated_commit="$(git rev-parse "${GATED_SHA}^{commit}")"
           branch_sha="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
 
-          if ! git merge-base --is-ancestor "${gated_sha}" "${branch_sha}"; then
-            echo "::error::${RESOLVED_TAG} (${gated_sha}) is not reachable from origin/${DEFAULT_BRANCH} (${branch_sha})."
+          if ! git merge-base --is-ancestor "${gated_commit}" "${branch_sha}"; then
+            echo "::error::${RESOLVED_TAG} (${gated_commit}) is not reachable from origin/${DEFAULT_BRANCH} (${branch_sha})."
             exit 1
           fi
           if git rev-parse -q --verify "refs/tags/${RESOLVED_TAG}" >/dev/null; then
             tag_sha="$(git rev-parse "refs/tags/${RESOLVED_TAG}^{commit}")"
-            if [ "${tag_sha}" != "${gated_sha}" ]; then
-              echo "::error::Tag ${RESOLVED_TAG} (${tag_sha}) does not point at the gated commit ${gated_sha}."
+            if [ "${tag_sha}" != "${gated_commit}" ]; then
+              echo "::error::Tag ${RESOLVED_TAG} (${tag_sha}) does not point at the gated commit ${gated_commit}."
               exit 1
             fi
           fi
