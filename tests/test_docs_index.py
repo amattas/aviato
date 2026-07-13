@@ -15,6 +15,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "docs" / "requirements" / "README.md"
+MATRIX = ROOT / "docs" / "requirements" / "traceability.md"
 CODE_ROOT = ROOT / "aviato"
 
 LOAD_BEARING_README_TERMS = {
@@ -186,3 +187,66 @@ def test_specifications_index_defines_document_ownership() -> None:
     text = (ROOT / "docs/specifications/README.md").read_text(encoding="utf-8")
     required = {"precise", "testable", "Requirements", "Architecture", "Security", "§"}
     assert sorted(term for term in required if term not in text) == []
+
+
+def _matrix_rows() -> dict[str, list[str]]:
+    rows: dict[str, list[str]] = {}
+    for line in MATRIX.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("|") or line.startswith("|---") or line.startswith("| ID "):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        assert len(cells) == 7, f"traceability row must have 7 fields: {line}"
+        assert cells[0] not in rows, f"duplicate traceability ID: {cells[0]}"
+        rows[cells[0]] = cells
+    return rows
+
+
+def _headed_ids(path: Path, prefix: str) -> set[str]:
+    pattern = re.compile(rf"^## ({re.escape(prefix)}-[0-9]{{3}})\b", re.MULTILINE)
+    return set(pattern.findall(path.read_text(encoding="utf-8")))
+
+
+def test_security_records_cross_link_threats_controls_and_architecture() -> None:
+    threat_model = ROOT / "docs/security/threat-model.md"
+    controls = ROOT / "docs/security/controls.md"
+    architecture = ROOT / "docs/architecture/security.md"
+    assert threat_model.is_file()
+    assert controls.is_file()
+    assert architecture.is_file()
+    assert _headed_ids(threat_model, "THREAT")
+    assert _headed_ids(controls, "SEC")
+    for path in (threat_model, controls, architecture):
+        text = path.read_text(encoding="utf-8")
+        assert "THREAT-" in text, path
+        assert "SEC-" in text, path
+        assert "traceability.md" in text, path
+
+
+def test_traceability_has_exactly_one_row_per_requirement_threat_and_control() -> None:
+    rows = _matrix_rows()
+    expected = {f"§{section}" for section in _index()}
+    expected |= _headed_ids(ROOT / "docs/security/threat-model.md", "THREAT")
+    expected |= _headed_ids(ROOT / "docs/security/controls.md", "SEC")
+    assert set(rows) == expected
+
+
+def test_traceability_states_are_canonical_and_evidence_gated() -> None:
+    allowed = {"proposed", "accepted", "implemented", "verified", "blocked", "retired"}
+    for identifier, cells in _matrix_rows().items():
+        state = cells[2]
+        assert state in allowed, f"{identifier}: invalid state {state!r}"
+        if state in {"implemented", "verified"}:
+            assert cells[4] not in {"", "—"}, f"{identifier}: {state} without implementation evidence"
+        if state == "verified":
+            assert cells[5] not in {"", "—"}, f"{identifier}: verified without verification evidence"
+
+
+def test_traceability_local_links_resolve() -> None:
+    link = re.compile(r"\[[^]]+\]\(([^)]+)\)")
+    for identifier, cells in _matrix_rows().items():
+        for target in link.findall(" ".join(cells[1:])):
+            if "://" in target:
+                continue
+            relative = target.split("#", 1)[0]
+            assert relative, f"{identifier}: anchor-only evidence is not precise enough"
+            assert (MATRIX.parent / relative).resolve().exists(), f"{identifier}: broken link {target}"

@@ -8,6 +8,7 @@ in code docstrings remain valid.
 - Requirements (outcomes, constraints, acceptance): `docs/requirements/`
 - Specifications (precise process and plug-in behavior): `docs/specifications/`
 - Architecture (current structure): `docs/architecture/`
+- Security threats and controls: `docs/security/`
 
 `tests/test_docs_index.py` guards that every § cited in `aviato/**/*.py`
 resolves through the index, including behavioral sections now classified as

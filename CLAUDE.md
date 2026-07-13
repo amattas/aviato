@@ -140,7 +140,7 @@ wheel and a pip-installed `aviato` can render rulesets — §5.6/§11.3). Loader
 - every release workflow in `RELEASE_WORKFLOWS` (embeds the literal in its `TAG_PATTERN` env so validation is pinned to the same ref)
 - rendered ruleset payloads (injected at render time, not stored)
 
-`aviato/validation.py` enforces these copies stay in sync via drift checks. **When you change the tag pattern or any embedded constant, update `policy.yml` and let validation tell you every copy that drifted — never treat docs or a workflow as the source of truth.** Docs (`README.md`, `docs/requirements/`, `docs/specifications/`, `docs/architecture/`) describe policy but are not authoritative runtime data.
+`aviato/validation.py` enforces these copies stay in sync via drift checks. **When you change the tag pattern or any embedded constant, update `policy.yml` and let validation tell you every copy that drifted — never treat docs or a workflow as the source of truth.** Docs (`README.md`, `docs/requirements/`, `docs/specifications/`, `docs/architecture/`, `docs/security/`) describe policy but are not authoritative runtime data.
 
 ### Rendering pipeline (policy → rulesets)
 

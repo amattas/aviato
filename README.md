@@ -320,5 +320,5 @@ are installed, so Apple secrets are not exposed to arbitrary versioning logic.
 
 See `docs/requirements/` for outcomes and constraints,
 `docs/specifications/` for precise testable behavior, `docs/architecture/` for
-the current implementation map. The § citation index remains
-`docs/requirements/README.md`.
+the current implementation map, and `docs/security/` for threats and controls.
+The § citation index remains `docs/requirements/README.md`.
