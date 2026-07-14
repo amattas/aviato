@@ -343,6 +343,43 @@ def test_repository_metadata_requires_valid_default_branch(
     assert calls == [repository_endpoint]
 
 
+@pytest.mark.parametrize("pin", ["", "-leading", "release.lock", "foo..bar", "bad?query", r"bad\ref"])
+def test_invalid_requested_ref_is_rejected_before_any_api_call(
+    monkeypatch: pytest.MonkeyPatch,
+    pin: str,
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        library_source.github,
+        "run",
+        lambda command, **_kwargs: calls.append(command) or subprocess.CompletedProcess(command, 0, "{}", ""),
+    )
+
+    with pytest.raises(AviatoError, match="ref|pin"):
+        library_source.resolve_library_ref(REPOSITORY, pin)
+
+    assert calls == []
+
+
+def test_invalid_default_ref_is_rejected_before_git_api_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository_endpoint = f"repos/{REPOSITORY}"
+    payload = _repository_payload(default_branch="bad?query")
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if command[2] == repository_endpoint:
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+        raise AssertionError(f"unexpected GitHub API read: {command[2]}")
+
+    monkeypatch.setattr(library_source.github, "run", fake_run)
+
+    with pytest.raises(AviatoError, match="default_branch|default branch|ref"):
+        library_source.resolve_library_ref(REPOSITORY, "v1")
+
+    assert calls == [["gh", "api", repository_endpoint]]
+
+
 def test_annotated_tag_peel_failure_never_falls_back_to_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     repository_endpoint = f"repos/{REPOSITORY}"
     tag_endpoint = f"{repository_endpoint}/git/ref/tags/v1"
@@ -359,6 +396,78 @@ def test_annotated_tag_peel_failure_never_falls_back_to_branch(monkeypatch: pyte
     with pytest.raises(AviatoError, match="peel|annotated"):
         library_source.resolve_library_ref(REPOSITORY, "v1")
 
+    assert not any("/git/ref/heads/v1" in endpoint for endpoint in calls)
+
+
+def test_annotated_tag_multi_hop_resolution_succeeds_within_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository_endpoint = f"repos/{REPOSITORY}"
+    tag_endpoint = f"{repository_endpoint}/git/ref/tags/v1"
+    second_tag_sha = "cccccccccccccccccccccccccccccccccccccccc"
+    first_peel = f"{repository_endpoint}/git/tags/{ANNOTATED_SHA}"
+    second_peel = f"{repository_endpoint}/git/tags/{second_tag_sha}"
+    calls = _install_api(
+        monkeypatch,
+        {
+            **_accessible_repository_responses(),
+            tag_endpoint: _ref_response(tag_endpoint, "tag", ANNOTATED_SHA),
+            first_peel: _ref_response(first_peel, "tag", second_tag_sha),
+            second_peel: _ref_response(second_peel, "commit", SHA),
+        },
+    )
+
+    resolved = library_source.resolve_library_ref(REPOSITORY, "v1")
+
+    assert resolved.object_sha == ANNOTATED_SHA
+    assert resolved.commit_sha == SHA
+    assert [endpoint for endpoint in calls if "/git/tags/" in endpoint] == [first_peel, second_peel]
+    assert not any("/git/ref/heads/v1" in endpoint for endpoint in calls)
+
+
+def test_annotated_tag_cycle_fails_before_repeated_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository_endpoint = f"repos/{REPOSITORY}"
+    tag_endpoint = f"{repository_endpoint}/git/ref/tags/v1"
+    second_tag_sha = "cccccccccccccccccccccccccccccccccccccccc"
+    first_peel = f"{repository_endpoint}/git/tags/{ANNOTATED_SHA}"
+    second_peel = f"{repository_endpoint}/git/tags/{second_tag_sha}"
+    calls = _install_api(
+        monkeypatch,
+        {
+            **_accessible_repository_responses(),
+            tag_endpoint: _ref_response(tag_endpoint, "tag", ANNOTATED_SHA),
+            first_peel: _ref_response(first_peel, "tag", second_tag_sha),
+            second_peel: _ref_response(second_peel, "tag", ANNOTATED_SHA),
+        },
+    )
+
+    with pytest.raises(AviatoError, match="cycle"):
+        library_source.resolve_library_ref(REPOSITORY, "v1")
+
+    assert [endpoint for endpoint in calls if "/git/tags/" in endpoint] == [first_peel, second_peel]
+    assert not any("/git/ref/heads/v1" in endpoint for endpoint in calls)
+
+
+def test_annotated_tag_acyclic_chain_over_depth_fails_before_next_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    peel_limit = library_source.MAX_ANNOTATED_TAG_PEEL_DEPTH
+    repository_endpoint = f"repos/{REPOSITORY}"
+    tag_endpoint = f"{repository_endpoint}/git/ref/tags/v1"
+    tag_shas = [f"{index:040x}" for index in range(1, peel_limit + 2)]
+    responses: dict[str, subprocess.CompletedProcess[str]] = {
+        **_accessible_repository_responses(),
+        tag_endpoint: _ref_response(tag_endpoint, "tag", tag_shas[0]),
+    }
+    expected_peels: list[str] = []
+    for index in range(peel_limit):
+        endpoint = f"{repository_endpoint}/git/tags/{tag_shas[index]}"
+        expected_peels.append(endpoint)
+        responses[endpoint] = _ref_response(endpoint, "tag", tag_shas[index + 1])
+    calls = _install_api(monkeypatch, responses)
+
+    with pytest.raises(AviatoError, match="depth|peel"):
+        library_source.resolve_library_ref(REPOSITORY, "v1")
+
+    assert [endpoint for endpoint in calls if "/git/tags/" in endpoint] == expected_peels
     assert not any("/git/ref/heads/v1" in endpoint for endpoint in calls)
 
 
@@ -457,6 +566,44 @@ def test_archive_identity_must_match_the_resolved_commit(
 
     with pytest.raises(AviatoError, match="resolved commit"), library_source.fetch_library_registry(REPOSITORY, "v1"):
         pass
+
+
+def test_archive_rejects_backslash_windows_traversal(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_run(monkeypatch, _archive(member=r"aviato/library/..\..\escape"))
+
+    with pytest.raises(AviatoError, match="backslash|unsafe"), library_source.fetch_library_registry(REPOSITORY, "1"):
+        pass
+
+
+def test_archive_extraction_resolves_each_candidate_beneath_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workdir = tmp_path / "work"
+    outside = tmp_path / "outside"
+    workdir.mkdir()
+    outside.mkdir()
+    _fake_run(monkeypatch, _archive(member="aviato/library/nested/escape.yaml"))
+    monkeypatch.setattr(library_source.tempfile, "mkdtemp", lambda **_kwargs: str(workdir))
+    original_members = library_source._safe_library_members
+
+    def plant_parent_symlink(
+        archive: tarfile.TarFile,
+        identity: library_source.RepositoryIdentity,
+        sha: str,
+    ) -> tuple[str, list[tarfile.TarInfo]]:
+        result = original_members(archive, identity, sha)
+        (workdir / "extracted" / "nested").symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(library_source, "_safe_library_members", plant_parent_symlink)
+
+    with pytest.raises(AviatoError, match="contain|extract|outside"), library_source.fetch_library_registry(
+        REPOSITORY, "1"
+    ):
+        pass
+
+    assert not (outside / "escape.yaml").exists()
 
 
 def test_repository_identity_is_correlated_and_canonical_for_ref_and_archive_reads(

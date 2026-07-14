@@ -83,34 +83,42 @@ def run_to_path(
         except OSError as exc:
             raise CommandError(command, 73, f"could not create output path {path}: {exc}") from exc
 
-        with output:
-            try:
-                result = subprocess.run(
-                    list(command),
-                    cwd=str(cwd) if cwd is not None else None,
-                    check=False,
-                    text=True,
-                    stdout=output,
-                    stderr=subprocess.PIPE,
-                    timeout=timeout,
-                    shell=False,
-                )
-            except subprocess.TimeoutExpired as exc:
-                message = f"timed out after {timeout}s: {exc}"
-                if check:
-                    raise CommandError(command, 124, message) from exc
-                return subprocess.CompletedProcess(list(command), 124, None, message)
-            except OSError as exc:
-                raise CommandError(command, 127, f"could not execute {command[0]!r}: {exc}") from exc
+        try:
+            with output:
+                try:
+                    result = subprocess.run(
+                        list(command),
+                        cwd=str(cwd) if cwd is not None else None,
+                        check=False,
+                        text=True,
+                        stdout=output,
+                        stderr=subprocess.PIPE,
+                        timeout=timeout,
+                        shell=False,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    message = f"timed out after {timeout}s: {exc}"
+                    result = subprocess.CompletedProcess(list(command), 124, None, message)
+                except OSError as exc:
+                    raise CommandError(
+                        command, 127, f"could not execute {command[0]!r}: {exc}"
+                    ) from exc
 
-            if result.returncode != 0:
-                if check:
-                    raise CommandError(command, result.returncode, result.stderr)
-                return result
-            output.flush()
-            os.fsync(output.fileno())
-            accepted = True
+                if result.returncode == 0:
+                    output.flush()
+                    os.fsync(output.fileno())
+        except OSError as exc:
+            raise CommandError(command, 74, f"could not finalize output path {path}: {exc}") from exc
+
+        if result.returncode != 0:
+            if check:
+                raise CommandError(command, result.returncode, result.stderr or "")
             return result
+
+        # A successful subprocess is accepted only after flush, fsync, and the
+        # output context's close have all completed without error.
+        accepted = True
+        return result
     finally:
         if created and not accepted:
             path.unlink(missing_ok=True)

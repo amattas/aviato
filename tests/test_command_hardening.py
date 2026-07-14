@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -123,6 +124,97 @@ def test_run_to_path_preserves_binary_bytes_with_a_finite_timeout(
     assert seen["timeout"] == DEFAULT_TIMEOUT_SECONDS
     assert DEFAULT_TIMEOUT_SECONDS is not None
     assert seen.get("shell", False) is False
+
+
+def test_run_to_path_close_error_is_typed_and_removes_partial_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "archive.tar.gz"
+    original_open = Path.open
+
+    class CloseFailingOutput:
+        def __init__(self, path: Path) -> None:
+            self._output = original_open(path, "xb")
+
+        def __enter__(self) -> CloseFailingOutput:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self._output.close()
+            raise OSError("simulated close failure")
+
+        def write(self, payload: bytes) -> int:
+            return self._output.write(payload)
+
+        def flush(self) -> None:
+            self._output.flush()
+
+        def fileno(self) -> int:
+            return self._output.fileno()
+
+    def fake_open(path: Path, mode: str = "r", *args: object, **kwargs: object) -> CloseFailingOutput:
+        assert path == destination
+        assert mode == "xb"
+        assert not args
+        assert not kwargs
+        return CloseFailingOutput(path)
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        stdout = kwargs["stdout"]
+        assert hasattr(stdout, "write")
+        stdout.write(b"partial archive")  # type: ignore[union-attr]
+        return subprocess.CompletedProcess(cmd, 0, None, "")
+
+    monkeypatch.setattr(Path, "open", fake_open)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(CommandError, match="could not finalize output path") as exc_info:
+        command.run_to_path(["gh", "api", "repos/o/r/tarball/abc"], destination)
+
+    assert exc_info.value.returncode == 74
+    assert not destination.exists()
+
+
+def test_run_to_path_real_child_preserves_invalid_utf8_stdout(tmp_path: Path) -> None:
+    destination = tmp_path / "child-output.bin"
+    payload = bytes([0x00, 0xFF, 0x80, 0xFE, 0x41, 0x0A])
+
+    result = command.run_to_path(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(bytes([0, 255, 128, 254, 65, 10]))",
+        ],
+        destination,
+        timeout=5,
+    )
+
+    assert result.returncode == 0
+    assert destination.read_bytes() == payload
+
+
+def test_run_to_path_real_child_timeout_removes_partial_file(tmp_path: Path) -> None:
+    destination = tmp_path / "child-output.bin"
+
+    with pytest.raises(CommandError) as exc_info:
+        command.run_to_path(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys, time; "
+                    "sys.stdout.buffer.write(b'partial'); "
+                    "sys.stdout.buffer.flush(); "
+                    "time.sleep(5)"
+                ),
+            ],
+            destination,
+            timeout=0.5,
+        )
+
+    assert exc_info.value.returncode == 124
+    assert not destination.exists()
 
 
 @pytest.mark.parametrize(

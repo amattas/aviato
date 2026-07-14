@@ -92,7 +92,7 @@ def test_auth_rate_limit_timeout_server_and_malformed_reads_are_errors(
     monkeypatch.setattr(github.time, "sleep", lambda _: None)
 
     identity = github.repository_identity("o/r")
-    outcome = github.read_git_object(identity, "git/ref/tags/v1")
+    outcome = github.read_git_ref(identity, github.GitRefNamespace.TAGS, "v1")
 
     assert outcome.status.value == "error"
     assert outcome.error
@@ -106,7 +106,7 @@ def test_git_object_launch_failure_is_a_typed_error(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(github, "run", unavailable)
 
-    outcome = github.read_git_object(identity, "git/ref/tags/v1")
+    outcome = github.read_git_ref(identity, github.GitRefNamespace.TAGS, "v1")
 
     assert outcome.status.value == "error"
     assert outcome.error and "could not execute" in outcome.error
@@ -120,6 +120,105 @@ def test_repository_identity_launch_failure_is_a_github_api_error(monkeypatch: p
 
     with pytest.raises(github.GitHubAPIError, match="could not execute"):
         github.repository_identity("o/r")
+
+
+@pytest.mark.parametrize(
+    "slug",
+    ["", "owner", "owner/repo/extra", "owner//repo", "-owner/repo", "owner/repo?query", "owner/.."],
+)
+def test_invalid_repository_slug_is_rejected_before_api_call(
+    monkeypatch: pytest.MonkeyPatch,
+    slug: str,
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda command, **_kwargs: calls.append(command) or subprocess.CompletedProcess(command, 0, "{}", ""),
+    )
+
+    with pytest.raises(ValueError, match="OWNER/REPO"):
+        github.repository_identity(slug)
+
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "ref_name",
+    [
+        "",
+        ".",
+        "foo//bar",
+        "foo/./bar",
+        "foo..bar",
+        "bad?query",
+        "bad\x01control",
+        r"bad\ref",
+        "-leading",
+        "release.lock",
+        "foo@{bar",
+        "bad~ref",
+        "bad^ref",
+        "bad:ref",
+        "bad*ref",
+        "bad[ref",
+    ],
+)
+def test_invalid_git_ref_name_is_rejected_before_api_call(
+    monkeypatch: pytest.MonkeyPatch,
+    ref_name: str,
+) -> None:
+    identity = RepositoryIdentity(database_id=17, node_id="R_test", full_name="o/r", default_branch="main")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda command, **_kwargs: calls.append(command) or subprocess.CompletedProcess(command, 0, "{}", ""),
+    )
+
+    with pytest.raises(ValueError, match="Git ref"):
+        github.read_git_ref(identity, github.GitRefNamespace.HEADS, ref_name)
+
+    assert calls == []
+
+
+def test_valid_nested_ref_uses_typed_namespace_and_encoded_correlated_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = RepositoryIdentity(database_id=17, node_id="R_test", full_name="o/r", default_branch="main")
+    endpoint = "repos/o/r/git/ref/heads/release%2F2026%2F%23v1"
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps({"object": {"type": "commit", "sha": "a" * 40}}),
+            "",
+        )
+
+    monkeypatch.setattr(github, "run", fake_run)
+
+    outcome = github.read_git_ref(identity, github.GitRefNamespace.HEADS, "release/2026/#v1")
+
+    assert outcome.status.value == "found"
+    assert calls == [["gh", "api", endpoint]]
+
+
+def test_annotated_tag_reader_rejects_non_sha_before_api_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    identity = RepositoryIdentity(database_id=17, node_id="R_test", full_name="o/r", default_branch="main")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda command, **_kwargs: calls.append(command) or subprocess.CompletedProcess(command, 0, "{}", ""),
+    )
+
+    with pytest.raises(ValueError, match="SHA"):
+        github.read_annotated_tag(identity, "not-a-sha")
+
+    assert calls == []
 
 
 def test_codeql_merge_protection_requires_exact_active_branch_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -259,7 +358,7 @@ def test_terminal_http_status_controls_not_found_classification(
         lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, "", stderr),
     )
 
-    outcome = github.read_git_object(identity, "git/ref/tags/v1")
+    outcome = github.read_git_ref(identity, github.GitRefNamespace.TAGS, "v1")
 
     assert outcome.status.value == expected_status
     assert bool(outcome.error) is (expected_status == "error")

@@ -7,7 +7,6 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from urllib.parse import quote
 
 from . import github
 from .command import run_to_path
@@ -16,17 +15,16 @@ from .core.ports import (
     GitObjectRead,
     GitObjectReadStatus,
     GitObjectType,
+    GitRefNamespace,
     LibraryRefKind,
     RepositoryIdentity,
     ResolvedLibraryRef,
+    validate_git_ref_name,
 )
 from .core.registry import Registry
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-
-
-def _read_object(identity: RepositoryIdentity, endpoint: str) -> GitObjectRead:
-    return github.read_git_object(identity, endpoint)
+MAX_ANNOTATED_TAG_PEEL_DEPTH = 8
 
 
 def _terminal_read_error(pin: str, read: GitObjectRead, *, operation: str) -> AviatoError:
@@ -38,11 +36,15 @@ def resolve_library_ref(repository: str, pin: str) -> ResolvedLibraryRef:
     """Resolve ``pin`` once, preferring tags, and return its immutable commit identity."""
 
     try:
+        validate_git_ref_name(pin)
+    except ValueError as exc:
+        raise AviatoError(f"invalid Library pin ref {pin!r}: {exc}") from exc
+    try:
         identity = github.repository_identity(repository)
-    except github.GitHubAPIError as exc:
+    except (github.GitHubAPIError, ValueError) as exc:
         raise AviatoError(f"could not establish access to Library repository {repository}: {exc}") from exc
 
-    access_probe = _read_object(identity, f"git/ref/heads/{quote(identity.default_branch, safe='')}")
+    access_probe = github.read_git_ref(identity, GitRefNamespace.HEADS, identity.default_branch)
     if (
         access_probe.status is not GitObjectReadStatus.FOUND
         or access_probe.object_type is not GitObjectType.COMMIT
@@ -54,13 +56,12 @@ def resolve_library_ref(repository: str, pin: str) -> ResolvedLibraryRef:
             f"in Library repository {identity.full_name}: {detail}"
         )
 
-    encoded = quote(pin, safe="")
-    resolved = _read_object(identity, f"git/ref/tags/{encoded}")
+    resolved = github.read_git_ref(identity, GitRefNamespace.TAGS, pin)
     ref_kind = LibraryRefKind.TAG
     if resolved.status is GitObjectReadStatus.ERROR:
         raise _terminal_read_error(pin, resolved, operation="resolve tag for")
     if resolved.status is GitObjectReadStatus.NOT_FOUND:
-        resolved = _read_object(identity, f"git/ref/heads/{encoded}")
+        resolved = github.read_git_ref(identity, GitRefNamespace.HEADS, pin)
         ref_kind = LibraryRefKind.BRANCH
         if resolved.status is GitObjectReadStatus.ERROR:
             raise _terminal_read_error(pin, resolved, operation="resolve branch for")
@@ -75,11 +76,18 @@ def resolve_library_ref(repository: str, pin: str) -> ResolvedLibraryRef:
     if ref_kind is LibraryRefKind.BRANCH and object_type is not GitObjectType.COMMIT:
         raise AviatoError(f"Library branch {pin!r} resolved to invalid Git object type {object_type.value!r}")
     seen: set[str] = set()
+    peel_depth = 0
     while object_type is GitObjectType.TAG:
         if sha in seen:
             raise AviatoError(f"annotated tag cycle while resolving Library pin {pin!r}")
+        if peel_depth >= MAX_ANNOTATED_TAG_PEEL_DEPTH:
+            raise AviatoError(
+                f"annotated tag peel depth exceeds {MAX_ANNOTATED_TAG_PEEL_DEPTH} "
+                f"while resolving Library pin {pin!r}"
+            )
         seen.add(sha)
-        peeled = _read_object(identity, f"git/tags/{sha}")
+        peel_depth += 1
+        peeled = github.read_annotated_tag(identity, sha)
         if peeled.status is not GitObjectReadStatus.FOUND:
             raise _terminal_read_error(pin, peeled, operation="peel annotated tag for")
         if peeled.object_type is None or peeled.sha is None:
@@ -113,6 +121,8 @@ def _safe_library_members(
     roots: set[str] = set()
     selected: list[tarfile.TarInfo] = []
     for member in members:
+        if "\\" in member.name:
+            raise AviatoError(f"Library archive contains a backslash path, which is unsafe: {member.name!r}")
         path = PurePosixPath(member.name)
         if path.is_absolute() or member.name.startswith(("/", "\\")):
             raise AviatoError(f"Library archive contains an absolute path: {member.name!r}")
@@ -141,6 +151,18 @@ def _safe_library_members(
     return root, selected
 
 
+def _contained_extraction_path(root: Path, relative: PurePosixPath) -> Path:
+    """Resolve one archive destination and reject every escape from ``root``."""
+
+    resolved_root = root.resolve(strict=True)
+    resolved = root.joinpath(*relative.parts).resolve(strict=False)
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError as exc:
+        raise AviatoError(f"Library archive extraction target escapes the extraction root: {relative}") from exc
+    return resolved
+
+
 @contextmanager
 def fetch_library_registry(repository: str, pin: str) -> Iterator[Registry]:
     """Yield the exact published Library registry for ``pin``, then remove all fetched bytes."""
@@ -162,11 +184,13 @@ def fetch_library_registry(repository: str, pin: str) -> Iterator[Registry]:
                     relative = PurePosixPath(member.name).relative_to(
                         PurePosixPath(archive_root) / "aviato" / "library"
                     )
-                    destination = extract_root.joinpath(*relative.parts)
                     if member.isdir():
+                        destination = _contained_extraction_path(extract_root, relative)
                         destination.mkdir(parents=True, exist_ok=True)
                         continue
-                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    parent = _contained_extraction_path(extract_root, relative.parent)
+                    parent.mkdir(parents=True, exist_ok=True)
+                    destination = _contained_extraction_path(extract_root, relative)
                     source = archive.extractfile(member)
                     if source is None:
                         raise AviatoError(f"could not read regular Library archive member {member.name!r}")

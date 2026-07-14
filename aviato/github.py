@@ -20,9 +20,12 @@ from .core.ports import (
     GitObjectRead,
     GitObjectReadStatus,
     GitObjectType,
+    GitRefNamespace,
     RepositoryIdentity,
     RulesetApplyResult,
+    validate_git_ref_name,
 )
+from .repos import is_owner_repo_slug
 
 # §5.5 (finding 30): rate-limit responses are tolerated and RETRIED (bounded), so a
 # scheduled fleet run doesn't fail outright on the first 403/429 throttle; a
@@ -163,6 +166,8 @@ def repository_identity(slug: str) -> RepositoryIdentity:
     succeeds may a 404 from a correlated Git-object endpoint mean NOT_FOUND.
     """
 
+    if not is_owner_repo_slug(slug):
+        raise ValueError(f"invalid repository slug {slug!r}; expected canonical OWNER/REPO")
     endpoint = f"repos/{slug}"
     result = _run_gh_read(["gh", "api", endpoint])
     if result.returncode != 0:
@@ -188,13 +193,20 @@ def repository_identity(slug: str) -> RepositoryIdentity:
         or any(not segment for segment in full_name.split("/"))
         or full_name.casefold() != slug.casefold()
         or not isinstance(default_branch, str)
-        or not default_branch
     ):
         raise GitHubAPIError(
             endpoint,
             result.returncode,
             "repository response omitted a correlated id, node_id, full_name, or default_branch",
         )
+    try:
+        validate_git_ref_name(default_branch)
+    except ValueError as exc:
+        raise GitHubAPIError(
+            endpoint,
+            result.returncode,
+            f"repository response has invalid default_branch: {exc}",
+        ) from exc
     return RepositoryIdentity(
         database_id=database_id,
         node_id=node_id,
@@ -203,13 +215,9 @@ def repository_identity(slug: str) -> RepositoryIdentity:
     )
 
 
-def read_git_object(identity: RepositoryIdentity, relative_endpoint: str) -> GitObjectRead:
-    """Read one ref/tag object without treating operational failure as absence."""
+def _read_git_object_endpoint(identity: RepositoryIdentity, relative_endpoint: str) -> GitObjectRead:
+    """Read one already-validated Git object endpoint."""
 
-    if relative_endpoint.startswith("/") or not relative_endpoint.startswith(
-        ("git/ref/tags/", "git/ref/heads/", "git/tags/")
-    ):
-        raise ValueError(f"unsupported Git object endpoint: {relative_endpoint!r}")
     endpoint = f"repos/{identity.full_name}/{relative_endpoint}"
     result = _run_gh_read(["gh", "api", endpoint])
     if result.returncode != 0:
@@ -232,6 +240,24 @@ def read_git_object(identity: RepositoryIdentity, relative_endpoint: str) -> Git
             error=f"malformed Git object response: invalid SHA {sha!r}",
         )
     return GitObjectRead(GitObjectReadStatus.FOUND, endpoint, object_type=object_type, sha=sha)
+
+
+def read_git_ref(identity: RepositoryIdentity, namespace: GitRefNamespace, name: str) -> GitObjectRead:
+    """Read a validated branch/tag ref from a typed namespace."""
+
+    if not isinstance(namespace, GitRefNamespace):
+        raise ValueError(f"invalid Git ref namespace: {namespace!r}")
+    validate_git_ref_name(name)
+    endpoint = f"git/ref/{namespace.value}/{quote(name, safe='')}"
+    return _read_git_object_endpoint(identity, endpoint)
+
+
+def read_annotated_tag(identity: RepositoryIdentity, sha: str) -> GitObjectRead:
+    """Read one annotated-tag object by its validated immutable SHA."""
+
+    if not isinstance(sha, str) or not _GIT_SHA_RE.fullmatch(sha):
+        raise ValueError(f"invalid annotated-tag SHA: {sha!r}")
+    return _read_git_object_endpoint(identity, f"git/tags/{sha}")
 
 
 def gh_json(endpoint: str, *, default: Any = None, allow_error: bool = False) -> Any:
