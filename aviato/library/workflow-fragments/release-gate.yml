@@ -1,0 +1,11 @@
+needs: [release]
+if: ${{ always() && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
+uses: "{{ aviato-workflow-prefix }}reusable-release-gate.yml{{ aviato-workflow-suffix }}"
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+with:
+  default-branch: "{{ default-branch }}"
+  require-merged-pr: true
+  release-tag: ${{ needs.release.outputs.tag }}

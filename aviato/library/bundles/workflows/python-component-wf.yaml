@@ -4,5 +4,5 @@ name: python-component-wf
 extends: base
 add:
   - python-verify
-  - release
+  - release-python
 remove: []

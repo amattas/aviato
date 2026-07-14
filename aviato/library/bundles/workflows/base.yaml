@@ -1,9 +1,7 @@
 name: base
-# The always-on security baseline (§2.13) plus the release gate are common to
-# every profile. Pipeline names map to the reusable workflows in
-# .github/workflows/reusable-*.yml. Language verify + deploy pipelines are added
-# by each profile's workflows bundle via explicit add (§4.2).
+# Shared graph-owned automation. Release and deployment variants are selected by
+# profile bundles; drift is an explicit owner rather than a scaffold side effect.
 pipelines:
   - security-baseline
-  - release-gate
   - common-lint
+  - drift-automation

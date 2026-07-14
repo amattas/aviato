@@ -75,16 +75,34 @@ capability: Aviato's own bootstrap declaration sets `docs: false` and carries no
 
 Caller templates live in `templates/`. They are examples or starting points for
 consumer repositories and are not the source of policy truth. They are **rendered
-from** the authoritative scaffold bundles (`aviato/library/scaffold/files/wf-*.yml`)
-via `scripts/regen-templates.py`; `aviato validate` fails if they drift.
+from** workflow schema v2 graph data: `workflow-envelopes.yaml` owns the three
+managed output paths (`aviato-ci.yml`, `aviato-drift.yml`, and the optional
+`aviato-docs.yml`), while selected entries in `pipelines.yaml` own triggers,
+jobs, checks, privileges, environments, and non-workflow artifacts. Each job
+body is a one-job file under `workflow-fragments/`; no monolithic caller body is
+maintained alongside the graph.
+
+`scripts/regen-templates.py` is the sole generator for the five unmarked profile
+examples, `templates/consumer-automation.yml`, and Aviato's two canonically
+marked bootstrap workflows. It renders from the target checkout's graph and
+`.github/aviato.yaml`; `aviato validate` fails on byte drift or if a referenced
+fragment/reusable-workflow contract is incomplete.
 Committed examples use `EXAMPLE_PIN`; fresh onboarding/provisioning requires an
 explicit published Library pin. The compatibility-only
 `--allow-unresolved-pin` option fails before rendering or writing; verified
 Library bytes are mandatory in every mode.
 
-The templates should stay thin. They should select a reusable workflow, provide
-repository-specific input values, and avoid duplicating release or protection
-logic.
+Generated callers contain only jobs and trigger contributions from selected
+pipelines. CI owns verify/security/common-lint/release/deploy jobs, drift owns
+the scheduled consumer-automation call, and docs owns resolve, release-gate,
+release-ref security, and deploy jobs. Removing a pipeline therefore removes
+its executable jobs, triggers, environment, privileges, and artifact ownership.
+
+| Envelope | Pipeline-owned jobs | Trigger owners | Managed output / other artifacts |
+| --- | --- | --- | --- |
+| `ci` | language `ci`, `security`, `common-lint`, `status-bridge`, `release`, `release-gate`, and the selected deploy jobs | verify owns default-branch push/PR; security owns the weekly schedule; release owns tags and dispatch | `.github/workflows/aviato-ci.yml` |
+| `drift` | `drift` | drift automation owns weekly schedule and dispatch | `.github/workflows/aviato-drift.yml` |
+| optional `docs` | `docs-resolve`, `docs-release-gate`, `docs-security`, `docs` | the selected docs pipeline owns `workflow_run`, coupled to the rendered CI name | `.github/workflows/aviato-docs.yml`, Zensical config, intro, and pinned requirements |
 
 ### Rulesets
 

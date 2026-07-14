@@ -1,0 +1,9 @@
+uses: "{{ aviato-workflow-prefix }}reusable-security-baseline.yml{{ aviato-workflow-suffix }}"
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+  actions: read
+with:
+  codeql-languages: "{{ codeql-languages }}"
+  codeql-runner: "{{ codeql-runner }}"

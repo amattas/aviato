@@ -1,5 +1,6 @@
 name: node-service
 identity: aviato-profile/node-service/v1
+workflow_schema: 2
 workflows: node-service-wf
 scaffold: node-service-sc
 settings: baseline
@@ -22,10 +23,10 @@ version_source:
 derived_variables:
   # Data-driven: the typecheck step is gated by the language-variant value.
   # Lives here (plug-in DATA), never as a literal in the agnostic core (§9b).
-  - {name: run-typecheck, from: language-variant, cases: {javascript: "false"}, default: "true"}
+  - {name: run-typecheck, from: language-variant, cases: {javascript: false}, default: true}
   # JavaScript has no compile step; the production artifact is the Docker image (§13.2),
   # so the source-CI build gate is enabled only for TypeScript (tsc) — never a no-op pass.
-  - {name: run-build, from: language-variant, cases: {javascript: "false"}, default: "true"}
+  - {name: run-build, from: language-variant, cases: {javascript: false}, default: true}
 toolchain:
   linter: eslint
   formatter: prettier
@@ -33,6 +34,13 @@ toolchain:
 notes:
   - "Requires an OPERATOR-PROVIDED container build definition before GHCR publishing (§13.2; probed, never seeded — R5-6)."
   - "type-check runs only when language-variant is typescript (§12.2)."
-docs_pipeline: docs-pages
+docs_pipeline: docs-node-service
+workflow_parameters:
+  workflow-name: Aviato Node Service
+  codeql-languages: javascript-typescript
+  codeql-runner: ubuntu-latest
+  verify-status-check: "ci / Node CI"
+  node-run-typecheck: "{{ run-typecheck }}"
+  node-run-build: "{{ run-build }}"
 prerequisites:
   container_build_definition: [Dockerfile]

@@ -1,0 +1,27 @@
+needs: [release, release-gate, security]
+if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
+uses: "{{ aviato-workflow-prefix }}reusable-app-store-connect.yml{{ aviato-workflow-suffix }}"
+permissions:
+  actions: read
+  contents: write
+with:
+  release-tag: ${{ needs.release.outputs.tag }}
+  gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
+  environment-name: "{{ environment-name }}"
+  xcode-version: "{{ xcode-version }}"
+  working-directory: "{{ working-directory }}"
+  scheme: "{{ product-scheme }}"
+  workspace: "{{ workspace }}"
+  project: "{{ project }}"
+  bundle-identifier: "{{ bundle-identifier }}"
+  team-id: "{{ team-id }}"
+  export-options-plist: "{{ export-options-plist }}"
+  export-method: "{{ export-method }}"
+  version-command: "{{ version-command }}"
+secrets:
+  APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+  APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+  APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+  APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+  APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+  APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}

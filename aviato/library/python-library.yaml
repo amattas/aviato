@@ -1,5 +1,6 @@
 name: python-library
 identity: aviato-profile/python-library/v1
+workflow_schema: 2
 workflows: python-library-wf
 scaffold: python-library-sc
 settings: baseline
@@ -22,7 +23,7 @@ variables:
   - {name: default-branch, type: string, required: false, default: main}
   - {name: distribution-name, type: string}
   - {name: import-name, type: string}
-  - {name: run-typecheck, type: string, required: false, default: "true"}
+  - {name: run-typecheck, type: boolean, required: false, default: true}
 version_source:
   locations: [pyproject.toml]
 toolchain:
@@ -32,4 +33,11 @@ toolchain:
   test_runner: pytest
 notes:
   - "Requires PyPI Trusted Publishing registration for the deploy pipeline (§13.1)."
-docs_pipeline: docs-pages
+docs_pipeline: docs-python-library
+workflow_parameters:
+  workflow-name: Aviato Python Library
+  codeql-languages: python
+  codeql-runner: ubuntu-latest
+  verify-status-check: "ci / Python CI"
+  python-install-command: "python -m pip install -e .[dev]"
+  python-run-build: true

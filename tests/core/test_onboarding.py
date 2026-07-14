@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
 from aviato.core.declaration import Declaration, load_declaration
 from aviato.core.errors import CompositionError, DeclarationError
@@ -16,9 +17,21 @@ from aviato.core.onboarding import (
     resolved_artifacts,
 )
 from aviato.core.registry import Registry
-from aviato.paths import MODULE_SOURCE_ROOT
+from aviato.paths import MODULE_SOURCE_ROOT, REPO_ROOT
+from aviato.validation import _PROFILE_TEMPLATE_FILES
 
 PYTHON_VARIABLES = {"distribution-name": "acme", "import-name": "acme"}
+
+
+@pytest.fixture
+def legacy_registry(tmp_path: Path) -> Registry:
+    library = tmp_path / "legacy-library"
+    shutil.copytree(MODULE_SOURCE_ROOT, library)
+    profile = library / "python-library.yaml"
+    document = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    document["workflow_schema"] = 1
+    profile.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    return Registry(library)
 
 
 def test_output_collision_among_applicable_templates_is_error() -> None:
@@ -48,11 +61,12 @@ def test_docs_true_scaffolds_gated_docs_workflow() -> None:
     # §4/§5.14: docs deploy is gated by the release gate AND the release-ref security baseline.
     assert "reusable-release-gate.yml" in docs.body
     assert "reusable-security-baseline.yml" in docs.body
-    assert "needs: [resolve, release-gate, security]" in docs.body
+    document = yaml.safe_load(docs.body)
+    assert document["jobs"]["docs"]["needs"] == ["docs-resolve", "docs-release-gate", "docs-security"]
     # In-run model (#1): triggered by workflow_run (token-pushed tags don't re-trigger),
     # deploying only when the completed run carries a fresh release tag.
     assert "workflow_run:" in docs.body
-    assert "release-tag: ${{ needs.resolve.outputs.tag }}" in docs.body
+    assert document["jobs"]["docs"]["with"]["release-tag"] == "${{ needs.docs-resolve.outputs.tag }}"
 
 
 def test_pin_is_stamped_into_generated_workflows() -> None:
@@ -152,7 +166,7 @@ def test_javascript_variant_omits_tsconfig_and_disables_typecheck() -> None:
             library_repository="example/library",
             derived_rules=rules,
         )["run-typecheck"]
-        == "false"
+        is False
     )
     assert (
         render_variables(
@@ -161,13 +175,13 @@ def test_javascript_variant_omits_tsconfig_and_disables_typecheck() -> None:
             library_repository="example/library",
             derived_rules=rules,
         )["run-typecheck"]
-        == "true"
+        is True
     )
 
 
 @pytest.mark.parametrize("value", ["ruby", "", 1, True])
 def test_read_only_resolution_rejects_invalid_enum(value: object) -> None:
-    with pytest.raises(DeclarationError, match="language-variant"):
+    with pytest.raises(CompositionError, match="language-variant"):
         resolved_artifacts(
             Registry(MODULE_SOURCE_ROOT),
             "node-service",
@@ -177,7 +191,7 @@ def test_read_only_resolution_rejects_invalid_enum(value: object) -> None:
 
 
 def test_read_only_resolution_rejects_unknown_variable() -> None:
-    with pytest.raises(DeclarationError, match="language-varaint"):
+    with pytest.raises(CompositionError, match="language-varaint"):
         resolved_artifacts(
             Registry(MODULE_SOURCE_ROOT),
             "node-service",
@@ -217,8 +231,8 @@ def test_partial_when_expression_is_true_false_or_indeterminate() -> None:
     assert template_applies(template, {"enabled": True}) is model_module.Unknown
 
 
-def test_legacy_materialize_requires_repin_before_building_scaffold_items() -> None:
-    reg = Registry(MODULE_SOURCE_ROOT)
+def test_legacy_materialize_requires_repin_before_building_scaffold_items(legacy_registry: Registry) -> None:
+    reg = legacy_registry
     with pytest.raises(CompositionError, match="repin"):
         materialize_items(reg, "python-library", variables=PYTHON_VARIABLES, pin="0")
 
@@ -249,15 +263,15 @@ def test_yaml_date_scalar_materializes_with_deterministic_input_hash(tmp_path: P
     assert [item.body for item in from_yaml] == [item.body for item in from_string]
 
 
-def test_legacy_materialize_fails_before_any_scaffold_write(tmp_path: Path) -> None:
-    reg = Registry(MODULE_SOURCE_ROOT)
+def test_legacy_materialize_fails_before_any_scaffold_write(tmp_path: Path, legacy_registry: Registry) -> None:
+    reg = legacy_registry
     with pytest.raises(CompositionError, match="repin"):
         materialize_items(reg, "python-library", variables=PYTHON_VARIABLES, pin="0")
-    assert list(tmp_path.iterdir()) == []
+    assert not (tmp_path / "consumer-output").exists()
 
 
-def test_plan_onboarding_legacy_adopt_requires_repin(tmp_path: Path) -> None:
-    reg = Registry(MODULE_SOURCE_ROOT)
+def test_plan_onboarding_legacy_adopt_requires_repin(tmp_path: Path, legacy_registry: Registry) -> None:
+    reg = legacy_registry
     with pytest.raises(CompositionError, match="repin"):
         plan_onboarding(reg, profile="python-library", existing_declaration=None, variables=PYTHON_VARIABLES)
 
@@ -269,15 +283,15 @@ def test_plan_onboarding_refuses_profile_change_without_migrate() -> None:
         plan_onboarding(reg, profile="python-library", existing_declaration=existing, variables={})
 
 
-def test_plan_onboarding_legacy_same_profile_requires_repin() -> None:
-    reg = Registry(MODULE_SOURCE_ROOT)
+def test_plan_onboarding_legacy_same_profile_requires_repin(legacy_registry: Registry) -> None:
+    reg = legacy_registry
     existing = Declaration(profile="python-library", version="v1")
     with pytest.raises(CompositionError, match="repin"):
         plan_onboarding(reg, profile="python-library", existing_declaration=existing, variables=PYTHON_VARIABLES)
 
 
-def test_plan_onboarding_legacy_profile_migration_requires_repin() -> None:
-    reg = Registry(MODULE_SOURCE_ROOT)
+def test_plan_onboarding_legacy_profile_migration_requires_repin(legacy_registry: Registry) -> None:
+    reg = legacy_registry
     existing = Declaration(profile="node-service", version="v1")
     with pytest.raises(CompositionError, match="repin"):
         plan_onboarding(
@@ -287,3 +301,19 @@ def test_plan_onboarding_legacy_profile_migration_requires_repin() -> None:
             variables=PYTHON_VARIABLES,
             allow_migrate=True,
         )
+
+
+def test_bootstrap_self_sync_generates_ci_drift_and_consumer_automation_parity() -> None:
+    import runpy
+
+    render_templates = runpy.run_path(str(REPO_ROOT / "scripts/regen-templates.py"))["render_templates"]
+    rendered = render_templates(REPO_ROOT)
+    expected = {
+        REPO_ROOT / ".github/workflows/aviato-ci.yml",
+        REPO_ROOT / ".github/workflows/aviato-drift.yml",
+        REPO_ROOT / "templates/consumer-automation.yml",
+        *(REPO_ROOT / path for path in _PROFILE_TEMPLATE_FILES.values()),
+    }
+
+    assert {REPO_ROOT / path for path in rendered} == expected
+    assert all(path.read_bytes() == rendered[path.relative_to(REPO_ROOT)].encode("utf-8") for path in expected)

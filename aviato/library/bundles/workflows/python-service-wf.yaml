@@ -2,6 +2,6 @@ name: python-service-wf
 extends: base
 add:
   - python-verify
-  - release
+  - release-python
   - ghcr-publish
 remove: []

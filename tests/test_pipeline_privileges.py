@@ -6,8 +6,13 @@ from typing import cast
 import pytest
 import yaml
 
+from aviato.core.compiler import compile_desired_state
+from aviato.core.composition import resolve_profile
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT, REPO_ROOT
+from aviato.validation import _TEMPLATE_EXAMPLE_VARS
+
+DAYZERO = ("python-library", "python-service", "python-component", "node-service", "swift-app")
 
 # Pipeline module name -> the reusable workflow whose permissions it must mirror (§11.3/§8.9).
 PIPELINE_WORKFLOWS = {
@@ -81,8 +86,18 @@ def test_pipeline_privileges_match_workflow_permissions(pipeline: str, workflow:
 
     wf = _mapping(yaml.safe_load((REPO_ROOT / ".github" / "workflows" / workflow).read_text()))
     workflow_privs = _workflow_privileges(wf) | CALLER_ONLY_PRIVILEGES.get(pipeline, set())
+    levels = {"none": 0, "read": 1, "write": 2}
+
+    def strongest(values: set[str] | tuple[str, ...]) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for value in values:
+            scope, level = value.split(": ", 1)
+            if levels[level] > levels[result.get(scope, "none")]:
+                result[scope] = level
+        return result
+
     message = f"{pipeline} module privileges {set(module.privileges)} != {workflow} permissions {workflow_privs}"
-    assert set(module.privileges) == workflow_privs, message
+    assert strongest(module.privileges) == strongest(workflow_privs), message
 
 
 @pytest.mark.parametrize("pipeline,workflow", PIPELINE_WORKFLOWS.items())
@@ -158,3 +173,53 @@ def test_mypy_uses_local_bashlex_types_without_import_relaxation() -> None:
     assert "ignore_missing_imports" not in pyproject
     assert 'mypy_path = ["typings"]' in pyproject
     assert (REPO_ROOT / "typings" / "bashlex" / "__init__.pyi").is_file()
+
+
+@pytest.mark.parametrize("profile", DAYZERO)
+def test_generated_permissions_equal_the_compiled_job_union(profile: str) -> None:
+    registry = Registry(MODULE_SOURCE_ROOT)
+    resolved = resolve_profile(registry, profile, docs=True)
+    desired = compile_desired_state(
+        registry,
+        resolved,
+        _TEMPLATE_EXAMPLE_VARS[profile],
+        pin="EXAMPLE_PIN",
+        docs=True,
+    )
+    metadata = {job.name: job for module in resolved.pipeline_modules for job in module.jobs}
+    levels = {"none": 0, "read": 1, "write": 2}
+    union: dict[str, str] = {}
+
+    for workflow in desired.workflows:
+        assert set(workflow.document.get("permissions", {})) <= {"contents"}
+        for name, job in workflow.document["jobs"].items():
+            expected = dict(value.split(": ", 1) for value in metadata[name].permissions)
+            assert job.get("permissions") == expected, (profile, name)
+            for scope, level in expected.items():
+                if levels[level] > levels[union.get(scope, "none")]:
+                    union[scope] = level
+
+    assert desired.privileges == tuple(sorted(f"{scope}: {level}" for scope, level in union.items()))
+
+
+@pytest.mark.parametrize("profile", DAYZERO)
+def test_generated_checks_are_exactly_the_compiled_producers(profile: str) -> None:
+    registry = Registry(MODULE_SOURCE_ROOT)
+    resolved = resolve_profile(registry, profile)
+    desired = compile_desired_state(
+        registry,
+        resolved,
+        _TEMPLATE_EXAMPLE_VARS[profile],
+        pin="EXAMPLE_PIN",
+    )
+    producers = {
+        job.status_check for module in resolved.pipeline_modules for job in module.jobs if job.status_check is not None
+    }
+    generated_jobs = {name for workflow in desired.workflows for name in workflow.document["jobs"]}
+    producer_jobs = {
+        job.name for module in resolved.pipeline_modules for job in module.jobs if job.status_check is not None
+    }
+
+    assert producer_jobs <= generated_jobs
+    assert set(desired.required_status_checks) == producers
+    assert set(desired.settings["default_branch"]["required_status_checks"]) == producers

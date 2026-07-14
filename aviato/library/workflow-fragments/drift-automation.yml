@@ -1,0 +1,10 @@
+uses: "{{ aviato-workflow-prefix }}reusable-consumer-automation.yml{{ aviato-workflow-suffix }}"
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+with:
+  aviato-ref: "{{ aviato-ref }}"
+  local-install: "{{ aviato-local-install }}"
+secrets:
+  settings-token: ${{ secrets.AVIATO_SETTINGS_TOKEN }}

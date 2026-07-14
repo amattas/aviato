@@ -1,12 +1,58 @@
 from __future__ import annotations
 
 import pytest
+import yaml
 
+from aviato.core.compiler import DesiredState, compile_desired_state, compile_partial_desired_state
 from aviato.core.composition import resolve_profile
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT
+from aviato.validation import _TEMPLATE_EXAMPLE_VARS
 
 DAYZERO = ("python-library", "python-service", "python-component", "node-service", "swift-app")
+
+EXPECTED_CI_JOBS = {
+    "python-library": {
+        "ci",
+        "security",
+        "common-lint",
+        "status-bridge",
+        "release",
+        "release-gate",
+        "pypi",
+        "pypi-publish",
+    },
+    "python-service": {"ci", "security", "common-lint", "status-bridge", "release", "release-gate", "docker"},
+    "python-component": {"ci", "security", "common-lint", "status-bridge", "release", "release-gate"},
+    "node-service": {"ci", "security", "common-lint", "status-bridge", "release", "release-gate", "docker"},
+    "swift-app": {"ci", "security", "common-lint", "status-bridge", "release", "release-gate", "app-store-connect"},
+}
+
+EXPECTED_VERIFY_CHECK = {
+    "python-library": "ci / Python CI",
+    "python-service": "ci / Python CI",
+    "python-component": "ci / Python CI",
+    "node-service": "ci / Node CI",
+    "swift-app": "ci / Swift CI",
+}
+
+
+def _compiled(
+    registry: Registry,
+    profile: str,
+    *,
+    docs: bool = False,
+    remove: tuple[str, ...] = (),
+) -> DesiredState:
+    overrides = {"pipelines": {"remove": list(remove)}} if remove else None
+    resolved = resolve_profile(registry, profile, overrides=overrides, docs=docs)
+    return compile_desired_state(
+        registry,
+        resolved,
+        _TEMPLATE_EXAMPLE_VARS[profile],
+        pin="EXAMPLE_PIN",
+        docs=docs,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -30,7 +76,7 @@ def test_security_baseline_present_in_every_profile(registry: Registry, name: st
 @pytest.mark.parametrize("name", DAYZERO)
 def test_release_gate_present_in_every_profile(registry: Registry, name: str) -> None:
     rs = resolve_profile(registry, name)
-    assert "release-gate" in rs.pipelines
+    assert any("release-gate" in {job.name for job in module.jobs} for module in rs.pipeline_modules)
 
 
 @pytest.mark.parametrize("name", DAYZERO)
@@ -54,8 +100,7 @@ def test_app_store_pipeline_declares_secrets_and_macos(registry: Registry) -> No
     rs = resolve_profile(registry, "swift-app")
     asc = next(m for m in rs.pipeline_modules if m.name == "app-store-connect")
     assert "APP_STORE_CONNECT_KEY_ID" in asc.secrets
-    assert asc.runner == "macos"
-    assert asc.environment == "app-store-connect"
+    assert asc.runner == "macos-latest"
     assert asc.environment_input == "environment-name"
 
 
@@ -110,7 +155,7 @@ def test_python_component_custom_typecheck_command_is_rendered(registry: Registr
         pin="1.2.3",
     )
     ci = next(artifact.body for artifact in artifacts if artifact.output == ".github/workflows/aviato-ci.yml")
-    assert 'typecheck-command: "python -m mypy --strict src/acme"' in ci
+    assert yaml.safe_load(ci)["jobs"]["ci"]["with"]["typecheck-command"] == "python -m mypy --strict src/acme"
 
 
 def test_services_deploy_ghcr(registry: Registry) -> None:
@@ -161,14 +206,18 @@ def test_swift_app_requires_macos_and_deploys_app_store(registry: Registry) -> N
     # not a profile-level flag — swift-app composes at least one macos pipeline.
     modules = [registry.pipeline_module(p) for p in rs.pipelines]
     runners = {module.runner for module in modules if module is not None}
-    assert "macos" in runners
+    assert "macos-latest" in runners
 
 
 @pytest.mark.parametrize("name", DAYZERO)
 def test_profile_scaffolds_caller_workflows(registry: Registry, name: str) -> None:
     # §15: a consumer actually receives the verify/release/deploy/security CI caller
     # and the scheduled drift/report workflow — not just composed pipeline names.
-    outputs = {t.output_path for t in resolve_profile(registry, name).templates}
+    from aviato.core.onboarding import resolved_artifacts
+
+    outputs = {
+        artifact.output for artifact in resolved_artifacts(registry, name, _TEMPLATE_EXAMPLE_VARS[name], pin="1")
+    }
     assert ".github/workflows/aviato-ci.yml" in outputs
     assert ".github/workflows/aviato-drift.yml" in outputs
 
@@ -395,20 +444,21 @@ def test_swift_caller_consumes_declared_variables() -> None:
         for i in resolved_artifacts(reg, "swift-app", variables, pin="0")
         if i.output == ".github/workflows/aviato-ci.yml"
     )
-    assert 'scheme: "Acme"' in ci.body
-    assert 'workspace: "AcmeApp.xcworkspace"' in ci.body
-    assert 'environment-name: "production"' in ci.body
-    assert 'export-options-plist: "Config/ExportOptions.plist"' in ci.body
-    assert 'version-command: "./scripts/set-version.sh"' in ci.body
-    assert 'bundle-identifier: "com.acme.app"' in ci.body
-    assert 'team-id: "ABCDE12345"' in ci.body
-    assert 'export-method: "app-store"' in ci.body
+    deploy = yaml.safe_load(ci.body)["jobs"]["app-store-connect"]["with"]
+    assert deploy["scheme"] == "Acme"
+    assert deploy["workspace"] == "AcmeApp.xcworkspace"
+    assert deploy["environment-name"] == "production"
+    assert deploy["export-options-plist"] == "Config/ExportOptions.plist"
+    assert deploy["version-command"] == "./scripts/set-version.sh"
+    assert deploy["bundle-identifier"] == "com.acme.app"
+    assert deploy["team-id"] == "ABCDE12345"
+    assert deploy["export-method"] == "app-store"
     assert "com.example.app" not in ci.body
     assert "TEAMID1234" not in ci.body
 
 
 def test_swift_caller_requires_workspace_or_project() -> None:
-    from aviato.core.errors import DeclarationError
+    from aviato.core.errors import CompositionError
     from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
@@ -418,14 +468,15 @@ def test_swift_caller_requires_workspace_or_project() -> None:
         "team-id": "ABCDE12345",
         "export-method": "app-store",
     }
-    with pytest.raises(DeclarationError, match="workspace|project"):
+    with pytest.raises(CompositionError, match="workspace|project"):
         resolved_artifacts(reg, "swift-app", variables, pin="0")
 
 
 @pytest.mark.parametrize("name", DAYZERO)
 def test_docs_opt_in_composes_docs_pipeline(registry: Registry, name: str) -> None:
-    assert "docs-pages" not in resolve_profile(registry, name).pipelines
-    assert "docs-pages" in resolve_profile(registry, name, docs=True).pipelines
+    docs_pipeline = registry.profile_doc(name)["docs_pipeline"]
+    assert docs_pipeline not in resolve_profile(registry, name).pipelines
+    assert docs_pipeline in resolve_profile(registry, name, docs=True).pipelines
 
 
 @pytest.mark.parametrize("name", DAYZERO)
@@ -438,10 +489,10 @@ def test_docs_profiles_default_pages_serving_off(registry: Registry, name: str) 
 
 
 def test_serve_pages_rejects_non_boolean_declaration(registry: Registry) -> None:
-    from aviato.core.errors import DeclarationError
+    from aviato.core.errors import CompositionError
     from aviato.core.onboarding import resolved_artifacts
 
-    with pytest.raises(DeclarationError, match="serve-pages.*not a boolean"):
+    with pytest.raises(CompositionError, match="serve-pages.*not a boolean"):
         resolved_artifacts(
             registry,
             "python-service",
@@ -547,17 +598,16 @@ def test_default_branch_templates_into_caller_triggers(registry: Registry) -> No
     # follow — otherwise CI/release gating would silently never fire on their branch.
     from aviato.core.onboarding import resolved_artifacts
 
-    def ci_body(variables: dict[str, str]) -> str:
+    def ci_doc(variables: dict[str, str]) -> dict[str, object]:
         arts = resolved_artifacts(registry, "python-library", variables, pin="1", docs=False)
-        return next(a.body for a in arts if a.output == ".github/workflows/aviato-ci.yml")
+        return yaml.safe_load(next(a.body for a in arts if a.output == ".github/workflows/aviato-ci.yml"))
 
     base = {"distribution-name": "d", "import-name": "pkg"}
-    default = ci_body(base)
-    assert 'branches: ["main"]' in default
-    overridden = ci_body({**base, "default-branch": "trunk"})
-    assert 'branches: ["trunk"]' in overridden
-    assert 'branches: ["main"]' not in overridden
-    assert "default-branch: trunk" in overridden
+    default = ci_doc(base)
+    assert default["on"]["push"]["branches"] == ["main"]
+    overridden = ci_doc({**base, "default-branch": "trunk"})
+    assert overridden["on"]["pull_request"]["branches"] == ["trunk"]
+    assert overridden["jobs"]["release-gate"]["with"]["default-branch"] == "trunk"
 
 
 def test_python_service_omits_image_name_input_like_node_service(registry: Registry) -> None:
@@ -580,3 +630,182 @@ def test_python_service_omits_image_name_input_like_node_service(registry: Regis
 
     assert not sets_image_name(py_ci)
     assert not sets_image_name(node_ci)
+
+
+@pytest.mark.parametrize("profile", DAYZERO)
+def test_all_five_profiles_compile_expected_envelopes_jobs_and_checks(registry: Registry, profile: str) -> None:
+    desired = _compiled(registry, profile)
+    workflows = {workflow.output_path: workflow.document for workflow in desired.workflows}
+
+    assert set(workflows) == {
+        ".github/workflows/aviato-ci.yml",
+        ".github/workflows/aviato-drift.yml",
+    }
+    assert set(workflows[".github/workflows/aviato-ci.yml"]["jobs"]) == EXPECTED_CI_JOBS[profile]
+    assert set(workflows[".github/workflows/aviato-drift.yml"]["jobs"]) == {"drift"}
+    assert desired.required_status_checks == tuple(
+        sorted(
+            {
+                EXPECTED_VERIFY_CHECK[profile],
+                "common-lint / Common lint",
+                "security / Security baseline heartbeat",
+            }
+        )
+    )
+
+
+@pytest.mark.parametrize("profile", DAYZERO)
+def test_removing_release_pipeline_removes_release_jobs_and_tag_trigger(registry: Registry, profile: str) -> None:
+    resolved = resolve_profile(registry, profile)
+    release_module = next(
+        module
+        for module in resolved.pipeline_modules
+        if {"release", "release-gate"} <= {job.name for job in module.jobs}
+    )
+    dependent_deploys = tuple(
+        module.name
+        for module in resolved.pipeline_modules
+        if module is not release_module and any("release" in job.needs for job in module.jobs)
+    )
+
+    desired = _compiled(registry, profile, remove=(release_module.name, *dependent_deploys))
+    ci = next(workflow.document for workflow in desired.workflows if workflow.output_path.endswith("aviato-ci.yml"))
+
+    assert {"release", "release-gate", "status-bridge"}.isdisjoint(ci["jobs"])
+    assert "tags" not in ci["on"].get("push", {})
+    assert "workflow_dispatch" not in ci["on"]
+
+
+@pytest.mark.parametrize("profile", DAYZERO)
+def test_removing_docs_pipeline_removes_docs_job_schedule_and_pages_privileges(
+    registry: Registry, profile: str
+) -> None:
+    docs_pipeline = registry.profile_doc(profile)["docs_pipeline"]
+    with_docs = _compiled(registry, profile, docs=True)
+    without_docs = _compiled(registry, profile, docs=True, remove=(docs_pipeline,))
+
+    docs_workflow = next(
+        workflow.document for workflow in with_docs.workflows if workflow.output_path.endswith("aviato-docs.yml")
+    )
+    assert set(docs_workflow["jobs"]) == {"docs-resolve", "docs-release-gate", "docs-security", "docs"}
+    assert set(docs_workflow["on"]) == {"workflow_run"}
+    assert "pages: write" in with_docs.privileges
+    assert "id-token: write" in with_docs.privileges
+    assert all(not workflow.output_path.endswith("aviato-docs.yml") for workflow in without_docs.workflows)
+    assert "pages: write" not in without_docs.privileges
+
+
+@pytest.mark.parametrize("profile", DAYZERO)
+def test_adding_profile_docs_pipeline_matches_docs_opt_in(registry: Registry, profile: str) -> None:
+    docs_pipeline = registry.profile_doc(profile)["docs_pipeline"]
+    added = resolve_profile(
+        registry,
+        profile,
+        overrides={"pipelines": {"add": [docs_pipeline]}},
+        docs=False,
+    )
+    added_desired = compile_desired_state(
+        registry,
+        added,
+        _TEMPLATE_EXAMPLE_VARS[profile],
+        pin="EXAMPLE_PIN",
+    )
+    opted_in = _compiled(registry, profile, docs=True)
+
+    added_docs = next(workflow.document for workflow in added_desired.workflows if workflow.envelope == "docs")
+    opted_in_docs = next(workflow.document for workflow in opted_in.workflows if workflow.envelope == "docs")
+    assert set(added_docs["jobs"]) == {"docs-resolve", "docs-release-gate", "docs-security", "docs"}
+    assert added_docs == opted_in_docs
+
+
+@pytest.mark.parametrize(
+    ("profile", "pipeline", "job", "environment"),
+    [
+        ("python-library", "pypi-publish", "pypi-publish", "pypi"),
+        ("python-service", "ghcr-publish", "docker", "ghcr"),
+        ("node-service", "ghcr-publish", "docker", "ghcr"),
+        ("swift-app", "app-store-connect", "app-store-connect", "app-store-connect"),
+    ],
+)
+def test_removing_deploy_pipeline_removes_environment_and_artifact_owner(
+    registry: Registry,
+    profile: str,
+    pipeline: str,
+    job: str,
+    environment: str,
+) -> None:
+    module = registry.pipeline_module(pipeline)
+    assert module is not None and module.identity is not None
+    default = _compiled(registry, profile)
+    without = _compiled(registry, profile, remove=(pipeline,))
+
+    default_ci = next(artifact for artifact in default.artifacts if artifact.output_path.endswith("aviato-ci.yml"))
+    without_ci = next(artifact for artifact in without.artifacts if artifact.output_path.endswith("aviato-ci.yml"))
+    without_ci_workflow = next(
+        workflow.document for workflow in without.workflows if workflow.output_path.endswith("aviato-ci.yml")
+    )
+    assert environment in default.environments
+    assert module.identity in default_ci.owners
+    assert environment not in without.environments
+    assert module.identity not in without_ci.owners
+    assert job not in without_ci_workflow["jobs"]
+
+
+@pytest.mark.parametrize("profile", DAYZERO)
+def test_generated_callers_have_no_jobs_outside_selected_pipeline_graph(registry: Registry, profile: str) -> None:
+    resolved = resolve_profile(registry, profile, docs=True)
+    desired = compile_desired_state(
+        registry,
+        resolved,
+        _TEMPLATE_EXAMPLE_VARS[profile],
+        pin="EXAMPLE_PIN",
+        docs=True,
+    )
+
+    expected = {job.name for module in resolved.pipeline_modules for job in module.jobs}
+    actual = {job for workflow in desired.workflows for job in workflow.document["jobs"]}
+    assert actual == expected
+
+
+@pytest.mark.parametrize(
+    "profile",
+    ("aviato-library", "python-library", "python-service", "python-component", "node-service", "swift-app"),
+)
+def test_every_v2_profile_declares_workflow_schema_two(registry: Registry, profile: str) -> None:
+    assert registry.profile(profile).workflow_schema == 2
+
+
+def test_partial_graph_preview_preserves_unknown_whole_value_placeholder(registry: Registry) -> None:
+    partial = compile_partial_desired_state(
+        registry,
+        resolve_profile(registry, "node-service"),
+        {"project-name": "preview"},
+        pin="EXAMPLE_PIN",
+    )
+
+    assert "language-variant" in partial.missing_inputs
+    assert ".github/workflows/aviato-ci.yml" in partial.definite_artifacts
+
+
+@pytest.mark.parametrize("profile", DAYZERO)
+def test_rendered_reusable_boolean_inputs_remain_native(registry: Registry, profile: str) -> None:
+    desired = _compiled(registry, profile, docs=True)
+    by_output = {workflow.output_path: workflow.document for workflow in desired.workflows}
+    ci = by_output[".github/workflows/aviato-ci.yml"]["jobs"]
+    assert isinstance(ci["common-lint"]["with"]["local-install"], bool)
+    if profile != "swift-app":
+        assert isinstance(ci["ci"]["with"]["run-typecheck"], bool)
+    if profile in {"python-library", "python-service", "python-component", "node-service"}:
+        assert isinstance(ci["ci"]["with"]["run-build"], bool)
+    docs = by_output[".github/workflows/aviato-docs.yml"]["jobs"]["docs"]
+    assert isinstance(docs["with"]["serve-pages"], bool)
+
+
+def test_compiled_workflow_yaml_uses_lint_clean_sequence_indentation(registry: Registry) -> None:
+    desired = _compiled(registry, "python-library")
+    ci = next(workflow.body for workflow in desired.workflows if workflow.output_path.endswith("aviato-ci.yml"))
+    drift = next(workflow.body for workflow in desired.workflows if workflow.output_path.endswith("aviato-drift.yml"))
+
+    assert "    branches:\n      - main\n" in ci
+    assert "  schedule:\n    - cron: 23 5 * * 1\n" in ci
+    assert "  schedule:\n    - cron: 17 6 * * 1\n" in drift

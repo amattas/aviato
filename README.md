@@ -34,7 +34,7 @@ in consumer repositories rather than supported by release publish workflows.
 - `aviato/library/rulesets/*.json` - GitHub ruleset templates.
 - `.github/workflows/reusable-*.yml` - reusable CI, release, deploy, and security workflows.
 - `templates/profile-*.yml`, `templates/consumer-automation.yml` - composed, copyable
-  caller-workflow examples for consumer repos (rendered from the scaffold bundles; they
+  caller-workflow examples for consumer repos (rendered from the schema-v2 graph; they
   include the always-on security baseline, §2.13). Use these composed callers rather than
   hand-wiring a single reusable workflow, which can omit the required baseline.
 - `aviato/` - Python CLI implementation.
@@ -277,11 +277,12 @@ and deployment jobs for common repo shapes:
 - `profile-node-service.yml`
 - `profile-swift-app.yml`
 
-These are **examples rendered from** the authoritative scaffold bundles
-(`aviato/library/scaffold/files/wf-*.yml`); `aviato validate` fails if they drift,
-and `python3 scripts/regen-templates.py` regenerates them. Prefer materializing the
-real workflows with `aviato sync` / `aviato onboard --write`; committed examples
-use the literal `EXAMPLE_PIN` placeholder instead of a production ref. Use
+These are **examples rendered from** the authoritative schema-v2 graph:
+`aviato/library/pipelines.yaml`, `workflow-envelopes.yaml`, and the one-job files under
+`workflow-fragments/`. `aviato validate` fails if they drift, and
+`python3 scripts/regen-templates.py` regenerates them. Prefer materializing the real
+workflows with `aviato sync` / `aviato onboard --write`; committed examples use the
+literal `EXAMPLE_PIN` placeholder instead of a production ref. Use
 `aviato onboard TARGET --profile PROFILE` to list the exact artifacts, secrets,
 rulesets, and protected deployment environments for a repository. The Python
 library plan requires `pypi`, container profiles require `ghcr`, and the Swift

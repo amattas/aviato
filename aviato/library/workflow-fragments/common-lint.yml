@@ -1,0 +1,7 @@
+if: ${{ github.ref_type != 'tag' }}
+uses: "{{ aviato-workflow-prefix }}reusable-common-lint.yml{{ aviato-workflow-suffix }}"
+permissions:
+  contents: read
+with:
+  aviato-ref: "{{ aviato-ref }}"
+  local-install: "{{ aviato-local-install }}"

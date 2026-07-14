@@ -259,16 +259,31 @@ def test_fetched_snapshot_bytes_drive_onboard_and_ruleset_output(
     from aviato import cli
 
     snapshot_root = _snapshot_tree(tmp_path)
-    workflows = yaml.safe_load(
-        (snapshot_root / "bundles/workflows/python-library-wf.yaml").read_text(encoding="utf-8")
-    )
+    workflows = yaml.safe_load((snapshot_root / "bundles/workflows/python-library-wf.yaml").read_text(encoding="utf-8"))
     workflows["add"].append("fetched-only-pipeline")
     (snapshot_root / "bundles/workflows/python-library-wf.yaml").write_text(
         yaml.safe_dump(workflows, sort_keys=False), encoding="utf-8"
     )
     pipelines = yaml.safe_load((snapshot_root / "pipelines.yaml").read_text(encoding="utf-8"))
-    pipelines["fetched-only-pipeline"] = {"privileges": []}
+    pipelines["fetched-only-pipeline"] = {
+        "identity": "pipeline/fetched-only/v2",
+        "envelope": "ci",
+        "privileges": [],
+        "runner": "ubuntu-latest",
+        "jobs": {
+            "fetched-only": {
+                "identity": "job/fetched-only/v2",
+                "fragment": "workflow-fragments/fetched-only.yml",
+                "permissions": [],
+                "runner": "ubuntu-latest",
+            }
+        },
+    }
     (snapshot_root / "pipelines.yaml").write_text(yaml.safe_dump(pipelines, sort_keys=False), encoding="utf-8")
+    (snapshot_root / "workflow-fragments/fetched-only.yml").write_text(
+        'runs-on: ubuntu-latest\npermissions: {}\nsteps:\n  - run: "true"\n',
+        encoding="utf-8",
+    )
     snapshot = SimpleNamespace(registry=Registry(snapshot_root), policy_root=snapshot_root)
     monkeypatch.setattr(cli, "_open_published_snapshot", lambda _pin: snapshot)
 
@@ -339,16 +354,19 @@ def test_ruleset_audit_and_lint_consumers_use_snapshot_policy_not_installed_data
     assert payloads
 
     repo = tmp_path / "consumer"
-    (repo / "aviato/library/scaffold/files").mkdir(parents=True)
-    (repo / "aviato/library/scaffold/files/wf-example.yml").write_text(
+    (repo / "aviato/library/workflow-fragments").mkdir(parents=True)
+    (repo / "aviato/library/workflow-fragments/example.yml").write_text(
         "jobs:\n  call:\n    uses: example/fetched-library/.github/workflows/reusable.yml@1\n",
         encoding="utf-8",
     )
-    assert action_pin_violations(
-        repo,
-        policy_root=snapshot_root,
-        library_repository="example/fetched-library",
-    ) == []
+    assert (
+        action_pin_violations(
+            repo,
+            policy_root=snapshot_root,
+            library_repository="example/fetched-library",
+        )
+        == []
+    )
 
     monkeypatch.setattr(audit, "tags", lambda _repo: ["fetched-7", "1.2.3"])
     monkeypatch.setattr(audit, "remote_url", lambda _repo: "")

@@ -1,5 +1,6 @@
 name: swift-app
 identity: aviato-profile/swift-app/v1
+workflow_schema: 2
 workflows: swift-app-wf
 scaffold: swift-app-sc
 settings: baseline
@@ -46,4 +47,9 @@ notes:
   - "Apple App Store Connect deploy requires stored secrets behind a protected environment (§13.4)."
   - "The deploy secrets are declared by the deploy plug-in, never in the declaration (§6.6)."
   - "version_source.locations is a day-zero placeholder; override it for your Xcode layout (§12.3)."
-docs_pipeline: docs-pages
+docs_pipeline: docs-swift-app
+workflow_parameters:
+  workflow-name: Aviato Swift App
+  codeql-languages: swift
+  codeql-runner: macos-latest
+  verify-status-check: "ci / Swift CI"

@@ -51,17 +51,17 @@ resolves to a published tag/branch. `--allow-unresolved-pin` is only for
 intentional offline/test scaffolds. Re-onboarding an adopted repo preserves the
 existing pin; use `aviato repin` to move it.
 
-**Onboarding materializes the caller workflows.** A profile's scaffold bundle includes
-the `.github/workflows/aviato-ci.yml` (verify/release/deploy/security) and
-`aviato-drift.yml` (scheduled drift/report) callers, so `sync`/`onboard --write` give a
-consumer the actual workflows required by §15 — not just composed pipeline names. The
-common scaffold also seeds `CONTRIBUTING.md`, `.github/CODEOWNERS`, and issue/PR
-templates (seed-once, §12.1). Caller
-workflows live as packaged bodies under `aviato/library/scaffold/files/wf-*.yml` — these
-are the **authoritative source**. The top-level `templates/profile-*.yml` and
-`templates/consumer-automation.yml` are documented copyable EXAMPLES **rendered from**
-those scaffold bodies (run `python3 scripts/regen-templates.py` after editing a caller);
-`aviato validate` fails if they drift (`_check_template_scaffold_parity`).
+**Onboarding materializes the caller workflows.** Schema-v2 profiles select pipelines
+from `aviato/library/pipelines.yaml`, including their trigger contributions;
+`workflow-envelopes.yaml` supplies workflow identity, name, output path, and top-level
+permissions, while one-job files under `workflow-fragments/` supply the jobs. Together
+they are the **authoritative source** for `aviato-ci.yml`,
+`aviato-drift.yml`, and the optional `aviato-docs.yml`. The common scaffold still seeds
+`CONTRIBUTING.md`, `.github/CODEOWNERS`, and issue/PR templates (seed-once, §12.1).
+The top-level `templates/profile-*.yml` and `templates/consumer-automation.yml` are
+documented copyable EXAMPLES rendered from that graph (run
+`python3 scripts/regen-templates.py` after graph changes); `aviato validate` fails if
+they drift (`_check_template_scaffold_parity`).
 
 Node callers now assume npm 11.10+ for install hardening. The reusable Node
 workflow defaults to Node 24, fails closed on npm <11.10 (the `min-release-age`
@@ -151,11 +151,11 @@ wheel and a pip-installed `aviato` can render rulesets — §5.6/§11.3). Loader
 
 ### Validation is the gate
 
-`aviato/validation.py` (`validate()`) is what CI runs and what guards correctness. It checks required files exist, YAML/JSON parse, `policy.yml` examples actually match/reject the pattern, pattern drift across embedded copies, template `uses:` references point at workflows that exist, release workflows are tag-only (no `release/*`, no checkout by repository name, must reference `GITHUB_REF_TYPE`/`tag`), third-party actions/tools are digest-pinned (§11.3, `_check_action_pins` → `aviato lint-actions`, which delegates `uses:`/image pinning to a bundled-config **zizmor** and runs a **fail-closed** `curl|bash` check — never interpreter enumeration, which fails open and flapped for 8 cycles; the same impl runs in every consumer's CI via `reusable-common-lint.yml`, with no grep mirror to drift), the `templates/profile-*.yml` examples match the rendered scaffold (`_check_template_scaffold_parity`), the Library bootstrap declaration resolves all managed artifacts through local refs (`_check_library_bootstrap`), and the inline `highest.py` heredocs embedded in the GHCR/Pages deploy workflows still agree with `core.versioning.is_highest` (§8.14/§13.2, `_check_monotonic_alias_parity` — runs the snippet against a battery of cases so a hand-copied comparator can't silently drift). Adding a new required workflow/file or release workflow means updating `REQUIRED_FILES` / `RELEASE_WORKFLOWS`.
+`aviato/validation.py` (`validate()`) is what CI runs and what guards correctness. It checks required files exist, YAML/JSON parse, `policy.yml` examples actually match/reject the pattern, pattern drift across embedded copies, template `uses:` references point at workflows that exist, release workflows are tag-only (no `release/*`, no checkout by repository name, must reference `GITHUB_REF_TYPE`/`tag`), third-party actions/tools are digest-pinned (§11.3, `_check_action_pins` → `aviato lint-actions`, which delegates `uses:`/image pinning to a bundled-config **zizmor** and runs a **fail-closed** `curl|bash` check — never interpreter enumeration, which fails open and flapped for 8 cycles; the same impl runs in every consumer's CI via `reusable-common-lint.yml`, with no grep mirror to drift), the `templates/profile-*.yml` examples match the graph-compiled workflows (`_check_template_scaffold_parity`), the Library bootstrap declaration resolves all managed artifacts through local refs (`_check_library_bootstrap`), and the inline `highest.py` heredocs embedded in the GHCR/Pages deploy workflows still agree with `core.versioning.is_highest` (§8.14/§13.2, `_check_monotonic_alias_parity` — runs the snippet against a battery of cases so a hand-copied comparator can't silently drift). Adding a new required workflow/file or release workflow means updating `REQUIRED_FILES` / `RELEASE_WORKFLOWS`.
 
 ### Reusable workflows share one command contract
 
-All language CI workflows (`reusable-python-ci`, `reusable-node-ci`, `reusable-swift-ci`) expose the same inputs: `working-directory`, `install-command`, `lint-command`, `test-command`, `build-command`, and the `run-*` toggles. Keep this contract identical across languages; unsupported steps use an empty command and a disabled default. The `templates/profile-*.yml` examples compose these reusable workflows for a repo shape and stay thin (select workflow + supply inputs, no duplicated release/protection logic); they are rendered from the scaffold bodies (see "Onboarding materializes the caller workflows"), not hand-edited.
+All language CI workflows (`reusable-python-ci`, `reusable-node-ci`, `reusable-swift-ci`) expose the same inputs: `working-directory`, `install-command`, `lint-command`, `test-command`, `build-command`, and the `run-*` toggles. Keep this contract identical across languages; unsupported steps use an empty command and a disabled default. The `templates/profile-*.yml` examples compose these reusable workflows for a repo shape and stay thin (select workflow + supply inputs, no duplicated release/protection logic); they are rendered from the schema-v2 pipeline/envelope/fragment graph (see "Onboarding materializes the caller workflows"), not hand-edited.
 
 ## Conventions
 

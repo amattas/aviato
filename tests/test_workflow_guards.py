@@ -18,6 +18,7 @@ from aviato.validation import _TEMPLATE_EXAMPLE_VARS
 
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 SCAFFOLD_FILES = REPO_ROOT / "aviato" / "library" / "scaffold" / "files"
+WORKFLOW_FRAGMENTS = REPO_ROOT / "aviato" / "library" / "workflow-fragments"
 JsonDict = dict[str, Any]
 
 
@@ -61,6 +62,18 @@ def _rendered_python_library_docs_workflow() -> JsonDict:
     return loaded
 
 
+def _rendered_docs_workflows() -> dict[str, JsonDict]:
+    registry = Registry(MODULE_SOURCE_ROOT)
+    rendered: dict[str, JsonDict] = {}
+    for profile, variables in _TEMPLATE_EXAMPLE_VARS.items():
+        artifacts = resolved_artifacts(registry, profile, variables, pin="1", docs=True)
+        body = next(a.body for a in artifacts if a.output == ".github/workflows/aviato-docs.yml")
+        loaded = yaml.safe_load(body)
+        assert isinstance(loaded, dict)
+        rendered[profile] = loaded
+    return rendered
+
+
 def test_serializing_workflows_declare_per_repo_concurrency() -> None:
     # review #4/#26: the scheduled drift run, the release run, and the deploy publishes must
     # SERIALIZE per repo (queue, never cancel) so concurrent runs can't race a force-push / alias
@@ -93,11 +106,8 @@ def test_docs_callers_gate_workflow_run_to_origin_repo() -> None:
     # review #27: a workflow_run runs in the BASE repo with full privileges; the resolve job's
     # privileged checkout must be gated to runs that originated in THIS repo, so fork-PR head code
     # is never checked out in the privileged context.
-    docs_callers = sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml"))
-    assert docs_callers
-    for caller in docs_callers:
-        body = caller.read_text(encoding="utf-8")
-        assert "head_repository.full_name == github.repository" in body, caller.name
+    body = (WORKFLOW_FRAGMENTS / "docs-resolve.yml").read_text(encoding="utf-8")
+    assert "head_repository.full_name == github.repository" in body
 
 
 def test_docs_callers_resolve_tolerates_no_tag() -> None:
@@ -105,11 +115,8 @@ def test_docs_callers_resolve_tolerates_no_tag() -> None:
     # tag (every ordinary merge), and under `set -euo pipefail` a failing command
     # substitution fails the assignment — the resolve job went red on every non-release
     # run instead of cleanly emitting release=false. The pipeline must end `|| true`.
-    docs_callers = sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml"))
-    assert docs_callers
-    for caller in docs_callers:
-        body = caller.read_text(encoding="utf-8")
-        assert '| head -n1 || true)"' in body, f"{caller.name}: resolve must tolerate the no-tag case"
+    body = (WORKFLOW_FRAGMENTS / "docs-resolve.yml").read_text(encoding="utf-8")
+    assert '| head -n1 || true)"' in body
 
 
 def test_docs_callers_resolve_bare_aviato_release_tags() -> None:
@@ -118,16 +125,10 @@ def test_docs_callers_resolve_bare_aviato_release_tags() -> None:
     # release commit. A v-prefixed glob (`v[0-9]*...`) can NEVER match a real Aviato tag,
     # so docs deploy would silently never run — and these callers have no template/parity
     # coverage, so nothing else catches it. Guard the tag matcher directly.
-    docs_callers = sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml"))
-    assert docs_callers, "no docs caller scaffolds found"
-    for caller in docs_callers:
-        body = caller.read_text(encoding="utf-8")
-        assert "--list" in body, f"{caller.name} no longer resolves a release tag via git tag --list"
-        assert "'v[0-9]" not in body, (
-            f"{caller.name} matches a v-prefixed tag glob, which no Aviato release tag ever uses "
-            f"(policy rejects the v-prefix) — docs deploy would never trigger"
-        )
-        assert "--list '[0-9]" in body, f"{caller.name} must match bare-SemVer release tags"
+    body = (WORKFLOW_FRAGMENTS / "docs-resolve.yml").read_text(encoding="utf-8")
+    assert "--list" in body
+    assert "'v[0-9]" not in body
+    assert "--list '[0-9]" in body
 
 
 def test_consumer_automation_jitters_scheduled_runs() -> None:
@@ -198,14 +199,33 @@ def test_deploys_consume_the_gated_sha() -> None:
 
 
 def test_callers_pass_gated_sha_to_deploys() -> None:
-    # Every scaffold caller body that wires a deploy must thread the gate's output —
-    # a missed caller ships a consumer whose deploy cannot start (required input).
-    for caller in sorted(SCAFFOLD_FILES.glob("wf-*.yml")):
-        body = caller.read_text(encoding="utf-8")
-        if not any(d in body for d in _DEPLOY_WORKFLOWS):
-            continue
-        threaded = "gated-sha: ${{ needs.release-gate.outputs.gated-sha }}" in body
-        assert threaded, f"{caller.name} wires a deploy without threading the gated SHA (C12-W2)"
+    # Every graph-composed caller that wires a deploy must thread the gate's output —
+    # a missed profile ships a consumer whose deploy cannot start (required input).
+    found: set[tuple[str, str, str]] = set()
+    registry = Registry(MODULE_SOURCE_ROOT)
+    deploy_workflows = set(_DEPLOY_WORKFLOWS)
+    for profile, variables in _TEMPLATE_EXAMPLE_VARS.items():
+        artifacts = resolved_artifacts(registry, profile, variables, pin="1", docs=True)
+        for artifact in artifacts:
+            if not artifact.output.startswith(".github/workflows/"):
+                continue
+            workflow = yaml.safe_load(artifact.body)
+            for job_name, job in workflow["jobs"].items():
+                reusable = str(job.get("uses", "")).split("/")[-1].split("@")[0]
+                if reusable not in deploy_workflows:
+                    continue
+                found.add((profile, artifact.output, job_name))
+                gate_job = "docs-release-gate" if artifact.output.endswith("aviato-docs.yml") else "release-gate"
+                assert job["with"]["gated-sha"] == f"${{{{ needs.{gate_job}.outputs.gated-sha }}}}", profile
+
+    expected = {
+        ("python-library", ".github/workflows/aviato-ci.yml", "pypi"),
+        ("python-service", ".github/workflows/aviato-ci.yml", "docker"),
+        ("node-service", ".github/workflows/aviato-ci.yml", "docker"),
+        ("swift-app", ".github/workflows/aviato-ci.yml", "app-store-connect"),
+    }
+    expected.update((profile, ".github/workflows/aviato-docs.yml", "docs") for profile in _TEMPLATE_EXAMPLE_VARS)
+    assert found == expected
 
 
 def _release_gate_step(name: str) -> JsonDict:
@@ -480,7 +500,9 @@ def test_pypi_reusable_only_builds_vetted_artifact_and_local_caller_publishes() 
     assert upload["with"]["if-no-files-found"] == "error"
     assert upload["with"]["retention-days"] == 1
 
-    caller_body = (SCAFFOLD_FILES / "wf-python-library.yml").read_text(encoding="utf-8")
+    caller_body = "\n".join(
+        (WORKFLOW_FRAGMENTS / name).read_text(encoding="utf-8") for name in ("pypi-build.yml", "pypi-publish.yml")
+    )
     assert "consumer-publisher-present: true" in caller_body
     assert "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b" in caller_body
     assert "actions/download-artifact@v7" in caller_body
@@ -495,7 +517,7 @@ def test_pypi_reusable_only_builds_vetted_artifact_and_local_caller_publishes() 
         permissions = job.get("permissions") or {}
         assert permissions.get("id-token") != "write", job_name
         assert permissions.get("attestations") != "write", job_name
-    publish_body = caller_body[caller_body.index("  pypi-publish:") :]
+    publish_body = caller_body
     assert '"repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}"' in publish_body
     assert "${{ needs.release-gate.outputs.gated-sha }}" in publish_body
     assert "eval " not in publish_body
@@ -738,10 +760,8 @@ def test_app_store_receipt_asset_and_url_share_exact_basename() -> None:
 
 
 def test_docs_deploy_callers_do_not_grant_inert_actions_read() -> None:
-    for caller in sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml")):
-        body = caller.read_text(encoding="utf-8")
-        docs_job = body[body.index("\n  docs:") :]
-        assert "      actions: read" not in docs_job, caller.name
+    for profile, workflow in _rendered_docs_workflows().items():
+        assert "actions" not in workflow["jobs"]["docs"]["permissions"], profile
 
 
 def test_release_workflow_splits_derive_from_write_job() -> None:
@@ -804,7 +824,7 @@ def test_npm_workflows_harden_installs_before_installing() -> None:
 
 
 def test_node_service_scaffold_uses_npm11_capable_node_default() -> None:
-    body = (SCAFFOLD_FILES / "wf-node-service.yml").read_text(encoding="utf-8")
+    body = (WORKFLOW_FRAGMENTS / "node-verify.yml").read_text(encoding="utf-8")
     assert 'node-version: "24"' in body
     assert 'node-version: "22"' not in body
     assert 'lint-command: "npx --no-install eslint ."' in body
@@ -1006,7 +1026,7 @@ def test_consumer_automation_settings_drift_token_is_optional_and_read_only() ->
 
     # The scaffolded caller (read as text — it carries {{ }} placeholders) passes the
     # consumer's optional secret through to the reusable workflow.
-    caller = (SCAFFOLD_FILES / "wf-drift.yml").read_text(encoding="utf-8")
+    caller = (WORKFLOW_FRAGMENTS / "drift-automation.yml").read_text(encoding="utf-8")
     assert "settings-token: ${{ secrets.AVIATO_SETTINGS_TOKEN }}" in caller
     assert "administration:" not in caller
 
@@ -1250,12 +1270,11 @@ def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
 
 def test_docs_security_ref_uses_full_tag_and_release_gate_sha() -> None:
     """Out-of-band docs scans must use the exact target already accepted by the release gate."""
-    for caller in sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml")):
-        body = caller.read_text(encoding="utf-8")
-        security_block = body[body.index("\n  security:") : body.index("\n  docs:")]
-        assert "needs: [resolve, release-gate]" in security_block, caller.name
-        assert "ref: refs/tags/${{ needs.resolve.outputs.tag }}" in security_block, caller.name
-        assert "sha: ${{ needs.release-gate.outputs.gated-sha }}" in security_block, caller.name
+    for profile, workflow in _rendered_docs_workflows().items():
+        security = workflow["jobs"]["docs-security"]
+        assert security["needs"] == ["docs-resolve", "docs-release-gate"], profile
+        assert security["with"]["ref"] == "refs/tags/${{ needs.docs-resolve.outputs.tag }}", profile
+        assert security["with"]["sha"] == "${{ needs.docs-release-gate.outputs.gated-sha }}", profile
 
 
 def test_aviato_ref_pin_guard_present_and_regex_correct() -> None:
@@ -1416,14 +1435,16 @@ def test_ci_callers_enable_release_pr_check_dispatch() -> None:
     # caller declares the workflow_dispatch trigger, and a caller cannot grant a
     # called workflow more than its own ceiling — so every CI caller that composes
     # the release pipeline must carry both the trigger and `actions: write`.
-    ci_callers = [
-        p for p in sorted(SCAFFOLD_FILES.glob("wf-*.yml")) if "reusable-release.yml" in p.read_text(encoding="utf-8")
-    ]
-    assert ci_callers, "no CI caller bodies compose reusable-release.yml?"
-    for caller in ci_callers:
-        body = caller.read_text(encoding="utf-8")
-        assert "workflow_dispatch:" in body, f"{caller.name}: release-branch check dispatch needs the trigger"
-        assert "actions: write" in body, f"{caller.name}: caller ceiling must cover the release job's actions: write"
+    registry = Registry(MODULE_SOURCE_ROOT)
+    for profile, variables in _TEMPLATE_EXAMPLE_VARS.items():
+        body = next(
+            artifact.body
+            for artifact in resolved_artifacts(registry, profile, variables, pin="1")
+            if artifact.output == ".github/workflows/aviato-ci.yml"
+        )
+        workflow = yaml.safe_load(body)
+        assert "workflow_dispatch" in workflow["on"], profile
+        assert workflow["jobs"]["release"]["permissions"]["actions"] == "write", profile
 
 
 def test_ci_callers_publish_dispatch_status_bridge_from_resolved_pipeline_contexts() -> None:

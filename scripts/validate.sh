@@ -95,8 +95,9 @@ else
 fi
 
 # Must run from the repo root: .yamllint.yml's ignore globs are relative, and an
-# absolute-path invocation bypasses them (the scaffold caller bodies carry {{ }}
-# placeholders that are deliberately excluded). Same invocation as
+# absolute-path invocation bypasses them (legacy scaffold template bodies carry {{ }}
+# placeholders and are deliberately excluded by relative globs). Graph fragments remain
+# in lint scope. Same invocation as
 # reusable-common-lint.yml's blocking step.
 if command -v mypy >/dev/null 2>&1; then
   # finding 38: strict typing gates the package (scope/strictness from [tool.mypy]).

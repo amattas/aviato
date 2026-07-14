@@ -1,29 +1,20 @@
-# aviato:managed profile=aviato-library version=0 hash=5b416bda75a05aac385bef88c08766b80cd0b762c53a87f0e901f5e1b79c7578 inputs=307e43b687a78cf99b23e701676ea5cb05fffc648763d97e0fe72226a435e556
+# aviato:managed profile=aviato-library version=0 hash=88c462d522b02c68f10f3db39b32f900cf191826a1f8bc39da36c3a0fb5d436f inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
 name: Aviato Drift Detection
-
-# Consumer-side scheduled automation (§5.5/§5.6). Detects file/settings drift and
-# reports (proposals + tracking issues); never mutates protected settings. The
-# schedule is jittered inside the reusable workflow so a fleet on the same cron
-# does not stampede the platform.
-
-on:
+'on':
   schedule:
-    - cron: "17 6 * * 1"
+    - cron: 17 6 * * 1
   workflow_dispatch: {}
-
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-
+  contents: read
 jobs:
   drift:
     uses: ./.github/workflows/reusable-consumer-automation.yml
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
     with:
-      aviato-ref: 0
+      aviato-ref: '0'
       local-install: true
     secrets:
-      # Optional: define AVIATO_SETTINGS_TOKEN (admin-capable) to enable settings-drift
-      # detection; without it only file drift runs (the platform token cannot read
-      # branch protection / rulesets, §5.6).
       settings-token: ${{ secrets.AVIATO_SETTINGS_TOKEN }}

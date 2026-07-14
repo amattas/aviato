@@ -1,5 +1,6 @@
 name: python-component
 identity: aviato-profile/python-component/v1
+workflow_schema: 2
 # Zero-deploy profile (§10.3): GitHub release is the only output, no deploy plug-in.
 workflows: python-component-wf
 scaffold: python-component-sc
@@ -24,7 +25,7 @@ variables:
   - {name: import-name, type: string}
   # Same strict-mypy default as python-library; a consumer can disable without
   # hand-editing the managed caller (review finding 49).
-  - {name: run-typecheck, type: string, required: false, default: "true"}
+  - {name: run-typecheck, type: boolean, required: false, default: true}
   - {name: typecheck-command, type: string, required: false, default: "python -m mypy --strict ."}
 version_source:
   locations: [pyproject.toml]
@@ -33,4 +34,11 @@ toolchain:
   formatter: ruff
   type_checker: mypy
   test_runner: pytest
-docs_pipeline: docs-pages
+docs_pipeline: docs-python-component
+workflow_parameters:
+  workflow-name: Aviato Python Component
+  codeql-languages: python
+  codeql-runner: ubuntu-latest
+  verify-status-check: "ci / Python CI"
+  python-install-command: "python -m pip install -e .[dev]"
+  python-run-build: true

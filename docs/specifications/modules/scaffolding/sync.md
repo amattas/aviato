@@ -31,9 +31,17 @@ Legacy workflow schema v1 is read-only at this boundary; sync that would change
 the graph requires a repin to v2. Partial desired states are preview-only and
 can never enter materialization.
 
+The repository generator reads the target checkout's Library graph and bootstrap
+declaration. It reproduces exactly eight committed outputs: five profile CI
+examples, the consumer drift example, and the canonically marked bootstrap CI
+and drift workflows. A second regeneration must be byte-stable. Validation also
+checks every rendered reusable call's declared inputs/secrets and native scalar
+types, proves the declared runner and status producer against the called workflow
+AST, and proves a nested `environment-name` is consumed as a called job environment.
+
 ```mermaid
 flowchart TD
-    A["Pinned resolved set + complete typed variables"] --> B["Compile selected graph → DesiredState<br/>base ∪ pipeline templates + generated callers"]
+    A["Pinned resolved set + complete typed variables"] --> B["Compile selected graph → DesiredState<br/>ci + drift + optional docs envelopes<br/>base ∪ pipeline templates + generated callers"]
     B --> C["For each output path"]
     C --> S0{"Seed-once / non-annotatable?"}
     S0 -- yes --> S1{"Already present?"}

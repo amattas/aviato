@@ -1,0 +1,11 @@
+if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
+needs: [ci, security, common-lint]
+uses: "{{ aviato-workflow-prefix }}reusable-release.yml{{ aviato-workflow-suffix }}"
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+with:
+  aviato-ref: "{{ aviato-ref }}"
+  local-install: "{{ aviato-local-install }}"
+  build-number: "{{ build-number }}"

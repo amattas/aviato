@@ -1,129 +1,144 @@
 name: Aviato Python Service
-
-on:
+'on':
   pull_request:
-    branches: ["main"]
+    branches:
+      - main
   push:
-    branches: ["main"]
+    branches:
+      - main
     tags:
-      - "*.*.*"
+      - '*.*.*'
   schedule:
-    - cron: "23 5 * * 1"
-  # §5.9: lets the release propose phase dispatch this workflow at the
-  # release/<next> branch (workflow_dispatch is exempt from GITHUB_TOKEN event
-  # suppression), so the release PR reports the same required status checks as
-  # any human branch.
-  workflow_dispatch:
-
-# Granted to the UNION of every called reusable workflow's permissions: a caller
-# cannot elevate the token for a called workflow, so it must grant >= their needs
-# (release propose-dispatch: actions:write; GHCR/PyPI provenance: id-token+attestations:write).
+    - cron: 23 5 * * 1
+  workflow_dispatch: {}
 permissions:
-  contents: write
-  pull-requests: write
-  security-events: write
-  actions: write
-  statuses: write
-  packages: write
-  id-token: write
-  attestations: write
-
+  contents: read
 jobs:
   ci:
     if: ${{ github.ref_type != 'tag' && github.event_name != 'schedule' }}
     uses: amattas/aviato/.github/workflows/reusable-python-ci.yml@EXAMPLE_PIN
+    permissions:
+      contents: read
     with:
-      python-version: "3.12"
-      # A container service installs its runtime deps from requirements.txt (the same file the
-      # Dockerfile uses) plus the seeded dev tools — NO editable/package install (no wheel,
-      # §13.2). Each install reads a requirements file (which pins its own versions, §11.3) and
-      # sits alone on its line so the supply-chain pin scan stays clean. The runtime step is
-      # conditional so a deps-less service still works.
-      install-command: |
-        python -m pip install -r requirements-dev.txt
-        if [ -f requirements.txt ]; then
-          python -m pip install -r requirements.txt
-        fi
-      lint-command: "python -m ruff check ."
-      # Non-strict type-check for a service (lower adoption friction than the library default's
-      # mypy --strict); still typed, just not strict-mode.
-      typecheck-command: "python -m mypy ."
-      test-command: "python -m pytest --cov --cov-report=term-missing"
-      # The build artifact is the Docker image (the `docker` job below), not a wheel — so the
-      # source-CI wheel build is disabled (mirrors node-service, §13.2).
+      python-version: '3.12'
+      install-command: "python -m pip install -r requirements-dev.txt\nif [ -f requirements.txt\
+        \ ]; then\n  python -m pip install -r requirements.txt\nfi\n"
+      lint-command: python -m ruff check .
+      test-command: python -m pytest --cov --cov-report=term-missing
+      build-command: python -m build
+      typecheck-command: python -m mypy .
+      run-typecheck: true
       run-build: false
-
-  security:
-    # Runs on PRs AND on the release tag, so source scans gate the verify pipeline
-    # and are re-run on the release ref before any deploy (§2.13/§5.14).
-    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@EXAMPLE_PIN
-    with:
-      codeql-languages: "python"
-
   common-lint:
     if: ${{ github.ref_type != 'tag' }}
     uses: amattas/aviato/.github/workflows/reusable-common-lint.yml@EXAMPLE_PIN
+    permissions:
+      contents: read
     with:
       aviato-ref: EXAMPLE_PIN
       local-install: false
-
+  docker:
+    needs:
+      - release
+      - release-gate
+      - security
+    if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result
+      == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released
+      == 'true') }}
+    uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@EXAMPLE_PIN
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      id-token: write
+      attestations: write
+    with:
+      context: .
+      dockerfile: Dockerfile
+      platforms: linux/amd64
+      release-tag: ${{ needs.release.outputs.tag }}
+      gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
+      environment-name: ghcr
+  release:
+    if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
+    needs:
+      - ci
+      - security
+      - common-lint
+    uses: amattas/aviato/.github/workflows/reusable-release.yml@EXAMPLE_PIN
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    with:
+      aviato-ref: EXAMPLE_PIN
+      local-install: false
+  release-gate:
+    needs:
+      - release
+    if: ${{ always() && (github.ref_type == 'tag' || needs.release.outputs.released
+      == 'true') }}
+    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@EXAMPLE_PIN
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    with:
+      default-branch: main
+      require-merged-pr: true
+      release-tag: ${{ needs.release.outputs.tag }}
+  security:
+    uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@EXAMPLE_PIN
+    permissions:
+      contents: read
+      pull-requests: read
+      security-events: write
+      actions: read
+    with:
+      codeql-languages: python
+      codeql-runner: ubuntu-latest
   status-bridge:
     if: ${{ always() && github.event_name == 'workflow_dispatch' }}
-    needs: [ci, security, common-lint]
+    needs:
+      - ci
+      - security
+      - common-lint
     runs-on: ubuntu-latest
     permissions:
       statuses: write
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Publish Python CI status
+      - name: Publish verify status
         env:
-          STATUS_CONTEXT: "ci / Python CI"
-          STATUS_STATE: ${{ needs.ci.result == 'success' && 'success' || 'failure' }}
-        run: &publish_status |
-          set -euo pipefail
-          gh api --method POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
-            -f state="${STATUS_STATE}" \
-            -f context="${STATUS_CONTEXT}"
+          STATUS_CONTEXT: ci / Python CI
+          STATUS_STATE: ${{ needs.ci.result == 'success' && 'success' || 'failure'
+            }}
+        run: 'set -euo pipefail
+
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}"
+          -f state="${STATUS_STATE}" -f context="${STATUS_CONTEXT}"
+
+          '
       - name: Publish security baseline status
         env:
-          STATUS_CONTEXT: "security / Security baseline heartbeat"
-          STATUS_STATE: ${{ needs.security.result == 'success' && 'success' || 'failure' }}
-        run: *publish_status
+          STATUS_CONTEXT: security / Security baseline heartbeat
+          STATUS_STATE: ${{ needs.security.result == 'success' && 'success' || 'failure'
+            }}
+        run: 'set -euo pipefail
+
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}"
+          -f state="${STATUS_STATE}" -f context="${STATUS_CONTEXT}"
+
+          '
       - name: Publish common lint status
         env:
-          STATUS_CONTEXT: "common-lint / Common lint"
-          STATUS_STATE: ${{ needs.common-lint.result == 'success' && 'success' || 'failure' }}
-        run: *publish_status
+          STATUS_CONTEXT: common-lint / Common lint
+          STATUS_STATE: ${{ needs.common-lint.result == 'success' && 'success' ||
+            'failure' }}
+        run: 'set -euo pipefail
 
-  release:
-    if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
-    needs: [ci, security, common-lint]
-    uses: amattas/aviato/.github/workflows/reusable-release.yml@EXAMPLE_PIN
-    with:
-      aviato-ref: EXAMPLE_PIN
-      local-install: false
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}"
+          -f state="${STATUS_STATE}" -f context="${STATUS_CONTEXT}"
 
-  # Gate before deploy. Two entry points: IN-RUN (release just tagged on this push;
-  # release-tag = its output) or a manual tag push (classic tag-ref context).
-  release-gate:
-    needs: [release]
-    if: ${{ always() && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
-    uses: amattas/aviato/.github/workflows/reusable-release-gate.yml@EXAMPLE_PIN
-    with:
-      default-branch: main
-      require-merged-pr: true
-      release-tag: ${{ needs.release.outputs.tag }}
-
-  docker:
-    needs: [release, release-gate, security]
-    if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
-    uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@EXAMPLE_PIN
-    with:
-      # No image-name: defaults to the repo slug in reusable-docker-ghcr.yml (R4-2, mirrors node-service).
-      context: "."
-      dockerfile: "Dockerfile"
-      platforms: "linux/amd64"
-      release-tag: ${{ needs.release.outputs.tag }}
-      gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
+          '

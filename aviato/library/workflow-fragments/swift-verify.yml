@@ -1,0 +1,13 @@
+if: ${{ github.ref_type != 'tag' && github.event_name != 'schedule' }}
+uses: "{{ aviato-workflow-prefix }}reusable-swift-ci.yml{{ aviato-workflow-suffix }}"
+permissions:
+  contents: read
+with:
+  xcode-version: "{{ xcode-version }}"
+  working-directory: "{{ working-directory }}"
+  scheme: "{{ product-scheme }}"
+  workspace: "{{ workspace }}"
+  project: "{{ project }}"
+  destination: "{{ destination }}"
+  install-command: "brew install swift-format swiftlint"
+  run-install: true

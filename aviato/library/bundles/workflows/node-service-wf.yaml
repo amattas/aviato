@@ -2,6 +2,6 @@ name: node-service-wf
 extends: base
 add:
   - node-verify
-  - release
+  - release-node
   - ghcr-publish
 remove: []

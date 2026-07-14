@@ -1,0 +1,26 @@
+if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository }}
+runs-on: ubuntu-latest
+permissions:
+  contents: read
+outputs:
+  tag: ${{ steps.tag.outputs.tag }}
+  release: ${{ steps.tag.outputs.release }}
+steps:
+  - uses: actions/checkout@v4
+    with:
+      persist-credentials: false
+      ref: ${{ github.event.workflow_run.head_sha }}
+      fetch-depth: 0
+      fetch-tags: true
+  - id: tag
+    env:
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    run: |
+      set -euo pipefail
+      tag="$(git tag --points-at "${HEAD_SHA}" --list '[0-9]*.[0-9]*.[0-9]*' | grep -E '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$' | head -n1 || true)"
+      if [ -n "${tag}" ]; then
+        echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+        echo "release=true" >> "${GITHUB_OUTPUT}"
+      else
+        echo "release=false" >> "${GITHUB_OUTPUT}"
+      fi

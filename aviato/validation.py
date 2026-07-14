@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import re
 import tomllib
+from collections.abc import Mapping
 from importlib import metadata
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -28,6 +29,7 @@ REQUIRED_FILES = [
     # (drops typed privileges/status-checks, disables the undeclared-pipeline check) and without
     # denylist.txt the §9b agnosticism scan can't run — yet validate() reported no missing file.
     "aviato/library/pipelines.yaml",
+    "aviato/library/workflow-envelopes.yaml",
     # §13.3 docs scaffold metadata: the Zensical site config (seed-once) and the
     # managed docs toolchain requirements. Load-bearing — a missing metadata file
     # silently drops the artifact from the docs opt-in scaffold set.
@@ -127,16 +129,14 @@ def _check_release_pattern_drift(root: Path, data_root: Path, policy: dict[str, 
         if f"TAG_FORMAT_DESCRIPTION: '{description}'" not in workflow_text:
             errors.append(f"{rel_path} TAG_FORMAT_DESCRIPTION env differs from policy.yml tag_format_description")
 
-    # finding 39: the wf-docs caller bodies post-filter the tag list with a grep over the
-    # SAME policy grammar — those literals were outside every drift check (and outside
-    # template parity, since docs callers have no committed template copy).
-    scaffold_dir = root / "aviato" / "library" / "scaffold" / "files"
-    for body_path in sorted(scaffold_dir.glob("wf-docs-*.yml")):
-        if f"grep -E '{pattern}'" not in body_path.read_text(encoding="utf-8"):
-            errors.append(
-                f"{body_path.relative_to(root)} does not embed the policy release tag pattern "
-                f"in its resolve grep (finding 39)"
-            )
+    # finding 39: the shared docs resolver post-filters the tag list with the SAME
+    # policy grammar. Keep that graph-owned fragment tied to the release policy.
+    resolve_fragment = root / "aviato/library/workflow-fragments/docs-resolve.yml"
+    if resolve_fragment.is_file() and f"grep -E '{pattern}'" not in resolve_fragment.read_text(encoding="utf-8"):
+        errors.append(
+            "aviato/library/workflow-fragments/docs-resolve.yml does not embed the policy release tag pattern "
+            "in its resolve grep (finding 39)"
+        )
 
     # Drift-check the STATIC ruleset templates, not the rendered output. Rendering injects
     # the policy value (rulesets._patch_*), so comparing the rendered payload to policy is a
@@ -229,6 +229,136 @@ def _check_remote_reusable_reference(
         errors.append(f"{source} advertises @{ref}; template examples must use a placeholder pin")
 
 
+def _check_reusable_call_contract(root: Path, job: dict[str, Any], *, source: str, errors: list[str]) -> None:
+    """Validate a rendered caller's with/secrets keys and native input types."""
+
+    uses = job.get("uses")
+    if not isinstance(uses, str) or _REMOTE_WORKFLOW_MARKER not in uses and not uses.startswith("./"):
+        return
+    workflow_name = uses.split(_REMOTE_WORKFLOW_MARKER, 1)[-1].split("@", 1)[0]
+    if uses.startswith("./"):
+        workflow_name = Path(uses).name
+    target = root / ".github/workflows" / workflow_name
+    if not target.is_file():
+        return
+    document = load_yaml(target)
+    on_block = document.get("on") or cast(dict[object, Any], document).get(True) or {}
+    call = on_block.get("workflow_call", {}) if isinstance(on_block, dict) else {}
+    declared_inputs = call.get("inputs", {}) if isinstance(call, dict) else {}
+    declared_secrets = call.get("secrets", {}) if isinstance(call, dict) else {}
+    actual_inputs = job.get("with", {}) or {}
+    actual_secrets = job.get("secrets", {}) or {}
+    if not all(isinstance(value, dict) for value in (declared_inputs, declared_secrets, actual_inputs, actual_secrets)):
+        errors.append(f"{source} reusable call contract must use mappings")
+        return
+    unknown_inputs = sorted(set(actual_inputs) - set(declared_inputs))
+    unknown_secrets = sorted(set(actual_secrets) - set(declared_secrets))
+    if unknown_inputs:
+        errors.append(f"{source} passes undeclared reusable input(s) {unknown_inputs} to {workflow_name}")
+    if unknown_secrets:
+        errors.append(f"{source} passes undeclared reusable secret(s) {unknown_secrets} to {workflow_name}")
+    missing = sorted(
+        name
+        for name, spec in declared_inputs.items()
+        if isinstance(spec, dict) and spec.get("required") is True and name not in actual_inputs
+    )
+    if missing:
+        errors.append(f"{source} omits required reusable input(s) {missing} for {workflow_name}")
+    missing_secrets = sorted(
+        name
+        for name, spec in declared_secrets.items()
+        if isinstance(spec, dict) and spec.get("required") is True and name not in actual_secrets
+    )
+    if missing_secrets:
+        errors.append(f"{source} omits required reusable secret(s) {missing_secrets} for {workflow_name}")
+    expected_types: dict[str, type[Any] | tuple[type[Any], ...]] = {
+        "boolean": bool,
+        "number": (int, float),
+        "string": str,
+    }
+    for name, value in actual_inputs.items():
+        spec = declared_inputs.get(name)
+        declared_type = spec.get("type") if isinstance(spec, dict) else None
+        expected = expected_types.get(declared_type) if isinstance(declared_type, str) else None
+        wrong_type = expected is not None and not isinstance(value, expected)
+        if declared_type == "number" and isinstance(value, bool):
+            wrong_type = True
+        if wrong_type:
+            errors.append(
+                f"{source} input {name!r} for {workflow_name} has {type(value).__name__}, expected {declared_type}"
+            )
+
+
+def _check_reusable_metadata_contract(
+    root: Path,
+    job_name: str,
+    job: dict[str, Any],
+    metadata: Any,
+    variables: Mapping[str, Any],
+    *,
+    source: str,
+    errors: list[str],
+) -> None:
+    uses = job.get("uses")
+    if not isinstance(uses, str):
+        return
+    workflow_name = Path(uses.split("@", 1)[0]).name
+    target = root / ".github/workflows" / workflow_name
+    if not target.is_file():
+        return
+    called = load_yaml(target)
+    called_jobs = called.get("jobs", {})
+    if not isinstance(called_jobs, dict):
+        return
+    runners: set[str] = set()
+    for value in called_jobs.values():
+        if isinstance(value, dict) and isinstance(value.get("runs-on"), str):
+            runners.add(value["runs-on"])
+    if metadata.runner and metadata.runner not in runners:
+        errors.append(
+            f"{source} job {job_name!r} runner {metadata.runner!r} is not provided by {workflow_name}: "
+            f"{sorted(runners)}"
+        )
+    expected_environment = metadata.environment
+    if metadata.environment_input:
+        expected_environment = variables.get(metadata.environment_input)
+    actual_environment = job.get("environment")
+    if actual_environment is None and isinstance(job.get("with"), dict):
+        actual_environment = job["with"].get("environment-name")
+    if expected_environment is not None and actual_environment != expected_environment:
+        errors.append(
+            f"{source} job {job_name!r} environment {actual_environment!r} does not match metadata "
+            f"{expected_environment!r}"
+        )
+    if expected_environment is not None and isinstance(job.get("with"), dict) and "environment-name" in job["with"]:
+        called_environments = {
+            value.get("environment", {}).get("name")
+            if isinstance(value.get("environment"), dict)
+            else value.get("environment")
+            for value in called_jobs.values()
+            if isinstance(value, dict) and value.get("environment") is not None
+        }
+        if "${{ inputs.environment-name }}" not in called_environments:
+            errors.append(
+                f"{source} passes environment-name to {workflow_name}, but the called workflow does not "
+                "consume it as a job environment"
+            )
+    if metadata.status_check:
+        prefix, separator, display = metadata.status_check.partition(" / ")
+        called_names: set[str] = set()
+        for key, value in called_jobs.items():
+            if not isinstance(value, dict):
+                continue
+            called_name = value.get("name", key)
+            if isinstance(called_name, str):
+                called_names.add(called_name)
+        if separator != " / " or prefix != job_name or display not in called_names:
+            errors.append(
+                f"{source} job {job_name!r} status check {metadata.status_check!r} is not produced by "
+                f"{workflow_name} jobs {sorted(called_names)}"
+            )
+
+
 def _check_template_references(root: Path, repository: str, errors: list[str]) -> None:
     workflow_dir = root / ".github/workflows"
     workflow_files = {path.name for path in _yaml_files(workflow_dir)}
@@ -247,6 +377,7 @@ def _check_template_references(root: Path, repository: str, errors: list[str]) -
                 errors=errors,
                 reject_main=True,
             )
+            _check_reusable_call_contract(root, job, source=str(path.relative_to(root)), errors=errors)
 
 
 def _check_release_workflow_contract(root: Path, repository: str, errors: list[str]) -> None:
@@ -300,31 +431,31 @@ def _check_docs_caller_name_parity(root: Path, errors: list[str]) -> None:
     error anywhere). Pin each pair together.
     """
 
-    def compare(docs_rel: str, ci_rel: str) -> None:
-        docs_body = root / docs_rel
-        ci_body = root / ci_rel
-        missing = [rel for rel, path in ((docs_rel, docs_body), (ci_rel, ci_body)) if not path.is_file()]
-        if missing:
-            errors.append(
-                f"docs caller name parity sources missing for {docs_rel}/{ci_rel}: {', '.join(missing)} (finding 40)"
-            )
-            return
-        ci_name = re.search(r"^name:\s*(.+?)\s*$", ci_body.read_text(encoding="utf-8"), re.MULTILINE)
-        trigger = re.search(r'workflows:\s*\[\s*"([^"]+)"\s*\]', docs_body.read_text(encoding="utf-8"))
-        if ci_name is None or trigger is None:
-            errors.append(f"{docs_rel}/{ci_rel}: could not extract workflow_run trigger or name (finding 40)")
-            return
-        if trigger.group(1) != ci_name.group(1):
-            errors.append(
-                f"{docs_rel} workflow_run trigger {trigger.group(1)!r} != {ci_rel} "
-                f"display name {ci_name.group(1)!r} — a rename silently kills docs deploys (finding 40)"
-            )
+    from .core.compiler import compile_desired_state
+    from .core.composition import resolve_profile
+    from .core.registry import Registry
 
-    scaffold = "aviato/library/scaffold/files"
-    for profile in _PROFILE_TEMPLATE_FILES:
-        docs_rel = f"{scaffold}/wf-docs-{profile}.yml"
-        compare(docs_rel, f"{scaffold}/wf-{profile}.yml")
-        compare(docs_rel, _PROFILE_TEMPLATE_FILES[profile])
+    registry = Registry(root / "aviato/library")
+    for profile, variables in _TEMPLATE_EXAMPLE_VARS.items():
+        try:
+            desired = compile_desired_state(
+                registry,
+                resolve_profile(registry, profile, docs=True),
+                variables,
+                pin=TEMPLATE_EXAMPLE_PIN,
+                docs=True,
+            )
+            by_output = {workflow.output_path: workflow.document for workflow in desired.workflows}
+            ci_name = by_output[".github/workflows/aviato-ci.yml"]["name"]
+            trigger_names = by_output[".github/workflows/aviato-docs.yml"]["on"]["workflow_run"]["workflows"]
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{profile} compiled docs caller name parity could not be validated: {exc} (finding 40)")
+            continue
+        if tuple(trigger_names) != (ci_name,):
+            errors.append(
+                f"{profile} docs workflow_run trigger {trigger_names!r} != CI display name {ci_name!r} "
+                "— a rename silently kills docs deploys (finding 40)"
+            )
 
 
 # finding 41: every unavoidable data/workflow copy of the Library repository is anchored on
@@ -429,12 +560,12 @@ def _check_library_repository_copies(root: Path, policy: dict[str, Any], reposit
 
 
 def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
-    """finding 43: shared literals maintained by hand across caller bodies must not desync.
+    """finding 43: shared literals maintained in workflow fragments must not desync.
 
-    These have no policy.yml home and no template-parity coverage; editing one profile's
-    caller must not silently leave its siblings behind.
+    These have no policy.yml home, so editing a graph fragment must not silently leave
+    related fragments behind.
     """
-    scaffold_dir = root / "aviato" / "library" / "scaffold" / "files"
+    scaffold_dir = root / "aviato" / "library" / "workflow-fragments"
 
     def _values(glob: str, regex: str) -> dict[str, list[str]]:
         found: dict[str, list[str]] = {}
@@ -444,34 +575,13 @@ def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
                 found[body.name] = hits
         return found
 
-    versions = _values("wf-python-*.yml", r'python-version:\s*"([^"]+)"')
+    versions = _values("python-verify.yml", r'python-version:\s*"([^"]+)"')
     if len({v for vs in versions.values() for v in vs}) > 1:
-        errors.append(f"python-version differs across scaffold callers: {versions} (finding 43)")
+        errors.append(f"python-version differs across workflow fragments: {versions} (finding 43)")
 
-    crons = _values("wf-*.yml", r'cron:\s*"([^"]+)"')
-    ci_crons = {n: v for n, v in crons.items() if not n.startswith("wf-docs-") and n != "wf-drift.yml"}
-    if len({v for vs in ci_crons.values() for v in vs}) > 1:
-        errors.append(f"CI caller cron schedules differ: {ci_crons} (finding 43)")
-
-    pins = _values("wf-docs-*.yml", r"pydoc-markdown==([0-9.]+)")
+    pins = _values("docs-python-*.yml", r"pydoc-markdown==([0-9.]+)")
     if len({v for vs in pins.values() for v in vs}) > 1:
         errors.append(f"pydoc-markdown pins differ across docs callers: {pins} (finding 43)")
-
-    resolve_blocks: dict[str, str] = {}
-    for body in sorted(scaffold_dir.glob("wf-docs-*.yml")):
-        # second-review fix: the boundary tolerates trailing comments on the next job
-        # key, and a body with NO resolve block is itself an error (the most divergent
-        # state must not fail open).
-        match = re.search(r"(?ms)^  resolve:\n.*?(?=^  [A-Za-z0-9_-]+:|\Z)", body.read_text(encoding="utf-8"))
-        if match is None:
-            errors.append(f"{body.name} has no resolve job; docs callers share one resolve block (finding 43)")
-            continue
-        resolve_blocks[body.name] = match.group(0)
-    if len(set(resolve_blocks.values())) > 1:
-        errors.append(
-            "the wf-docs resolve jobs have drifted apart; keep the shared resolve block "
-            "byte-identical across docs callers (finding 43)"
-        )
 
     toolchain_path = root / "aviato/library/docs-toolchain.yaml"
     if not toolchain_path.is_file():
@@ -483,7 +593,7 @@ def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"invalid docs toolchain pin source: {exc}")
         else:
-            pins = _values("wf-docs-*.yml", r"pydoc-markdown==([0-9.]+)")
+            pins = _values("docs-python-*.yml", r"pydoc-markdown==([0-9.]+)")
             actual = {pin for values in pins.values() for pin in values}
             if actual != {pydoc_pin}:
                 errors.append(
@@ -560,10 +670,10 @@ def _check_action_pins(root: Path, repository: str, errors: list[str]) -> None:
         errors.append(f"unpinned third-party action/tool (§11.3): {violation}")
 
 
-# The documented copyable caller templates are RENDERED from the authoritative scaffold
-# bundles with these example variables — they are not a hand-maintained second copy.
-# The parity check below fails if they drift, so editing a scaffold caller forces a
-# regenerate (scripts/regen-templates.py).
+# The documented copyable caller templates are COMPILED from the authoritative pipeline
+# graph with these example variables — they are not a hand-maintained second copy.
+# The parity check below fails if they drift, so editing the graph forces a regenerate
+# (scripts/regen-templates.py).
 _TEMPLATE_EXAMPLE_VARS: dict[str, dict[str, str]] = {
     "python-library": {"distribution-name": "your-distribution", "import-name": "your_package"},
     # A container service declares no packaging/image vars — the GHCR image defaults to the repo
@@ -601,17 +711,17 @@ def _rendered_caller(root: Path, profile: str, output: str) -> str | None:
 
 
 def _check_scaffold_workflow_yaml(root: Path, repository: str, errors: list[str]) -> None:
-    """Each RENDERED scaffold workflow body must be valid YAML (§16).
+    """Each graph-compiled workflow body must be valid YAML (§16).
 
-    The scaffold ``wf-*.yml`` bodies carry ``{{ var }}`` placeholders, so they aren't valid YAML
-    until rendered — `_check_workflow_yaml` only parses committed `.github/workflows`/`templates`.
-    Render each profile's caller workflows (docs off AND on) with the example vars and parse them,
-    so a syntax error in a scaffolded caller is caught here, not first in a consumer's repo.
+    One-job fragments carry ``{{ var }}`` placeholders, so validate each profile's
+    compiled callers (docs off AND on) with example variables before consumers receive them.
     """
+    from .core.composition import resolve_profile
     from .core.onboarding import resolved_artifacts
     from .core.registry import Registry
+    from .core.variables import resolve_declared_variables
 
-    # review #25: the docs callers (rendered only with docs=True) have NO committed template, so
+    # review #25: docs workflows (rendered only with docs=True) have NO committed template, so
     # _check_template_references never validates their `uses:` targets. Verify here that every
     # reusable-workflow ref in a rendered caller resolves to a workflow that actually exists, so a
     # renamed/deleted reusable workflow can't ship a broken caller to consumers undetected.
@@ -620,9 +730,16 @@ def _check_scaffold_workflow_yaml(root: Path, repository: str, errors: list[str]
     for profile, example_vars in _TEMPLATE_EXAMPLE_VARS.items():
         for docs in (False, True):
             try:
+                resolved = resolve_profile(registry, profile, docs=docs)
+                exact_variables = resolve_declared_variables(resolved.variables, example_vars)
+                metadata = {
+                    (registry.workflow_envelope(module.envelope or "").output_path, job.name): job
+                    for module in resolved.pipeline_modules
+                    for job in module.jobs
+                }
                 artifacts = resolved_artifacts(registry, profile, example_vars, pin=TEMPLATE_EXAMPLE_PIN, docs=docs)
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"scaffold render failed for {profile!r} (docs={docs}): {exc}")
+                errors.append(f"workflow graph render failed for {profile!r} (docs={docs}): {exc}")
                 continue
             for artifact in artifacts:
                 if artifact.seed_once or not artifact.output.startswith(".github/workflows/"):
@@ -633,24 +750,43 @@ def _check_scaffold_workflow_yaml(root: Path, repository: str, errors: list[str]
                     doc = yaml.safe_load(artifact.body)
                 except Exception as exc:  # noqa: BLE001
                     errors.append(
-                        f"rendered scaffold workflow {artifact.output} ({profile!r}, docs={docs}) "
-                        f"is invalid YAML: {exc}"
+                        f"rendered graph workflow {artifact.output} ({profile!r}, docs={docs}) is invalid YAML: {exc}"
                     )
                     continue
-                for job in _walk_jobs(doc if isinstance(doc, dict) else {}):
+                jobs = doc.get("jobs", {}) if isinstance(doc, dict) else {}
+                for job_name, job in jobs.items():
+                    if not isinstance(job_name, str) or not isinstance(job, dict):
+                        continue
                     uses = job.get("uses")
                     if isinstance(uses, str):
                         _check_remote_reusable_reference(
                             uses,
-                            source=f"rendered scaffold workflow {artifact.output} ({profile!r}, docs={docs})",
+                            source=f"rendered graph workflow {artifact.output} ({profile!r}, docs={docs})",
                             repository=repository,
                             workflow_files=workflow_files,
                             errors=errors,
                         )
+                        _check_reusable_call_contract(
+                            root,
+                            job,
+                            source=f"rendered graph workflow {artifact.output} ({profile!r}, docs={docs})",
+                            errors=errors,
+                        )
+                        metadata_key = (artifact.output, job_name)
+                        if metadata_key in metadata:
+                            _check_reusable_metadata_contract(
+                                root,
+                                job_name,
+                                job,
+                                metadata[metadata_key],
+                                exact_variables,
+                                source=f"rendered graph workflow {artifact.output} ({profile!r}, docs={docs})",
+                                errors=errors,
+                            )
 
 
 def _check_template_scaffold_parity(root: Path, errors: list[str]) -> None:
-    """Documented caller templates must equal the rendered scaffold output (no drift)."""
+    """Documented caller templates must equal graph-compiled output (no drift)."""
     checks = [(p, f, ".github/workflows/aviato-ci.yml") for p, f in _PROFILE_TEMPLATE_FILES.items()]
     checks.append(("python-library", "templates/consumer-automation.yml", ".github/workflows/aviato-drift.yml"))
     for profile, rel_path, output in checks:
@@ -660,13 +796,13 @@ def _check_template_scaffold_parity(root: Path, errors: list[str]) -> None:
         try:
             expected = _rendered_caller(root, profile, output)
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"{rel_path}: scaffold caller could not be rendered: {exc}")
+            errors.append(f"{rel_path}: workflow graph could not be rendered: {exc}")
             continue
         if expected is None:
             errors.append(f"{rel_path}: profile {profile!r} no longer produces {output}")
         elif path.read_text(encoding="utf-8") != expected:
             errors.append(
-                f"{rel_path} is stale: it does not match the rendered scaffold caller for "
+                f"{rel_path} is stale: it does not match the graph-compiled caller for "
                 f"{profile!r}. Regenerate with scripts/regen-templates.py."
             )
 
@@ -685,7 +821,7 @@ def _check_status_bridge_contexts(root: Path, errors: list[str]) -> None:
 
     registry = Registry(root / "aviato" / "library")
     for profile in _PROFILE_TEMPLATE_FILES:
-        source = f"aviato/library/scaffold/files/wf-{profile}.yml"
+        source = f"compiled {profile} release status bridge"
         try:
             expected = {
                 module.status_check
@@ -771,27 +907,6 @@ def _check_library_bootstrap(root: Path, repository: str, errors: list[str]) -> 
             continue
         text = path.read_text(encoding="utf-8")
         if text != body:
-            # A pristine legacy marker is intentionally one safe sync away from the
-            # current marker grammar. Do not make the Library's own validation gate
-            # impossible to run during that migration, but accept only the legacy
-            # marker case: body/profile/version/hash safety must all still agree.
-            from .core.marker import content_hash, parse_marker_from_text, strip_marker_from_text
-
-            live_marker = parse_marker_from_text(text)
-            expected_marker = parse_marker_from_text(body)
-            live_body = strip_marker_from_text(text)
-            clean_legacy = (
-                live_marker is not None
-                and expected_marker is not None
-                and live_marker.input_hash is None
-                and live_marker.profile == expected_marker.profile
-                and live_marker.version == expected_marker.version
-                and live_marker.hash == content_hash(live_body)
-                and live_body == strip_marker_from_text(body)
-            )
-        else:
-            clean_legacy = True
-        if not clean_legacy:
             errors.append(f"{rel_path} is stale: it does not match the rendered Library bootstrap artifact (§5.10)")
         if f"{repository}/.github/workflows/" in text:
             errors.append(f"{rel_path} uses a released Aviato ref in bootstrap; use local workflow refs (§5.10)")

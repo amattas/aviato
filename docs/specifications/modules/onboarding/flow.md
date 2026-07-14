@@ -41,6 +41,13 @@ onboarding requires every typed variable. A fresh preview may instead compile a
 inputs, but it never has a plan ID and cannot mutate. A missing schema is legacy
 v1: read-only inspection remains available, while graph-changing onboarding
 fails with repin guidance.
+The graph composes shared `ci`, `drift`, and optional `docs` envelopes. Pipeline
+modules contribute the complete job AST plus their trigger slices; the compiler
+derives exact job-level permissions, required checks, protected environments,
+and managed-artifact owners from that selected union. Documentation opt-in is
+composed before the consumer add/remove delta, so an explicit removal is
+authoritative. A release removal must also remove any dependent deployment
+pipeline; missing graph dependencies fail closed.
 **Two paths, one shape:**
 - *Provision-new*: create the repository, apply **minimal** protection (§2.11),
   scaffold, first commit, then apply **full** protection.
@@ -69,6 +76,9 @@ environment job required by PyPI Trusted Publishing. Register that exact caller
 path and environment with PyPI/TestPyPI after onboarding. The reusable build
 workflow requires `consumer-publisher-present: true`; older callers fail loudly
 with an `aviato sync` instruction instead of completing without publishing.
+The local publisher retains annotated-tag peeling, repeated fresh-tag checks,
+HTTPS/index validation, attestations, alternate-index support, and published-file
+hash confirmation; graph generation changes ownership, not release trust.
 **Partially-provisioned state & recovery (normative):** between minimal and full
 protection the repo is in a defined **partially-provisioned** state. Minimal
 protection (no force-push, no deletion; no PR-required gate that would block the
@@ -98,7 +108,7 @@ flowchart TD
     Pin --> Vars["Resolve required variables<br/>(flags > declaration > env > enumerated auto-detect),<br/>then write NON-SECRET into declaration (secret-typed = hard error, §8.15)"]
     Vars --> V{"All required vars present?"}
     V -- no --> Vfail["FAIL CLOSED: list missing vars + how to set"]
-    V -- yes --> Compile["Compile + validate one pinned DesiredState<br/>jobs · triggers · artifacts · settings · envs · checks"]
+    V -- yes --> Compile["Compile + validate one pinned DesiredState<br/>ci + drift + optional docs envelopes<br/>jobs · triggers · artifacts · settings · envs · checks"]
     Compile --> Mode{"New or existing?"}
 
     Mode -- new --> N1["Create repository"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -60,7 +61,9 @@ def test_library_has_no_self_docs_site_but_consumer_docs_assets_remain() -> None
     assert not (REPO_ROOT / ".github/workflows/aviato-docs.yml").exists()
     assert not (REPO_ROOT / ".github/aviato.seed.json").exists()
     assert (REPO_ROOT / "starter/docs-site/docs.yml").is_file()
-    assert (REPO_ROOT / "aviato/library/scaffold/files/wf-docs-python-library.yml").is_file()
+    assert (REPO_ROOT / "aviato/library/workflow-envelopes.yaml").is_file()
+    assert (REPO_ROOT / "aviato/library/workflow-fragments/docs-python-library.yml").is_file()
+    assert (REPO_ROOT / "aviato/library/workflow-fragments/docs-resolve.yml").is_file()
 
 
 def test_docs_pin_sync_rejects_floating_source_pin(tmp_path: Path) -> None:
@@ -90,8 +93,11 @@ def test_committed_docs_pin_outputs_are_current() -> None:
 
 def test_regen_templates_check_lists_every_drift(tmp_path: Path) -> None:
     regen = _load_script("regen-templates.py")
-    expected = regen.render_templates()
     root = tmp_path / "repo"
+    shutil.copytree(REPO_ROOT / "aviato/library", root / "aviato/library")
+    (root / ".github").mkdir(parents=True)
+    shutil.copyfile(REPO_ROOT / ".github/aviato.yaml", root / ".github/aviato.yaml")
+    expected = regen.render_templates(root)
     for rel_path, body in expected.items():
         path = root / rel_path
         path.parent.mkdir(parents=True, exist_ok=True)

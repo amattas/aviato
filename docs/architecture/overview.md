@@ -24,7 +24,7 @@ those consumers.
 The current implementation is intentionally small:
 
 - reusable GitHub Actions workflows;
-- reusable caller workflow templates and composition-backed scaffold bodies;
+- graph-composed caller workflows built from envelopes, pipelines, and one-job fragments;
 - GitHub repository ruleset payloads;
 - operator-run scripts for auditing and applying rulesets;
 - generated or local reporting artifacts.

@@ -1,13 +1,15 @@
 name: aviato-library
 identity: aviato-profile/aviato-library/v1
+workflow_schema: 2
 workflows: python-library-wf
 scaffold: aviato-library-sc
 settings: baseline
 variables:
   - {name: serve-pages, type: boolean, required: false, default: false}
+  - {name: default-branch, type: string, required: false, default: main}
   # finding 38: the typing migration is COMPLETE for the package and tests;
   # the Library now runs the gate it mandates for consumers.
-  - {name: run-typecheck, type: string, required: false, default: "true"}
+  - {name: run-typecheck, type: boolean, required: false, default: true}
   - {name: typecheck-command, type: string, required: false, default: "python -m mypy --strict aviato tests"}
   # Used only when the optional docs capability is enabled for this profile.
   - {name: import-name, type: string}
@@ -15,7 +17,14 @@ variables:
   - {name: owner, type: string, required: false}
   - {name: repo, type: string, required: false}
   - {name: project-name, type: string, required: false}
-docs_pipeline: docs-pages
+docs_pipeline: docs-python-library
+workflow_parameters:
+  workflow-name: Aviato Python Library
+  codeql-languages: python
+  codeql-runner: ubuntu-latest
+  verify-status-check: "ci / Python CI"
+  python-install-command: "python -m pip install -e .[dev]"
+  python-run-build: true
 version_source:
   locations: [pyproject.toml]
 toolchain:

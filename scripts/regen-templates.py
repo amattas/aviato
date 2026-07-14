@@ -3,7 +3,7 @@
 
 The ``templates/profile-*.yml`` and ``templates/consumer-automation.yml`` files are
 human-readable EXAMPLES of what ``aviato sync``/``onboard`` materializes. They are
-rendered from the authoritative scaffold bundles (never hand-maintained), so this
+compiled from the authoritative pipeline graph, envelopes, and one-job fragments, so this
 script is the only sanctioned way to update them. ``aviato validate`` fails if they
 drift from the rendered output (see validation._check_template_scaffold_parity).
 
@@ -15,10 +15,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from aviato.core.onboarding import resolved_artifacts
+from aviato.core.declaration import load_declaration
+from aviato.core.onboarding import materialize_items, resolved_artifacts
 from aviato.core.pathguard import confined_target
 from aviato.core.registry import Registry
-from aviato.paths import MODULE_SOURCE_ROOT, REPO_ROOT
+from aviato.core.scaffold import render_managed
+from aviato.paths import REPO_ROOT
 from aviato.validation import _PROFILE_TEMPLATE_FILES, _TEMPLATE_EXAMPLE_VARS, TEMPLATE_EXAMPLE_PIN
 
 
@@ -29,7 +31,12 @@ def _body(registry: Registry, profile: str, output: str) -> str:
     return next(a.body for a in artifacts if a.output == output)
 
 
-_OUTPUTS = tuple(Path(path) for path in _PROFILE_TEMPLATE_FILES.values()) + (Path("templates/consumer-automation.yml"),)
+_OUTPUTS = (
+    Path(".github/workflows/aviato-ci.yml"),
+    Path(".github/workflows/aviato-drift.yml"),
+    *(Path(path) for path in _PROFILE_TEMPLATE_FILES.values()),
+    Path("templates/consumer-automation.yml"),
+)
 
 
 def _preflight_outputs(root: Path) -> dict[Path, Path]:
@@ -40,25 +47,47 @@ def _preflight_outputs(root: Path) -> dict[Path, Path]:
     }
 
 
-def _render_templates() -> dict[Path, str]:
-    registry = Registry(MODULE_SOURCE_ROOT)
+def _render_templates(root: Path) -> dict[Path, str]:
+    source_root = root / "aviato/library"
+    if not source_root.is_dir():
+        raise ValueError(f"missing Library module source: {source_root}")
+    registry = Registry(source_root)
     rendered: dict[Path, str] = {}
     for profile, rel_path in _PROFILE_TEMPLATE_FILES.items():
         rendered[Path(rel_path)] = _body(registry, profile, ".github/workflows/aviato-ci.yml")
     rendered[Path("templates/consumer-automation.yml")] = _body(
         registry, "python-library", ".github/workflows/aviato-drift.yml"
     )
+    declaration = load_declaration(root / ".github/aviato.yaml")
+    if not declaration.bootstrap:
+        raise ValueError(".github/aviato.yaml must declare bootstrap: true")
+    bootstrap = materialize_items(
+        registry,
+        declaration.profile,
+        declaration.variables,
+        pin=declaration.version,
+        docs=declaration.docs,
+        bootstrap=True,
+        overrides=declaration.overrides,
+    )
+    bootstrap_by_output = {
+        item.output: render_managed(item, profile=declaration.profile, version=declaration.version)
+        for item in bootstrap
+        if not item.seed_once
+    }
+    for output in (".github/workflows/aviato-ci.yml", ".github/workflows/aviato-drift.yml"):
+        rendered[Path(output)] = bootstrap_by_output[output]
     return rendered
 
 
 def render_templates(root: Path = REPO_ROOT) -> dict[Path, str]:
     _preflight_outputs(root)
-    return _render_templates()
+    return _render_templates(root)
 
 
 def regenerate(root: Path = REPO_ROOT, *, check: bool = False) -> list[Path]:
     targets = _preflight_outputs(root)
-    rendered = _render_templates()
+    rendered = _render_templates(root)
     drifted: list[Path] = []
     for rel_path, body in rendered.items():
         path = targets[rel_path]

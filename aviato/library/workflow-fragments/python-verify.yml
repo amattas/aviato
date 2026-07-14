@@ -1,0 +1,13 @@
+if: ${{ github.ref_type != 'tag' && github.event_name != 'schedule' }}
+uses: "{{ aviato-workflow-prefix }}reusable-python-ci.yml{{ aviato-workflow-suffix }}"
+permissions:
+  contents: read
+with:
+  python-version: "3.12"
+  install-command: "{{ python-install-command }}"
+  lint-command: "python -m ruff check ."
+  test-command: "python -m pytest --cov --cov-report=term-missing"
+  build-command: "python -m build"
+  typecheck-command: "{{ typecheck-command }}"
+  run-typecheck: "{{ run-typecheck }}"
+  run-build: "{{ python-run-build }}"

@@ -10,12 +10,6 @@ add:
   # R4-1: swap the strict library mypy.ini for a genuinely non-strict service config (same output
   # path), so the caller's non-strict type-check intent is actually delivered.
   - python-typecheck-config-service
-  - wf-ci-python-service
-  - wf-drift
-  - wf-docs-python-service
-  - zensical-config
-  - docs-intro
-  - docs-requirements
 remove:
   # python-sc seeds pyproject.toml (the library packaging manifest); a container service that
   # builds via its Dockerfile and installs from requirements.txt does not use it (§13.2).

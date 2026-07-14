@@ -1,5 +1,6 @@
 name: python-service
 identity: aviato-profile/python-service/v1
+workflow_schema: 2
 workflows: python-service-wf
 scaffold: python-service-sc
 settings: baseline
@@ -39,6 +40,19 @@ notes:
   # node-service, whose Dockerfile is likewise operator-owned.
   - "Requires an operator-provided Dockerfile (probed, never seeded) before GHCR publishing (§13.2)."
   - "CI installs from requirements.txt (+ the seeded requirements-dev.txt); it does NOT `pip install -e .`."
-docs_pipeline: docs-pages
+docs_pipeline: docs-python-service
+workflow_parameters:
+  workflow-name: Aviato Python Service
+  codeql-languages: python
+  codeql-runner: ubuntu-latest
+  verify-status-check: "ci / Python CI"
+  python-install-command: |
+    python -m pip install -r requirements-dev.txt
+    if [ -f requirements.txt ]; then
+      python -m pip install -r requirements.txt
+    fi
+  python-run-build: false
+  typecheck-command: "python -m mypy ."
+  run-typecheck: true
 prerequisites:
   container_build_definition: [Dockerfile]

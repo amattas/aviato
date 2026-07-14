@@ -1,0 +1,12 @@
+needs: [docs-resolve, docs-release-gate, docs-security]
+if: ${{ needs.docs-resolve.outputs.release == 'true' }}
+uses: "{{ aviato-workflow-prefix }}reusable-docs-pages.yml{{ aviato-workflow-suffix }}"
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+with:
+  working-directory: website
+  release-tag: ${{ needs.docs-resolve.outputs.tag }}
+  gated-sha: ${{ needs.docs-release-gate.outputs.gated-sha }}
+  serve-pages: "{{ serve-pages }}"

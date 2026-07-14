@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -60,17 +61,15 @@ def test_pypi_privilege_split_drift_is_detected(repo_copy: Path) -> None:
 
 
 def test_status_bridge_context_drift_is_detected(repo_copy: Path) -> None:
-    caller = repo_copy / "aviato" / "library" / "scaffold" / "files" / "wf-python-library.yml"
+    caller = repo_copy / "aviato/library/workflow-fragments/release-status-bridge.yml"
     text = caller.read_text(encoding="utf-8")
-    drifted = text.replace("ci / Python CI", "ci / Drifted Python CI", 1)
-    assert drifted != text, "fixture did not contain the expected Python verify context"
+    drifted = text.replace("common-lint / Common lint", "common-lint / Drifted common lint", 1)
+    assert drifted != text, "fixture did not contain the expected common-lint context"
     caller.write_text(drifted, encoding="utf-8")
 
     errors = validate(repo_copy)
 
-    assert any(
-        "wf-python-library.yml" in error and "ci / Python CI" in error and "status bridge" in error for error in errors
-    )
+    assert any("common-lint / Common lint" in error and "status bridge" in error for error in errors)
 
 
 def test_project_version_drift_from_runtime_metadata_is_detected(repo_copy: Path) -> None:
@@ -331,9 +330,9 @@ def test_released_aviato_ref_in_bootstrap_artifact_is_detected(repo_copy: Path) 
 
 
 def test_scaffold_reference_to_missing_reusable_workflow_is_detected(repo_copy: Path) -> None:
-    # A scaffold caller body referencing a reusable workflow that doesn't ship would give
-    # every consumer a broken pipeline — the rendered-scaffold check must flag it.
-    body = repo_copy / "aviato" / "library" / "scaffold" / "files" / "wf-python-library.yml"
+    # A graph fragment referencing a reusable workflow that doesn't ship would give
+    # every consumer a broken pipeline — the rendered-graph check must flag it.
+    body = repo_copy / "aviato/library/workflow-fragments/python-verify.yml"
     text = body.read_text(encoding="utf-8")
     drifted = text.replace("reusable-python-ci.yml", "reusable-missing-ci.yml")
     assert drifted != text, "fixture did not contain the expected reusable workflow reference"
@@ -343,7 +342,7 @@ def test_scaffold_reference_to_missing_reusable_workflow_is_detected(repo_copy: 
 
 
 def test_rendered_scaffold_wrong_repository_is_detected_with_placeholder_ref(repo_copy: Path) -> None:
-    body = repo_copy / "aviato/library/scaffold/files/wf-python-library.yml"
+    body = repo_copy / "aviato/library/workflow-fragments/python-verify.yml"
     text = body.read_text(encoding="utf-8")
     drifted = text.replace(
         "{{ aviato-workflow-prefix }}reusable-python-ci.yml{{ aviato-workflow-suffix }}",
@@ -356,7 +355,7 @@ def test_rendered_scaffold_wrong_repository_is_detected_with_placeholder_ref(rep
     errors = validate(repo_copy)
 
     assert any(
-        "rendered scaffold workflow" in error and "wrong/repository" in error and "amattas/aviato" in error
+        "rendered graph workflow" in error and "wrong/repository" in error and "amattas/aviato" in error
         for error in errors
     )
 
@@ -369,7 +368,7 @@ def test_rendered_scaffold_wrong_repository_is_detected_with_placeholder_ref(rep
     ],
 )
 def test_rendered_scaffold_requires_one_nonempty_ref(repo_copy: Path, replacement: str) -> None:
-    body = repo_copy / "aviato/library/scaffold/files/wf-python-library.yml"
+    body = repo_copy / "aviato/library/workflow-fragments/python-verify.yml"
     text = body.read_text(encoding="utf-8")
     drifted = text.replace(
         "{{ aviato-workflow-prefix }}reusable-python-ci.yml{{ aviato-workflow-suffix }}",
@@ -382,7 +381,7 @@ def test_rendered_scaffold_requires_one_nonempty_ref(repo_copy: Path, replacemen
     errors = validate(repo_copy)
 
     assert any(
-        "rendered scaffold workflow" in error and "reusable-python-ci.yml" in error and "nonempty @ref" in error
+        "rendered graph workflow" in error and "reusable-python-ci.yml" in error and "nonempty @ref" in error
         for error in errors
     )
 
@@ -429,7 +428,7 @@ def test_docs_caller_grep_pattern_drift_is_detected(repo_copy: Path) -> None:
     pattern = yaml.safe_load((repo_copy / "aviato/library/policy.yml").read_text(encoding="utf-8"))["release"][
         "tag_pattern"
     ]
-    body = repo_copy / "aviato/library/scaffold/files/wf-docs-python-library.yml"
+    body = repo_copy / "aviato/library/workflow-fragments/docs-resolve.yml"
     text = body.read_text(encoding="utf-8")
     drifted = text.replace(f"grep -E '{pattern}'", "grep -E '^.*$'")
     assert drifted != text, "fixture did not contain the policy grep literal"
@@ -440,21 +439,21 @@ def test_docs_caller_grep_pattern_drift_is_detected(repo_copy: Path) -> None:
 def test_docs_caller_workflow_run_name_drift_is_detected(repo_copy: Path) -> None:
     # finding 40: a renamed CI caller display name must be flagged — workflow_run
     # matches by name, so the docs deploy would otherwise just never fire again.
-    ci = repo_copy / "aviato/library/scaffold/files/wf-python-library.yml"
-    text = ci.read_text(encoding="utf-8")
-    drifted = text.replace("name: Aviato Python Library\n", "name: Renamed Python Library\n")
-    assert drifted != text, "fixture did not contain the expected display name"
-    ci.write_text(drifted, encoding="utf-8")
+    pipelines = repo_copy / "aviato/library/pipelines.yaml"
+    text = pipelines.read_text(encoding="utf-8")
+    drifted = text.replace('workflows: {add: ["{{ workflow-name }}"]}', 'workflows: {add: ["Renamed Python Library"]}')
+    assert drifted != text, "fixture did not contain the graph-owned workflow_run name"
+    pipelines.write_text(drifted, encoding="utf-8")
     assert any("finding 40" in e for e in validate(repo_copy))
 
 
 def test_missing_docs_name_parity_source_is_an_error(repo_copy: Path) -> None:
-    missing = repo_copy / "aviato/library/scaffold/files/wf-python-library.yml"
+    missing = repo_copy / "aviato/library/workflow-envelopes.yaml"
     missing.unlink()
 
     errors = validate(repo_copy)
 
-    assert any("wf-docs-python-library.yml" in e and "missing" in e and "name parity" in e for e in errors)
+    assert any("finding 40" in e and "could not be validated" in e for e in errors)
 
 
 def test_monotonic_alias_timeout_is_one_actionable_error(repo_copy: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -592,12 +591,12 @@ def test_library_repository_policy_mutation_binds_validation_and_repository_iden
 
 def test_scaffold_cron_drift_is_detected(repo_copy: Path) -> None:
     # finding 43: hand-duplicated CI schedules must stay in lockstep across callers.
-    body = repo_copy / "aviato/library/scaffold/files/wf-python-service.yml"
+    body = repo_copy / "aviato/library/pipelines.yaml"
     text = body.read_text(encoding="utf-8")
     drifted = text.replace('cron: "23 5 * * 1"', 'cron: "0 0 * * 0"')
     assert drifted != text, "fixture did not contain the shared CI cron"
     body.write_text(drifted, encoding="utf-8")
-    assert any("finding 43" in e for e in validate(repo_copy))
+    assert any("stale" in e for e in validate(repo_copy))
 
 
 def test_docs_toolchain_pin_drift_is_flagged(repo_copy: Path) -> None:
@@ -610,3 +609,129 @@ def test_docs_toolchain_pin_drift_is_flagged(repo_copy: Path) -> None:
     target.write_text(drifted)
     errors = validate(repo_copy)
     assert any("docs toolchain pins differ" in e for e in errors), errors
+
+
+def test_generated_templates_are_byte_stable_after_second_regeneration(repo_copy: Path) -> None:
+    import runpy
+
+    regenerate = runpy.run_path(str(REPO_ROOT / "scripts/regen-templates.py"))["regenerate"]
+    owned = {
+        Path(".github/workflows/aviato-ci.yml"),
+        Path(".github/workflows/aviato-drift.yml"),
+        Path("templates/consumer-automation.yml"),
+        Path("templates/profile-node-service.yml"),
+        Path("templates/profile-python-component.yml"),
+        Path("templates/profile-python-library.yml"),
+        Path("templates/profile-python-service.yml"),
+        Path("templates/profile-swift-app.yml"),
+    }
+    (repo_copy / ".github/workflows/aviato-ci.yml").write_text("stale bootstrap\n", encoding="utf-8")
+    (repo_copy / "templates/profile-python-library.yml").write_text("stale example\n", encoding="utf-8")
+
+    assert set(regenerate(repo_copy)) == {
+        Path(".github/workflows/aviato-ci.yml"),
+        Path("templates/profile-python-library.yml"),
+    }
+    first = {path: (repo_copy / path).read_bytes() for path in owned}
+    assert regenerate(repo_copy) == []
+    second = {path: (repo_copy / path).read_bytes() for path in owned}
+
+    assert second == first
+    assert regenerate(repo_copy, check=True) == []
+
+
+@pytest.mark.parametrize(
+    ("inputs", "expected"),
+    [
+        ({"not-declared": "x"}, "undeclared reusable input"),
+        ({"run-build": "false"}, "expected boolean"),
+    ],
+)
+def test_reusable_call_contract_rejects_input_schema_drift(
+    repo_copy: Path, inputs: dict[str, object], expected: str
+) -> None:
+    import aviato.validation as validation
+
+    errors: list[str] = []
+    validation._check_reusable_call_contract(
+        repo_copy,
+        {"uses": "./.github/workflows/reusable-python-ci.yml", "with": inputs},
+        source="fixture",
+        errors=errors,
+    )
+    assert any(expected in error for error in errors), errors
+
+
+def test_reusable_call_contract_rejects_omitted_required_input_and_secret(repo_copy: Path) -> None:
+    import aviato.validation as validation
+
+    errors: list[str] = []
+    validation._check_reusable_call_contract(
+        repo_copy,
+        {"uses": "./.github/workflows/reusable-app-store-connect.yml", "with": {}, "secrets": {}},
+        source="fixture",
+        errors=errors,
+    )
+    assert any("omits required reusable input" in error for error in errors), errors
+    assert any("omits required reusable secret" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("runner", "status_check", "expected"),
+    [
+        ("macos-latest", None, "runner"),
+        ("ubuntu-latest", "ci / Missing producer", "status check"),
+    ],
+)
+def test_reusable_metadata_contract_rejects_runner_and_status_drift(
+    repo_copy: Path, runner: str, status_check: str | None, expected: str
+) -> None:
+    import aviato.validation as validation
+
+    errors: list[str] = []
+    metadata = SimpleNamespace(
+        runner=runner,
+        environment=None,
+        environment_input=None,
+        status_check=status_check,
+    )
+    validation._check_reusable_metadata_contract(
+        repo_copy,
+        "ci",
+        {"uses": "./.github/workflows/reusable-python-ci.yml"},
+        metadata,
+        {},
+        source="fixture",
+        errors=errors,
+    )
+    assert any(expected in error for error in errors), errors
+
+
+def test_reusable_metadata_contract_requires_nested_environment_consumption(repo_copy: Path) -> None:
+    import aviato.validation as validation
+
+    reusable = repo_copy / ".github/workflows/reusable-app-store-connect.yml"
+    text = reusable.read_text(encoding="utf-8")
+    drifted = text.replace("${{ inputs.environment-name }}", "hardcoded-environment")
+    assert drifted != text
+    reusable.write_text(drifted, encoding="utf-8")
+    errors: list[str] = []
+    metadata = SimpleNamespace(
+        runner="macos-latest",
+        environment=None,
+        environment_input="environment-name",
+        status_check=None,
+    )
+    validation._check_reusable_metadata_contract(
+        repo_copy,
+        "app-store-connect",
+        {
+            "uses": "./.github/workflows/reusable-app-store-connect.yml",
+            "with": {"environment-name": "production"},
+        },
+        metadata,
+        {"environment-name": "production"},
+        source="fixture",
+        errors=errors,
+    )
+    assert any("does not consume it as a job environment" in error for error in errors), errors

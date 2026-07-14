@@ -29,6 +29,40 @@ _REFERENCE = {
     "secrets": re.compile(r"\bsecrets\.([A-Za-z_][\w-]*)\b"),
 }
 _PERMISSION_LEVEL = {"none": 0, "read": 1, "write": 2}
+_EXACT_TEMPLATE_VALUE = re.compile(r"^\{\{\s*([A-Za-z_][\w-]*)\s*\}\}$")
+
+
+class _WorkflowDumper(yaml.SafeDumper):
+    """Emit block sequences indented beneath their mapping key for repository policy parity."""
+
+    def increase_indent(self, flow: bool = False, indentless: bool = False) -> None:
+        return super().increase_indent(flow, indentless=False)
+
+
+def _dump_workflow(document: Mapping[str, Any]) -> str:
+    return yaml.dump(document, Dumper=_WorkflowDumper, sort_keys=False)
+
+
+def _render_workflow_node(value: Any, variables: Mapping[str, Any], *, strict: bool) -> Any:
+    """Render a workflow AST while retaining native whole-placeholder scalars."""
+
+    if isinstance(value, Mapping):
+        return {key: _render_workflow_node(nested, variables, strict=strict) for key, nested in value.items()}
+    if isinstance(value, list):
+        return [_render_workflow_node(nested, variables, strict=strict) for nested in value]
+    if isinstance(value, tuple):
+        return [_render_workflow_node(nested, variables, strict=strict) for nested in value]
+    if not isinstance(value, str):
+        return value
+    exact = _EXACT_TEMPLATE_VALUE.fullmatch(value)
+    if exact and exact.group(1) in variables:
+        selected = variables[exact.group(1)]
+        if selected is Unknown or isinstance(selected, UnknownValue):
+            if not strict:
+                return value
+            raise CompositionError(f"undefined variable: {exact.group(1)}")
+        return selected
+    return render(value, variables, strict=strict)
 
 
 @dataclass(frozen=True)
@@ -122,10 +156,21 @@ def _job_environment(fragment: Mapping[str, Any]) -> str | None:
         name = value.get("name")
         if isinstance(name, str):
             return name
+    call_inputs = fragment.get("with")
+    if isinstance(call_inputs, Mapping):
+        nested = call_inputs.get("environment-name")
+        if isinstance(nested, str):
+            return nested
     return None
 
 
-def _validate_job(job: WorkflowJobModule, fragment: dict[str, Any], *, workflow_name: str) -> None:
+def _validate_job(
+    job: WorkflowJobModule,
+    fragment: dict[str, Any],
+    *,
+    workflow_name: str,
+    variables: Mapping[str, Any],
+) -> None:
     fragment_needs = fragment.get("needs", [])
     if isinstance(fragment_needs, str):
         fragment_needs = [fragment_needs]
@@ -138,8 +183,13 @@ def _validate_job(job: WorkflowJobModule, fragment: dict[str, Any], *, workflow_
     fragment_permissions = fragment.get("permissions", {})
     if not isinstance(fragment_permissions, dict) or fragment_permissions != declared_permissions:
         raise CompositionError(f"job {job.name!r} permissions are orphaned or incompatible with its fragment")
-    if job.runner != fragment.get("runs-on"):
-        raise CompositionError(f"job {job.name!r} runner metadata does not match its fragment")
+    # A reusable-workflow caller has no `runs-on`; its runner is validated
+    # against the referenced reusable workflow by repository validation. Local
+    # jobs retain exact AST parity here.
+    if "uses" not in fragment:
+        rendered_runner = fragment.get("runs-on")
+        if job.runner != rendered_runner:
+            raise CompositionError(f"job {job.name!r} runner metadata does not match its fragment")
 
     actual_inputs = _refs(fragment, "inputs")
     if job.environment_input:
@@ -159,7 +209,8 @@ def _validate_job(job: WorkflowJobModule, fragment: dict[str, Any], *, workflow_
         raise CompositionError(f"job {job.name!r} environment declares both a literal and an input")
     declared_environment = job.environment
     if job.environment_input:
-        declared_environment = "${{ inputs." + job.environment_input + " }}"
+        selected = variables.get(job.environment_input, Unknown)
+        declared_environment = None if selected is Unknown or selected is None else str(selected)
     if actual_environment != declared_environment:
         raise CompositionError(f"job {job.name!r} environment metadata is orphaned or incompatible with its fragment")
 
@@ -167,7 +218,7 @@ def _validate_job(job: WorkflowJobModule, fragment: dict[str, Any], *, workflow_
     if not isinstance(display_name, str) or not display_name.strip():
         raise CompositionError(f"job {job.name!r} rendered name must be a non-empty string")
     produced_check = f"{workflow_name} / {display_name}"
-    if job.status_check is not None and job.status_check != produced_check:
+    if "uses" not in fragment and job.status_check is not None and job.status_check != produced_check:
         raise CompositionError(
             f"job {job.name!r} status check {job.status_check!r} is not produced by the rendered workflow "
             f"(expected {produced_check!r})"
@@ -484,6 +535,31 @@ def _compile_workflows(
         library_repository=registry.library_repository(),
         derived_rules=registry.profile_doc(resolved.profile).get("derived_variables", []),
     )
+    # These values are booleans in Actions reusable-workflow contracts. Legacy
+    # text templates used lowercase strings; graph AST rendering keeps them typed.
+    render_vars["aviato-local-install"] = bootstrap
+    render_vars["docs"] = docs
+    profile_parameters = registry.profile_doc(resolved.profile).get("workflow_parameters", {})
+    if not isinstance(profile_parameters, Mapping) or any(
+        not isinstance(key, str) or not key.strip() for key in profile_parameters
+    ):
+        raise CompositionError(f"profile {resolved.profile!r} workflow_parameters must be a string-keyed mapping")
+    overlap = sorted(set(render_vars) & set(profile_parameters))
+    if overlap:
+        raise CompositionError(
+            f"profile {resolved.profile!r} workflow_parameters collide with rendered variables {overlap}"
+        )
+    rendered_parameters: dict[str, Any] = {}
+    for key, value in profile_parameters.items():
+        if not isinstance(value, (str, bool, int, float)) and value is not None:
+            raise CompositionError(f"profile {resolved.profile!r} workflow parameter {key!r} must be a scalar")
+        rendered_value = _render_workflow_node(value, render_vars, strict=not partial)
+        if not isinstance(rendered_value, (str, bool, int, float)) and rendered_value is not None:
+            raise CompositionError(
+                f"profile {resolved.profile!r} rendered workflow parameter {key!r} must remain a scalar"
+            )
+        rendered_parameters[key] = rendered_value
+    render_vars = {**render_vars, **rendered_parameters}
     for envelope_name in sorted(by_envelope):
         envelope = registry.workflow_envelope(envelope_name)
         if envelope.output_path in output_paths:
@@ -491,9 +567,13 @@ def _compile_workflows(
         output_paths.add(envelope.output_path)
         jobs: dict[str, WorkflowJobModule] = {}
         fragments: dict[str, dict[str, Any]] = {}
-        triggers = _aggregate_triggers(
+        raw_triggers = _aggregate_triggers(
             [module.triggers for module in by_envelope[envelope_name]], envelope=envelope_name
         )
+        triggers = _render_workflow_node(deep_thaw(raw_triggers), render_vars, strict=not partial)
+        if not isinstance(triggers, dict):
+            raise CompositionError(f"workflow envelope {envelope_name!r} rendered triggers must be a mapping")
+        workflow_name = render(envelope.display_name, render_vars, strict=not partial)
         job_permission_union: dict[str, str] = {}
         for module in by_envelope[envelope_name]:
             for job in module.jobs:
@@ -501,16 +581,12 @@ def _compile_workflows(
                     raise CompositionError(f"duplicate job ID {job.name!r} in workflow envelope {envelope_name!r}")
                 jobs[job.name] = job
                 fragment = registry.workflow_fragment(job.fragment)
-                if partial:
-                    serialized = render(yaml.safe_dump(fragment, sort_keys=False), render_vars, strict=False)
-                else:
-                    serialized = render(yaml.safe_dump(fragment, sort_keys=False), render_vars, strict=True)
-                loaded = yaml.safe_load(serialized)
+                loaded = _render_workflow_node(fragment, render_vars, strict=not partial)
                 loaded = validate_actions_job_fragment(
                     loaded,
-                    context=f"rendered job {job.name!r} in workflow {envelope.display_name!r}",
+                    context=f"rendered job {job.name!r} in workflow {workflow_name!r}",
                 )
-                _validate_job(job, loaded, workflow_name=envelope.display_name)
+                _validate_job(job, loaded, workflow_name=workflow_name, variables=variables)
                 fragments[job.name] = loaded
                 for scope, level in _permission_map(job.permissions, context=f"job {job.name!r}").items():
                     prior = job_permission_union.get(scope, "none")
@@ -535,12 +611,12 @@ def _compile_workflows(
                 raise CompositionError(
                     f"workflow {envelope_name!r} privilege {scope}: {level} is broader than the selected job graph"
                 )
-        document: dict[str, Any] = {"name": envelope.display_name, "on": triggers}
+        document: dict[str, Any] = {"name": workflow_name, "on": triggers}
         document["permissions"] = dict(envelope.permissions)
         if envelope.concurrency:
             document["concurrency"] = dict(envelope.concurrency)
         document["jobs"] = {name: fragments[name] for name in sorted(fragments)}
-        body = yaml.safe_dump(document, sort_keys=False)
+        body = _dump_workflow(document)
         workflows.append(
             CompiledWorkflow(
                 envelope=envelope_name,
@@ -585,7 +661,21 @@ def compile_desired_state(
         if workflow.output_path in seen_paths:
             raise CompositionError(f"duplicate artifact path {workflow.output_path!r}")
         seen_paths.add(workflow.output_path)
-        artifacts.append(DesiredArtifact(workflow.output_path, workflow.body, False, "#", (workflow.identity,)))
+        workflow_owners = {workflow.identity}
+        workflow_owners.update(
+            module.identity
+            for module in resolved.pipeline_modules
+            if module.envelope == workflow.envelope and module.identity is not None
+        )
+        artifacts.append(
+            DesiredArtifact(
+                workflow.output_path,
+                workflow.body,
+                False,
+                "#",
+                tuple(sorted(workflow_owners)),
+            )
+        )
     settings = deep_thaw(resolved.settings)
     branch = settings.setdefault("default_branch", {})
     if not isinstance(branch, dict):

@@ -1,0 +1,16 @@
+needs: [release, release-gate, security]
+if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
+uses: "{{ aviato-workflow-prefix }}reusable-docker-ghcr.yml{{ aviato-workflow-suffix }}"
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+  id-token: write
+  attestations: write
+with:
+  context: "."
+  dockerfile: Dockerfile
+  platforms: linux/amd64
+  release-tag: ${{ needs.release.outputs.tag }}
+  gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
+  environment-name: ghcr

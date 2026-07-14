@@ -281,6 +281,16 @@ def resolve_profile(
 
     wf_layers: list[WorkflowsBundle] = _chain(registry.workflows_bundle, profile.workflows)
     pipelines = _resolve_list(wf_layers, "pipelines")
+    doc = registry.profile_doc(name)
+
+    # Documentation is an ordinary pipeline contribution. Compose the opt-in
+    # before the consumer delta so an explicit remove remains authoritative.
+    # This keeps ordering generic: core knows only the profile-declared module
+    # identity, never a docs implementation name.
+    if docs:
+        docs_pipeline = doc.get("docs_pipeline")
+        if docs_pipeline and docs_pipeline not in pipelines:
+            pipelines = (*pipelines, docs_pipeline)
 
     sc_layers: list[ScaffoldBundle] = _chain(registry.scaffold_bundle, profile.scaffold)
     template_refs = _resolve_list(sc_layers, "templates")
@@ -393,13 +403,6 @@ def resolve_profile(
                 f"{sorted(below_floor)} relative to the canonical floor (§2.13); every profile must "
                 "compose at least the baseline security toggles"
             )
-
-    doc = registry.profile_doc(name)
-
-    if docs:
-        docs_pipeline = doc.get("docs_pipeline")
-        if docs_pipeline and docs_pipeline not in pipelines:
-            pipelines = (*pipelines, docs_pipeline)
 
     # §5.1: a referenced pipeline that the manifest does not declare is a hard error — a typo
     # must fail loud, never silently resolve to a module-less pipeline (no privileges/checks).

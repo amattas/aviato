@@ -1,0 +1,15 @@
+ci:
+  identity: workflow-envelope/ci/v2
+  output_path: .github/workflows/aviato-ci.yml
+  name: "{{ workflow-name }}"
+  permissions: {contents: read}
+drift:
+  identity: workflow-envelope/drift/v2
+  output_path: .github/workflows/aviato-drift.yml
+  name: Aviato Drift Detection
+  permissions: {contents: read}
+docs:
+  identity: workflow-envelope/docs/v2
+  output_path: .github/workflows/aviato-docs.yml
+  name: Aviato Docs
+  permissions: {contents: read}

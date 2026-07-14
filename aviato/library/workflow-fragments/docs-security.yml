@@ -1,0 +1,13 @@
+needs: [docs-resolve, docs-release-gate]
+if: ${{ needs.docs-resolve.outputs.release == 'true' }}
+uses: "{{ aviato-workflow-prefix }}reusable-security-baseline.yml{{ aviato-workflow-suffix }}"
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+  security-events: write
+with:
+  ref: refs/tags/${{ needs.docs-resolve.outputs.tag }}
+  sha: ${{ needs.docs-release-gate.outputs.gated-sha }}
+  codeql-languages: "{{ codeql-languages }}"
+  codeql-runner: "{{ codeql-runner }}"

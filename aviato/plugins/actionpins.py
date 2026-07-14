@@ -908,18 +908,19 @@ def unpinned_tool_invocations(text: str) -> list[str]:
 
 
 def action_pin_violations(root: Path, *, policy_root: Path, library_repository: str) -> list[str]:
-    """Scan a repo's workflows + scaffold bodies for §11.3 violations.
+    """Scan workflows and graph/scaffold templates for §11.3 violations.
 
     Real `.github/workflows/` get zizmor (`unpinned-uses`/`unpinned-images`) for action/image
-    pinning. Scaffold template bodies (`wf-*.yml`, carrying `{{ aviato-ref }}` placeholders zizmor
-    cannot parse) get a placeholder-aware `uses:` SHA check. Both get the fail-closed fetch-execute
-    + pip checks. Seeded requirements files get the exact-pin check.
+    pinning. Graph fragments and legacy scaffold workflow bodies can carry placeholders that zizmor
+    cannot parse, so they get a placeholder-aware `uses:` SHA check. All workflow sources get the
+    fail-closed fetch-execute + pip checks. Seeded requirements files get the exact-pin check.
     """
     from .zizmor_scan import ZizmorUnavailable, zizmor_uses_image_violations
 
     root = Path(root)
     workflow_dir = root / ".github" / "workflows"
     scaffold_dir = root / "aviato" / "library" / "scaffold" / "files"
+    fragment_dir = root / "aviato" / "library" / "workflow-fragments"
     violations: list[str] = []
 
     # 1. zizmor on real workflows (uses + images).
@@ -936,9 +937,15 @@ def action_pin_violations(root: Path, *, policy_root: Path, library_repository: 
         for tool in unpinned_tool_invocations(text):
             violations.append(f"{path.name}: {tool}")
 
-    # 3. Scaffold bodies: placeholder-aware uses: + fetch + pip (zizmor can't parse templates).
-    scaffold_files = sorted(p for ext in ("wf-*.yml", "wf-*.yaml") for p in scaffold_dir.glob(ext))
-    for path in scaffold_files:
+    # 3. Graph fragments and legacy scaffold bodies: placeholder-aware uses: + fetch + pip.
+    # Retaining the v1 scanner keeps linting safe for read-only snapshots during migration.
+    template_files = sorted(
+        {
+            *(p for ext in ("wf-*.yml", "wf-*.yaml") for p in scaffold_dir.glob(ext)),
+            *(p for ext in ("*.yml", "*.yaml") for p in fragment_dir.glob(ext)),
+        }
+    )
+    for path in template_files:
         text = path.read_text(encoding="utf-8", errors="replace")
         for ref in unpinned_third_party_uses(text, library_repository=library_repository):
             if "{{" in ref:  # scaffold placeholder, resolved at scaffold time

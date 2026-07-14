@@ -1,0 +1,12 @@
+if: ${{ github.ref_type != 'tag' && github.event_name != 'schedule' }}
+uses: "{{ aviato-workflow-prefix }}reusable-node-ci.yml{{ aviato-workflow-suffix }}"
+permissions:
+  contents: read
+with:
+  node-version: "24"
+  install-command: "if [ -f package-lock.json ]; then npm ci; else npm install; fi"
+  lint-command: "npx --no-install eslint ."
+  test-command: "npm test"
+  build-command: "npm run build"
+  run-typecheck: "{{ node-run-typecheck }}"
+  run-build: "{{ node-run-build }}"
