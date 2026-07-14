@@ -13,6 +13,7 @@
 | Per-Consumer audit of actions taken | That Consumer's tracking issues (left open, §5.6/§5.7) |
 | The Library's version | The Library's own version record + release tags |
 | Which repos an operator manages | The operator's **local, ephemeral** scan input (§5.11) — never the Library |
+| In-progress local file mutation | A checksummed, per-worktree write-ahead journal under Git administrative storage; never a tracked Consumer path |
 
 There is no central registry of Consumers anywhere in the Library (§2.2).
 
@@ -81,5 +82,11 @@ Each maps to a principle and must be designed out, not patched later.
   known version, a stable artifact identity, and a live body matching the
   marker and recorded receipt. Modified, foreign, malformed, unreadable,
   symlinked, ambiguous, and seed-once paths fail closed and remain untouched.
+- **§8.18** A crash, concurrent command, or parent-directory swap leaves a
+  falsely successful or externally redirected multi-file update → prevented by
+  one digest-bound transition plan, a per-worktree no-follow lock, durable
+  preimages and `PREPARED`/`APPLIED` WAL records, dirfd-relative atomic mutation,
+  verified rollback, and explicit journal-confirmed recovery. `--allow-dirty`
+  never admits a dirty path that overlaps the plan.
 
 ---

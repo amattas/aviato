@@ -53,6 +53,21 @@ pipeline; missing graph dependencies fail closed.
   scaffold, first commit, then apply **full** protection.
 - *Adopt-existing*: write/merge the declaration, scaffold onto a branch, open a
   proposal for review.
+
+Both paths use the same pure, digest-bound local `TransitionPlan`. The plan
+enumerates every managed write/retirement, seed addition, sidecar update,
+declaration update, and final inventory receipt before any mutation. Conflicts
+abort without creating transition state. `--allow-dirty` tolerates only
+unrelated paths and never an overlap with a planned path. Local execution is
+serialized per worktree and journaled in Git administrative storage; the
+managed inventory is the final operation and success requires a final local
+convergence diagnosis before journal removal.
+
+An interrupted transition blocks ordinary onboarding, sync, repin, and
+offboarding mutation. `aviato recover-transition PATH` inspects it without
+mutation. Resume or rollback requires exactly one requested action and the
+exact displayed journal id through `--confirm JOURNAL_ID`; unknown third-party
+edits leave the journal indeterminate rather than being overwritten.
 **Guards:** never change an already-declared profile to a different one without
 an explicit migrate override; enumerate files left untouched (seed-once,
 unmanaged) in the proposal.
@@ -124,8 +139,8 @@ flowchart TD
     E0 -- "yes & no override" --> Emig["REFUSE: require explicit --migrate-profile"]
     E0 -- "no / override" --> E1{"Working tree clean (or override)?"}
     E1 -- no --> Edirty["REFUSE: clean tree or pass --allow-dirty"]
-    E1 -- yes --> E2["Write/merge declaration<br/>(resolved profile + version + vars)"]
-    E2 --> E3["Scaffold onto a branch"]
+    E1 -- yes --> E2["Build one pure transition plan<br/>(all bytes, modes, preimages, inventory)"]
+    E2 --> E3["Execute WAL transition onto a branch<br/>inventory last; final local diagnosis"]
     E3 --> E4["Open proposal; enumerate UNCHANGED<br/>seed-once/unmanaged files"]
     E4 --> Done
 ```

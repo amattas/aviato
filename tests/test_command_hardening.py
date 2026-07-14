@@ -6,11 +6,14 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import BinaryIO, cast
 
 import pytest
 
 from aviato import command, github
 from aviato.command import DEFAULT_TIMEOUT_SECONDS, CommandError, run
+from aviato.core.errors import InventoryError
+from aviato.repos import git_candidate_paths
 
 
 def test_run_maps_timeout_to_command_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -37,6 +40,28 @@ def test_run_passes_a_finite_default_timeout(monkeypatch: pytest.MonkeyPatch) ->
     run(["echo", "hi"])
     assert seen["timeout"] == DEFAULT_TIMEOUT_SECONDS
     assert DEFAULT_TIMEOUT_SECONDS is not None
+
+
+def test_marker_scan_is_nul_safe_and_git_failures_map_to_aviato_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"ordinary.txt\0line\nbreak.yml\0nonutf8-\xff.yml\0"
+    monkeypatch.setattr(
+        "aviato.repos.run_bytes",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, payload, b""),
+    )
+    assert git_candidate_paths(tmp_path) == (
+        "ordinary.txt",
+        "line\nbreak.yml",
+        "nonutf8-\udcff.yml",
+    )
+
+    def fail(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise CommandError(["git"], 127, "missing git")
+
+    monkeypatch.setattr("aviato.repos.run_bytes", fail)
+    with pytest.raises(InventoryError, match="could not enumerate repository files"):
+        git_candidate_paths(tmp_path)
 
 
 def test_gh_read_retries_rate_limit_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -112,7 +137,7 @@ def test_run_to_path_preserves_binary_bytes_with_a_finite_timeout(
         seen.update(kwargs)
         stdout = kwargs["stdout"]
         assert hasattr(stdout, "write")
-        stdout.write(payload)  # type: ignore[union-attr]
+        cast(BinaryIO, stdout).write(payload)
         return subprocess.CompletedProcess(cmd, 0, None, "")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -163,7 +188,7 @@ def test_run_to_path_close_error_is_typed_and_removes_partial_file(
     def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         stdout = kwargs["stdout"]
         assert hasattr(stdout, "write")
-        stdout.write(b"partial archive")  # type: ignore[union-attr]
+        cast(BinaryIO, stdout).write(b"partial archive")
         return subprocess.CompletedProcess(cmd, 0, None, "")
 
     monkeypatch.setattr(Path, "open", fake_open)
@@ -202,12 +227,7 @@ def test_run_to_path_real_child_timeout_removes_partial_file(tmp_path: Path) -> 
             [
                 sys.executable,
                 "-c",
-                (
-                    "import sys, time; "
-                    "sys.stdout.buffer.write(b'partial'); "
-                    "sys.stdout.buffer.flush(); "
-                    "time.sleep(5)"
-                ),
+                ("import sys, time; sys.stdout.buffer.write(b'partial'); sys.stdout.buffer.flush(); time.sleep(5)"),
             ],
             destination,
             timeout=0.5,
@@ -234,7 +254,7 @@ def test_binary_output_failure_timeout_and_launch_error_remove_partial_file(
             raise FileNotFoundError("gh is missing")
         stdout = kwargs["stdout"]
         assert hasattr(stdout, "write")
-        stdout.write(b"partial archive")  # type: ignore[union-attr]
+        cast(BinaryIO, stdout).write(b"partial archive")
         if failure == "timeout":
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=1)
         return subprocess.CompletedProcess(cmd, 23, None, "download failed")
@@ -259,7 +279,7 @@ def test_run_to_path_check_false_returns_failure_without_accepting_partial_outpu
     def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         stdout = kwargs["stdout"]
         assert hasattr(stdout, "write")
-        stdout.write(b"partial archive")  # type: ignore[union-attr]
+        cast(BinaryIO, stdout).write(b"partial archive")
         if failure == "timeout":
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=2)
         return subprocess.CompletedProcess(cmd, 9, None, "download failed")

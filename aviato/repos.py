@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .command import run
+from .command import CommandError, run, run_bytes
 from .core.errors import InventoryError
 
 # R2-8: a slug is exactly `owner/repo` with safe chars — anything else (a `?`-bearing segment, a
@@ -128,15 +128,18 @@ def workflow_files(repo: Path) -> str:
 
 def git_candidate_paths(repo: Path) -> tuple[str, ...]:
     """Return tracked plus untracked nonignored paths using Git's NUL-safe format."""
-    result = run(
-        ["git", "-C", str(repo), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        check=False,
-    )
+    try:
+        result = run_bytes(
+            ["git", "-C", str(repo), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            check=False,
+        )
+    except CommandError as exc:
+        raise InventoryError(f"could not enumerate repository files: {exc}") from exc
     if result.returncode != 0:
-        raise InventoryError(f"could not enumerate repository files: {result.stderr.strip()}")
-    paths = result.stdout.split("\0")
-    if paths and paths[-1] == "":
+        raise InventoryError(f"could not enumerate repository files: {os.fsdecode(result.stderr).strip()}")
+    paths = result.stdout.split(b"\0")
+    if paths and paths[-1] == b"":
         paths.pop()
     if any(not path for path in paths):
         raise InventoryError("Git returned an empty path in the managed marker universe")
-    return tuple(paths)
+    return tuple(os.fsdecode(path) for path in paths)

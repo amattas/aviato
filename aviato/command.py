@@ -56,6 +56,40 @@ def run(
     return result
 
 
+def run_bytes(
+    command: Sequence[str],
+    *,
+    cwd: str | Path | None = None,
+    check: bool = True,
+    timeout: float | None = DEFAULT_TIMEOUT_SECONDS,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a command without decoding stdout or stderr.
+
+    Git path-producing commands must remain byte-oriented until their NUL-framed
+    records have been split; decoding the whole stream first can fail on a valid
+    filesystem name that is not valid in the process locale.
+    """
+    try:
+        result = subprocess.run(
+            list(command),
+            cwd=str(cwd) if cwd is not None else None,
+            check=False,
+            text=False,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        message = f"timed out after {timeout}s: {exc}".encode(errors="replace")
+        if check:
+            raise CommandError(command, 124, os.fsdecode(message)) from exc
+        return subprocess.CompletedProcess(list(command), 124, b"", message)
+    except OSError as exc:
+        raise CommandError(command, 127, f"could not execute {command[0]!r}: {exc}") from exc
+    if check and result.returncode != 0:
+        raise CommandError(command, result.returncode, os.fsdecode(result.stderr))
+    return result
+
+
 def run_to_path(
     command: Sequence[str],
     destination: str | Path,
@@ -100,9 +134,7 @@ def run_to_path(
                     message = f"timed out after {timeout}s: {exc}"
                     result = subprocess.CompletedProcess(list(command), 124, None, message)
                 except OSError as exc:
-                    raise CommandError(
-                        command, 127, f"could not execute {command[0]!r}: {exc}"
-                    ) from exc
+                    raise CommandError(command, 127, f"could not execute {command[0]!r}: {exc}") from exc
 
                 if result.returncode == 0:
                     output.flush()

@@ -52,6 +52,7 @@ from .core.scaffold import (
     scaffold,
 )
 from .core.settings_drift_flow import run_settings_drift
+from .core.transition import inspect_transition, resume_pending_transition, rollback_transition
 from .core.variables import (
     resolve_declared_variables,
     resolve_partial_variables,
@@ -750,6 +751,7 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
     if not target.is_dir():
         print(f"--write requires a local repository path; {args.target!r} is not a directory", file=sys.stderr)
         return 2
+    _require_no_pending_transition(target)
 
     # §5.2 adopt precondition: the working tree must be clean (so the scaffold lands as
     # a reviewable change), unless the operator explicitly overrides.
@@ -1217,6 +1219,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    _require_no_pending_transition(root)
     declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
@@ -1619,6 +1622,8 @@ def cmd_repin(args: argparse.Namespace) -> int:
         print("dry run; re-run with --write to record the new pin and re-scaffold.")
         return 0
 
+    _require_no_pending_transition(root)
+
     if (gate_error := _gate_repin_target(root, plan.target_version, args, declaration)) is not None:
         print(gate_error, file=sys.stderr)
         return 2
@@ -1827,6 +1832,8 @@ def cmd_offboard(args: argparse.Namespace) -> int:
         print("re-run with --write to perform the removal.")
         return 0
 
+    _require_no_pending_transition(root)
+
     result = offboard_repo(root, managed_outputs, keep_files=not args.delete_files)
     for output in result.stripped:
         print(f"stripped marker: {output}")
@@ -1838,6 +1845,48 @@ def cmd_offboard(args: argparse.Namespace) -> int:
         print("removed .github/aviato.seed.json")
     print(f"WARNING: {result.warning}")
     return 0
+
+
+def cmd_recover_transition(args: argparse.Namespace) -> int:
+    """Inspect or explicitly recover one Git-private transition journal."""
+    root = canonical_repository_root(Path(args.path))
+    inspection = inspect_transition(root)
+    if not inspection.pending:
+        if args.resume or args.rollback or args.confirm:
+            raise AviatoError("there is no pending transition to recover")
+        print("No pending transition.")
+        return 0
+
+    if not args.resume and not args.rollback:
+        if args.confirm:
+            raise AviatoError("--confirm requires exactly one of --resume or --rollback")
+        print(f"Pending transition journal: {inspection.journal_id}")
+        print(f"Plan digest: {inspection.plan_digest}")
+        for operation in inspection.operations:
+            print(f"{operation.status.value}\t{operation.path}\t{operation.kind}")
+        print(f"To mutate, choose exactly one of --resume or --rollback and pass --confirm {inspection.journal_id}.")
+        return 1
+
+    if args.confirm != inspection.journal_id:
+        raise AviatoError(
+            f"transition recovery requires the exact journal confirmation: --confirm {inspection.journal_id}"
+        )
+    if args.resume:
+        result = resume_pending_transition(root, inspection.journal_id)
+        print(f"Resumed and accepted transition {result.journal_id}.")
+    else:
+        result = rollback_transition(root, inspection.journal_id)
+        print(f"Rolled back transition {result.journal_id}.")
+    return 0
+
+
+def _require_no_pending_transition(root: Path) -> None:
+    inspection = inspect_transition(root)
+    if inspection.pending:
+        raise AviatoError(
+            f"pending transition {inspection.journal_id} must be recovered first; run "
+            f"`aviato recover-transition {root}` to inspect it"
+        )
 
 
 def _offboard_proposal(args: argparse.Namespace) -> int:
@@ -2688,6 +2737,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Open a reviewable removal proposal (PR) instead of mutating locally (§5.13).",
     )
     offboard.set_defaults(func=cmd_offboard)
+
+    recover = subparsers.add_parser(
+        "recover-transition",
+        help="Inspect, resume, or roll back a pending local file transition.",
+    )
+    recover.add_argument("path", help="Path to the consumer repository.")
+    recover_action = recover.add_mutually_exclusive_group()
+    recover_action.add_argument("--resume", action="store_true", help="Resume the recorded plan.")
+    recover_action.add_argument("--rollback", action="store_true", help="Restore all recorded preimages.")
+    recover.add_argument("--confirm", metavar="JOURNAL_ID", help="Exact pending journal id required for mutation.")
+    recover.set_defaults(func=cmd_recover_transition)
 
     complete = subparsers.add_parser(
         "complete-protection",

@@ -88,6 +88,41 @@ plan ID or mutation path. Missing `workflow_schema` means legacy v1. Legacy
 snapshots remain usable for read-only diagnosis/offboard and repin source reads,
 but generation or graph mutation requires repinning to v2.
 
+## Local Transition Boundary
+
+Compiled state does not mutate a checkout directly. The engine first produces an
+immutable `TransitionPlan` whose digest binds the canonical worktree, pinned
+snapshot SHA, declaration identity, complete desired bytes and modes, expected
+preimage fingerprints, conflicts, notices, and deterministic operation order.
+Planning reads state but creates no directory, lock, journal, or consumer file.
+
+Execution acquires a per-worktree no-follow lock in Git administrative storage.
+It re-confines and re-fingerprints every path through directory file descriptors,
+then records each mutation in a write-ahead log: fsynced preimage, fsynced
+`PREPARED`, atomic dirfd-relative replace/delete, parent-directory fsync, and
+fsynced `APPLIED`. Managed files and clean retirements precede seed additions,
+the seed sidecar, the declaration, and finally the managed inventory. A local
+convergence check runs while the journal is still present; only a successful
+check accepts the inventory and removes the journal.
+
+```mermaid
+flowchart LR
+    D["DesiredState + reconciled inventory"] --> P["Pure digest-bound TransitionPlan"]
+    P --> L["Per-worktree no-follow lock"]
+    L --> W["Preimage + PREPARED WAL"]
+    W --> M["Dirfd-confined atomic mutation"]
+    M --> A["APPLIED WAL"]
+    A --> V["Local convergence validation"]
+    V --> I["Accept inventory + remove journal"]
+```
+
+An ordinary exception rolls back and verifies every preimage. Interruption or
+process death deliberately retains the Git-private journal. Inspection is
+read-only; `aviato recover-transition PATH --resume|--rollback --confirm
+JOURNAL_ID` is the only mutation path. Resume requires the recorded plan and
+requires each target to match either its preimage or desired fingerprint. Any
+third state is reported as indeterminate and remains untouched.
+
 ## Release Architecture
 
 Release publishing is tag-driven only.

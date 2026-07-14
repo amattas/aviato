@@ -45,6 +45,25 @@ collisions and multiple Git-index spellings, even on a case-sensitive host. The
 managed inventory is accepted last, after convergence proves its own marker and
 body as well as the ordinary managed artifacts.
 
+The reconciled result becomes one pure `TransitionPlan`; no planning step
+mutates the checkout. Its digest binds the pinned snapshot, declaration
+identity, full desired bytes/modes, deletions, seed additions, metadata updates,
+and expected preimage fingerprints. Under the per-worktree execution lock,
+managed replacements and retirements run first, followed by seed additions,
+the seed sidecar, the declaration, and the managed inventory last. Every
+operation is re-confined and re-fingerprinted immediately before a no-follow,
+dirfd-relative atomic replace or unlink.
+
+The executor stores its lock, journal, and fsynced preimages under the absolute
+per-worktree Git administrative path. Each operation durably records
+`PREPARED` before mutation and `APPLIED` after the target parent is fsynced.
+Ordinary failures roll back and verify exact preimages. Interruptions retain an
+honest recoverable journal; a resume accepts only the identical plan and paths
+matching either recorded preimage or desired state. A path matching neither is
+an indeterminate conflict. The final local diagnosis runs before journal
+removal, and public remote-probing doctor behavior is not invoked by this
+executor.
+
 The repository generator reads the target checkout's Library graph and bootstrap
 declaration. It reproduces exactly eight committed outputs: five profile CI
 examples, the consumer drift example, and the canonically marked bootstrap CI
@@ -74,5 +93,6 @@ flowchart TD
     G -- "yes, unmanaged OR malformed marker" --> Sforce{"Force?"}
     Sforce -- no --> Skip["SKIP + report (protect operator's file)"]
     Sforce -- yes --> W
-    W --> I["Accept marker-bearing inventory last"]
+    W --> P["WAL: PREPARED → atomic dirfd mutation → APPLIED"]
+    P --> I["Local convergence; accept marker-bearing inventory last"]
 ```
