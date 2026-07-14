@@ -1,7 +1,74 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
+
+
+class GitObjectType(StrEnum):
+    """Validated Git object kinds returned by GitHub's ref/object endpoints."""
+
+    COMMIT = "commit"
+    TAG = "tag"
+
+
+class GitObjectReadStatus(StrEnum):
+    """The fail-closed semantic result of reading one Git object endpoint."""
+
+    FOUND = "found"
+    NOT_FOUND = "not_found"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class RepositoryIdentity:
+    """The immutable identity positively read for one accessible GitHub repository."""
+
+    database_id: int
+    node_id: str
+    full_name: str
+    default_branch: str
+
+
+@dataclass(frozen=True)
+class GitObjectRead:
+    """A typed Git-object read that cannot collapse an error into absence."""
+
+    status: GitObjectReadStatus
+    endpoint: str
+    object_type: GitObjectType | None = None
+    sha: str | None = None
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status is GitObjectReadStatus.FOUND:
+            if self.object_type is None or self.sha is None or self.error is not None:
+                raise ValueError("a FOUND Git object read requires type and SHA, without an error")
+            return
+        if self.object_type is not None or self.sha is not None:
+            raise ValueError("a non-FOUND Git object read cannot contain object data")
+        if self.status is GitObjectReadStatus.ERROR and not self.error:
+            raise ValueError("an ERROR Git object read requires an error")
+        if self.status is GitObjectReadStatus.NOT_FOUND and self.error is not None:
+            raise ValueError("a NOT_FOUND Git object read cannot contain an error")
+
+
+class LibraryRefKind(StrEnum):
+    """The authoritative ref namespace selected for a Library pin."""
+
+    TAG = "tag"
+    BRANCH = "branch"
+
+
+@dataclass(frozen=True)
+class ResolvedLibraryRef:
+    """One Library pin bound to an exact repository and peeled commit."""
+
+    repository_identity: RepositoryIdentity
+    ref_kind: LibraryRefKind
+    requested_pin: str
+    object_sha: str
+    commit_sha: str
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,13 @@ from urllib.parse import quote
 # Explicit re-export (`as run`): github_platform (and test monkeypatches) access this
 # helper as a real `aviato.github.run` module attribute.
 from .command import run as run
-from .core.ports import RulesetApplyResult
+from .core.ports import (
+    GitObjectRead,
+    GitObjectReadStatus,
+    GitObjectType,
+    RepositoryIdentity,
+    RulesetApplyResult,
+)
 
 # §5.5 (finding 30): rate-limit responses are tolerated and RETRIED (bounded), so a
 # scheduled fleet run doesn't fail outright on the first 403/429 throttle; a
@@ -25,6 +31,12 @@ from .core.ports import RulesetApplyResult
 _RATE_LIMIT_MARKERS = ("rate limit", "ratelimit", "secondary rate", "abuse detection", "http 429")
 _RATE_LIMIT_ATTEMPTS = 3
 _RATE_LIMIT_BASE_SLEEP_SECONDS = 2.0
+_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_HTTP_STATUS_SUFFIX_RE = re.compile(r"\(HTTP\s+([1-5][0-9]{2})\)", re.IGNORECASE)
+_HTTP_STATUS_PREFIX_RE = re.compile(
+    r"^[ \t]*(?:gh:[ \t]*)?HTTP[ \t]+([1-5][0-9]{2}):",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _run_gh_read(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -107,6 +119,110 @@ class SettingsReadError(GitHubAPIError):
     """
 
 
+def _terminal_http_status(stderr: str) -> int | None:
+    """Return gh's final structured HTTP status, if it is terminal.
+
+    Current GitHub CLI appends shapes such as ``(HTTP 404)``; older versions
+    emitted a final line such as ``gh: HTTP 404: Not Found``. An embedded/stale
+    404 before a later 403/5xx must never authorize absence.
+    """
+
+    markers = [
+        (match.start(), match.end(), int(match.group(1)), "suffix")
+        for match in _HTTP_STATUS_SUFFIX_RE.finditer(stderr)
+    ]
+    markers.extend(
+        (match.start(), match.end(), int(match.group(1)), "prefix")
+        for match in _HTTP_STATUS_PREFIX_RE.finditer(stderr)
+    )
+    if not markers:
+        return None
+    _, end, status, style = max(markers, key=lambda marker: marker[0])
+    if style == "suffix":
+        return status if not stderr[end:].strip() else None
+    line_end = stderr.find("\n", end)
+    return status if line_end < 0 or not stderr[line_end + 1 :].strip() else None
+
+
+def repository_identity(slug: str) -> RepositoryIdentity:
+    """Positively establish accessibility and immutable identity for ``slug``.
+
+    A repository-level 404 is deliberately an error: GitHub uses that response
+    for both absence and inaccessible private repositories. Only after this read
+    succeeds may a 404 from a correlated Git-object endpoint mean NOT_FOUND.
+    """
+
+    endpoint = f"repos/{slug}"
+    result = _run_gh_read(["gh", "api", endpoint])
+    if result.returncode != 0:
+        raise GitHubAPIError(endpoint, result.returncode, result.stderr)
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise GitHubAPIError(endpoint, result.returncode, f"invalid JSON response: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise GitHubAPIError(endpoint, result.returncode, "repository response was not an object")
+    database_id = payload.get("id")
+    node_id = payload.get("node_id")
+    full_name = payload.get("full_name")
+    default_branch = payload.get("default_branch")
+    if (
+        isinstance(database_id, bool)
+        or not isinstance(database_id, int)
+        or database_id <= 0
+        or not isinstance(node_id, str)
+        or not node_id
+        or not isinstance(full_name, str)
+        or full_name.count("/") != 1
+        or any(not segment for segment in full_name.split("/"))
+        or full_name.casefold() != slug.casefold()
+        or not isinstance(default_branch, str)
+        or not default_branch
+    ):
+        raise GitHubAPIError(
+            endpoint,
+            result.returncode,
+            "repository response omitted a correlated id, node_id, full_name, or default_branch",
+        )
+    return RepositoryIdentity(
+        database_id=database_id,
+        node_id=node_id,
+        full_name=full_name,
+        default_branch=default_branch,
+    )
+
+
+def read_git_object(identity: RepositoryIdentity, relative_endpoint: str) -> GitObjectRead:
+    """Read one ref/tag object without treating operational failure as absence."""
+
+    if relative_endpoint.startswith("/") or not relative_endpoint.startswith(
+        ("git/ref/tags/", "git/ref/heads/", "git/tags/")
+    ):
+        raise ValueError(f"unsupported Git object endpoint: {relative_endpoint!r}")
+    endpoint = f"repos/{identity.full_name}/{relative_endpoint}"
+    result = _run_gh_read(["gh", "api", endpoint])
+    if result.returncode != 0:
+        if _terminal_http_status(result.stderr) == 404:
+            return GitObjectRead(GitObjectReadStatus.NOT_FOUND, endpoint)
+        detail = result.stderr.strip() or f"gh exited with status {result.returncode}"
+        return GitObjectRead(GitObjectReadStatus.ERROR, endpoint, error=detail)
+    try:
+        payload = json.loads(result.stdout)
+        obj = payload["object"]
+        raw_type = obj["type"]
+        sha = obj["sha"]
+        object_type = GitObjectType(raw_type)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        return GitObjectRead(GitObjectReadStatus.ERROR, endpoint, error=f"malformed Git object response: {exc}")
+    if not isinstance(sha, str) or not _GIT_SHA_RE.fullmatch(sha):
+        return GitObjectRead(
+            GitObjectReadStatus.ERROR,
+            endpoint,
+            error=f"malformed Git object response: invalid SHA {sha!r}",
+        )
+    return GitObjectRead(GitObjectReadStatus.FOUND, endpoint, object_type=object_type, sha=sha)
+
+
 def gh_json(endpoint: str, *, default: Any = None, allow_error: bool = False) -> Any:
     result = _run_gh_read(["gh", "api", endpoint])
     if result.returncode != 0:
@@ -154,10 +270,10 @@ def gh_json_optional(endpoint: str, *, default: Any = None) -> Any:
     """
     result = _run_gh_read(["gh", "api", endpoint])
     if result.returncode != 0:
-        # Distinguish a genuine 404 ONLY by the HTTP status `gh` appends (``(HTTP 404)``).
+        # Distinguish a genuine 404 ONLY by the terminal structured HTTP status from `gh`.
         # Keying off free-text like "not found"/"no such" would misread a 403/5xx whose
         # body merely contains those words as an empty 404 — re-opening the §2.7 fail-OPEN.
-        if "http 404" in result.stderr.lower():
+        if _terminal_http_status(result.stderr) == 404:
             return default
         raise GitHubAPIError(endpoint, result.returncode, result.stderr)
     if not result.stdout.strip():
@@ -177,7 +293,7 @@ def gh_json_paginated_optional(endpoint: str, *, default: Any = None) -> Any:
     """
     result = _run_gh_read(["gh", "api", "--paginate", "--slurp", endpoint])
     if result.returncode != 0:
-        if "http 404" in result.stderr.lower():
+        if _terminal_http_status(result.stderr) == 404:
             return default
         raise GitHubAPIError(endpoint, result.returncode, result.stderr)
     if not result.stdout.strip():

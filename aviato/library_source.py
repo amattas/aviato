@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import tarfile
@@ -10,49 +9,104 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
-from .command import run
+from . import github
+from .command import run_to_path
 from .core.errors import AviatoError
+from .core.ports import (
+    GitObjectRead,
+    GitObjectReadStatus,
+    GitObjectType,
+    LibraryRefKind,
+    RepositoryIdentity,
+    ResolvedLibraryRef,
+)
 from .core.registry import Registry
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
-def _read_object(repository: str, endpoint: str) -> tuple[str, str] | None:
-    result = run(["gh", "api", f"repos/{repository}/{endpoint}"], check=False)
-    if result.returncode != 0:
-        return None
+def _read_object(identity: RepositoryIdentity, endpoint: str) -> GitObjectRead:
+    return github.read_git_object(identity, endpoint)
+
+
+def _terminal_read_error(pin: str, read: GitObjectRead, *, operation: str) -> AviatoError:
+    detail = read.error or "the endpoint returned no correlated object"
+    return AviatoError(f"could not {operation} Library pin {pin!r}: {detail}")
+
+
+def resolve_library_ref(repository: str, pin: str) -> ResolvedLibraryRef:
+    """Resolve ``pin`` once, preferring tags, and return its immutable commit identity."""
+
     try:
-        payload = json.loads(result.stdout)
-        obj = payload["object"]
-        object_type, sha = obj["type"], obj["sha"]
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise AviatoError(f"could not parse resolved Library ref from GitHub: {exc}") from exc
-    if object_type not in ("commit", "tag") or not isinstance(sha, str) or not _SHA_RE.fullmatch(sha):
-        raise AviatoError(f"Library ref resolved to an invalid Git object: type={object_type!r}, sha={sha!r}")
-    return object_type, sha
+        identity = github.repository_identity(repository)
+    except github.GitHubAPIError as exc:
+        raise AviatoError(f"could not establish access to Library repository {repository}: {exc}") from exc
 
+    access_probe = _read_object(identity, f"git/ref/heads/{quote(identity.default_branch, safe='')}")
+    if (
+        access_probe.status is not GitObjectReadStatus.FOUND
+        or access_probe.object_type is not GitObjectType.COMMIT
+        or access_probe.sha is None
+    ):
+        detail = access_probe.error or "the default branch was absent, malformed, or not a commit"
+        raise AviatoError(
+            f"could not establish Git content access through default branch {identity.default_branch!r} "
+            f"in Library repository {identity.full_name}: {detail}"
+        )
 
-def _resolve_commit(repository: str, pin: str) -> str:
     encoded = quote(pin, safe="")
-    resolved = _read_object(repository, f"git/ref/tags/{encoded}")
-    if resolved is None:
-        resolved = _read_object(repository, f"git/ref/heads/{encoded}")
-    if resolved is None:
+    resolved = _read_object(identity, f"git/ref/tags/{encoded}")
+    ref_kind = LibraryRefKind.TAG
+    if resolved.status is GitObjectReadStatus.ERROR:
+        raise _terminal_read_error(pin, resolved, operation="resolve tag for")
+    if resolved.status is GitObjectReadStatus.NOT_FOUND:
+        resolved = _read_object(identity, f"git/ref/heads/{encoded}")
+        ref_kind = LibraryRefKind.BRANCH
+        if resolved.status is GitObjectReadStatus.ERROR:
+            raise _terminal_read_error(pin, resolved, operation="resolve branch for")
+    if resolved.status is GitObjectReadStatus.NOT_FOUND:
         raise AviatoError(f"Library pin {pin!r} does not resolve in {repository}; no archive was downloaded")
-    object_type, sha = resolved
+    if resolved.object_type is None or resolved.sha is None:
+        raise AviatoError(f"Library pin {pin!r} produced an internally inconsistent Git object result")
+
+    object_type = resolved.object_type
+    object_sha = resolved.sha
+    sha = object_sha
+    if ref_kind is LibraryRefKind.BRANCH and object_type is not GitObjectType.COMMIT:
+        raise AviatoError(f"Library branch {pin!r} resolved to invalid Git object type {object_type.value!r}")
     seen: set[str] = set()
-    while object_type == "tag":
+    while object_type is GitObjectType.TAG:
         if sha in seen:
             raise AviatoError(f"annotated tag cycle while resolving Library pin {pin!r}")
         seen.add(sha)
-        peeled = _read_object(repository, f"git/tags/{sha}")
-        if peeled is None:
-            raise AviatoError(f"could not peel annotated Library tag {pin!r}")
-        object_type, sha = peeled
-    return sha
+        peeled = _read_object(identity, f"git/tags/{sha}")
+        if peeled.status is not GitObjectReadStatus.FOUND:
+            raise _terminal_read_error(pin, peeled, operation="peel annotated tag for")
+        if peeled.object_type is None or peeled.sha is None:
+            raise AviatoError(f"annotated Library tag {pin!r} produced an inconsistent Git object result")
+        object_type, sha = peeled.object_type, peeled.sha
+    if object_type is not GitObjectType.COMMIT or not _SHA_RE.fullmatch(sha):
+        raise AviatoError(f"Library pin {pin!r} did not peel to a valid commit")
+    return ResolvedLibraryRef(
+        repository_identity=identity,
+        ref_kind=ref_kind,
+        requested_pin=pin,
+        object_sha=object_sha,
+        commit_sha=sha,
+    )
 
 
-def _safe_library_members(archive: tarfile.TarFile, sha: str) -> tuple[str, list[tarfile.TarInfo]]:
+def _resolve_commit(repository: str, pin: str) -> str:
+    """Compatibility shim for internal callers while consumers migrate to OperationContext."""
+
+    return resolve_library_ref(repository, pin).commit_sha
+
+
+def _safe_library_members(
+    archive: tarfile.TarFile,
+    identity: RepositoryIdentity,
+    sha: str,
+) -> tuple[str, list[tarfile.TarInfo]]:
     members = archive.getmembers()
     if not members:
         raise AviatoError("downloaded Library archive is empty")
@@ -76,8 +130,12 @@ def _safe_library_members(archive: tarfile.TarFile, sha: str) -> tuple[str, list
     if len(roots) != 1:
         raise AviatoError("Library archive does not have one commit-root directory")
     root = next(iter(roots))
-    if not root.endswith(f"-{sha[:7]}"):
-        raise AviatoError(f"Library archive commit root {root!r} does not match resolved commit {sha}")
+    expected_root = f"{identity.full_name.replace('/', '-')}-{sha[:7]}"
+    if root != expected_root:
+        raise AviatoError(
+            f"Library archive root {root!r} does not match repository {identity.full_name} "
+            f"and resolved commit {sha}; expected {expected_root!r}"
+        )
     if not any(m.isfile() and len(PurePosixPath(m.name).parts) > 3 for m in selected):
         raise AviatoError("Library archive is missing the aviato/library tree")
     return root, selected
@@ -86,18 +144,20 @@ def _safe_library_members(archive: tarfile.TarFile, sha: str) -> tuple[str, list
 @contextmanager
 def fetch_library_registry(repository: str, pin: str) -> Iterator[Registry]:
     """Yield the exact published Library registry for ``pin``, then remove all fetched bytes."""
-    sha = _resolve_commit(repository, pin)
+    resolved = resolve_library_ref(repository, pin)
+    sha = resolved.commit_sha
     workdir = Path(tempfile.mkdtemp(prefix="aviato-library-"))
     try:
         archive_path = workdir / "library.tar.gz"
-        result = run(["gh", "api", f"repos/{repository}/tarball/{sha}", "--output", str(archive_path)], check=False)
+        endpoint = f"repos/{resolved.repository_identity.full_name}/tarball/{sha}"
+        result = run_to_path(["gh", "api", endpoint], archive_path, check=False)
         if result.returncode != 0:
             raise AviatoError(f"could not download Library archive for resolved commit {sha}: {result.stderr.strip()}")
         extract_root = workdir / "extracted"
         extract_root.mkdir()
         try:
             with tarfile.open(archive_path, mode="r:gz") as archive:
-                archive_root, members = _safe_library_members(archive, sha)
+                archive_root, members = _safe_library_members(archive, resolved.repository_identity, sha)
                 for member in members:
                     relative = PurePosixPath(member.name).relative_to(
                         PurePosixPath(archive_root) / "aviato" / "library"

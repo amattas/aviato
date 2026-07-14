@@ -58,6 +58,44 @@ def test_gh_json_can_allow_error(monkeypatch: pytest.MonkeyPatch) -> None:
     assert github.gh_json("repos/amattas/aviato/rulesets", default=[], allow_error=True) == []
 
 
+@pytest.mark.parametrize(
+    "ref_result",
+    [
+        subprocess.CompletedProcess(["gh"], 1, "", "gh: Bad credentials (HTTP 401)"),
+        subprocess.CompletedProcess(["gh"], 1, "", "gh: API rate limit exceeded (HTTP 429)"),
+        subprocess.CompletedProcess(["gh"], 1, "", "request timed out"),
+        subprocess.CompletedProcess(["gh"], 1, "", "gh: Service unavailable (HTTP 503)"),
+        subprocess.CompletedProcess(["gh"], 0, "not-json", ""),
+        subprocess.CompletedProcess(["gh"], 0, '{"object":{"type":"commit","sha":"short"}}', ""),
+    ],
+    ids=("auth", "rate-limit", "timeout", "server", "invalid-json", "malformed-object"),
+)
+def test_auth_rate_limit_timeout_server_and_malformed_reads_are_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    ref_result: subprocess.CompletedProcess[str],
+) -> None:
+    repository_endpoint = "repos/o/r"
+    ref_endpoint = f"{repository_endpoint}/git/ref/tags/v1"
+    repository_payload = {"id": 17, "node_id": "R_test", "full_name": "o/r", "default_branch": "main"}
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        endpoint = command[2]
+        if endpoint == repository_endpoint:
+            return subprocess.CompletedProcess(command, 0, json.dumps(repository_payload), "")
+        if endpoint == ref_endpoint:
+            return subprocess.CompletedProcess(command, ref_result.returncode, ref_result.stdout, ref_result.stderr)
+        raise AssertionError(f"unexpected GitHub API read: {endpoint}")
+
+    monkeypatch.setattr(github, "run", fake_run)
+    monkeypatch.setattr(github.time, "sleep", lambda _: None)
+
+    identity = github.repository_identity("o/r")
+    outcome = github.read_git_object(identity, "git/ref/tags/v1")
+
+    assert outcome.status.value == "error"
+    assert outcome.error
+
+
 def test_codeql_merge_protection_requires_exact_active_branch_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "default_branch", lambda slug: "main")
     effective: list[JsonObject] = [
@@ -144,6 +182,56 @@ def test_gh_json_optional_returns_default_on_genuine_404(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(github, "run", fake_run)
     assert github.gh_json_optional("repos/o/r/branches/main/protection", default={}) == {}
+
+
+@pytest.mark.parametrize("terminal_status", [403, 500])
+def test_gh_json_optional_rejects_embedded_404_before_terminal_error(
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_status: int,
+) -> None:
+    stderr = f"gh: upstream Not Found (HTTP 404)\ngh: request failed (HTTP {terminal_status})"
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(["gh"], 1, "", stderr),
+    )
+
+    with pytest.raises(github.GitHubAPIError):
+        github.gh_json_optional("repos/o/r/branches/main/protection", default={})
+
+
+def test_paginated_optional_rejects_embedded_404_before_terminal_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    stderr = "gh: upstream Not Found (HTTP 404)\ngh: forbidden (HTTP 403)"
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(["gh"], 1, "", stderr),
+    )
+
+    with pytest.raises(github.GitHubAPIError):
+        github.gh_json_paginated_optional("repos/o/r/rulesets", default=[])
+
+
+def test_git_object_read_uses_terminal_http_status_not_embedded_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository_endpoint = "repos/o/r"
+    ref_endpoint = f"{repository_endpoint}/git/ref/tags/v1"
+    repository_payload = {"id": 17, "node_id": "R_test", "full_name": "o/r", "default_branch": "main"}
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if command[2] == repository_endpoint:
+            return subprocess.CompletedProcess(command, 0, json.dumps(repository_payload), "")
+        if command[2] == ref_endpoint:
+            stderr = "gh: upstream Not Found (HTTP 404)\ngh: forbidden (HTTP 403)"
+            return subprocess.CompletedProcess(command, 1, "", stderr)
+        raise AssertionError(f"unexpected GitHub API read: {command[2]}")
+
+    monkeypatch.setattr(github, "run", fake_run)
+    identity = github.repository_identity("o/r")
+
+    outcome = github.read_git_object(identity, "git/ref/tags/v1")
+
+    assert outcome.status.value == "error"
+    assert outcome.error
 
 
 def test_upsert_ruleset_posts_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
