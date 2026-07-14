@@ -85,6 +85,21 @@ def parse_marker_from_text(text: str) -> MarkerInfo | None:
     return None
 
 
+def marker_token_present(text: str | bytes) -> bool:
+    """Return whether content contains the managed token without implying validity."""
+    if isinstance(text, bytes):
+        return _TOKEN.encode("ascii") in text
+    return _TOKEN in text
+
+
+def marker_line_from_text(text: str) -> str | None:
+    """Return the first nonblank marker line exactly as stored, if it is valid."""
+    for line in text.splitlines():
+        if line.strip():
+            return line if parse_marker(line) is not None else None
+    return None
+
+
 def strip_marker_from_text(text: str) -> str:
     """Remove the managed-marker line from a file's text, leaving a plain file (§5.13).
 

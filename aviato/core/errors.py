@@ -21,6 +21,10 @@ class MarkerError(AviatoError):
     """A managed marker could not be rendered or parsed (§6.2)."""
 
 
+class InventoryError(AviatoError):
+    """Managed inventory or marker-universe state could not be trusted."""
+
+
 class AuthorizationError(AviatoError):
     """An authorization decision denied a privileged action (§5.8)."""
 

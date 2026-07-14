@@ -9,10 +9,33 @@ from aviato.core.diagnosis import ExpectedArtifact, diagnose
 from aviato.core.errors import PathConfinementError
 from aviato.core.marker import content_hash, parse_marker_from_text
 from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
-from aviato.core.scaffold import SeedSidecar, read_sidecar, scaffold
+from aviato.core.scaffold import SeedSidecar, inventory_entry_for_item, read_sidecar, scaffold
 
 INPUT_HASH = "a" * 64
 ScaffoldItem = partial(_ScaffoldItem, input_hash=INPUT_HASH)
+
+
+def test_scaffold_inventory_receipt_requires_stable_identity_and_excludes_seed_once() -> None:
+    item = ScaffoldItem(
+        "cfg.py",
+        "X = 1\n",
+        "#",
+        artifact_id="artifact:python-lint",
+        pipeline_owners=("pipeline:verify",),
+        legacy_aliases=("legacy.cfg",),
+    )
+    entry = inventory_entry_for_item(item, profile="p", version="1.2.3")
+    assert entry.artifact_id == "artifact:python-lint"
+    assert entry.pipeline_owners == ("pipeline:verify",)
+    assert entry.legacy_aliases == ("legacy.cfg",)
+    with pytest.raises(ValueError, match="stable artifact identity"):
+        inventory_entry_for_item(ScaffoldItem("cfg.py", "X = 1\n", "#"), profile="p", version="1.2.3")
+    with pytest.raises(ValueError, match="seed-once"):
+        inventory_entry_for_item(
+            ScaffoldItem("LICENSE", "MIT\n", "#", seed_once=True, artifact_id="artifact:license"),
+            profile="p",
+            version="1.2.3",
+        )
 
 
 def test_scaffold_rejects_symlinked_parent(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .command import run
+from .core.errors import InventoryError
 
 # R2-8: a slug is exactly `owner/repo` with safe chars — anything else (a `?`-bearing segment, a
 # sub-path) is rejected so it can't later alter an API endpoint it's interpolated into.
@@ -123,3 +124,19 @@ def workflow_files(repo: Path) -> str:
         return ""
     names = sorted(path.name for path in workflow_dir.iterdir() if path.is_file() and path.suffix in {".yml", ".yaml"})
     return ",".join(names)
+
+
+def git_candidate_paths(repo: Path) -> tuple[str, ...]:
+    """Return tracked plus untracked nonignored paths using Git's NUL-safe format."""
+    result = run(
+        ["git", "-C", str(repo), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        check=False,
+    )
+    if result.returncode != 0:
+        raise InventoryError(f"could not enumerate repository files: {result.stderr.strip()}")
+    paths = result.stdout.split("\0")
+    if paths and paths[-1] == "":
+        paths.pop()
+    if any(not path for path in paths):
+        raise InventoryError("Git returned an empty path in the managed marker universe")
+    return tuple(paths)

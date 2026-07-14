@@ -85,6 +85,29 @@ resolved seed set. This gives tamper *visibility* without fighting the required
 operator edits that make these files operator-owned. (This replaces the earlier
 "no sidecar at all" stance, which left these files with zero integrity tracking.)
 
+### 6.3a Managed inventory (normative)
+
+`.github/aviato.managed.yml` is a generated, schema-versioned index of the last
+successfully accepted desired state. It carries a normal managed marker and its
+body is validated independently. The body records profile name and immutable
+identity, declared pin, resolved Library commit, stable artifact identities by
+output path, pipeline owners, expected marker/body/input hashes, reviewed legacy
+aliases, and owned remote-ruleset fingerprints. It never lists itself.
+
+The inventory is discovery metadata, not deletion authority. Every diagnosis or
+transition reconciles it with a confined Git scan of tracked plus untracked
+nonignored files, excluding Git metadata, nested repositories/worktrees, and
+build roots. A valid live marker remains the authority that a file is managed.
+A missing, malformed, truncated, hand-edited, or path-injecting inventory cannot
+hide a marked file. An obsolete artifact is retirable only when its stable
+identity is known, its marker belongs to the current profile (or an explicitly
+authorized migration source profile), its version is recognized, and the live
+body and marker match the prior receipt. Seed-once files are never inventory-
+retired. Path identities are Unicode-normalized and compared case-insensitively
+for portability; case-equivalent entries, aliases, protected roots, or multiple
+Git-index spellings block rather than collapse silently. A single reviewed
+legacy alias may be adopted; alias ambiguity blocks.
+
 ### 6.4 Consent record (normative)
 
 - Consent to a settings reconcile is expressed by an explicit, defined record on

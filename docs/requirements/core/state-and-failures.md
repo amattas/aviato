@@ -7,6 +7,7 @@
 | Desired conventions | The Library's profiles/bundles/modules at the pinned version |
 | A Consumer's chosen conventions | The Consumer's `.github/aviato.yaml` declaration (§6.1) |
 | Whether a file is managed | The managed marker in the file (§6.2); seed-once files (§6.3) are operator-owned |
+| Prior managed paths and remote ownership receipts | The marker-bearing, schema-versioned `.github/aviato.managed.yml` index, reconciled with the complete live marker universe; the index alone never proves ownership or authorizes deletion |
 | Live protected settings | The hosting platform (read at diagnosis/apply time) |
 | Consent to mutate settings | The tracking issue's authoritative event history (§6.4) |
 | Per-Consumer audit of actions taken | That Consumer's tracking issues (left open, §5.6/§5.7) |
@@ -72,5 +73,13 @@ Each maps to a principle and must be designed out, not patched later.
   the findings-upload scope, or a scan never ran, leaving the repo reading
   "clean") → prevented by a runtime privilege probe that hard-fails and a per-run
   heartbeat whose absence reads as broken, not clean (§5.14, §5.4, §8.9).
+- **§8.17** A stale generated workflow survives because the current profile no
+  longer names it, or a corrupt inventory hides it → prevented by scanning every
+  tracked and untracked nonignored Git file for managed markers and reconciling
+  that universe with desired and prior state. The inventory is only an index;
+  retirement additionally requires a valid current/source-profile marker, a
+  known version, a stable artifact identity, and a live body matching the
+  marker and recorded receipt. Modified, foreign, malformed, unreadable,
+  symlinked, ambiguous, and seed-once paths fail closed and remain untouched.
 
 ---

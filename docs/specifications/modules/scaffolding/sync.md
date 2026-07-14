@@ -31,6 +31,20 @@ Legacy workflow schema v1 is read-only at this boundary; sync that would change
 the graph requires a repin to v2. Partial desired states are preview-only and
 can never enter materialization.
 
+Before planning writes, sync loads `.github/aviato.managed.yml` as an
+untrusted, marker-bearing index and scans the complete Git marker universe
+(tracked plus untracked nonignored files). The scan excludes metadata, build
+roots, and nested repositories/worktrees. Desired paths, prior indexed paths,
+and independently discovered marked paths are reconciled every time, so an
+inventory omission cannot hide stale executable automation. Clean obsolete
+managed files become retirement candidates; missing obsolete files disappear
+from the next index. Dirty, foreign, malformed, unreadable, symlinked,
+ambiguous, or seed-once paths block the transition and are never deleted. The
+same fail-closed rule applies to Unicode-normalized, case-equivalent path
+collisions and multiple Git-index spellings, even on a case-sensitive host. The
+managed inventory is accepted last, after convergence proves its own marker and
+body as well as the ordinary managed artifacts.
+
 The repository generator reads the target checkout's Library graph and bootstrap
 declaration. It reproduces exactly eight committed outputs: five profile CI
 examples, the consumer drift example, and the canonically marked bootstrap CI
@@ -42,7 +56,10 @@ AST, and proves a nested `environment-name` is consumed as a called job environm
 ```mermaid
 flowchart TD
     A["Pinned resolved set + complete typed variables"] --> B["Compile selected graph → DesiredState<br/>ci + drift + optional docs envelopes<br/>base ∪ pipeline templates + generated callers"]
-    B --> C["For each output path"]
+    B --> U["Load inventory index + scan full Git marker universe"]
+    U --> R{"All obsolete and legacy paths classified?"}
+    R -- no --> Block["BLOCK: preserve every uncertain path"]
+    R -- yes --> C["For each output path"]
     C --> S0{"Seed-once / non-annotatable?"}
     S0 -- yes --> S1{"Already present?"}
     S1 -- yes --> Skip2["Leave as-is (operator-owned, drift-excluded)"]
@@ -57,4 +74,5 @@ flowchart TD
     G -- "yes, unmanaged OR malformed marker" --> Sforce{"Force?"}
     Sforce -- no --> Skip["SKIP + report (protect operator's file)"]
     Sforce -- yes --> W
+    W --> I["Accept marker-bearing inventory last"]
 ```

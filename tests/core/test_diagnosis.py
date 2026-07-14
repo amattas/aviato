@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from functools import partial
 from pathlib import Path
 
@@ -13,16 +14,55 @@ from aviato.core.diagnosis import (
     ExpectedArtifact as _ExpectedArtifact,
 )
 from aviato.core.errors import BootstrapError, PathConfinementError
+from aviato.core.inventory import INVENTORY_PATH, ManagedInventory, render_managed_inventory
 from aviato.core.onboarding import resolved_artifacts
 from aviato.core.registry import Registry
 from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
-from aviato.core.scaffold import scaffold
+from aviato.core.scaffold import inventory_entry_for_item, scaffold
 from aviato.paths import MODULE_SOURCE_ROOT
 
 INPUT_A = "a" * 64
 INPUT_B = "b" * 64
 ExpectedArtifact = partial(_ExpectedArtifact, input_hash="0" * 64)
 ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
+
+
+def test_diagnosis_reconciles_inventory_with_the_full_marker_universe(tmp_path: Path) -> None:
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    path = ".github/workflows/old.yml"
+    item = ScaffoldItem(
+        path,
+        "name: old\n",
+        "#",
+        artifact_id="artifact:old",
+        pipeline_owners=("pipeline:old",),
+    )
+    scaffold(tmp_path, [item], profile="p", version="1.2.3")
+    prior = ManagedInventory(
+        schema_version=1,
+        profile="p",
+        profile_identity="profile:p/v1",
+        pin="1.2.3",
+        snapshot_commit="a" * 40,
+        entries={path: inventory_entry_for_item(item, profile="p", version="1.2.3")},
+    )
+    inventory_path = tmp_path / INVENTORY_PATH
+    inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    inventory_path.write_text(render_managed_inventory(prior), encoding="utf-8")
+    desired = ManagedInventory(
+        schema_version=1,
+        profile="p",
+        profile_identity="profile:p/v1",
+        pin="1.2.3",
+        snapshot_commit="b" * 40,
+        entries={},
+    )
+
+    report = diagnose(tmp_path, [], desired_inventory=desired)
+
+    assert report.managed_inventory_status == "valid"
+    assert report.obsolete_retirable == [path]
+    assert not report.obsolete_blocked
 
 
 def _scaffold_one(root: Path, output: str, body: str) -> None:

@@ -6,7 +6,10 @@ import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from .inventory import InventoryEntry
 
 from .marker import content_hash, parse_marker_from_text, render_marker, strip_marker_from_text
 from .pathguard import confined_target
@@ -24,6 +27,12 @@ class ScaffoldItem:
     comment: str
     seed_once: bool = False
     input_hash: str = field(kw_only=True)
+    # Stable identity and ownership are inventory metadata. They are optional on
+    # legacy call sites until the shared transition planner supplies them, and
+    # are never inferred from the mutable output path.
+    artifact_id: str | None = field(default=None, kw_only=True)
+    pipeline_owners: tuple[str, ...] = field(default=(), kw_only=True)
+    legacy_aliases: tuple[str, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -260,6 +269,31 @@ def render_managed(item: ScaffoldItem, *, profile: str, version: str) -> str:
         input_hash=item.input_hash,
     )
     return f"{marker}\n{item.body}"
+
+
+def inventory_entry_for_item(item: ScaffoldItem, *, profile: str, version: str) -> InventoryEntry:
+    """Create the inventory receipt for one managed scaffold item.
+
+    Seed-once files are operator-owned and cannot be represented by the managed
+    inventory. Callers must provide a stable identity rather than deriving one
+    from the current output path.
+    """
+    from .inventory import InventoryEntry
+
+    if item.seed_once:
+        raise ValueError("seed-once artifacts cannot be added to the managed inventory")
+    if item.artifact_id is None or not item.artifact_id:
+        raise ValueError(f"managed artifact {item.output!r} has no stable artifact identity")
+    rendered = render_managed(item, profile=profile, version=version)
+    marker_line = rendered.splitlines()[0]
+    return InventoryEntry(
+        artifact_id=item.artifact_id,
+        pipeline_owners=item.pipeline_owners,
+        marker_hash=content_hash(marker_line),
+        body_hash=content_hash(item.body),
+        input_hash=item.input_hash,
+        legacy_aliases=item.legacy_aliases,
+    )
 
 
 def scaffold(

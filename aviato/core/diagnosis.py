@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from .errors import BootstrapError
+from .inventory import InventoryReadStatus, ManagedInventory, reconcile_managed_inventory
 from .marker import content_hash, parse_marker_from_text, strip_marker_from_text
 from .pathguard import confined_target
 from .scaffold import read_sidecar
@@ -42,6 +43,12 @@ class DiagnosisReport:
     # "unable to determine"; the doctor report surfaces both so the operator can act (§5.4 —
     # absence reads as broken, never clean).
     prerequisites_remote: dict[str, bool | None] = field(default_factory=dict)
+    managed_inventory_status: InventoryReadStatus | None = None
+    obsolete_retirable: list[str] = field(default_factory=list)
+    obsolete_missing: list[str] = field(default_factory=list)
+    obsolete_blocked: dict[str, str] = field(default_factory=dict)
+    legacy_adoptable: dict[str, str] = field(default_factory=dict)
+    ambiguous_legacy: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def drift_automation_healthy(self) -> bool:
@@ -177,6 +184,9 @@ def diagnose(
     profile: str | None = None,
     is_library: bool = False,
     bootstrap_declared: bool = False,
+    desired_inventory: ManagedInventory | None = None,
+    source_profile: str | None = None,
+    seed_once_paths: set[str] | frozenset[str] = frozenset(),
 ) -> DiagnosisReport:
     """Classify a Consumer's managed artifacts and probe its health (§5.4).
 
@@ -230,5 +240,19 @@ def diagnose(
 
     report.drift_automation_present = _has_drift_automation(root, drift_automation_markers)
     report.prerequisites = _probe_prerequisites(root, prerequisite_paths or {})
+
+    if desired_inventory is not None:
+        inventory = reconcile_managed_inventory(
+            root,
+            desired_inventory,
+            source_profile=source_profile,
+            seed_once_paths=seed_once_paths,
+        )
+        report.managed_inventory_status = inventory.inventory_status
+        report.obsolete_retirable.extend(inventory.obsolete_clean)
+        report.obsolete_missing.extend(inventory.obsolete_missing)
+        report.obsolete_blocked.update(inventory.obsolete_blocked)
+        report.legacy_adoptable.update(inventory.legacy_adoptable)
+        report.ambiguous_legacy.update(inventory.ambiguous)
 
     return report
