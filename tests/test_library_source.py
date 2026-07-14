@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import aviato.library_source as library_source
+from aviato.command import CommandError
 from aviato.core.errors import AviatoError
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -262,7 +263,7 @@ def test_hidden_or_ambiguous_404_never_falls_back_to_branch(
     assert not any("/git/ref/heads/private" in endpoint for endpoint in calls)
 
 
-def test_metadata_visible_but_git_content_hidden_404_never_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_metadata_visible_but_git_content_hidden_never_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     repository_endpoint = f"repos/{REPOSITORY}"
     default_ref_endpoint = f"{repository_endpoint}/git/ref/heads/{DEFAULT_BRANCH}"
     calls = _install_api(
@@ -278,6 +279,16 @@ def test_metadata_visible_but_git_content_hidden_404_never_falls_back(monkeypatc
 
     assert not any("/git/ref/tags/private" in endpoint for endpoint in calls)
     assert not any("/git/ref/heads/private" in endpoint for endpoint in calls)
+
+
+def test_repository_identity_launch_failure_is_mapped_to_aviato_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unavailable(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise CommandError(["gh", "api", f"repos/{REPOSITORY}"], 127, "could not execute 'gh'")
+
+    monkeypatch.setattr(library_source.github, "run", unavailable)
+
+    with pytest.raises(AviatoError, match="establish access"):
+        library_source.resolve_library_ref(REPOSITORY, "v1")
 
 
 @pytest.mark.parametrize(
@@ -381,6 +392,46 @@ def test_ref_movement_after_resolution_still_fetches_original_commit_archive(
     assert calls.count(tag_endpoint) == 1
     assert original_archive_endpoint in calls
     assert moved_archive_endpoint not in calls
+
+
+def test_archive_download_uses_supported_binary_stdout_and_preserves_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_endpoint = f"repos/{REPOSITORY}"
+    tag_endpoint = f"{repository_endpoint}/git/ref/tags/v1"
+    archive_endpoint = f"{repository_endpoint}/tarball/{SHA}"
+    responses = {
+        **_accessible_repository_responses(),
+        tag_endpoint: _ref_response(tag_endpoint, "commit", SHA),
+    }
+    archive_bytes = _archive(identity="aviato-profile/binary-stream/v1")
+    observed_commands: list[list[str]] = []
+    observed_bytes: list[bytes] = []
+
+    def fake_read(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        endpoint = command[2]
+        response = responses.get(endpoint)
+        if response is None:
+            raise AssertionError(f"unexpected GitHub API read: {endpoint}")
+        return subprocess.CompletedProcess(command, response.returncode, response.stdout, response.stderr)
+
+    def fake_subprocess(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        observed_commands.append(command)
+        stdout = kwargs["stdout"]
+        assert hasattr(stdout, "write") and hasattr(stdout, "flush") and hasattr(stdout, "name")
+        stdout.write(archive_bytes)  # type: ignore[union-attr]
+        stdout.flush()  # type: ignore[union-attr]
+        observed_bytes.append(Path(stdout.name).read_bytes())  # type: ignore[union-attr]
+        return subprocess.CompletedProcess(command, 0, None, "")
+
+    monkeypatch.setattr(library_source.github, "run", fake_read)
+    monkeypatch.setattr(subprocess, "run", fake_subprocess)
+
+    with library_source.fetch_library_registry(REPOSITORY, "v1") as registry:
+        assert registry.profile("profile").identity == "aviato-profile/binary-stream/v1"
+
+    assert observed_commands == [["gh", "api", archive_endpoint]]
+    assert observed_bytes == [archive_bytes]
 
 
 @pytest.mark.parametrize(

@@ -129,7 +129,7 @@ def test_run_to_path_preserves_binary_bytes_with_a_finite_timeout(
     ("failure", "expected_returncode"),
     [("launch", 127), ("nonzero", 23), ("timeout", 124)],
 )
-def test_run_to_path_maps_failures_and_removes_partial_output(
+def test_binary_output_failure_timeout_and_launch_error_remove_partial_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failure: str,

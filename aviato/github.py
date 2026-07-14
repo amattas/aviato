@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-# Explicit re-export (`as run`): github_platform (and test monkeypatches) access this
-# helper as a real `aviato.github.run` module attribute.
-from .command import run as run
+# GitHubPlatform and tests access this helper through the real `aviato.github.run`
+# module attribute.
+from .command import CommandError, run
 from .core.ports import (
     GitObjectRead,
     GitObjectReadStatus,
@@ -41,12 +41,23 @@ _HTTP_STATUS_PREFIX_RE = re.compile(
 
 def _run_gh_read(args: list[str]) -> subprocess.CompletedProcess[str]:
     """Run a gh READ with bounded rate-limit retry (§5.5, finding 30)."""
-    result = run(args, check=False)
+
+    def execute() -> subprocess.CompletedProcess[str]:
+        try:
+            return run(args, check=False)
+        except CommandError as exc:
+            # `run(..., check=False)` still raises when the process cannot launch.
+            # Normalize that operator/environment failure at the read boundary so
+            # callers retain their total FOUND/NOT_FOUND/ERROR or GitHubAPIError
+            # contracts instead of leaking a fourth exception-shaped outcome.
+            return subprocess.CompletedProcess(exc.command, exc.returncode, "", exc.stderr)
+
+    result = execute()
     for attempt in range(1, _RATE_LIMIT_ATTEMPTS):
         if result.returncode == 0 or not any(m in result.stderr.lower() for m in _RATE_LIMIT_MARKERS):
             return result
         time.sleep(_RATE_LIMIT_BASE_SLEEP_SECONDS * (2 ** (attempt - 1)))
-        result = run(args, check=False)
+        result = execute()
     return result
 
 
