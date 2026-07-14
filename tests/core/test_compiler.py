@@ -187,7 +187,10 @@ def _registry(tmp_path: Path) -> Registry:
             "name": "Publish",
             "runs-on": "ubuntu-latest",
             "permissions": {"contents": "read"},
-            "environment": "${{ inputs.environment-name }}",
+            # Pipeline-owned variables use the engine's render placeholder. A
+            # GitHub `inputs.*` expression here would be invalid for this
+            # push/tag-triggered local job and would not bind the selected value.
+            "environment": "{{ environment-name }}",
             "steps": [{"run": "echo ${{ secrets.TOKEN }}"}],
         },
     )

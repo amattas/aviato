@@ -348,10 +348,10 @@ def test_scaffold_placeholders_have_a_render_source() -> None:
     assert not unresolved, f"scaffold placeholders with no render source: {unresolved}"
 
 
-def test_docs_pipeline_not_duplicated_if_already_present(module_root: Path) -> None:
+def test_docs_pipeline_add_rejects_duplicate_after_docs_opt_in(module_root: Path) -> None:
     reg = Registry(module_root)
-    rs = resolve_profile(reg, "child", docs=True, overrides={"pipelines": {"add": ["docs-pages"]}})
-    assert rs.pipelines.count("docs-pages") == 1
+    with pytest.raises(CompositionError, match="add of already-present"):
+        resolve_profile(reg, "child", docs=True, overrides={"pipelines": {"add": ["docs-pages"]}})
 
 
 def test_missing_referenced_module_is_hard_error(module_root: Path) -> None:

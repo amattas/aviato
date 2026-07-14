@@ -11,6 +11,7 @@ from .diagnosis import ExpectedArtifact, diagnose
 from .errors import AviatoError, DeclarationError
 from .onboarding import resolved_artifacts
 from .registry import Registry
+from .variables import resolve_declared_variables
 
 
 @dataclass
@@ -89,8 +90,17 @@ def scan_fleet(
             continue
         try:
             declaration = load_declaration(declaration_path)
+            resolved = resolve_profile(
+                registry,
+                declaration.profile,
+                overrides=declaration.overrides,
+                docs=declaration.docs,
+            )
+            # Keep malformed consumer data classified as an invalid declaration
+            # before the schema-v2 compiler wraps it as a generic composition
+            # failure. This is also the closed-key/type gate used by mutation.
+            resolve_declared_variables(resolved.variables, declaration.variables)
             expected = _expected_artifacts(registry, declaration)
-            resolved = resolve_profile(registry, declaration.profile, docs=declaration.docs)
             secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
             report = diagnose(
                 root,

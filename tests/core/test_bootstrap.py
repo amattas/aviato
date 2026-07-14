@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from aviato.core.bootstrap import is_library
 
 
@@ -59,7 +57,6 @@ def test_reonboard_preserves_verified_bootstrap(tmp_path: Path) -> None:
     from aviato.cli import _resolve_onboard_declaration
     from aviato.core.composition import resolve_profile
     from aviato.core.declaration import Declaration
-    from aviato.core.errors import CompositionError
     from aviato.core.registry import Registry
 
     _make_library(tmp_path)
@@ -82,6 +79,12 @@ def test_reonboard_preserves_verified_bootstrap(tmp_path: Path) -> None:
         allow_unresolved_pin=False,
     )
 
-    with pytest.raises(CompositionError, match="repin"):
-        _resolve_onboard_declaration(args, registry, resolve_profile(registry, "python-library"), existing)
+    declaration, _ = _resolve_onboard_declaration(
+        args,
+        registry,
+        resolve_profile(registry, "python-library"),
+        existing,
+    )
+    assert declaration.bootstrap is True
+    assert declaration.version == "0"
     assert existing.bootstrap is True

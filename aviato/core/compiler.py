@@ -210,7 +210,14 @@ def _validate_job(
     declared_environment = job.environment
     if job.environment_input:
         selected = variables.get(job.environment_input, Unknown)
-        declared_environment = None if selected is Unknown or selected is None else str(selected)
+        # Partial previews deliberately retain an unresolved engine placeholder;
+        # validating it as `None` would reject every conditional environment
+        # before it can be reported as indeterminate.
+        declared_environment = (
+            f"{{{{ {job.environment_input} }}}}"
+            if selected is Unknown or isinstance(selected, UnknownValue)
+            else (None if selected is None else str(selected))
+        )
     if actual_environment != declared_environment:
         raise CompositionError(f"job {job.name!r} environment metadata is orphaned or incompatible with its fragment")
 
