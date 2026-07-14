@@ -2,14 +2,31 @@ from pathlib import Path
 
 import pytest
 
+from aviato.paths import POLICY_DATA_ROOT
 from aviato.plugins.actionpins import (
-    action_pin_violations,
+    action_pin_violations as _action_pin_violations,
+)
+from aviato.plugins.actionpins import (
     unpinned_requirements_lines,
-    unpinned_third_party_uses,
     unpinned_tool_invocations,
+)
+from aviato.plugins.actionpins import (
+    unpinned_third_party_uses as _unpinned_third_party_uses,
 )
 
 _SHA = "a" * 40
+
+
+def unpinned_third_party_uses(text: str, *, library_repository: str = "amattas/aviato") -> list[str]:
+    return _unpinned_third_party_uses(text, library_repository=library_repository)
+
+
+def action_pin_violations(root: Path) -> list[str]:
+    return _action_pin_violations(
+        root,
+        policy_root=POLICY_DATA_ROOT,
+        library_repository="amattas/aviato",
+    )
 
 
 # --- uses: SHA check (kept for scaffold bodies; placeholder-aware in action_pin_violations) ---
@@ -76,7 +93,7 @@ def test_unpinned_requirements_lines_flags_floors_not_exact() -> None:
 def test_action_pin_scan_flags_floor_seeded_requirements(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from aviato.plugins import zizmor_scan
 
-    monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: [])
+    monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d, **_k: [])
     seed = tmp_path / "aviato" / "library" / "scaffold" / "files"
     seed.mkdir(parents=True)
     (seed / "requirements-dev.txt.txt").write_text("pytest>=8.0\n", encoding="utf-8")
@@ -87,7 +104,7 @@ def test_action_pin_scan_flags_floor_seeded_requirements(tmp_path: Path, monkeyp
 def test_action_pin_scan_flags_fetch_execute_in_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from aviato.plugins import zizmor_scan
 
-    monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: [])
+    monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d, **_k: [])
     wf = tmp_path / ".github" / "workflows"
     wf.mkdir(parents=True)
     (wf / "ci.yml").write_text("        run: curl https://x/i.sh | bash\n", encoding="utf-8")
@@ -133,7 +150,7 @@ def test_flags_npx_package_fetch_without_exact_version() -> None:
 def test_action_pin_scan_surfaces_zizmor_uses_finding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from aviato.plugins import zizmor_scan
 
-    monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: ["unpinned-uses: ci.yml"])
+    monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d, **_k: ["unpinned-uses: ci.yml"])
     wf = tmp_path / ".github" / "workflows"
     wf.mkdir(parents=True)
     (wf / "ci.yml").write_text("on: push\n", encoding="utf-8")
@@ -144,7 +161,7 @@ def test_action_pin_scan_surfaces_zizmor_uses_finding(tmp_path: Path, monkeypatc
 def test_action_pin_scan_tolerates_non_utf8_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from aviato.plugins import zizmor_scan
 
-    monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d: [])
+    monkeypatch.setattr(zizmor_scan, "zizmor_uses_image_violations", lambda _d, **_k: [])
     wf = tmp_path / ".github" / "workflows"
     wf.mkdir(parents=True)
     (wf / "bad.yml").write_bytes(b"\xff\xfe not utf8")
@@ -203,8 +220,12 @@ def test_root_pyproject_extras_are_scanned_but_build_system_floor_is_not(
         encoding="utf-8",
     )
     monkeypatch_target = __import__("aviato.plugins.zizmor_scan", fromlist=["zizmor_uses_image_violations"])
-    monkeypatch.setattr(monkeypatch_target, "zizmor_uses_image_violations", lambda _d: [])
-    violations = actionpins.action_pin_violations(tmp_path)
+    monkeypatch.setattr(monkeypatch_target, "zizmor_uses_image_violations", lambda _d, **_k: [])
+    violations = actionpins.action_pin_violations(
+        tmp_path,
+        policy_root=POLICY_DATA_ROOT,
+        library_repository="amattas/aviato",
+    )
 
     assert any("pyproject.toml" in item and "pytest>=9" in item for item in violations)
     assert not any("setuptools>=69" in item for item in violations)

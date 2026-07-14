@@ -9,6 +9,8 @@ import yaml
 import aviato.cli as cli
 from aviato.cli import main
 
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
+
 
 def _git_init_clean(path: Path) -> None:
     subprocess.run(["git", "-C", str(path), "init", "-q"], check=True)
@@ -26,7 +28,6 @@ def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureF
             "--allow-dirty",
             "--pin",
             "v0",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",
@@ -69,7 +70,6 @@ def test_onboard_write_does_not_treat_lost_declaration_as_fresh(
             "--allow-dirty",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",
@@ -98,7 +98,6 @@ def test_reonboard_preserves_docs_opt_in(tmp_path: Path) -> None:
         "--allow-dirty",
         "--pin",
         "0",
-        "--allow-unresolved-pin",
         "--var",
         "distribution-name=acme",
         "--var",
@@ -127,7 +126,6 @@ def test_reonboard_docs_true_also_scaffolds_docs_workflow(tmp_path: Path) -> Non
         "--allow-dirty",
         "--pin",
         "0",
-        "--allow-unresolved-pin",
         "--var",
         "distribution-name=a",
         "--var",
@@ -175,7 +173,13 @@ def test_fresh_onboard_write_requires_explicit_pin(tmp_path: Path, capsys: pytes
 def test_fresh_onboard_write_refuses_unpublished_pin(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: False)
+    from aviato.core.errors import AviatoError
+
+    monkeypatch.setattr(
+        cli,
+        "_open_new_context",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AviatoError("Library pin '0' does not resolve")),
+    )
     rc = main(
         [
             "onboard",
@@ -195,7 +199,7 @@ def test_fresh_onboard_write_refuses_unpublished_pin(
     err = capsys.readouterr().err
     assert rc == 2
     assert "does not resolve" in err
-    assert "--allow-unresolved-pin" in err
+    assert "does not resolve" in err
     assert not (tmp_path / ".github" / "aviato.yaml").exists()
 
 
@@ -238,7 +242,6 @@ def test_onboard_write_explicit_profile_migration_persists_new_identity_and_arti
                 "--allow-dirty",
                 "--pin",
                 "0",
-                "--allow-unresolved-pin",
                 "--var",
                 "distribution-name=acme",
                 "--var",
@@ -258,7 +261,6 @@ def test_onboard_write_explicit_profile_migration_persists_new_identity_and_arti
             "--allow-dirty",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
             "--migrate-profile",
             "--var",
             "project-name=widget",
@@ -303,7 +305,6 @@ def test_onboard_write_profile_migration_protects_target_and_mutates_nothing(
                 "--allow-dirty",
                 "--pin",
                 "0",
-                "--allow-unresolved-pin",
                 "--var",
                 "distribution-name=acme",
                 "--var",
@@ -336,7 +337,6 @@ def test_onboard_write_profile_migration_protects_target_and_mutates_nothing(
             "--allow-dirty",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
             "--migrate-profile",
             "--var",
             "project-name=widget",
@@ -367,7 +367,6 @@ def test_onboard_write_profile_migration_scaffold_rechecks_before_mutation(
                 "--allow-dirty",
                 "--pin",
                 "0",
-                "--allow-unresolved-pin",
                 "--var",
                 "distribution-name=acme",
                 "--var",
@@ -391,7 +390,6 @@ def test_onboard_write_profile_migration_scaffold_rechecks_before_mutation(
             "--allow-dirty",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
             "--migrate-profile",
             "--var",
             "project-name=widget",
@@ -419,7 +417,6 @@ def test_onboard_write_refuses_dirty_tree_without_override(tmp_path: Path) -> No
             "--write",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=a",
             "--var",
@@ -441,7 +438,6 @@ def test_onboard_write_adopts_clean_git_repo(tmp_path: Path) -> None:
             "--write",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=a",
             "--var",
@@ -453,7 +449,7 @@ def test_onboard_write_adopts_clean_git_repo(tmp_path: Path) -> None:
 
 
 def test_onboard_without_write_only_prints_plan(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    rc = main(["onboard", str(tmp_path), "--profile", "python-library"])
+    rc = main(["onboard", str(tmp_path), "--profile", "python-library", "--pin", "0"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "Onboarding plan" in out
@@ -483,7 +479,6 @@ def test_reonboard_write_refuses_legacy_or_mismatched_identity_without_mutation(
             "--allow-dirty",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
         ]
     )
 

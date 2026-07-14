@@ -386,9 +386,9 @@ def _check_library_repository_copies(root: Path, policy: dict[str, Any], reposit
         )
 
     # Enumerate the runtime bindings as contracts too: a future refactor must not load policy yet
-    # accidentally ignore it in the plug-in exemption, CLI remote formatter, generated `uses:`
+    # accidentally ignore it in the plug-in exemption, CLI locator, generated `uses:`
     # references, or rendered contributing link.
-    from .cli import _library_remote_url
+    from .cli import _library_repository
     from .core.onboarding import resolved_artifacts
     from .core.registry import Registry
     from .plugins.actionpins import unpinned_third_party_uses
@@ -397,11 +397,8 @@ def _check_library_repository_copies(root: Path, policy: dict[str, Any], reposit
     if unpinned_third_party_uses(mutable_self_ref, library_repository=repository):
         errors.append("action-pin plug-in allowlist does not derive from policy library.repository (finding 41)")
 
-    expected_remote = f"https://github.com/{repository}.git"
-    if _library_remote_url(policy) != expected_remote:
-        errors.append(
-            f"CLI Library remote URL does not derive from policy library.repository; expected {expected_remote!r}"
-        )
+    if _library_repository(policy) != repository:
+        errors.append("CLI Library locator does not derive from policy library.repository")
 
     try:
         artifacts = resolved_artifacts(
@@ -555,7 +552,11 @@ def _check_action_pins(root: Path, repository: str, errors: list[str]) -> None:
     """§11.3: third-party actions/tools invoked by any pipeline are pinned by digest."""
     from .plugins.actionpins import action_pin_violations
 
-    for violation in action_pin_violations(root, library_repository=repository):
+    for violation in action_pin_violations(
+        root,
+        policy_root=root / "aviato/library",
+        library_repository=repository,
+    ):
         errors.append(f"unpinned third-party action/tool (§11.3): {violation}")
 
 

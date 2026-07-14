@@ -27,6 +27,40 @@ validation checks any embedded copies needed by GitHub Actions defaults.
 Documentation may describe policy, but documentation must not become the source
 of truth.
 
+## Consumer Operation Context
+
+Every Consumer operation first resolves the supplied path, asks Git for its
+top-level directory, and requires those paths to be equal. Declaration reads,
+rendering, and writes happen only after this canonical-root check, so a nested
+directory, nonexistent path, or non-repository path cannot become an alternate
+operation target. Filesystem aliases such as macOS `/tmp` and `/private/tmp`,
+`.` components, and directory symlinks collapse to the same canonical root.
+
+The declaration's pin is then resolved exactly once. Resolution prefers an
+exact tag and falls back to an exact branch; either outcome is peeled to a
+commit SHA. Aviato downloads that commit, validates the archive and the fetched
+policy's canonical Library repository identity, and constructs one immutable
+operation context. Its Registry, policy root, requested pin, ref kind, commit
+SHA, and repository identity all describe the same temporary snapshot. Every
+consumer of Library data in that command uses this context; installed package
+data is not a fallback for an unresolved pin.
+
+```mermaid
+flowchart LR
+    T["Supplied target"] --> C["Resolve path + Git top level<br/>require equality"]
+    C --> D["Read Consumer declaration"]
+    D --> R["Resolve tag, else branch<br/>bounded peel to commit SHA"]
+    R --> F["Fetch and validate that commit"]
+    F --> O["One OperationContext<br/>Registry + policy + ref identity"]
+    O --> X["Plan / render / diagnose / mutate"]
+```
+
+Bootstrap is the sole alternate source. When both the structural Library
+predicate and `bootstrap: true` hold, Aviato copies the operated checkout's
+`aviato/library` tree to a temporary snapshot before hashing or reading it. The
+context records the checkout Git HEAD and a deterministic digest of that same
+copy, and owns removal of the copy when the operation ends.
+
 ## Release Architecture
 
 Release publishing is tag-driven only.

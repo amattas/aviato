@@ -20,7 +20,6 @@ from typing import Any, cast
 # single source of truth in the operator-direct path).
 from . import github
 from .core.ports import RulesetApplyResult
-from .paths import POLICY_DATA_ROOT
 from .policy import default_required_approvals, get_path, load_policy, load_ruleset_manifest
 
 # R3-9: the patch keys a manifest entry may declare. An unknown key (typo) would be silently
@@ -75,12 +74,12 @@ def _patch_status_checks(payload: dict[str, Any], extra_contexts: list[str]) -> 
 def render_ruleset(
     item: dict[str, Any],
     *,
-    root: Path = POLICY_DATA_ROOT,
+    root: Path,
     policy: dict[str, Any] | None = None,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,
 ) -> dict[str, Any]:
-    policy = policy or load_policy(root)
+    policy = policy or load_policy(root=root)
     payload_path = root / item["file"]
     with payload_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
@@ -183,11 +182,11 @@ def drifted_ruleset_names(desired_payloads: list[dict[str, Any]], live_payloads:
 
 def render_all_rulesets(
     *,
-    root: Path = POLICY_DATA_ROOT,
+    root: Path,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    policy = load_policy(root)
+    policy = load_policy(root=root)
     manifest = load_ruleset_manifest(root)
     return [
         render_ruleset(
@@ -204,6 +203,8 @@ def render_all_rulesets(
 def apply_rulesets(
     slugs: list[str],
     *,
+    root: Path | None = None,
+    payloads: list[dict[str, Any]] | None = None,
     apply: bool,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,
@@ -219,7 +220,14 @@ def apply_rulesets(
     matching the old eager-list semantics, regardless of whether/how the caller consumes the
     generator. Only the per-upsert platform writes are streamed lazily.
     """
-    payloads = render_all_rulesets(required_approvals=required_approvals, extra_status_checks=extra_status_checks)
+    if payloads is None:
+        if root is None:
+            raise ValueError("apply_rulesets requires an explicit snapshot policy root or pre-rendered payloads")
+        payloads = render_all_rulesets(
+            root=root,
+            required_approvals=required_approvals,
+            extra_status_checks=extra_status_checks,
+        )
 
     def _stream() -> Iterator[RulesetApplyResult]:
         for slug in slugs:

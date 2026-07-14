@@ -2,33 +2,39 @@ from __future__ import annotations
 
 import argparse
 import atexit
-import contextlib
 import os
 import re
 import shlex
 import shutil
-import subprocess
 import sys
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import ExitStack
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, TypedDict
 from urllib.parse import quote
 
 from . import __version__
-from .audit import audit_repos, discover_and_audit, render_json, render_tsv
+from .audit import audit_repos, render_json, render_tsv
 from .command import CommandError, run
-from .core.bootstrap import is_library
+from .core.bootstrap import bootstrap_authorized, is_library
 from .core.composition import resolve_profile
 from .core.declaration import Declaration, declaration_to_yaml, dump_declaration, load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
-from .core.errors import AviatoError, CompatibilityError, CompositionError, DeclarationError
+from .core.errors import AviatoError, CompatibilityError, DeclarationError
 from .core.file_drift_flow import _PROPOSABLE, FileDriftOutcome, run_file_drift
 from .core.fleet import RepoScan, scan_fleet
 from .core.marker import parse_marker_from_text
 from .core.model import ResolvedSet, VariableSpec
 from .core.offboarding import offboard as offboard_repo
 from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, resolved_artifacts
+from .core.operation_context import (
+    LibrarySnapshot,
+    OperationContext,
+    canonical_repository_root,
+    operation_context_for_root,
+)
 from .core.pathguard import confined_target
 from .core.ports import Platform
 from .core.provision import provision_repo
@@ -50,11 +56,11 @@ from .core.version import is_compatible, is_known_version_pin, most_restrictive_
 from .core.versioning import classify_commits, is_highest, next_version
 from .github import GitHubAPIError, SettingsReadError, gh_json_paginated_optional, is_archived
 from .github_platform import GitHubPlatform, UnmodeledProtectionError
-from .library_source import fetch_library_registry
-from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
+from .library_source import configured_library_repository, fetch_library_snapshot
+from .paths import REPO_ROOT
 from .plugins.version_formats import bump_files
 from .policy import library_repository, load_policy
-from .repos import git_root, is_owner_repo_slug, normalize_slug, remote_url, working_tree_clean
+from .repos import is_owner_repo_slug, normalize_slug, remote_url, working_tree_clean
 from .rulesets import apply_rulesets, render_all_rulesets
 from .validation import validate
 
@@ -67,6 +73,7 @@ DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
 # data, like the markers above.
 DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
 DECLARATION_RELATIVE_PATH = ".github/aviato.yaml"
+_COMMAND_STACK: ContextVar[ExitStack | None] = ContextVar("aviato_command_stack", default=None)
 
 
 def _declaration_ruleset_command(repo: str, declaration_path: str | Path) -> str:
@@ -76,12 +83,45 @@ def _declaration_ruleset_command(repo: str, declaration_path: str | Path) -> str
 
 def _library_repository(policy: dict[str, Any] | None = None) -> str:
     """Return the policy-owned Library slug at the GitHub binding boundary."""
-    return library_repository(load_policy() if policy is None else policy)
+    return configured_library_repository() if policy is None else library_repository(policy)
 
 
-def _library_remote_url(policy: dict[str, Any] | None = None) -> str:
-    """Format the Library's GitHub remote URL outside the agnostic core."""
-    return f"https://github.com/{_library_repository(policy)}.git"
+def _open_consumer_context(root: Path, declaration: Declaration) -> OperationContext:
+    """Open the operation's sole snapshot for this one-command process."""
+
+    stack = _COMMAND_STACK.get()
+    if stack is None:
+        raise RuntimeError("operation context requested outside command dispatch")
+    return stack.enter_context(
+        operation_context_for_root(
+            root,
+            declaration,
+            repository=_library_repository(),
+            tool_version=__version__,
+        )
+    )
+
+
+def _open_new_context(root: Path, pin: str) -> OperationContext:
+    stack = _COMMAND_STACK.get()
+    if stack is None:
+        raise RuntimeError("operation context requested outside command dispatch")
+    return stack.enter_context(
+        operation_context_for_root(
+            root,
+            None,
+            repository=_library_repository(),
+            pin=pin,
+            tool_version=__version__,
+        )
+    )
+
+
+def _open_published_snapshot(pin: str) -> LibrarySnapshot:
+    stack = _COMMAND_STACK.get()
+    if stack is None:
+        raise RuntimeError("Library snapshot requested outside command dispatch")
+    return stack.enter_context(fetch_library_snapshot(_library_repository(), pin))
 
 
 def _print_seed_integrity_error() -> None:
@@ -141,24 +181,44 @@ def _read_repos_file(path: Path) -> list[str]:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    policy = load_policy()  # packaged data root (ships in the wheel; works installed)
     if args.repo:
-        repos = []
-        for value in args.repo:
-            root = git_root(Path(value))
-            if root is None:
-                print(f"not a git repository: {value}", file=sys.stderr)
-                return 2
-            repos.append(root)
-        rows = audit_repos(repos, root=Path(args.root).resolve(), policy=policy)
+        discovered = [Path(value) for value in args.repo]
     else:
-        rows = discover_and_audit(Path(args.root), policy=policy)
+        from .repos import discover_repos
+
+        discovered = discover_repos(Path(args.root))
+
+    repos = []
+    for candidate in discovered:
+        try:
+            repos.append(canonical_repository_root(candidate))
+        except AviatoError:
+            print(f"not a git repository: {candidate}", file=sys.stderr)
+            return 2
+
+    rows = []
+    for repo in repos:
+        declaration_path = _consumer_declaration_target(repo, operation="inspect declaration")
+        if declaration_path.is_file():
+            declaration = _load_consumer_declaration(repo)
+            policy_root = _open_consumer_context(repo, declaration).policy_root
+        else:
+            if not args.pin:
+                print(
+                    f"audit of undeclared repository {repo} requires an explicit --pin",
+                    file=sys.stderr,
+                )
+                return 2
+            policy_root = _open_new_context(repo, normalize_pin(args.pin)).policy_root
+        rows.extend(audit_repos([repo], root=Path(args.root), policy=load_policy(root=policy_root)))
 
     print(render_json(rows) if args.format == "json" else render_tsv(rows))
     return 0
 
 
-def _profile_status_checks(profile: str | None, overrides: dict[str, object] | None = None) -> list[str]:
+def _profile_status_checks(
+    registry: Registry, profile: str | None, overrides: dict[str, object] | None = None
+) -> list[str]:
     """The resolved profile's required status-check contexts (§10.3 composition; §5.6 gate), or [] if none.
 
     Lets `apply-rulesets`/`render-rulesets` inject the language verify job (e.g.
@@ -169,11 +229,7 @@ def _profile_status_checks(profile: str | None, overrides: dict[str, object] | N
     """
     if not profile:
         return []
-    from .core.composition import resolve_profile
-    from .core.registry import Registry
-    from .paths import MODULE_SOURCE_ROOT
-
-    resolved = resolve_profile(Registry(MODULE_SOURCE_ROOT), profile, overrides=overrides or {})
+    resolved = resolve_profile(registry, profile, overrides=overrides or {})
     return list(resolved.settings.get("default_branch", {}).get("required_status_checks", []))
 
 
@@ -206,19 +262,21 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
                     f"declaration must use the canonical {DECLARATION_RELATIVE_PATH} consumer path: "
                     f"{supplied_declaration}"
                 )
-            declaration = _load_consumer_declaration(supplied_declaration.parent.parent)
-            extra_checks = _profile_status_checks(declaration.profile, declaration.overrides)
+            root = canonical_repository_root(supplied_declaration.parent.parent)
+            declaration = _load_consumer_declaration(root)
+            context = _open_consumer_context(root, declaration)
+            extra_checks = _profile_status_checks(context.registry, declaration.profile, declaration.overrides)
             if required_approvals is None:
-                from .core.composition import resolve_profile
-                from .core.registry import Registry
-                from .paths import MODULE_SOURCE_ROOT
-
                 _db = resolve_profile(
-                    Registry(MODULE_SOURCE_ROOT), declaration.profile, overrides=declaration.overrides
+                    context.registry, declaration.profile, overrides=declaration.overrides
                 ).settings.get("default_branch", {})
                 required_approvals = _db.get("required_reviews")
         else:
-            extra_checks = _profile_status_checks(getattr(args, "profile", None))
+            if not getattr(args, "pin", None):
+                raise DeclarationError("apply-rulesets without a declaration requires an explicit --pin")
+            snapshot = _open_published_snapshot(normalize_pin(args.pin))
+            context = None
+            extra_checks = _profile_status_checks(snapshot.registry, getattr(args, "profile", None))
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -237,6 +295,7 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
     try:
         for message in apply_rulesets(
             slugs,
+            root=context.policy_root if context is not None else snapshot.policy_root,
             apply=args.apply,
             required_approvals=required_approvals,
             extra_status_checks=extra_checks,
@@ -271,12 +330,19 @@ def cmd_render_rulesets(args: argparse.Namespace) -> int:
     import json
 
     try:
-        extra_checks = _profile_status_checks(getattr(args, "profile", None))
+        if not getattr(args, "pin", None):
+            raise DeclarationError("render-rulesets requires an explicit --pin")
+        snapshot = _open_published_snapshot(normalize_pin(args.pin))
+        extra_checks = _profile_status_checks(snapshot.registry, getattr(args, "profile", None))
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     try:
-        payloads = render_all_rulesets(required_approvals=args.required_approvals, extra_status_checks=extra_checks)
+        payloads = render_all_rulesets(
+            root=snapshot.policy_root,
+            required_approvals=args.required_approvals,
+            extra_status_checks=extra_checks,
+        )
     except ValueError as exc:
         # R2-4-5: malformed ruleset library data → clean error, never a raw traceback (§2.4).
         print(f"ruleset render error (run `aviato validate`): {exc}", file=sys.stderr)
@@ -344,7 +410,7 @@ def _version_pin_error(
     recorded marker (a clean refusal, never an uncaught traceback) and checks EVERY
     recorded marker, not just the first.
     """
-    if override or is_library(root):
+    if override or bootstrap_authorized(root, declared=declaration.bootstrap):
         return None
     for recorded in _recorded_versions(root, expected) or [declaration.version]:
         try:
@@ -414,6 +480,7 @@ def _drifted_rulesets(
     slug: str,
     platform: Platform,
     *,
+    policy_root: Path,
     required_approvals: int | None = None,
     extra_status_checks: list[str] | None = None,
 ) -> tuple[str, ...]:
@@ -433,7 +500,11 @@ def _drifted_rulesets(
     """
     from .rulesets import drifted_ruleset_names, render_all_rulesets
 
-    desired = render_all_rulesets(required_approvals=required_approvals, extra_status_checks=extra_status_checks or [])
+    desired = render_all_rulesets(
+        root=policy_root,
+        required_approvals=required_approvals,
+        extra_status_checks=extra_status_checks or [],
+    )
     live = platform.read_rulesets(slug)
     return tuple(drifted_ruleset_names(desired, live))
 
@@ -489,32 +560,13 @@ def _env_vars(specs: Iterable[VariableSpec]) -> dict[str, str]:
     return env
 
 
-def _published_library_ref_exists(pin: str) -> bool:
-    """True iff the requested consumer pin resolves to a published Library branch/tag (§6.1)."""
-    refs = [f"refs/tags/{pin}", f"refs/heads/{pin}"]
-    try:
-        result = subprocess.run(
-            ["git", "ls-remote", "--exit-code", _library_remote_url(), *refs],
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=15,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0 and bool(result.stdout.strip())
-
-
 def _require_published_pin(pin: str, *, allow_unresolved: bool) -> None:
-    """Fail closed before writing consumer refs that GitHub cannot resolve (§2.6/§6.1)."""
-    if allow_unresolved or _published_library_ref_exists(pin):
-        return
-    remote_url = _library_remote_url()
-    raise DeclarationError(
-        f"Library pin {pin!r} does not resolve to a published Aviato branch or tag at {remote_url}; "
-        "refusing to write consumer workflows that would call a missing reusable workflow ref. "
-        "Publish the ref first, or pass --allow-unresolved-pin only for an intentional offline/test scaffold."
-    )
+    """Reject the retired escape hatch; snapshot construction is the sole pin proof."""
+    if allow_unresolved:
+        raise DeclarationError(
+            "--allow-unresolved-pin is no longer supported: verified, commit-addressed Library bytes "
+            "are mandatory before rendering or writing"
+        )
 
 
 def _resolve_onboard_pin(args: argparse.Namespace, existing: Declaration | None) -> str:
@@ -654,6 +706,7 @@ def _resolve_onboard_declaration(
         version=pin,
         profile_identity=profile_identity,
         docs=docs,
+        bootstrap=(existing.bootstrap if existing else False),
         variables=persisted,
         overrides=(existing.overrides if existing else {}),
     )
@@ -756,7 +809,7 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
     return 0
 
 
-def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: ResolvedSet) -> int:
+def _onboard_proposal(args: argparse.Namespace) -> int:
     """Adopt an EXISTING repository via a proposal (§5.2): scaffold the declaration +
     managed artifacts onto a branch and open a PR, enumerating untouched seed-once /
     operator-owned files. Non-destructive: works in a fresh temp clone, never the
@@ -777,6 +830,7 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
     clone = workdir / "repo"
     try:
         run(["gh", "repo", "clone", slug, str(clone)])
+        clone = canonical_repository_root(clone)
     except CommandError as exc:
         print(f"could not clone {slug}: {exc}", file=sys.stderr)
         return 1
@@ -784,6 +838,11 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
     declaration_path = _consumer_declaration_target(clone, operation="inspect declaration")
     existing = _load_consumer_declaration(clone) if declaration_path.is_file() else None
     try:
+        pin = _resolve_onboard_pin(args, existing)
+        args.pin = pin
+        context = _open_consumer_context(clone, existing) if existing is not None else _open_new_context(clone, pin)
+        registry = context.registry
+        resolved = resolve_profile(registry, args.profile, docs=args.docs or (existing.docs if existing else False))
         declaration, variables = _resolve_onboard_declaration(args, registry, resolved, existing)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -860,28 +919,48 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
 
 
 def cmd_onboard(args: argparse.Namespace) -> int:
+    try:
+        _require_published_pin(args.pin or "", allow_unresolved=args.allow_unresolved_pin)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if args.write and args.open_pr:
         print("--write and --open-pr are mutually exclusive (local adoption vs. a PR proposal)", file=sys.stderr)
         return 2
-    # §5.2/§6.1: re-onboarding an already-adopted repo PRESERVES its opt-in docs choice — --docs
-    # only ENABLES, a re-run without it must not silently drop docs:true (and then write a docs:true
-    # declaration with no docs artifacts). Apply it to the resolved set + plan here for a LOCAL
-    # target; the --open-pr path reads the existing from its clone and uses declaration.docs.
-    if not args.docs:
-        target_root = Path(args.target)
-        decl_path = _consumer_declaration_target(target_root, operation="inspect declaration")
-        if decl_path.is_file():
-            with contextlib.suppress(AviatoError):
-                args.docs = _load_consumer_declaration(target_root).docs
-    registry = Registry(MODULE_SOURCE_ROOT)
+    if args.open_pr:
+        return _onboard_proposal(args)
+
+    target_path = Path(args.target)
+    existing: Declaration | None = None
+    target_root: Path | None = None
     try:
+        if target_path.is_dir():
+            target_root = canonical_repository_root(target_path)
+            args.target = str(target_root)
+            decl_path = _consumer_declaration_target(target_root, operation="inspect declaration")
+            existing = _load_consumer_declaration(target_root) if decl_path.is_file() else None
+        else:
+            decl_path = Path(DECLARATION_RELATIVE_PATH)
+        pin = _resolve_onboard_pin(args, existing)
+        args.pin = pin
+        if target_root is not None:
+            context = (
+                _open_consumer_context(target_root, existing)
+                if existing is not None
+                else _open_new_context(target_root, pin)
+            )
+            registry = context.registry
+            policy_root = context.policy_root
+        else:
+            snapshot = _open_published_snapshot(pin)
+            registry = snapshot.registry
+            policy_root = snapshot.policy_root
+        args.docs = args.docs or (existing.docs if existing else False)
         resolved = resolve_profile(registry, args.profile, docs=args.docs)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
-    if args.open_pr:
-        return _onboard_proposal(args, registry, resolved)
     if args.write:
         return _onboard_write(args, registry, resolved)
 
@@ -890,12 +969,8 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     # for an invalid --var/--pin, nor a plan for an action --write would refuse (a profile change
     # without --migrate-profile).
     flag_vars = _parse_var_flags(args.var)
-    canonical_pin = normalize_pin(args.pin) if args.pin is not None else None
-    target_root = Path(args.target)
-    decl_path = _consumer_declaration_target(target_root, operation="inspect declaration")
-    existing: Declaration | None = None
-    if decl_path.is_file():
-        existing = _load_consumer_declaration(target_root)
+    canonical_pin = normalize_pin(args.pin)
+    if existing is not None:
         # Resolve through the exact write-path precedence and guards, but discard the
         # declaration value: this is a pure plan and must not mutate the target. Saved
         # declaration values therefore beat defaults, while explicit --var values beat
@@ -942,7 +1017,10 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     # list, §4.2, and it would otherwise mislead the plan without affecting what is applied).
     from .rulesets import render_all_rulesets
 
-    for payload in render_all_rulesets(extra_status_checks=_profile_status_checks(args.profile)):
+    for payload in render_all_rulesets(
+        root=policy_root,
+        extra_status_checks=_profile_status_checks(registry, args.profile),
+    ):
         print(f"- ruleset: {payload['name']}")
 
     environments = _deployment_environments(resolved, known)
@@ -963,15 +1041,20 @@ def cmd_onboard(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    root = Path(args.path).resolve()
+    try:
+        root = canonical_repository_root(Path(args.path))
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(root)
+        context = _open_consumer_context(root, declaration)
+        registry = context.registry
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
@@ -1006,6 +1089,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         default_branch_settings = resolved.settings.get("default_branch", {})
         desired_rulesets = tuple(
             render_all_rulesets(
+                root=context.policy_root,
                 required_approvals=default_branch_settings.get("required_reviews"),
                 extra_status_checks=list(default_branch_settings.get("required_status_checks", [])),
             )
@@ -1052,27 +1136,24 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
-    root = Path(args.path).resolve()
+    try:
+        root = canonical_repository_root(Path(args.path))
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
-    installed_registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(root)
+        context = _open_consumer_context(root, declaration)
+        registry = context.registry
         backfilled: Declaration | None = None
         if declaration.profile_identity is None:
-            with fetch_library_registry(_library_repository(), declaration.version) as pinned_registry:
-                installed_identity = installed_registry.profile(declaration.profile).identity
-                pinned_identity = pinned_registry.profile(declaration.profile).identity
-                if pinned_identity != installed_identity:
-                    raise CompositionError(
-                        f"legacy declaration profile {declaration.profile!r} has identity {pinned_identity!r} "
-                        f"at its current pin, not the installed identity {installed_identity!r}; refusing to "
-                        "backfill or mutate the repository (§6.5)"
-                    )
-                backfilled = Declaration(
+            pinned_identity = registry.profile(declaration.profile).identity
+            backfilled = Declaration(
                     profile=declaration.profile,
                     version=declaration.version,
                     profile_identity=pinned_identity,
@@ -1081,18 +1162,18 @@ def cmd_sync(args: argparse.Namespace) -> int:
                     variables=declaration.variables,
                     overrides=declaration.overrides,
                 )
-                items = materialize_items(
-                    pinned_registry,
+            items = materialize_items(
+                    registry,
                     backfilled.profile,
                     backfilled.variables,
                     pin=backfilled.version,
                     docs=backfilled.docs,
                     bootstrap=backfilled.bootstrap,
                     overrides=backfilled.overrides,
-                )
+            )
         else:
             items = materialize_items(
-                installed_registry,
+                registry,
                 declaration.profile,
                 declaration.variables,
                 pin=declaration.version,
@@ -1173,16 +1254,35 @@ def _archived_probe(root: Path) -> bool | None:
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
-    registry = Registry(MODULE_SOURCE_ROOT)
-    scans = scan_fleet(
-        [Path(p) for p in args.paths],
-        registry,
-        include_archived=args.include_archived,
-        archived_probe=_archived_probe,
-        # finding 33: full §5.4 parity with doctor — the fleet sweep probes the drift
-        # automation and §17 prerequisites too.
-        drift_automation_markers=DRIFT_AUTOMATION_MARKERS,
-    )
+    scans: list[RepoScan] = []
+    registries: dict[str, Registry] = {}
+    for path_value in args.paths:
+        try:
+            root = canonical_repository_root(Path(path_value))
+            declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
+            if not declaration_path.is_file():
+                scans.append(RepoScan(path=str(root), error="no declaration"))
+                continue
+            declaration = _load_consumer_declaration(root)
+            context = _open_consumer_context(root, declaration)
+            registries[str(root)] = context.registry
+            scans.extend(
+                scan_fleet(
+                    [root],
+                    context.registry,
+                    include_archived=args.include_archived,
+                    archived_probe=_archived_probe,
+                    drift_automation_markers=DRIFT_AUTOMATION_MARKERS,
+                )
+            )
+        except AviatoError as exc:
+            scans.append(
+                RepoScan(
+                    path=str(Path(path_value)),
+                    error=str(exc),
+                    invalid_declaration=isinstance(exc, DeclarationError),
+                )
+            )
     rc = 0
     for scan in scans:
         if scan.skipped_archived:
@@ -1214,7 +1314,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
             _print_repo_audit(Path(scan.path))
         if args.fix and _scan_has_file_drift(scan):
             try:
-                outcome = _propose_file_drift(registry, Path(scan.path), override_version_pin=args.override_version_pin)
+                outcome = _propose_file_drift(
+                    registries[scan.path], Path(scan.path), override_version_pin=args.override_version_pin
+                )
                 print(f"  fix: proposed={outcome.proposed} dirty={outcome.dirty}")
             except (AviatoError, GitHubAPIError, CommandError) as exc:
                 # R3-1: open_or_update_proposal's git/gh writes raise CommandError; without it in
@@ -1317,6 +1419,7 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
     clone = workdir / "repo"
     try:
         run(["gh", "repo", "clone", slug, str(clone)])
+        clone = canonical_repository_root(clone)
     except CommandError as exc:
         raise AviatoError(f"could not clone {slug} to propose a fix: {exc}") from exc
 
@@ -1326,11 +1429,16 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
         profile=declaration.profile,
         statuses=report.statuses,
         expected_bodies=managed_bodies,
-        is_bootstrap=is_library(root),
+        is_bootstrap=bootstrap_authorized(root, declared=declaration.bootstrap),
     )
 
 
-def _gate_repin_target(root: Path | None, target_version: str, args: argparse.Namespace) -> str | None:
+def _gate_repin_target(
+    root: Path | None,
+    target_version: str,
+    args: argparse.Namespace,
+    declaration: Declaration,
+) -> str | None:
     """The two repin write-gates (finding 9); an error message, or None when clear.
 
     repin is the ONLY sanctioned pin move, yet it skipped both gates onboard/provision
@@ -1343,7 +1451,9 @@ def _gate_repin_target(root: Path | None, target_version: str, args: argparse.Na
         _require_published_pin(target_version, allow_unresolved=args.allow_unresolved_pin)
     except AviatoError as exc:
         return str(exc)
-    if args.override_version_pin or (root is not None and is_library(root)):
+    if args.override_version_pin or (
+        root is not None and bootstrap_authorized(root, declared=declaration.bootstrap)
+    ):
         return None
     # Major-line check only: a same-major forward re-pin is the normal §5.12 move (the
     # CONSUMER runs the target's workflows, not this tool's); a CROSS-major target means
@@ -1364,13 +1474,22 @@ def _gate_repin_target(root: Path | None, target_version: str, args: argparse.Na
 
 def cmd_repin(args: argparse.Namespace) -> int:
     """Move a consumer to a different Library version (§5.12) — the only sanctioned pin move."""
+    try:
+        _require_published_pin(args.version, allow_unresolved=args.allow_unresolved_pin)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if args.write and args.open_pr:
         print("--write and --open-pr are mutually exclusive (local re-pin vs. a PR proposal)", file=sys.stderr)
         return 2
     if args.open_pr:
         return _repin_proposal(args)
 
-    root = Path(args.path).resolve()
+    try:
+        root = canonical_repository_root(Path(args.path))
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
@@ -1378,11 +1497,13 @@ def cmd_repin(args: argparse.Namespace) -> int:
 
     try:
         declaration = _load_consumer_declaration(root)
-        base_resolved = resolve_profile(Registry(MODULE_SOURCE_ROOT), declaration.profile)
+        current_context = _open_consumer_context(root, declaration)
+        base_resolved = resolve_profile(current_context.registry, declaration.profile)
         resolve_declared_variables(base_resolved.variables, declaration.variables)
-        with fetch_library_registry(_library_repository(), normalize_pin(args.version)) as target_registry:
-            plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
-            items = (
+        target_snapshot = _open_published_snapshot(normalize_pin(args.version))
+        target_registry = target_snapshot.registry
+        plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
+        items = (
                 materialize_items(
                     target_registry,
                     declaration.profile,
@@ -1392,9 +1513,9 @@ def cmd_repin(args: argparse.Namespace) -> int:
                     bootstrap=declaration.bootstrap,
                     overrides=declaration.overrides,
                 )
-                if plan.ok and args.write
-                else None
-            )
+            if plan.ok and args.write
+            else None
+        )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -1423,7 +1544,7 @@ def cmd_repin(args: argparse.Namespace) -> int:
         print("dry run; re-run with --write to record the new pin and re-scaffold.")
         return 0
 
-    if (gate_error := _gate_repin_target(root, plan.target_version, args)) is not None:
+    if (gate_error := _gate_repin_target(root, plan.target_version, args, declaration)) is not None:
         print(gate_error, file=sys.stderr)
         return 2
     if items is None:
@@ -1492,6 +1613,7 @@ def _repin_proposal(args: argparse.Namespace) -> int:
     clone = workdir / "repo"
     try:
         run(["gh", "repo", "clone", slug, str(clone)])
+        clone = canonical_repository_root(clone)
     except CommandError as exc:
         print(f"could not clone {slug}: {exc}", file=sys.stderr)
         return 1
@@ -1503,9 +1625,12 @@ def _repin_proposal(args: argparse.Namespace) -> int:
 
     try:
         declaration = _load_consumer_declaration(clone)
-        with fetch_library_registry(_library_repository(), normalize_pin(args.version)) as target_registry:
-            plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
-            items = (
+        current_context = _open_consumer_context(clone, declaration)
+        current_resolved = resolve_profile(current_context.registry, declaration.profile)
+        resolve_declared_variables(current_resolved.variables, declaration.variables)
+        target_registry = _open_published_snapshot(normalize_pin(args.version)).registry
+        plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
+        items = (
                 materialize_items(
                     target_registry,
                     declaration.profile,
@@ -1515,9 +1640,9 @@ def _repin_proposal(args: argparse.Namespace) -> int:
                     bootstrap=declaration.bootstrap,
                     overrides=declaration.overrides,
                 )
-                if plan.ok
-                else None
-            )
+            if plan.ok
+            else None
+        )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -1532,7 +1657,7 @@ def _repin_proposal(args: argparse.Namespace) -> int:
         return 1
     if items is None:
         raise AssertionError("writeable re-pin proposal did not materialize target-registry items")
-    if (gate_error := _gate_repin_target(clone, plan.target_version, args)) is not None:
+    if (gate_error := _gate_repin_target(clone, plan.target_version, args, declaration)) is not None:
         print(gate_error, file=sys.stderr)
         return 2
 
@@ -1591,15 +1716,19 @@ def cmd_offboard(args: argparse.Namespace) -> int:
     if args.open_pr:
         return _offboard_proposal(args)
 
-    root = Path(args.path).resolve()
+    try:
+        root = canonical_repository_root(Path(args.path))
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(root)
+        registry = _open_consumer_context(root, declaration).registry
         expected = _expected_artifacts(registry, declaration)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -1654,6 +1783,7 @@ def _offboard_proposal(args: argparse.Namespace) -> int:
     clone = workdir / "repo"
     try:
         run(["gh", "repo", "clone", slug, str(clone)])
+        clone = canonical_repository_root(clone)
     except CommandError as exc:
         print(f"could not clone {slug}: {exc}", file=sys.stderr)
         return 1
@@ -1663,9 +1793,9 @@ def _offboard_proposal(args: argparse.Namespace) -> int:
         print(f"no declaration at {declaration_path}; nothing to offboard", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(clone)
+        registry = _open_consumer_context(clone, declaration).registry
         expected = _expected_artifacts(registry, declaration)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -1704,7 +1834,11 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
     state for the repo's resolved profile. This is operator-DIRECT provisioning (§2.3),
     not the gated §5.7 drift/consent flow.
     """
-    root = Path(args.path).resolve()
+    try:
+        root = canonical_repository_root(Path(args.path))
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
@@ -1715,9 +1849,9 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
         print("could not determine OWNER/REPO from the repository remote", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(root)
+        registry = _open_consumer_context(root, declaration).registry
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
@@ -1766,12 +1900,17 @@ def cmd_provision(args: argparse.Namespace) -> int:
     the repo is left in the partially-provisioned state and the operator is pointed at
     the idempotent `complete-protection` recovery (§8.7). Operator-DIRECT (§2.3).
     """
+    try:
+        _require_published_pin(args.pin or "", allow_unresolved=args.allow_unresolved_pin)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
     slug = args.slug
     if not is_owner_repo_slug(slug):
         print("provide the new repository as OWNER/REPO", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
     try:
         # Canonicalize the pin to bare SemVer (§6.1) before it lands in the declaration
         # or markers; a legacy ``v`` is stripped and a malformed pin is refused.
@@ -1781,7 +1920,8 @@ def cmd_provision(args: argparse.Namespace) -> int:
                 "Aviato Library ref (§6.1)."
             )
         args.pin = normalize_pin(args.pin)
-        _require_published_pin(args.pin, allow_unresolved=args.allow_unresolved_pin)
+        snapshot = _open_published_snapshot(args.pin)
+        registry = snapshot.registry
         resolved = resolve_profile(registry, args.profile, docs=args.docs)
         variables = resolve_variables(
             resolved.variables,
@@ -1815,6 +1955,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
         atexit.register(shutil.rmtree, workdir, True)  # clean the clone at exit (one command per process)
         clone = workdir / "repo"
         run(["gh", "repo", "clone", slug, str(clone)])
+        clone = canonical_repository_root(clone)
         _dump_consumer_declaration(declaration, clone)
         scaffold(clone, items, profile=args.profile, version=args.pin)
         run(["git", "-C", str(clone), "config", "user.name", "aviato-bot"])
@@ -1908,7 +2049,11 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         print("--require-settings has no effect with --file-only (there is no settings drift to gate)", file=sys.stderr)
         return 2
 
-    root = Path(args.path).resolve()
+    try:
+        root = canonical_repository_root(Path(args.path))
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
@@ -1919,9 +2064,10 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
         print("could not determine OWNER/REPO from the repository remote", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(root)
+        context = _open_consumer_context(root, declaration)
+        registry = context.registry
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
@@ -1999,7 +2145,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
                 # Bootstrap (§2.10/§5.10): when the Library diagnoses itself it does not raise
                 # file-drift proposals against the remote-ref scaffold — its automation is
                 # self-applied/operator-maintained locally. Consistent with the pin-gate skip.
-                is_bootstrap=is_library(root),
+                is_bootstrap=bootstrap_authorized(root, declared=declaration.bootstrap),
             )
             print(f"file drift: proposed={file_outcome.proposed} dirty={file_outcome.dirty}")
         except (GitHubAPIError, CommandError) as exc:
@@ -2022,6 +2168,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
             drifted_rulesets = _drifted_rulesets(
                 slug,
                 platform,
+                policy_root=context.policy_root,
                 required_approvals=_db.get("required_reviews"),
                 extra_status_checks=list(_db.get("required_status_checks", [])),
             )
@@ -2072,7 +2219,22 @@ def cmd_lint_actions(args: argparse.Namespace) -> int:
     check classes, so the message is generic — not just 'unpinned action'.)"""
     from .plugins.actionpins import action_pin_violations
 
-    violations = action_pin_violations(Path(args.path))
+    root = canonical_repository_root(Path(args.path))
+    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
+    if declaration_path.is_file():
+        declaration = _load_consumer_declaration(root)
+        context = _open_consumer_context(root, declaration)
+        policy_root = context.policy_root
+    else:
+        if not getattr(args, "pin", None):
+            raise DeclarationError("lint-actions without a declaration requires an explicit --pin")
+        policy_root = _open_new_context(root, normalize_pin(args.pin)).policy_root
+    policy = load_policy(root=policy_root)
+    violations = action_pin_violations(
+        root,
+        policy_root=policy_root,
+        library_repository=library_repository(policy),
+    )
     for violation in violations:
         print(f"§11.3 supply-chain violation: {violation}", file=sys.stderr)
     if violations:
@@ -2141,14 +2303,18 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
         )
         return 2
     args.version = bare
-    root = Path(args.path).resolve()
+    try:
+        root = canonical_repository_root(Path(args.path))
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
         return 2
-    registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(root)
+        registry = _open_consumer_context(root, declaration).registry
         resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -2186,7 +2352,11 @@ def cmd_bump_version(args: argparse.Namespace) -> int:
 
 
 def cmd_reconcile(args: argparse.Namespace) -> int:
-    root = Path(args.path).resolve()
+    try:
+        root = canonical_repository_root(Path(args.path))
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
@@ -2197,9 +2367,9 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         print("could not determine OWNER/REPO from the repository remote", file=sys.stderr)
         return 2
 
-    registry = Registry(MODULE_SOURCE_ROOT)
     try:
         declaration = _load_consumer_declaration(root)
+        registry = _open_consumer_context(root, declaration).registry
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
@@ -2275,6 +2445,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit = subparsers.add_parser("audit", help="Audit local repositories.")
     audit.add_argument("root", nargs="?", default=os.environ.get("AVIATO_REPO_ROOT", "."))
     audit.add_argument("--repo", action="append", help="Audit one explicit local repository path.")
+    audit.add_argument("--pin", help="Explicit Library pin for repositories without a declaration.")
     audit.add_argument("--format", choices=["tsv", "json"], default="tsv")
     audit.set_defaults(func=cmd_audit)
 
@@ -2282,6 +2453,7 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("repo_pos", nargs="*", help="Repository slug, for example OWNER/REPO.")
     apply.add_argument("--repo", action="append", help="Repository slug, for example OWNER/REPO.")
     apply.add_argument("--repos-file", help="Optional newline-delimited list of repository slugs.")
+    apply.add_argument("--pin", help="Explicit Library pin when no declaration is available.")
     apply.add_argument("--apply", action="store_true", help="Apply changes instead of dry-running.")
     apply.add_argument(
         "--required-approvals", type=_non_negative_int, help="Override required PR approval count (>= 0)."
@@ -2305,6 +2477,7 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument(
         "--required-approvals", type=_non_negative_int, help="Override required PR approval count (>= 0)."
     )
+    render.add_argument("--pin", help="Explicit Library pin used to render policy bytes.")
     render.add_argument(
         "--profile",
         help="Inject the profile's language verify status checks into the rendered branch ruleset.",
@@ -2335,7 +2508,7 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument(
         "--allow-unresolved-pin",
         action="store_true",
-        help="Skip the published-ref check for an intentional offline/test scaffold.",
+        help="Compatibility-only retired option; always fails because verified Library bytes are mandatory.",
     )
     onboard.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     onboard.add_argument(
@@ -2410,7 +2583,7 @@ def build_parser() -> argparse.ArgumentParser:
     repin.add_argument(
         "--allow-unresolved-pin",
         action="store_true",
-        help="Skip the published-ref check (intentional offline/test re-pin only, §6.1).",
+        help="Compatibility-only retired option; always fails because verified Library bytes are mandatory.",
     )
     repin.add_argument(
         "--override-version-pin",
@@ -2458,7 +2631,7 @@ def build_parser() -> argparse.ArgumentParser:
     provision.add_argument(
         "--allow-unresolved-pin",
         action="store_true",
-        help="Skip the published-ref check for an intentional offline/test scaffold.",
+        help="Compatibility-only retired option; always fails because verified Library bytes are mandatory.",
     )
     provision.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     provision.add_argument("--public", action="store_true", help="Create a public repo (default: private).")
@@ -2502,6 +2675,7 @@ def build_parser() -> argparse.ArgumentParser:
         "lint-actions", help="Flag action/tool invocations that violate §11.3 supply-chain pinning."
     )
     lint_actions.add_argument("path", nargs="?", default=".", help="Repository root (default: .).")
+    lint_actions.add_argument("--pin", help="Explicit Library pin when the repository has no declaration.")
     lint_actions.set_defaults(func=cmd_lint_actions)
 
     nextver = subparsers.add_parser("next-version", help="Derive the next SemVer from Conventional Commits (§5.9).")
@@ -2543,11 +2717,15 @@ def main(argv: list[str] | None = None) -> int:
     # forgets to guard an AviatoError/GitHubAPIError/CommandError, fail closed to a clean stderr
     # message + exit 2 instead of a stack trace. (Genuinely unexpected exceptions still propagate
     # — those are bugs we WANT to see, not operator errors.)
-    try:
-        return int(args.func(args))
-    except (AviatoError, GitHubAPIError, CommandError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
+    with ExitStack() as stack:
+        token = _COMMAND_STACK.set(stack)
+        try:
+            return int(args.func(args))
+        except (AviatoError, GitHubAPIError, CommandError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        finally:
+            _COMMAND_STACK.reset(token)
 
 
 if __name__ == "__main__":

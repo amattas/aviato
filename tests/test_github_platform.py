@@ -1341,7 +1341,11 @@ def test_read_rulesets_preserves_degraded_payload_for_non_clean_drift(monkeypatc
 def test_probe_health_reports_degraded_ruleset_as_non_clean(monkeypatch: pytest.MonkeyPatch) -> None:
     from aviato.rulesets import render_all_rulesets
 
-    desired = next(payload for payload in render_all_rulesets() if payload["target"] == "tag")
+    desired = next(
+        payload
+        for payload in render_all_rulesets(root=Path("aviato/library"))
+        if payload["target"] == "tag"
+    )
     degraded = json.loads(json.dumps(desired))
     degraded["rules"] = [rule for rule in degraded["rules"] if rule["type"] != "tag_name_pattern"]
     monkeypatch.setattr(GitHubPlatform, "read_rulesets", lambda self, repo: [degraded])

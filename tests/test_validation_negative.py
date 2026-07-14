@@ -567,7 +567,7 @@ def test_zizmor_unpinned_uses_policy_map_is_closed(
     assert any("zizmor.yml" in error and "exactly equal" in error for error in errors)
 
 
-def test_library_repository_policy_mutation_binds_validation_and_remote(repo_copy: Path) -> None:
+def test_library_repository_policy_mutation_binds_validation_and_repository_identity(repo_copy: Path) -> None:
     from aviato import cli
     from aviato.policy import library_repository, load_policy
 
@@ -583,7 +583,7 @@ def test_library_repository_policy_mutation_binds_validation_and_remote(repo_cop
     policy = load_policy(repo_copy / "aviato/library")
 
     assert library_repository(policy) == "example/library"
-    assert cli._library_remote_url(policy) == "https://github.com/example/library.git"
+    assert cli._library_repository(policy) == "example/library"
     errors = validate(repo_copy)
     assert any("reusable-release.yml" in error and "example/library" in error for error in errors)
     assert any("zizmor.yml" in error and "example/library" in error for error in errors)

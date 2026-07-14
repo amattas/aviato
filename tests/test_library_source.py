@@ -52,6 +52,8 @@ def _archive(
     kind: str = "file",
     second_root: str | None = None,
     identity: str = "aviato-profile/profile/v1",
+    policy_repository: str = REPOSITORY,
+    policy_body: bytes | None = b"default",
 ) -> bytes:
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w:gz") as archive:
@@ -65,6 +67,20 @@ def _archive(
         else:
             info.size = len(body)
         archive.addfile(info, None if kind == "symlink" else io.BytesIO(body))
+        if (
+            policy_body is not None
+            and kind != "symlink"
+            and member.startswith("aviato/library/")
+            and member != "aviato/library/policy.yml"
+        ):
+            rendered_policy = (
+                f"library:\n  repository: {policy_repository}\n".encode()
+                if policy_body == b"default"
+                else policy_body
+            )
+            policy = tarfile.TarInfo(f"{root}/aviato/library/policy.yml")
+            policy.size = len(rendered_policy)
+            archive.addfile(policy, io.BytesIO(rendered_policy))
         if second_root is not None:
             extra = tarfile.TarInfo(f"{second_root}/README.md")
             extra.size = 1
@@ -700,6 +716,77 @@ def test_fetch_library_registry_resolves_exact_commit_and_cleans_up(
         assert extracted.exists()
     assert not extracted.exists()
     assert any(f"/tarball/{SHA}" in part for call in calls for part in call)
+    assert sum(f"/git/ref/tags/{pin}" in part for call in calls for part in call) == 1
+    assert sum(f"/tarball/{SHA}" in part for call in calls for part in call) == 1
+
+
+def test_fetch_library_snapshot_exposes_one_provenance_and_shared_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _fake_run(monkeypatch, _archive())
+
+    with library_source.fetch_library_snapshot(REPOSITORY, "1") as snapshot:
+        extracted = snapshot.root
+        assert snapshot.requested_pin == "1"
+        assert snapshot.resolved_ref_kind == "tag"
+        assert snapshot.commit_sha == SHA
+        assert snapshot.repository_identity is not None
+        assert snapshot.repository_identity.full_name == REPOSITORY
+        assert snapshot.registry.root == extracted
+        assert snapshot.policy_root == extracted
+        assert extracted.exists()
+
+    assert not extracted.exists()
+    assert sum("/git/ref/tags/1" in part for call in calls for part in call) == 1
+    assert sum(f"/tarball/{SHA}" in part for call in calls for part in call) == 1
+
+
+def test_fetch_library_snapshot_rejects_policy_identity_mismatch_before_yield_and_cleans_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_run(monkeypatch, _archive(policy_repository="other/library"))
+    monkeypatch.setattr("aviato.library_source.tempfile.tempdir", str(tmp_path))
+    before = set(tmp_path.iterdir())
+    yielded = False
+
+    with (
+        pytest.raises(AviatoError, match="policy repository.*does not match"),
+        library_source.fetch_library_snapshot(REPOSITORY, "1"),
+    ):
+        yielded = True
+
+    assert yielded is False
+    assert set(tmp_path.iterdir()) == before
+
+
+@pytest.mark.parametrize(
+    ("archive_bytes", "load_error"),
+    [
+        (_archive(policy_body=b"library: [\n"), None),
+        (_archive(policy_body=None), None),
+        (_archive(), OSError("policy is unreadable")),
+    ],
+    ids=("malformed-yaml", "missing", "unreadable"),
+)
+def test_fetch_library_snapshot_normalizes_policy_read_failures_and_cleans_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    archive_bytes: bytes,
+    load_error: OSError | None,
+) -> None:
+    _fake_run(monkeypatch, archive_bytes)
+    monkeypatch.setattr("aviato.library_source.tempfile.tempdir", str(tmp_path))
+    if load_error is not None:
+        monkeypatch.setattr(library_source, "load_policy", lambda _root: (_ for _ in ()).throw(load_error))
+    before = set(tmp_path.iterdir())
+
+    with (
+        pytest.raises(AviatoError, match="fetched Library policy is invalid"),
+        library_source.fetch_library_snapshot(REPOSITORY, "1"),
+    ):
+        pytest.fail("invalid policy snapshot yielded")
+
+    assert set(tmp_path.iterdir()) == before
 
 
 @pytest.mark.parametrize(

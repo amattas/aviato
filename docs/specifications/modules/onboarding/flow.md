@@ -27,8 +27,12 @@ sources is a post-day-zero refinement.
 tree is clean unless overridden. A fresh provision/adopt **must** record an
 explicit Library pin supplied by the operator; the process never fabricates a
 default pin. That pin must resolve to a published Library tag/branch before
-write/provision proceeds. A dedicated unresolved-pin escape hatch is permitted
-only for intentional offline/test scaffolds and must be named as such.
+write/provision proceeds. `--allow-unresolved-pin` is retained only to reject
+legacy invocations with a compatibility error; there is no offline/test escape
+from verified Library bytes. Before declaration inspection or any write, the
+target path is resolved and must equal its Git top level. The pin is resolved
+once to an exact tag-or-branch outcome and commit SHA, and all planning,
+rendering, policy, and ruleset reads share that one snapshot.
 **Two paths, one shape:**
 - *Provision-new*: create the repository, apply **minimal** protection (§2.11),
   scaffold, first commit, then apply **full** protection.
@@ -81,7 +85,9 @@ examines one error entry at a time and never combines entries.
 
 ```mermaid
 flowchart TD
-    Start["Operator: onboard repo with profile P"] --> Vars["Resolve required variables<br/>(flags > declaration > env > enumerated auto-detect),<br/>then write NON-SECRET into declaration (secret-typed = hard error, §8.15)"]
+    Start["Operator: onboard repo with profile P"] --> Root["Canonicalize target<br/>require exact Git root"]
+    Root --> Pin["Resolve explicit pin once<br/>tag/branch → commit snapshot"]
+    Pin --> Vars["Resolve required variables<br/>(flags > declaration > env > enumerated auto-detect),<br/>then write NON-SECRET into declaration (secret-typed = hard error, §8.15)"]
     Vars --> V{"All required vars present?"}
     V -- no --> Vfail["FAIL CLOSED: list missing vars + how to set"]
     V -- yes --> Mode{"New or existing?"}

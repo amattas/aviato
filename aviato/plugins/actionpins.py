@@ -6,9 +6,6 @@ import tomllib
 from collections.abc import Set as AbstractSet
 from pathlib import Path
 
-from ..policy import library_repository as policy_library_repository
-from ..policy import load_policy
-
 # §11.3: third-party actions/tools must be pinned by commit digest (40-hex SHA).
 # GitHub's own namespaces are first-party and exempt.
 _FIRST_PARTY_OWNERS = {"actions", "github"}
@@ -32,15 +29,14 @@ def _is_third_party(action_ref: str, library_repository: str) -> bool:
     return owner not in _FIRST_PARTY_OWNERS
 
 
-def unpinned_third_party_uses(text: str, *, library_repository: str | None = None) -> list[str]:
+def unpinned_third_party_uses(text: str, *, library_repository: str) -> list[str]:
     """Return third-party ``uses:`` refs in a workflow not pinned to a commit SHA (§11.3)."""
-    repository = policy_library_repository(load_policy()) if library_repository is None else library_repository
     violations: list[str] = []
     for ref in _USES_RE.findall(text):
         if "@" not in ref:
             continue
         action, _, version = ref.partition("@")
-        if _is_third_party(action, repository) and not _SHA_RE.match(version):
+        if _is_third_party(action, library_repository) and not _SHA_RE.match(version):
             violations.append(ref)
     return violations
 
@@ -911,7 +907,7 @@ def unpinned_tool_invocations(text: str) -> list[str]:
     return violations
 
 
-def action_pin_violations(root: Path, *, library_repository: str | None = None) -> list[str]:
+def action_pin_violations(root: Path, *, policy_root: Path, library_repository: str) -> list[str]:
     """Scan a repo's workflows + scaffold bodies for §11.3 violations.
 
     Real `.github/workflows/` get zizmor (`unpinned-uses`/`unpinned-images`) for action/image
@@ -928,7 +924,7 @@ def action_pin_violations(root: Path, *, library_repository: str | None = None) 
 
     # 1. zizmor on real workflows (uses + images).
     try:
-        for v in zizmor_uses_image_violations(workflow_dir):
+        for v in zizmor_uses_image_violations(workflow_dir, policy_root=policy_root):
             violations.append(f".github/workflows: {v}")
     except ZizmorUnavailable as exc:
         violations.append(f"zizmor unavailable (cannot verify action/image pins, §5.14): {exc}")

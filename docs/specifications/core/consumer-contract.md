@@ -19,6 +19,8 @@ surface, specified normatively below.
   - `version` (string) — the Library version pin: an exact version (`X.Y.Z`) or
     a floating major reference (`X`). Bare SemVer is canonical (matching `policy.yml`
     and the CLI); a legacy leading `v` is tolerated on read but never emitted.
+    The pin must resolve to an exact tag or branch and then to one commit SHA;
+    unresolved pins have no installed-data fallback.
   - `docs` (boolean, optional, default `false`) — opt-in to building and
     publishing the multi-version documentation site (§13.3). When `true`, the
     language plug-in's docs step emits API/reference material as md/mdx (§12) and
@@ -33,6 +35,15 @@ surface, specified normatively below.
   **self-contained** (everything the Consumer needs is in its own repo plus the
   version-pinned Library reference), and carries **no secrets** for
   read/propose/report automation (§6.6).
+
+Before reading this declaration, an operation resolves the supplied target and
+requires it to equal Git's canonical repository root. Nested paths,
+non-repositories, and nonexistent targets are rejected before render or write.
+After reading the declaration, the operation resolves and fetches its pin once
+and owns one immutable snapshot for its full lifetime. Profile manifests,
+templates, rulesets, and policy must all come from that snapshot. Its recorded
+requested pin, tag-or-branch outcome, commit SHA, and canonical repository
+identity are the authoritative provenance for the operation.
 
 ### 6.2 Managed-marker format (normative)
 

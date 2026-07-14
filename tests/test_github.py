@@ -34,7 +34,14 @@ def _record_named_files[**P, TNamedFile: _NamedFile](
 
 
 def _tag_ruleset_payload() -> JsonObject:
-    return cast(JsonObject, next(payload for payload in render_all_rulesets() if payload["target"] == "tag"))
+    return cast(
+        JsonObject,
+        next(
+            payload
+            for payload in render_all_rulesets(root=Path("aviato/library"))
+            if payload["target"] == "tag"
+        ),
+    )
 
 
 def _capture_payload(cmd: list[str]) -> JsonObject:

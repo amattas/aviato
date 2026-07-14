@@ -3,6 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def structural_anchors(root: Path) -> tuple[Path, ...]:
+    """Return every anchor whose real, non-symlink presence grants bootstrap authority."""
+
+    root = Path(root)
+    return (
+        root / "aviato" / "core" / "__init__.py",
+        root / "aviato" / "library" / "bundles",
+        root / "aviato" / "library" / "scaffold",
+        root / "aviato" / "library" / "policy.yml",
+    )
+
+
 def is_library(root: Path) -> bool:
     """The §5.10 structural predicate: is ``root`` the Library itself?
 
@@ -18,16 +30,17 @@ def is_library(root: Path) -> bool:
     which never vendors the ``aviato/`` package tree — has no ``aviato/`` at all, so
     the discrimination is unchanged.
 
-    The anchors matter: ``is_library()`` true skips the §2.6 version-pin gate, so the
-    predicate must not fire on a Consumer repository (no ``aviato/`` tree). Detection
-    is by structure, never by repository name, so forks/renames are unaffected.
+    This predicate establishes structure only; it never grants a bootstrap-only
+    compatibility or proposal skip by itself. Callers must also require the operated
+    declaration's explicit ``bootstrap: true`` through :func:`bootstrap_authorized`.
+    Detection is by structure, never by repository name, so forks/renames are unaffected.
     """
     root = Path(root)
-    return all(
-        [
-            (root / "aviato" / "core" / "__init__.py").is_file(),
-            (root / "aviato" / "library" / "bundles").is_dir(),
-            (root / "aviato" / "library" / "scaffold").is_dir(),
-            (root / "aviato" / "library" / "policy.yml").is_file(),
-        ]
-    )
+    core, bundles, scaffold, policy = structural_anchors(root)
+    return core.is_file() and bundles.is_dir() and scaffold.is_dir() and policy.is_file()
+
+
+def bootstrap_authorized(root: Path, *, declared: bool) -> bool:
+    """Return true only when structure and explicit declaration consent both hold."""
+
+    return declared and is_library(root)

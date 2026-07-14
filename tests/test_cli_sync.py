@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +12,8 @@ from aviato.core.errors import AviatoError
 from aviato.core.onboarding import materialize_items
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT
+
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
 
 
 def _consumer(tmp_path: Path) -> Path:
@@ -54,12 +55,11 @@ def test_sync_backfills_legacy_identity_from_its_declared_pin(
     declaration.write_text(declaration.read_text().replace("profile-identity: aviato-profile/python-library/v1\n", ""))
     fetched: list[str] = []
 
-    @contextmanager
-    def fake_fetch(repository: str, pin: str) -> Iterator[Registry]:
-        fetched.append(pin)
-        yield Registry(MODULE_SOURCE_ROOT)
+    def fake_context(_root: Path, declaration: object) -> object:
+        fetched.append(declaration.version)
+        return SimpleNamespace(registry=Registry(MODULE_SOURCE_ROOT), policy_root=MODULE_SOURCE_ROOT)
 
-    monkeypatch.setattr(cli, "fetch_library_registry", fake_fetch)
+    monkeypatch.setattr(cli, "_open_consumer_context", fake_context)
     rc = main(["sync", str(consumer), "--rebaseline-seeds"])
 
     assert rc == 0
@@ -83,13 +83,12 @@ def test_legacy_sync_fetch_failure_or_identity_mismatch_mutates_nothing(
             profile.read_text().replace("aviato-profile/python-library/v1", "aviato-profile/repurposed/v1")
         )
 
-    @contextmanager
-    def fake_fetch(repository: str, pin: str) -> Iterator[Registry]:
+    def fake_context(_root: Path, _declaration: object) -> object:
         if failure == "unresolved":
             raise AviatoError("pin does not resolve")
-        yield Registry(target)
+        raise AviatoError("profile identity mismatch")
 
-    monkeypatch.setattr(cli, "fetch_library_registry", fake_fetch)
+    monkeypatch.setattr(cli, "_open_consumer_context", fake_context)
     before = {p.relative_to(consumer): p.read_bytes() for p in consumer.rglob("*") if p.is_file()}
     assert main(["sync", str(consumer), "--rebaseline-seeds"]) == 2
     after = {p.relative_to(consumer): p.read_bytes() for p in consumer.rglob("*") if p.is_file()}
@@ -169,7 +168,6 @@ def test_fresh_onboard_write_baselines_preexisting_seed_before_writes(
             "--allow-dirty",
             "--pin",
             "v0",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",

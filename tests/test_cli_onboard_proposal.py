@@ -10,6 +10,8 @@ import aviato.cli as cli
 from aviato.cli import main
 from aviato.github_platform import GitHubPlatform
 
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
+
 
 def test_onboard_open_pr_builds_proposal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -20,6 +22,8 @@ def test_onboard_open_pr_builds_proposal(
     def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
+            dest.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "-C", str(dest), "init"], check=True, capture_output=True)
             (dest / ".github").mkdir(parents=True, exist_ok=True)
             (dest / "LICENSE").write_text("operator's own license", encoding="utf-8")
         return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -44,7 +48,6 @@ def test_onboard_open_pr_builds_proposal(
             "python-library",
             "--pin",
             "v0",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",
@@ -82,6 +85,8 @@ def test_onboard_open_pr_rejects_symlinked_artifact_probe(
     def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
+            dest.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "-C", str(dest), "init"], check=True, capture_output=True)
             (dest / ".github").mkdir(parents=True, exist_ok=True)
             (dest / "LICENSE").symlink_to(outside)
         return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -103,7 +108,6 @@ def test_onboard_open_pr_rejects_symlinked_artifact_probe(
             "python-library",
             "--pin",
             "v0",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",
@@ -126,6 +130,8 @@ def test_reonboard_open_pr_refuses_legacy_or_mismatched_identity_without_proposa
     def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
+            dest.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "-C", str(dest), "init"], check=True, capture_output=True)
             (dest / ".github").mkdir(parents=True)
             (dest / ".github" / "aviato.yaml").write_text(
                 "profile: python-library\n"
@@ -151,7 +157,6 @@ def test_reonboard_open_pr_refuses_legacy_or_mismatched_identity_without_proposa
             "python-library",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
         ]
     )
 
@@ -171,6 +176,8 @@ def test_reonboard_open_pr_preserves_equal_profile_identity(monkeypatch: pytest.
     def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
+            dest.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "-C", str(dest), "init"], check=True, capture_output=True)
             (dest / ".github").mkdir(parents=True)
             (dest / ".github" / "aviato.yaml").write_text(
                 "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
@@ -197,7 +204,6 @@ def test_reonboard_open_pr_preserves_equal_profile_identity(monkeypatch: pytest.
                 "python-library",
                 "--pin",
                 "0",
-                "--allow-unresolved-pin",
             ]
         )
         == 0
@@ -215,6 +221,8 @@ def test_onboard_open_pr_profile_migration_requires_flag_and_renders_requested_p
     def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
+            dest.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "-C", str(dest), "init"], check=True, capture_output=True)
             (dest / ".github").mkdir(parents=True)
             (dest / ".github" / "aviato.yaml").write_text(
                 "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
@@ -239,7 +247,6 @@ def test_onboard_open_pr_profile_migration_requires_flag_and_renders_requested_p
         "node-service",
         "--pin",
         "0",
-        "--allow-unresolved-pin",
         "--var",
         "project-name=widget",
         "--var",
@@ -272,6 +279,8 @@ def test_onboard_open_pr_profile_migration_does_not_propose_over_protected_targe
     def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
+            dest.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "-C", str(dest), "init"], check=True, capture_output=True)
             (dest / ".github").mkdir(parents=True)
             (dest / ".github" / "aviato.yaml").write_text(
                 "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
@@ -297,7 +306,6 @@ def test_onboard_open_pr_profile_migration_does_not_propose_over_protected_targe
             "node-service",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
             "--migrate-profile",
             "--var",
             "project-name=widget",

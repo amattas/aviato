@@ -1,11 +1,30 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from aviato.paths import REPO_ROOT
+
+
+@pytest.fixture
+def task3_pinned_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit reusable fetched-snapshot double for pre-context CLI behavior tests."""
+
+    from aviato import cli
+    from aviato.core.registry import Registry
+
+    snapshot_root = tmp_path.parent / f"{tmp_path.name}-library-snapshot"
+    shutil.copytree(Path("aviato/library"), snapshot_root)
+    snapshot = SimpleNamespace(registry=Registry(snapshot_root), policy_root=snapshot_root)
+    monkeypatch.setattr(cli, "_open_consumer_context", lambda _root, _declaration: snapshot)
+    monkeypatch.setattr(cli, "_open_new_context", lambda _root, _pin: snapshot)
+    monkeypatch.setattr(cli, "_open_published_snapshot", lambda _pin: snapshot)
+    subprocess.run(["git", "-C", str(tmp_path), "init"], check=True, capture_output=True)
 
 
 def pytest_configure(config: pytest.Config) -> None:

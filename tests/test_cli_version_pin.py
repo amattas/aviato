@@ -5,9 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from aviato.cli import _recorded_versions, main
+from aviato.cli import _recorded_versions, _version_pin_error, main
+from aviato.core.declaration import Declaration
 from aviato.core.diagnosis import ExpectedArtifact as _ExpectedArtifact
 from aviato.core.errors import PathConfinementError
+
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
 
 ExpectedArtifact = partial(_ExpectedArtifact, input_hash="0" * 64)
 
@@ -21,6 +24,28 @@ def _consumer(tmp_path: Path, pin: str) -> Path:
         encoding="utf-8",
     )
     return tmp_path
+
+
+def _library_shape(root: Path) -> None:
+    (root / "aviato/core").mkdir(parents=True)
+    (root / "aviato/core/__init__.py").write_text("", encoding="utf-8")
+    (root / "aviato/library/bundles").mkdir(parents=True)
+    (root / "aviato/library/scaffold").mkdir(parents=True)
+    (root / "aviato/library/policy.yml").write_text("library: {}\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize(("bootstrap", "skipped"), [(False, False), (True, True)])
+def test_version_pin_skip_requires_structure_and_bootstrap_declaration(
+    tmp_path: Path, bootstrap: bool, skipped: bool
+) -> None:
+    _library_shape(tmp_path)
+    declaration = Declaration(profile="python-library", version="9.0.0", bootstrap=bootstrap)
+
+    error = _version_pin_error(tmp_path, declaration, [], override=False)
+
+    assert (error is None) is skipped
+    if not skipped:
+        assert "version-pin mismatch" in str(error)
 
 
 def test_sync_refuses_incompatible_pin(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

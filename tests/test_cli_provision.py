@@ -10,6 +10,8 @@ from aviato.cli import main
 from aviato.core.ports import Issue, Platform
 from aviato.core.provision import ProvisionOutcome
 
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
+
 
 class _FakePlatform:
     def __init__(self, skipped: list[str] | None = None) -> None:
@@ -111,12 +113,6 @@ def test_provision_rejects_unsafe_slug_before_platform_calls(slug: str, monkeypa
         "provision_repo",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("provision must not run")),
     )
-    monkeypatch.setattr(
-        cli,
-        "_published_library_ref_exists",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("pin probe must not run")),
-    )
-
     argv = ["provision", "--profile", "python-library", "--pin", "0"]
     if slug.startswith("-"):
         argv.append("--")
@@ -142,7 +138,13 @@ def test_provision_requires_explicit_pin(capsys: pytest.CaptureFixture[str]) -> 
 
 
 def test_provision_refuses_unpublished_pin(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: False)
+    from aviato.core.errors import AviatoError
+
+    monkeypatch.setattr(
+        cli,
+        "_open_published_snapshot",
+        lambda _pin: (_ for _ in ()).throw(AviatoError("Library pin '0' does not resolve")),
+    )
     rc = main(
         [
             "provision",
@@ -160,7 +162,7 @@ def test_provision_refuses_unpublished_pin(monkeypatch: pytest.MonkeyPatch, caps
     err = capsys.readouterr().err
     assert rc == 2
     assert "does not resolve" in err
-    assert "--allow-unresolved-pin" in err
+    assert "does not resolve" in err
 
 
 def test_provision_partial_outcome_reports_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -185,7 +187,6 @@ def test_provision_partial_outcome_reports_recovery(monkeypatch: pytest.MonkeyPa
             "python-library",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",
@@ -214,7 +215,6 @@ def test_provision_exposed_state_reports_unprotected_and_recovery(
             "python-library",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=a",
             "--var",
@@ -243,7 +243,6 @@ def test_provision_success_exit_zero(monkeypatch: pytest.MonkeyPatch) -> None:
             "python-library",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",
@@ -279,7 +278,6 @@ def test_provision_success_reports_skipped_unavailable_toggle(
             "python-library",
             "--pin",
             "0",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=a",
             "--var",

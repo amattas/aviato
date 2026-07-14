@@ -15,6 +15,8 @@ from aviato.core.registry import Registry
 from aviato.github_platform import GitHubPlatform
 from aviato.paths import MODULE_SOURCE_ROOT
 
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
+
 
 @pytest.mark.parametrize(
     ("docs", "serve_pages", "expected_probe"),
@@ -182,6 +184,8 @@ def test_onboard_secret_value_never_prints_in_doctor_facing_plan(
             str(tmp_path),
             "--profile",
             "test-profile",
+            "--pin",
+            "0",
             "--var",
             f"api-token={supplied_secret}",
         ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
@@ -9,13 +10,17 @@ import pytest
 
 from aviato import cli
 from aviato.cli import _scan_has_file_drift, main
-from aviato.core.diagnosis import diagnose
+from aviato.core.diagnosis import DiagnosisReport, diagnose
 from aviato.core.errors import AviatoError
 from aviato.core.file_drift_flow import _PROPOSABLE, FileDriftOutcome
 from aviato.core.fleet import RepoScan
+from aviato.core.registry import Registry
 from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
 from aviato.core.scaffold import scaffold
 from aviato.github_platform import GitHubPlatform
+from aviato.paths import MODULE_SOURCE_ROOT
+
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
 
 
 def _record_keyword_arguments[**P, R](fn: Callable[P, R], calls: list[dict[str, object]]) -> Callable[P, R]:
@@ -33,12 +38,26 @@ PYTHON_DECLARATION = (
 )
 
 
+def _git_init(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "-C", str(root), "init"], check=True, capture_output=True)
+
+
+def _library_shape(root: Path) -> None:
+    (root / "aviato/core").mkdir(parents=True)
+    (root / "aviato/core/__init__.py").write_text("", encoding="utf-8")
+    (root / "aviato/library/bundles").mkdir(parents=True)
+    (root / "aviato/library/scaffold").mkdir(parents=True)
+    (root / "aviato/library/policy.yml").write_text("library: {}\n", encoding="utf-8")
+
+
 def test_scan_prints_per_repo_lines(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
     (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
     plain = tmp_path / "plain"
-    plain.mkdir()
+    _git_init(consumer)
+    _git_init(plain)
 
     rc = main(["scan", str(consumer), str(plain)])
     captured = capsys.readouterr()
@@ -60,6 +79,7 @@ def test_scan_rejects_invalid_declared_enum_before_fix_proposal(
         "profile: node-service\nversion: v0\nvariables:\n  project-name: sample\n  language-variant: ruby\n",
         encoding="utf-8",
     )
+    _git_init(consumer)
     monkeypatch.setattr(cli, "_propose_file_drift", lambda *args, **kwargs: pytest.fail("opened proposal"))
 
     rc = main(["scan", str(consumer), "--fix"])
@@ -67,6 +87,20 @@ def test_scan_rejects_invalid_declared_enum_before_fix_proposal(
     captured = capsys.readouterr()
     assert rc == 2
     assert "language-variant" in captured.err
+
+
+def test_scan_declaration_parse_error_exits_two(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    consumer = tmp_path / "c"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github" / "aviato.yaml").write_text(
+        "profile: python-library\nversion: 0\nunknown-field: true\n", encoding="utf-8"
+    )
+    _git_init(consumer)
+
+    rc = main(["scan", str(consumer)])
+
+    assert rc == 2
+    assert "ERROR:" in capsys.readouterr().err
 
 
 def test_scan_fix_preserves_declaration_exit_when_later_proposal_fails(
@@ -81,6 +115,8 @@ def test_scan_fix_preserves_declaration_exit_when_later_proposal_fails(
     fixable = tmp_path / "fixable"
     (fixable / ".github").mkdir(parents=True)
     (fixable / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    _git_init(invalid)
+    _git_init(fixable)
 
     def fail_proposal(*args: object, **kwargs: object) -> object:
         raise AviatoError("proposal failed")
@@ -100,6 +136,7 @@ def test_scan_surfaces_seed_once_divergence(tmp_path: Path, capsys: pytest.Captu
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
     (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    _git_init(consumer)
     # Seed LICENSE (records its hash in the report-only sidecar), then TAMPER it.
     license_item = [ScaffoldItem("LICENSE", "MIT v1\n", "#", seed_once=True)]
     scaffold(consumer, license_item, profile="python-library", version="v1")
@@ -156,6 +193,7 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
     (consumer / ".editorconfig").write_text(
         f"# aviato:managed profile=python-library version=v1 hash=DEADBEEF\n{body}", encoding="utf-8"
     )
+    _git_init(consumer)
 
     monkeypatch.setattr(cli, "_version_pin_error", lambda *a, **k: None)  # not under test here
     monkeypatch.setattr(cli, "remote_url", lambda root: "https://github.com/o/r.git")
@@ -164,7 +202,7 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
 
     def fake_run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
         assert "clone" in cmd, f"scan --fix ran an unexpected command in/near the operator tree: {cmd}"
-        Path(cmd[-1]).mkdir(parents=True, exist_ok=True)  # stand in for the clone
+        _git_init(Path(cmd[-1]))  # stand in for the clone
         return SimpleNamespace(stdout="", stderr="", returncode=0)
 
     captured: dict[str, str] = {}
@@ -185,6 +223,62 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
     assert {key: diagnosis_calls[-1][key] for key in expected_inputs} == expected_inputs
 
 
+@pytest.mark.parametrize(("bootstrap", "expected"), [(False, False), (True, True)])
+def test_scan_fix_proposal_suppression_requires_structure_and_bootstrap_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bootstrap: bool, expected: bool
+) -> None:
+    consumer = tmp_path / "consumer"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github/aviato.yaml").write_text(
+        PYTHON_DECLARATION + ("bootstrap: true\n" if bootstrap else ""), encoding="utf-8"
+    )
+    _git_init(consumer)
+    _library_shape(consumer)
+    monkeypatch.setattr(cli, "remote_url", lambda _root: "https://github.com/o/r.git")
+    monkeypatch.setattr(cli, "diagnose", lambda *_args, **_kwargs: DiagnosisReport(statuses={"ruff.toml": "missing"}))
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        _git_init(Path(cmd[-1]))
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    observed: list[bool] = []
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(
+        cli,
+        "run_file_drift",
+        lambda _platform, **kwargs: observed.append(bool(kwargs["is_bootstrap"])) or FileDriftOutcome(),
+    )
+
+    cli._propose_file_drift(Registry(MODULE_SOURCE_ROOT), consumer, override_version_pin=True)
+
+    assert observed == [expected]
+
+
+@pytest.mark.parametrize("clone_kind", ["non-git", "nested"])
+def test_scan_fix_rejects_noncanonical_clone_before_proposal_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clone_kind: str
+) -> None:
+    consumer = tmp_path / "consumer"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github/aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    _git_init(consumer)
+    monkeypatch.setattr(cli, "remote_url", lambda _root: "https://github.com/o/r.git")
+    monkeypatch.setattr(cli, "diagnose", lambda *_args, **_kwargs: DiagnosisReport(statuses={"ruff.toml": "missing"}))
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        clone = Path(cmd[-1])
+        clone.mkdir(parents=True)
+        if clone_kind == "nested":
+            _git_init(clone.parent)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli, "run_file_drift", lambda *_args, **_kwargs: pytest.fail("proposal mutated"))
+
+    with pytest.raises(AviatoError, match="Git repository|repository root"):
+        cli._propose_file_drift(Registry(MODULE_SOURCE_ROOT), consumer, override_version_pin=True)
+
+
 def test_scan_fix_blocks_incompatible_version_pin(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # §2.6/§5.12: scan --fix must enforce the version-pin gate like drift-report/sync —
     # an incompatible local tool cannot regenerate a consumer's files. Pin at a major the
@@ -194,6 +288,7 @@ def test_scan_fix_blocks_incompatible_version_pin(tmp_path: Path, capsys: pytest
     (consumer / ".github" / "aviato.yaml").write_text(
         PYTHON_DECLARATION.replace("version: v1", "version: 2.0.0"), encoding="utf-8"
     )
+    _git_init(consumer)
     rc = main(["scan", str(consumer), "--fix"])
     err = capsys.readouterr().err
     assert rc == 1
@@ -206,6 +301,7 @@ def test_scan_surfaces_missing_drift_automation(tmp_path: Path, capsys: pytest.C
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
     (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    _git_init(consumer)
 
     rc = main(["scan", str(consumer)])
     err = capsys.readouterr().err
@@ -221,6 +317,7 @@ def test_scan_audit_lists_open_drift_issues(
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
     (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    _git_init(consumer)
     monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:o/r.git")
     monkeypatch.setattr(
         cli,

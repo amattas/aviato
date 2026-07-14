@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from aviato import audit
+from aviato import audit, cli
 from aviato.audit import (
     AuditRow,
     _force_push_blocked,
@@ -14,9 +16,15 @@ from aviato.audit import (
     render_json,
     render_tsv,
 )
+from aviato.cli import main
 from aviato.github import GitHubAPIError
 
 _POLICY = {"release": {"tag_pattern": r"^[0-9]+\.[0-9]+\.[0-9]+$"}}
+
+
+def _git_init(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "-C", str(root), "init"], check=True, capture_output=True)
 
 
 def test_requires_pr_from_ruleset() -> None:
@@ -102,3 +110,73 @@ def test_render_json_roundtrips() -> None:
     data = json.loads(render_json([row]))
     assert data[0]["slug"] == "o/r"
     assert data[0]["force_push_blocked"] == "no"
+
+
+def test_audit_undeclared_repository_requires_explicit_pin(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _git_init(tmp_path)
+
+    assert main(["audit", "--repo", str(tmp_path)]) == 2
+    assert "explicit --pin" in capsys.readouterr().err
+
+
+def test_audit_undeclared_repository_uses_explicit_snapshot_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _git_init(tmp_path)
+    policy_root = tmp_path / "snapshot-policy"
+    snapshot = SimpleNamespace(policy_root=policy_root)
+    opened: list[tuple[Path, str]] = []
+    policies: list[object] = []
+    monkeypatch.setattr(
+        cli,
+        "_open_new_context",
+        lambda root, pin: opened.append((root, pin)) or snapshot,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_open_published_snapshot",
+        lambda _pin: pytest.fail("target-bearing audit opened a bare snapshot"),
+    )
+    monkeypatch.setattr(cli, "load_policy", lambda root: {"root": str(root)})
+    monkeypatch.setattr(
+        cli,
+        "audit_repos",
+        lambda repos, *, root, policy: policies.append(policy) or [],
+    )
+
+    assert main(["audit", "--repo", str(tmp_path), "--pin", "1"]) == 0
+    assert opened == [(tmp_path.resolve(), "1")]
+    assert policies == [{"root": str(policy_root)}]
+
+
+def test_audit_declared_repositories_each_use_their_own_pin_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repos = [tmp_path / "one", tmp_path / "two"]
+    for index, repo in enumerate(repos, start=1):
+        _git_init(repo)
+        declaration = repo / ".github/aviato.yaml"
+        declaration.parent.mkdir()
+        declaration.write_text(f"profile: python-library\nversion: {index}\nvariables: {{}}\n", encoding="utf-8")
+    opened: list[tuple[Path, str]] = []
+
+    def open_consumer(root: Path, declaration: object) -> object:
+        opened.append((root, str(declaration.version)))  # type: ignore[attr-defined]
+        return SimpleNamespace(policy_root=tmp_path / f"policy-{declaration.version}")  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(cli, "_open_consumer_context", open_consumer)
+    monkeypatch.setattr(
+        cli,
+        "_open_published_snapshot",
+        lambda _pin: pytest.fail("declared audit ignored the repository declaration"),
+    )
+    monkeypatch.setattr(cli, "load_policy", lambda root: {"root": str(root)})
+    monkeypatch.setattr(cli, "audit_repos", lambda repos, *, root, policy: [])
+
+    argv = ["audit", "--pin", "9"]
+    for repo in repos:
+        argv.extend(["--repo", str(repo)])
+    assert main(argv) == 0
+    assert opened == [(repo.resolve(), str(index)) for index, repo in enumerate(repos, start=1)]

@@ -16,6 +16,8 @@ from aviato.core.settings_drift_flow import diff_identity
 from aviato.core.settingsdrift import classify_settings
 from aviato.paths import MODULE_SOURCE_ROOT
 
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
+
 
 class _FakePlatform:
     """Minimal platform recording mutations, for the reconcile CLI glue."""

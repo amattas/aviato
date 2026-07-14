@@ -12,9 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from ..command import run
-from ..paths import POLICY_DATA_ROOT
-
-ZIZMOR_CONFIG = POLICY_DATA_ROOT / "zizmor.yml"
 
 # Audits aviato gates on today. zizmor runs all audits; we surface only these. Forward-compatible:
 # adopting another audit is a one-line addition here (plus a doc note), not a new detector.
@@ -53,7 +50,7 @@ def _finding_location(finding: dict[str, Any]) -> str:
     return str(finding.get("ident", "?"))
 
 
-def zizmor_uses_image_violations(workflow_dir: Path) -> list[str]:
+def zizmor_uses_image_violations(workflow_dir: Path, *, policy_root: Path) -> list[str]:
     """Return gated zizmor findings for ``workflow_dir`` as ``ident: file`` strings.
 
     Empty if the directory is absent. Raises :class:`ZizmorUnavailable` if zizmor is missing or
@@ -83,7 +80,7 @@ def zizmor_uses_image_violations(workflow_dir: Path) -> list[str]:
         [
             "zizmor",
             "--config",
-            str(ZIZMOR_CONFIG),
+            str(policy_root / "zizmor.yml"),
             "--format",
             "json",
             "--no-exit-codes",

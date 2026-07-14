@@ -48,3 +48,38 @@ def test_vendored_package_without_policy_is_not_library(tmp_path: Path) -> None:
     _make_library(tmp_path)
     (tmp_path / "aviato" / "library" / "policy.yml").unlink()
     assert is_library(tmp_path) is False
+
+
+def test_reonboard_preserves_verified_bootstrap(tmp_path: Path) -> None:
+    import shutil
+    from argparse import Namespace
+
+    from aviato.cli import _resolve_onboard_declaration
+    from aviato.core.composition import resolve_profile
+    from aviato.core.declaration import Declaration
+    from aviato.core.registry import Registry
+    _make_library(tmp_path)
+    shutil.copytree(Path("aviato/library"), tmp_path / "aviato/library", dirs_exist_ok=True)
+    registry = Registry(tmp_path / "aviato/library")
+    existing = Declaration(
+        profile="python-library",
+        profile_identity=registry.profile("python-library").identity,
+        version="0",
+        bootstrap=True,
+        variables={"distribution-name": "aviato", "import-name": "aviato"},
+    )
+    args = Namespace(
+        profile="python-library",
+        pin=None,
+        var=[],
+        target=".",
+        migrate_profile=False,
+        docs=False,
+        allow_unresolved_pin=False,
+    )
+
+    declaration, _ = _resolve_onboard_declaration(
+        args, registry, resolve_profile(registry, "python-library"), existing
+    )
+
+    assert declaration.bootstrap is True

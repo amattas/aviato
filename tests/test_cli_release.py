@@ -21,6 +21,8 @@ from aviato.cli import _version_pin_error, main
 from aviato.core.declaration import Declaration
 from aviato.core.diagnosis import ExpectedArtifact as _ExpectedArtifact
 
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
+
 ExpectedArtifact = partial(_ExpectedArtifact, input_hash="0" * 64)
 
 

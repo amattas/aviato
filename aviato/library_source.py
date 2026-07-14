@@ -8,9 +8,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
+import yaml
+
 from . import github
 from .command import run_to_path
 from .core.errors import AviatoError
+from .core.operation_context import LibrarySnapshot
 from .core.ports import (
     GitObjectRead,
     GitObjectReadStatus,
@@ -22,9 +25,16 @@ from .core.ports import (
     validate_git_ref_name,
 )
 from .core.registry import Registry
+from .policy import library_repository, load_policy
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_ANNOTATED_TAG_PEEL_DEPTH = 8
+
+
+def configured_library_repository() -> str:
+    """Return the pre-snapshot locator; fetched policy must corroborate it."""
+
+    return library_repository(load_policy())
 
 
 def _terminal_read_error(pin: str, read: GitObjectRead, *, operation: str) -> AviatoError:
@@ -164,8 +174,8 @@ def _contained_extraction_path(root: Path, relative: PurePosixPath) -> Path:
 
 
 @contextmanager
-def fetch_library_registry(repository: str, pin: str) -> Iterator[Registry]:
-    """Yield the exact published Library registry for ``pin``, then remove all fetched bytes."""
+def fetch_library_snapshot(repository: str, pin: str) -> Iterator[LibrarySnapshot]:
+    """Yield one resolved, commit-addressed Library tree and its complete identity."""
     resolved = resolve_library_ref(repository, pin)
     sha = resolved.commit_sha
     workdir = Path(tempfile.mkdtemp(prefix="aviato-library-"))
@@ -198,6 +208,35 @@ def fetch_library_registry(repository: str, pin: str) -> Iterator[Registry]:
                         shutil.copyfileobj(source, output)
         except (tarfile.TarError, OSError) as exc:
             raise AviatoError(f"could not safely extract Library archive: {exc}") from exc
-        yield Registry(extract_root)
+        registry = Registry(extract_root)
+        try:
+            policy_repository = library_repository(load_policy(extract_root))
+        except (AviatoError, OSError, yaml.YAMLError, KeyError, TypeError, ValueError) as exc:
+            raise AviatoError(f"fetched Library policy is invalid: {exc}") from exc
+        if policy_repository.casefold() != resolved.repository_identity.full_name.casefold():
+            raise AviatoError(
+                f"fetched Library policy repository {policy_repository!r} does not match resolved "
+                f"repository {resolved.repository_identity.full_name!r}"
+            )
+        snapshot = LibrarySnapshot(
+            root=extract_root,
+            registry=registry,
+            policy_root=extract_root,
+            requested_pin=pin,
+            resolved_ref=resolved,
+            _cleanup=lambda: shutil.rmtree(workdir, ignore_errors=True),
+        )
+        yield snapshot
     finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+        if "snapshot" in locals():
+            snapshot.close()
+        else:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+
+@contextmanager
+def fetch_library_registry(repository: str, pin: str) -> Iterator[Registry]:
+    """Compatibility adapter over :func:`fetch_library_snapshot`; never resolves twice."""
+
+    with fetch_library_snapshot(repository, pin) as snapshot:
+        yield snapshot.registry

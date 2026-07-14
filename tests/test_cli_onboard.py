@@ -12,8 +12,11 @@ from aviato.core.scaffold import scaffold
 
 ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
+
 
 def _adopt(tmp_path: Path, *extra: str) -> int:
+    pin = [] if (tmp_path / ".github/aviato.yaml").is_file() else ["--pin", "0"]
     return main(
         [
             "onboard",
@@ -22,11 +25,11 @@ def _adopt(tmp_path: Path, *extra: str) -> int:
             "python-library",
             "--write",
             "--allow-dirty",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",
             "import-name=acme",
+            *pin,
             *extra,
         ]
     )
@@ -51,7 +54,7 @@ def test_autodetect_fills_owner_and_repo_from_slug(
 
 
 def test_onboard_lists_composed_pipelines_and_variables(capsys: pytest.CaptureFixture[str]) -> None:
-    rc = main(["onboard", "owner/repo", "--profile", "python-library"])
+    rc = main(["onboard", "owner/repo", "--profile", "python-library", "--pin", "0"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "profile: python-library" in out
@@ -66,7 +69,7 @@ def test_onboard_lists_composed_pipelines_and_variables(capsys: pytest.CaptureFi
 
 
 def test_onboard_unknown_profile_fails(capsys: pytest.CaptureFixture[str]) -> None:
-    rc = main(["onboard", "owner/repo", "--profile", "does-not-exist"])
+    rc = main(["onboard", "owner/repo", "--profile", "does-not-exist", "--pin", "0"])
     assert rc != 0
 
 
@@ -85,7 +88,7 @@ def test_malformed_var_on_plan_path_is_clean_error_not_traceback(capsys: pytest.
     # review #8: a malformed --var on the (unguarded) plan path used to escape as a raw traceback
     # + exit 1. The top-level main() safety net must turn ANY leaked AviatoError into a clean
     # stderr message + exit 2 — no command path may ever surface a stack trace.
-    rc = main(["onboard", "owner/repo", "--profile", "python-library", "--var", "novalue"])
+    rc = main(["onboard", "owner/repo", "--profile", "python-library", "--pin", "0", "--var", "novalue"])
     err = capsys.readouterr().err
     assert rc == 2
     assert "KEY=VALUE" in err or "novalue" in err
@@ -94,14 +97,14 @@ def test_malformed_var_on_plan_path_is_clean_error_not_traceback(capsys: pytest.
 def test_onboard_plan_hides_docs_artifacts_unless_opted_in(capsys: pytest.CaptureFixture[str]) -> None:
     # §6.1: the plan must list the EXACT artifacts that would be written. With docs off
     # (the default) the docs caller workflow and website artifacts must not appear.
-    rc = main(["onboard", "owner/repo", "--profile", "python-library"])
+    rc = main(["onboard", "owner/repo", "--profile", "python-library", "--pin", "0"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "aviato-docs.yml" not in out
     assert "website/" not in out
 
     # With --docs the docs-gated artifacts appear.
-    rc = main(["onboard", "owner/repo", "--profile", "python-library", "--docs"])
+    rc = main(["onboard", "owner/repo", "--profile", "python-library", "--pin", "0", "--docs"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "aviato-docs.yml" in out
@@ -111,7 +114,7 @@ def test_onboard_plan_does_not_list_conflicting_variant_templates(capsys: pytest
     # §6.1/§4.2: node-service has two templates writing package.json gated on mutually-
     # exclusive language-variant. The plan must list the EXACT set --write materializes, so
     # the top-level package.json must appear AT MOST once, never both variants at once.
-    rc = main(["onboard", "owner/repo", "--profile", "node-service"])
+    rc = main(["onboard", "owner/repo", "--profile", "node-service", "--pin", "0"])
     out = capsys.readouterr().out
     assert rc == 0
     pkg_lines = [ln for ln in out.splitlines() if ln.strip().startswith("- package.json ")]
@@ -130,7 +133,7 @@ def test_onboard_plan_does_not_list_conflicting_variant_templates(capsys: pytest
 def test_onboard_plan_lists_protected_deployment_environment_requirements(
     profile: str, expected_environment: str | None, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert main(["onboard", "owner/repo", "--profile", profile]) == 0
+    assert main(["onboard", "owner/repo", "--profile", profile, "--pin", "0"]) == 0
     output = capsys.readouterr().out
 
     if expected_environment is None:
@@ -150,6 +153,8 @@ def test_swift_onboard_plan_uses_resolved_environment_name_override(
                 "owner/repo",
                 "--profile",
                 "swift-app",
+                "--pin",
+                "0",
                 "--var",
                 "environment-name=production",
             ]

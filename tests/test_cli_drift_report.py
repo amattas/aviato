@@ -10,7 +10,9 @@ from aviato import cli
 from aviato.core.diagnosis import diagnose
 from aviato.core.ports import Issue, Platform
 from aviato.core.registry import Registry
-from aviato.paths import MODULE_SOURCE_ROOT
+from aviato.paths import MODULE_SOURCE_ROOT, POLICY_DATA_ROOT
+
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
 
 
 def _record_keyword_arguments[**P, R](fn: Callable[P, R], calls: list[dict[str, object]]) -> Callable[P, R]:
@@ -43,7 +45,10 @@ class FakePlatform:
         from aviato.cli import _profile_status_checks
         from aviato.rulesets import render_all_rulesets
 
-        return render_all_rulesets(extra_status_checks=_profile_status_checks("python-library"))
+        return render_all_rulesets(
+            root=POLICY_DATA_ROOT,
+            extra_status_checks=_profile_status_checks(Registry(MODULE_SOURCE_ROOT), "python-library"),
+        )
 
     def get_issue(self, repo: str, key: str) -> Issue | None:
         return None
@@ -86,6 +91,34 @@ def _consumer(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return tmp_path
+
+
+def _library_shape(root: Path) -> None:
+    (root / "aviato/core").mkdir(parents=True)
+    (root / "aviato/core/__init__.py").write_text("", encoding="utf-8")
+    (root / "aviato/library/bundles").mkdir(parents=True)
+    (root / "aviato/library/scaffold").mkdir(parents=True)
+    (root / "aviato/library/policy.yml").write_text("library: {}\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize(("bootstrap", "proposal_expected"), [(False, True), (True, False)])
+def test_drift_proposal_suppression_requires_structure_and_bootstrap_declaration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bootstrap: bool,
+    proposal_expected: bool,
+) -> None:
+    consumer = _consumer(tmp_path)
+    if bootstrap:
+        declaration = consumer / ".github/aviato.yaml"
+        declaration.write_text(declaration.read_text(encoding="utf-8") + "bootstrap: true\n", encoding="utf-8")
+    _library_shape(consumer)
+    fake = FakePlatform()
+    monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
+    monkeypatch.setattr(cli, "remote_url", lambda _root: "git@github.com:owner/repo.git")
+
+    assert cli.main(["drift-report", str(consumer), "--file-only"]) == 0
+    assert ("open_or_update_proposal" in fake.call_names()) is proposal_expected
 
 
 def test_drift_report_rejects_invalid_declared_enum_before_proposal(
@@ -143,7 +176,12 @@ def test_drift_report_reports_content_drifted_ruleset(
     from aviato.cli import _profile_status_checks
     from aviato.rulesets import render_all_rulesets
 
-    live = copy.deepcopy(render_all_rulesets(extra_status_checks=_profile_status_checks("python-library")))
+    live = copy.deepcopy(
+        render_all_rulesets(
+            root=POLICY_DATA_ROOT,
+            extra_status_checks=_profile_status_checks(Registry(MODULE_SOURCE_ROOT), "python-library"),
+        )
+    )
     for ruleset in live:
         if ruleset["target"] == "tag":
             ruleset["enforcement"] = "disabled"  # same name, but disabled = drift
@@ -297,13 +335,15 @@ def test_drifted_rulesets_honors_required_reviews_override() -> None:
     from aviato.cli import _drifted_rulesets, _profile_status_checks
     from aviato.rulesets import render_all_rulesets
 
-    checks = _profile_status_checks("python-library")
-    live = render_all_rulesets(required_approvals=2, extra_status_checks=checks)
+    checks = _profile_status_checks(Registry(MODULE_SOURCE_ROOT), "python-library")
+    live = render_all_rulesets(root=POLICY_DATA_ROOT, required_approvals=2, extra_status_checks=checks)
     platform = FakePlatform(rulesets=live)
     # With the override threaded through, desired==live → NO drift.
-    assert _drifted_rulesets("o/r", platform, required_approvals=2, extra_status_checks=checks) == ()
+    assert _drifted_rulesets(
+        "o/r", platform, policy_root=POLICY_DATA_ROOT, required_approvals=2, extra_status_checks=checks
+    ) == ()
     # Without it (policy default 1), desired (1) != live (2) → the branch ruleset reports drift.
-    assert _drifted_rulesets("o/r", platform, extra_status_checks=checks) != ()
+    assert _drifted_rulesets("o/r", platform, policy_root=POLICY_DATA_ROOT, extra_status_checks=checks) != ()
 
 
 def test_drifted_rulesets_uses_resolved_checks_not_base_profile() -> None:
@@ -313,6 +353,6 @@ def test_drifted_rulesets_uses_resolved_checks_not_base_profile() -> None:
     from aviato.cli import _drifted_rulesets
     from aviato.rulesets import render_all_rulesets
 
-    live = render_all_rulesets(extra_status_checks=[])
+    live = render_all_rulesets(root=POLICY_DATA_ROOT, extra_status_checks=[])
     platform = FakePlatform(rulesets=live)
-    assert _drifted_rulesets("o/r", platform, extra_status_checks=[]) == ()
+    assert _drifted_rulesets("o/r", platform, policy_root=POLICY_DATA_ROOT, extra_status_checks=[]) == ()

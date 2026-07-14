@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -13,22 +11,19 @@ import yaml
 
 import aviato.cli as cli
 from aviato.cli import main
+from aviato.core.declaration import Declaration
+from aviato.core.errors import AviatoError
 from aviato.core.model import VariableSpec
 from aviato.core.registry import Registry
 from aviato.github_platform import GitHubPlatform
 from aviato.paths import MODULE_SOURCE_ROOT
 
-
-@pytest.fixture(autouse=True)
-def _published_target_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    @contextmanager
-    def fake_fetch(repository: str, pin: str) -> Iterator[Registry]:  # noqa: ARG001
-        yield Registry(MODULE_SOURCE_ROOT)
-
-    monkeypatch.setattr(cli, "fetch_library_registry", fake_fetch)
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
+_REAL_OPEN_CONSUMER_CONTEXT = cli._open_consumer_context
 
 
 def _adopt(tmp_path: Path) -> None:
+    subprocess.run(["git", "-C", str(tmp_path), "init"], check=True, capture_output=True)
     rc = main(
         [
             "onboard",
@@ -39,7 +34,6 @@ def _adopt(tmp_path: Path) -> None:
             "--allow-dirty",
             "--pin",
             "v0",
-            "--allow-unresolved-pin",
             "--var",
             "distribution-name=acme",
             "--var",
@@ -49,6 +43,34 @@ def _adopt(tmp_path: Path) -> None:
     assert rc == 0
 
 
+def _git_init(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "-C", str(root), "init"], check=True, capture_output=True)
+
+
+def _library_shape(root: Path) -> None:
+    (root / "aviato/core").mkdir(parents=True)
+    (root / "aviato/core/__init__.py").write_text("", encoding="utf-8")
+    (root / "aviato/library/bundles").mkdir(parents=True)
+    (root / "aviato/library/scaffold").mkdir(parents=True)
+    (root / "aviato/library/policy.yml").write_text("library: {}\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize(("bootstrap", "skipped"), [(False, False), (True, True)])
+def test_repin_target_gate_skip_requires_structure_and_bootstrap_declaration(
+    tmp_path: Path, bootstrap: bool, skipped: bool
+) -> None:
+    _library_shape(tmp_path)
+    declaration = Declaration(profile="python-library", version="0", bootstrap=bootstrap)
+    args = SimpleNamespace(allow_unresolved_pin=False, override_version_pin=False)
+
+    error = cli._gate_repin_target(tmp_path, "9.0.0", args, declaration)
+
+    assert (error is None) is skipped
+    if not skipped:
+        assert "version-pin mismatch" in str(error)
+
+
 def test_repin_dry_run_then_write(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -56,7 +78,6 @@ def test_repin_dry_run_then_write(
     capsys.readouterr()
     # finding 9: the write path now gates on the target resolving as a PUBLISHED ref;
     # fake the resolution here (the refusal paths get their own tests below).
-    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
 
     # _adopt() passed a legacy ``v0``; it must have been canonicalized to bare on write
     # (§6.1 — a leading ``v`` is tolerated on input but never emitted).
@@ -173,7 +194,6 @@ def test_repin_reports_skipped_hand_edited_files(
     # §5.12: a re-pin must not silently leave hand-edited managed files at the old
     # pin — the no-clobber skip has to be surfaced so the operator knows.
     _adopt(tmp_path)
-    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
     ci_path = tmp_path / ".github" / "workflows" / "aviato-ci.yml"
     ci_path.write_text(ci_path.read_text() + "\n# operator hand-edit\n", encoding="utf-8")
     capsys.readouterr()
@@ -192,8 +212,12 @@ def test_repin_write_refuses_unpublished_target(
     # rewritten — onboard/provision already had this gate; repin (the only sanctioned
     # pin move) did not.
     _adopt(tmp_path)
-    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: False)
     capsys.readouterr()
+
+    def unpublished(_pin: str) -> object:
+        raise AviatoError("pin does not resolve to a published Library ref")
+
+    monkeypatch.setattr(cli, "_open_published_snapshot", unpublished)
 
     rc = main(["repin", str(tmp_path), "0.9.9", "--write"])
     err = capsys.readouterr().err
@@ -208,7 +232,6 @@ def test_repin_write_refuses_cross_major_without_override(
     # finding 9 (§2.6): the running tool must refuse to stamp a cross-major target
     # unless explicitly overridden — its templates are not that major's templates.
     _adopt(tmp_path)
-    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
     capsys.readouterr()
 
     rc = main(["repin", str(tmp_path), "9.0.0", "--write"])
@@ -222,7 +245,6 @@ def test_repin_write_unknown_seed_integrity_mutates_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _adopt(tmp_path)
-    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
     (tmp_path / ".github" / "aviato.seed.json").unlink()
     before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     capsys.readouterr()
@@ -252,6 +274,7 @@ def test_repin_open_pr_unknown_seed_integrity_opens_no_proposal(
             clone_path = Path(cmd[4])
             (clone_path / ".github").mkdir(parents=True)
             (clone_path / ".github" / "aviato.yaml").write_text(original_declaration, encoding="utf-8")
+            _git_init(clone_path)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     def fake_proposal(*_args: object, **_kwargs: object) -> str:
@@ -260,7 +283,6 @@ def test_repin_open_pr_unknown_seed_integrity_opens_no_proposal(
         return "branch"
 
     monkeypatch.setattr(cli, "run", fake_run)
-    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
     monkeypatch.setattr(GitHubPlatform, "open_worktree_proposal", fake_proposal)
 
     rc = main(["repin", "acme/widget", "1.0.0", "--open-pr", "--override-version-pin"])
@@ -289,19 +311,23 @@ def test_legacy_sync_then_local_repin_materializes_distinct_target_registry(
     template.write_text(template.read_text() + sentinel, encoding="utf-8")
     fetched: list[str] = []
 
-    @contextmanager
-    def fake_fetch(repository: str, pin: str) -> Iterator[Registry]:  # noqa: ARG001
+    def fake_consumer_context(_root: Path, loaded_declaration: object) -> object:
+        pin = str(loaded_declaration.version)  # type: ignore[attr-defined]
         fetched.append(pin)
-        yield Registry(MODULE_SOURCE_ROOT if pin == "0" else target)
+        return SimpleNamespace(registry=Registry(MODULE_SOURCE_ROOT), policy_root=MODULE_SOURCE_ROOT)
 
-    monkeypatch.setattr(cli, "fetch_library_registry", fake_fetch)
-    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
+    def fake_published_snapshot(pin: str) -> object:
+        fetched.append(pin)
+        return SimpleNamespace(registry=Registry(target), policy_root=target)
+
+    monkeypatch.setattr(cli, "_open_consumer_context", fake_consumer_context)
+    monkeypatch.setattr(cli, "_open_published_snapshot", fake_published_snapshot)
 
     assert main(["sync", str(tmp_path), "--rebaseline-seeds"]) == 0
     assert yaml.safe_load(declaration.read_text())["profile-identity"] == "aviato-profile/python-library/v1"
     capsys.readouterr()
     assert main(["repin", str(tmp_path), "0.1.0", "--write"]) == 0
-    assert fetched == ["0", "0.1.0"]
+    assert fetched == ["0", "0", "0.1.0"]
     assert sentinel.strip() in (tmp_path / "ruff.toml").read_text()
 
 
@@ -316,9 +342,8 @@ def test_repin_proposal_materializes_target_registry_body(tmp_path: Path, monkey
     template.write_text(template.read_text() + sentinel, encoding="utf-8")
     captured: dict[str, str] = {}
 
-    @contextmanager
-    def fake_fetch(repository: str, pin: str) -> Iterator[Registry]:  # noqa: ARG001
-        yield Registry(target)
+    def fake_snapshot(_pin: str) -> object:
+        return SimpleNamespace(registry=Registry(target), policy_root=target)
 
     def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gh", "repo", "clone"]:
@@ -329,13 +354,91 @@ def test_repin_proposal_materializes_target_registry_body(tmp_path: Path, monkey
         captured["ruff"] = (self.workdir / "ruff.toml").read_text()
         return "branch"
 
-    monkeypatch.setattr(cli, "fetch_library_registry", fake_fetch)
+    monkeypatch.setattr(cli, "_open_published_snapshot", fake_snapshot)
     monkeypatch.setattr(cli, "run", fake_run)
-    monkeypatch.setattr(cli, "_published_library_ref_exists", lambda pin: True)
     monkeypatch.setattr(GitHubPlatform, "open_worktree_proposal", fake_proposal)
 
     assert main(["repin", "acme/widget", "0.1.0", "--open-pr"]) == 0
     assert sentinel.strip() in captured["ruff"]
+
+
+def test_repin_proposal_rejects_unauthorized_bootstrap_before_target_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "source"
+    declaration = source / ".github/aviato.yaml"
+    declaration.parent.mkdir(parents=True)
+    declaration.write_text(
+        "profile: python-library\nversion: 0\nbootstrap: true\nvariables:\n"
+        "  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
+    )
+    _git_init(source)
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if cmd[:3] == ["gh", "repo", "clone"]:
+            shutil.copytree(source, Path(cmd[4]), dirs_exist_ok=True)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli, "_open_consumer_context", _REAL_OPEN_CONSUMER_CONTEXT)
+    for name in (
+        "_open_published_snapshot",
+        "plan_repin",
+        "materialize_items",
+        "_dump_consumer_declaration",
+        "scaffold",
+    ):
+        monkeypatch.setattr(cli, name, lambda *_args, _name=name, **_kwargs: pytest.fail(f"crossed {_name}"))
+    monkeypatch.setattr(
+        GitHubPlatform,
+        "open_worktree_proposal",
+        lambda *_args, **_kwargs: pytest.fail("opened proposal"),
+    )
+
+    rc = main(["repin", "acme/widget", "0.1.0", "--open-pr"])
+
+    assert rc == 2
+    assert "structurally verified" in capsys.readouterr().err
+
+
+def test_repin_proposal_validates_authorized_bootstrap_before_target_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _adopt(source)
+    declaration = source / ".github/aviato.yaml"
+    declaration.write_text(declaration.read_text(encoding="utf-8") + "bootstrap: true\n", encoding="utf-8")
+    (source / "aviato/core").mkdir(parents=True)
+    (source / "aviato/core/__init__.py").write_text("", encoding="utf-8")
+    shutil.copytree(MODULE_SOURCE_ROOT, source / "aviato/library")
+    subprocess.run(["git", "-C", str(source), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(source), "config", "user.name", "Test"], check=True)
+    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(source), "commit", "-m", "fixture"], check=True, capture_output=True)
+    events: list[str] = []
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if cmd[:3] == ["gh", "repo", "clone"]:
+            shutil.copytree(source, Path(cmd[4]), dirs_exist_ok=True)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def open_current(root: Path, loaded: Declaration) -> object:
+        events.append("current")
+        return _REAL_OPEN_CONSUMER_CONTEXT(root, loaded)
+
+    def open_target(_pin: str) -> object:
+        events.append("target")
+        return SimpleNamespace(registry=Registry(MODULE_SOURCE_ROOT), policy_root=MODULE_SOURCE_ROOT)
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli, "_open_consumer_context", open_current)
+    monkeypatch.setattr(cli, "_open_published_snapshot", open_target)
+    monkeypatch.setattr(GitHubPlatform, "open_worktree_proposal", lambda *_args, **_kwargs: "branch")
+
+    assert main(["repin", "acme/widget", "0.1.0", "--open-pr"]) == 0
+    assert events == ["current", "target"]
 
 
 def test_repin_open_pr_reports_orphaned_overrides_before_blocking_summary(
@@ -351,6 +454,7 @@ def test_repin_open_pr_reports_orphaned_overrides_before_blocking_summary(
                 "overrides:\n  settings:\n    removed-setting: true\n",
                 encoding="utf-8",
             )
+            _git_init(clone)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(cli, "run", fake_run)
@@ -403,6 +507,7 @@ def test_offboard_open_pr_opens_reviewable_removal_proposal(monkeypatch: pytest.
             (dest / "ruff.toml").write_text(
                 "# aviato:managed profile=python-library version=0 hash=abc\nline-length = 100\n", encoding="utf-8"
             )
+            _git_init(dest)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     captured: dict[str, object] = {}

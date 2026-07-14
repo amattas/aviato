@@ -18,6 +18,9 @@ repository never vendors the `aviato/` package tree, so the predicate is false
 for it. (The predicate is only ever evaluated against the operated-on repository
 root — never the installed package in site-packages — so the fact that a
 site-packages copy also contains `aviato/library/policy.yml` is immaterial.)
+Every structural anchor is inspected component-by-component and a symlinked
+anchor is rejected. The operated path must first pass the same canonical Git
+root equality check as a Consumer operation.
 **Rule:** in bootstrap state, **all** self-applied automation — scaffolding,
 verify, **and the release pipeline** — resolves its module/action references to
 self-contained local paths. The first release the pipeline produces is what makes
@@ -30,14 +33,23 @@ false, the workflow fails before installing from the local checkout. This preven
 a Consumer from hand-editing `local-install: true` and executing unreviewed local
 code in place of the pinned Library reference.
 
+Bootstrap source ownership is checkout-local and immutable for one operation.
+After both gates above pass, Aviato copies the operated checkout's
+`aviato/library` tree into a temporary snapshot, rejects links, hashes that same
+copy deterministically, and records the checkout's Git HEAD. Registry and policy
+reads use only the copy until the operation context closes and removes it. A
+change to the live checkout after copying cannot change the in-flight operation.
+Re-onboarding a structurally verified Library preserves an existing
+`bootstrap: true`; no other repository may acquire or retain the exception.
+
 ```mermaid
 flowchart TD
-    A["Library applies conventions + runs pipelines on itself"] --> B{"Released reference exists?"}
-    B -- no --> C["BOOTSTRAP STATE"]
-    C --> D["Scaffolding AND release/verify pipelines<br/>resolve refs to self-contained local paths"]
+    A["Library applies conventions + runs pipelines on itself"] --> H{"Canonical Git root + structural anchors<br/>and bootstrap: true?"}
+    H -- no --> X["REFUSE bootstrap before profile resolution/render"]
+    H -- yes --> C["Copy checkout-local Library tree<br/>record HEAD + digest of copy"]
+    C --> D["Scaffolding AND release/verify pipelines<br/>use one immutable local snapshot"]
     D --> E["Produce first release (§5.9)"]
     E --> F["Released reference now exists"]
-    B -- yes --> G["Normal state: version-pinned references"]
     F --> G
-    H["Detect Library by STRUCTURE (core pkg + profiles/ + bundles/ + manifest),<br/>not by name"] -.-> C
+    G["Normal state: version-pinned references"]
 ```

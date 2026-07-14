@@ -7,7 +7,12 @@ from typing import Protocol
 
 import pytest
 
+from aviato.paths import POLICY_DATA_ROOT
 from aviato.plugins import zizmor_scan
+
+
+def _scan(workflow_dir: Path) -> list[str]:
+    return zizmor_scan.zizmor_uses_image_violations(workflow_dir, policy_root=POLICY_DATA_ROOT)
 
 
 class _Run(Protocol):
@@ -47,7 +52,7 @@ def test_filters_to_gated_audits_only(tmp_path: Path, monkeypatch: pytest.Monkey
     )
     monkeypatch.setattr(zizmor_scan, "_zizmor_available", lambda: True)
     monkeypatch.setattr(zizmor_scan, "run", _fake_run(findings))
-    out = zizmor_scan.zizmor_uses_image_violations(tmp_path)
+    out = _scan(tmp_path)
     assert any("unpinned-uses" in v for v in out)
     assert any("template-injection" in v for v in out)
     assert not any("artipacked" in v for v in out)
@@ -57,19 +62,19 @@ def test_empty_when_no_findings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     (tmp_path / "w.yml").write_text("on: push\n", encoding="utf-8")
     monkeypatch.setattr(zizmor_scan, "_zizmor_available", lambda: True)
     monkeypatch.setattr(zizmor_scan, "run", _fake_run("[]\n", 0))
-    assert zizmor_scan.zizmor_uses_image_violations(tmp_path) == []
+    assert _scan(tmp_path) == []
 
 
 def test_absent_workflow_dir_is_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(zizmor_scan, "_zizmor_available", lambda: True)
-    assert zizmor_scan.zizmor_uses_image_violations(tmp_path / "nope") == []
+    assert _scan(tmp_path / "nope") == []
 
 
 def test_raises_when_zizmor_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "w.yml").write_text("on: push\n", encoding="utf-8")
     monkeypatch.setattr(zizmor_scan, "_zizmor_available", lambda: False)
     with pytest.raises(zizmor_scan.ZizmorUnavailable):
-        zizmor_scan.zizmor_uses_image_violations(tmp_path)
+        _scan(tmp_path)
 
 
 def test_raises_on_zizmor_error_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,7 +82,7 @@ def test_raises_on_zizmor_error_exit(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(zizmor_scan, "_zizmor_available", lambda: True)
     monkeypatch.setattr(zizmor_scan, "run", _fake_run("", 1))
     with pytest.raises(zizmor_scan.ZizmorUnavailable):
-        zizmor_scan.zizmor_uses_image_violations(tmp_path)
+        _scan(tmp_path)
 
 
 def test_raises_on_non_list_toplevel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,7 +91,7 @@ def test_raises_on_non_list_toplevel(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(zizmor_scan, "_zizmor_available", lambda: True)
     monkeypatch.setattr(zizmor_scan, "run", _fake_run('{"findings": []}\n', 0))
     with pytest.raises(zizmor_scan.ZizmorUnavailable):
-        zizmor_scan.zizmor_uses_image_violations(tmp_path)
+        _scan(tmp_path)
 
 
 def test_finding_location_tolerates_non_dict_symbolic() -> None:
@@ -110,7 +115,7 @@ def test_real_zizmor_flags_unpinned_container_image(tmp_path: Path) -> None:
         "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    container:\n      image: alpine:3.19\n"
         "    steps:\n      - run: echo hi\n",
     )
-    out = zizmor_scan.zizmor_uses_image_violations(wf)
+    out = _scan(wf)
     assert any("unpinned-images" in v for v in out), out
 
 
@@ -123,7 +128,7 @@ def test_real_zizmor_ignores_inline_ignore(tmp_path: Path) -> None:
         "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n"
         "      - uses: docker/build-push-action@v5 # zizmor: ignore[unpinned-uses]\n",
     )
-    out = zizmor_scan.zizmor_uses_image_violations(wf)
+    out = _scan(wf)
     assert any("unpinned-uses" in v for v in out), out
 
 
@@ -138,7 +143,7 @@ def test_real_zizmor_first_party_not_false_flagged_under_auditor(tmp_path: Path)
         "      - uses: github/codeql-action@v3\n"
         "      - uses: amattas/aviato/.github/workflows/x.yml@v1\n",
     )
-    out = zizmor_scan.zizmor_uses_image_violations(wf)
+    out = _scan(wf)
     assert not any("unpinned-uses" in v for v in out), out
 
 
@@ -152,7 +157,7 @@ def test_real_zizmor_flags_unpinned_and_passes_first_party(tmp_path: Path) -> No
         "      - uses: docker/build-push-action@v5\n",
         encoding="utf-8",
     )
-    out = zizmor_scan.zizmor_uses_image_violations(wf)
+    out = _scan(wf)
     assert any("unpinned-uses" in v for v in out), out
 
 
@@ -162,4 +167,4 @@ def test_raises_on_unparseable_zizmor_output(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(zizmor_scan, "_zizmor_available", lambda: True)
     monkeypatch.setattr(zizmor_scan, "run", _fake_run("panic: not json{", 0))
     with pytest.raises(zizmor_scan.ZizmorUnavailable):
-        zizmor_scan.zizmor_uses_image_violations(tmp_path)
+        _scan(tmp_path)

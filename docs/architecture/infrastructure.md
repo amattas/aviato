@@ -78,8 +78,9 @@ consumer repositories and are not the source of policy truth. They are **rendere
 from** the authoritative scaffold bundles (`aviato/library/scaffold/files/wf-*.yml`)
 via `scripts/regen-templates.py`; `aviato validate` fails if they drift.
 Committed examples use `EXAMPLE_PIN`; fresh onboarding/provisioning requires an
-explicit published Library pin, with `--allow-unresolved-pin` reserved for
-intentional offline/test scaffolds.
+explicit published Library pin. The compatibility-only
+`--allow-unresolved-pin` option fails before rendering or writing; verified
+Library bytes are mandatory in every mode.
 
 The templates should stay thin. They should select a reusable workflow, provide
 repository-specific input values, and avoid duplicating release or protection
@@ -87,8 +88,9 @@ logic.
 
 ### Rulesets
 
-Ruleset payloads live in `aviato/library/rulesets/` (inside the package, so they
-ship in the wheel for installed rendering).
+Ruleset payloads live in `aviato/library/rulesets/`. Consumer rendering reads
+them from that operation's verified Library snapshot, never implicitly from the
+installed wheel.
 
 - `protect-default-branch.json` protects the repository default branch.
 - `release-tag-format.json` protects release tags and enforces the release tag
@@ -131,9 +133,17 @@ state distinguishes ok, missing, and corrupt sidecars and requires the explicit
 identity persisted as `profile-identity`, so re-pin continuity does not depend
 on a digest of legitimately evolvable profile contents.
 
+Consumer commands bind to one `OperationContext`. It owns the canonical Git
+root and one immutable Library snapshot whose Registry and policy data came
+from the same resolved commit. Multi-repository commands open an independent
+context for each declaration and its pin. Installed/source-package roots remain
+available for validating Aviato itself, but are not Consumer policy or rendering
+inputs.
+
 Supply-chain pin enforcement (§11.3) is a plug-in concern. `uses:`/container-image pinning is
-delegated to **zizmor** (a pinned dependency) configured by bundled policy data at
-`aviato/library/zizmor.yml`; `curl|bash` fetch-execute uses a **fail-closed** rule (reject anything
+delegated to **zizmor** (a pinned dependency) configured by
+`aviato/library/zizmor.yml`; Consumer runs read that configuration from the
+operation snapshot. `curl|bash` fetch-execute uses a **fail-closed** rule (reject anything
 not provably checksum-verified or piped to an allowlisted data sink — deliberately *not* an
 interpreter enumeration, which fails open). Both run through the one `aviato lint-actions`
 entrypoint, invoked identically by `aviato validate` and by every consumer's `reusable-common-lint`
@@ -142,14 +152,18 @@ CI — one implementation with no independent workflow-side detector.
 The Library consumes itself through the internal `aviato-library` profile and a
 declaration that sets `bootstrap: true`. Bootstrap rendering is validated against
 every managed artifact resolved by that declaration, and local workflow/install
-references are accepted only on this structural Library path.
+references are accepted only on this structural Library path. The operation
+copies the checkout-local Library tree, records Git HEAD and a digest of the
+copy, then uses only that temporary snapshot for the command lifetime.
 
 ### Scripts
 
 The Python CLI lives in `aviato/`.
 
 - `aviato audit <root>` discovers and audits repositories under a local root.
-- `aviato audit --repo <path>` audits one local repository.
+- `aviato audit --repo <path>` audits one local repository. A repository with a
+  declaration uses its own pinned context; an undeclared repository requires
+  `--pin` and uses that verified snapshot's policy.
 - `aviato apply-rulesets <owner/repo>` renders configured rulesets (dry-run by
   default; `--apply` mutates). Bare or `--profile` use is limited to the
   pre-declaration path. `--declaration <path>` is mandatory once

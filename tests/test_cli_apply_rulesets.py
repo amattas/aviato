@@ -9,6 +9,9 @@ import pytest
 from aviato import cli
 from aviato.core.ports import RulesetApplyResult
 from aviato.github import GitHubAPIError
+from aviato.paths import POLICY_DATA_ROOT
+
+pytestmark = pytest.mark.usefixtures("task3_pinned_context")
 
 
 def _patch_apply(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
@@ -18,6 +21,7 @@ def _patch_apply(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
     def fake(
         slugs: Sequence[str],
         *,
+        root: Path,
         apply: bool,
         required_approvals: int | None = None,
         extra_status_checks: Sequence[str] | None = None,
@@ -37,7 +41,9 @@ def test_apply_rulesets_aggregates_slugs_from_all_sources(
     calls = _patch_apply(monkeypatch)
     repos_file = tmp_path / "repos.txt"
     repos_file.write_text("o/three\n# comment\n\no/four\n")
-    rc = cli.main(["apply-rulesets", "o/one", "--repo", "o/two", "--repos-file", str(repos_file)])
+    rc = cli.main(
+        ["apply-rulesets", "o/one", "--repo", "o/two", "--repos-file", str(repos_file), "--pin", "0"]
+    )
     assert rc == 0
     assert calls[0]["slugs"] == ["o/one", "o/two", "o/three", "o/four"]
     assert calls[0]["apply"] is False  # default is dry-run
@@ -74,7 +80,7 @@ def test_apply_rulesets_warns_on_direct_apply(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     calls = _patch_apply(monkeypatch)
-    rc = cli.main(["apply-rulesets", "o/r", "--apply"])
+    rc = cli.main(["apply-rulesets", "o/r", "--apply", "--pin", "0"])
     assert rc == 0
     assert calls[0]["apply"] is True
     err = capsys.readouterr().err
@@ -88,7 +94,7 @@ def test_apply_rulesets_maps_github_error_to_exit_1(
         raise GitHubAPIError("repos/o/r/rulesets", 1, "nope")
 
     monkeypatch.setattr(cli, "apply_rulesets", boom)
-    rc = cli.main(["apply-rulesets", "o/r", "--apply"])
+    rc = cli.main(["apply-rulesets", "o/r", "--apply", "--pin", "0"])
     assert rc == 1
     assert "GitHub API error" in capsys.readouterr().err
 
@@ -102,7 +108,7 @@ def test_apply_rulesets_unknown_profile_exits_2(
         raise AssertionError("apply_rulesets must not be called when the profile is invalid")
 
     monkeypatch.setattr(cli, "apply_rulesets", must_not_run)
-    rc = cli.main(["apply-rulesets", "o/r", "--profile", "no-such-profile", "--apply"])
+    rc = cli.main(["apply-rulesets", "o/r", "--profile", "no-such-profile", "--apply", "--pin", "0"])
     assert rc == 2
 
 
@@ -181,7 +187,7 @@ def test_apply_rulesets_streams_messages_before_a_later_failure(monkeypatch: pyt
         return f"upserted on {slug}"
 
     monkeypatch.setattr(github, "upsert_ruleset", fake_upsert)
-    gen = cast(Iterator[str], rulesets.apply_rulesets(["o/a", "o/b"], apply=True))
+    gen = cast(Iterator[str], rulesets.apply_rulesets(["o/a", "o/b"], root=POLICY_DATA_ROOT, apply=True))
     with pytest.raises(github.GitHubAPIError):
         for msg in gen:
             seen.append(msg)
@@ -194,7 +200,7 @@ def test_apply_rulesets_value_error_is_clean_exit_not_traceback(monkeypatch: pyt
         raise ValueError("unknown patch key")
 
     monkeypatch.setattr(cli, "apply_rulesets", boom)
-    assert cli.main(["apply-rulesets", "o/r"]) == 1
+    assert cli.main(["apply-rulesets", "o/r", "--pin", "0"]) == 1
 
 
 def test_command_run_missing_binary_raises_commanderror(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -223,7 +229,7 @@ def test_apply_rulesets_deferred_render_value_error_caught_through_real_path(mon
 
     monkeypatch.setattr(rulesets, "render_all_rulesets", boom)
     # github.upsert_ruleset must never be reached (render fails first).
-    assert cli.main(["apply-rulesets", "o/r"]) == 1
+    assert cli.main(["apply-rulesets", "o/r", "--pin", "0"]) == 1
 
 
 def test_apply_rulesets_renders_eagerly_at_call_not_on_iteration(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,7 +242,7 @@ def test_apply_rulesets_renders_eagerly_at_call_not_on_iteration(monkeypatch: py
 
     monkeypatch.setattr(rulesets, "render_all_rulesets", boom)
     with pytest.raises(ValueError):
-        rulesets.apply_rulesets(["o/r"], apply=False)  # raises at call, before any iteration
+        rulesets.apply_rulesets(["o/r"], root=POLICY_DATA_ROOT, apply=False)  # raises at call, before any iteration
 
 
 def test_apply_rulesets_prints_loud_degraded_warning_only_after_successful_fallback(
@@ -248,7 +254,7 @@ def test_apply_rulesets_prints_loud_degraded_warning_only_after_successful_fallb
         lambda *_, **__: iter([RulesetApplyResult("Created Common: release tag format on o/r", ("tag_name_pattern",))]),
     )
 
-    assert cli.main(["apply-rulesets", "o/r", "--apply"]) == 0
+    assert cli.main(["apply-rulesets", "o/r", "--apply", "--pin", "0"]) == 0
     captured = capsys.readouterr()
     assert "Created Common: release tag format on o/r" in captured.out
     assert "DEGRADED" in captured.err
@@ -264,7 +270,7 @@ def test_apply_rulesets_reports_earlier_success_before_later_failure_with_struct
         raise GitHubAPIError("repos/o/b/rulesets", 1, "boom")
 
     monkeypatch.setattr(cli, "apply_rulesets", stream)
-    assert cli.main(["apply-rulesets", "o/a", "--repo", "o/b", "--apply"]) == 1
+    assert cli.main(["apply-rulesets", "o/a", "--repo", "o/b", "--apply", "--pin", "0"]) == 1
     captured = capsys.readouterr()
     assert "Created first on o/a" in captured.out
     assert "GitHub API error" in captured.err
