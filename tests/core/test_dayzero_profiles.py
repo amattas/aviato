@@ -174,19 +174,19 @@ def test_profile_scaffolds_caller_workflows(registry: Registry, name: str) -> No
 
 
 def test_node_ci_workflow_renders_typecheck_from_variant() -> None:
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
     js = next(
         i
-        for i in materialize_items(
+        for i in resolved_artifacts(
             reg, "node-service", {"project-name": "acme", "language-variant": "javascript"}, pin="0"
         )
         if i.output == ".github/workflows/aviato-ci.yml"
     )
     ts = next(
         i
-        for i in materialize_items(
+        for i in resolved_artifacts(
             reg, "node-service", {"project-name": "acme", "language-variant": "typescript"}, pin="0"
         )
         if i.output == ".github/workflows/aviato-ci.yml"
@@ -215,7 +215,7 @@ def test_required_status_checks_include_language_verify(registry: Registry, name
 def test_common_scaffold_ships_shared_governance_files() -> None:
     # §12.1 (finding 48): contributing, code owners, and issue/PR templates come from
     # the common scaffold — seed-once, so the consumer owns them after seeding.
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
     expected = {
@@ -229,12 +229,12 @@ def test_common_scaffold_ships_shared_governance_files() -> None:
         ("python-library", {"distribution-name": "a", "import-name": "a"}),
         ("node-service", {"project-name": "a", "language-variant": "typescript"}),
     ):
-        items = materialize_items(reg, profile, variables, pin="0")
+        items = resolved_artifacts(reg, profile, variables, pin="0")
         outputs = {i.output for i in items}
         assert expected <= outputs, (profile, expected - outputs)
         assert all(i.seed_once for i in items if i.output in expected)
 
-    owned = materialize_items(
+    owned = resolved_artifacts(
         reg, "python-library", {"distribution-name": "a", "import-name": "a", "owner": "octocat"}, pin="0"
     )
     codeowners = next(i for i in owned if i.output == ".github/CODEOWNERS")
@@ -244,11 +244,11 @@ def test_common_scaffold_ships_shared_governance_files() -> None:
 def test_unset_optional_variables_never_render_as_none() -> None:
     # finding 28: resolve_variables emits None for unset optionals; the render layer
     # must omit them (placeholder preserved), never bake the literal "None".
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {"distribution-name": "acme", "import-name": "acme", "owner": None}
-    items = materialize_items(reg, "python-library", variables, pin="0")
+    items = resolved_artifacts(reg, "python-library", variables, pin="0")
     license_body = next(i.body for i in items if i.output == "LICENSE")
     assert "None" not in license_body
     assert "{{ owner }}" in license_body
@@ -256,11 +256,11 @@ def test_unset_optional_variables_never_render_as_none() -> None:
 
 def test_owner_variable_seeds_license() -> None:
     # finding 28: a detected owner (CLI autodetect tier) lands in the seed-once LICENSE.
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {"distribution-name": "acme", "import-name": "acme", "owner": "octocat"}
-    items = materialize_items(reg, "python-library", variables, pin="0")
+    items = resolved_artifacts(reg, "python-library", variables, pin="0")
     license_body = next(i.body for i in items if i.output == "LICENSE")
     assert "octocat" in license_body
     assert "{{ owner }}" not in license_body
@@ -271,12 +271,12 @@ def test_docs_opt_in_scaffolds_zensical_site() -> None:
     # page, and a pinned docs toolchain requirements.txt — and none of it without the
     # opt-in. Zensical consumes plain markdown, so there is no config.js / sidebars /
     # package.json / eslint / algolia surface anymore.
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {"distribution-name": "acme", "import-name": "acme"}
-    outputs_off = {i.output for i in materialize_items(reg, "python-library", variables, docs=False, pin="0")}
-    items_on = materialize_items(reg, "python-library", variables, docs=True, pin="0")
+    outputs_off = {i.output for i in resolved_artifacts(reg, "python-library", variables, docs=False, pin="0")}
+    items_on = resolved_artifacts(reg, "python-library", variables, docs=True, pin="0")
     outputs_on = {i.output for i in items_on}
 
     expected = {
@@ -305,12 +305,17 @@ def test_docs_opt_in_scaffolds_zensical_site() -> None:
 def test_python_profile_scaffolds_pyproject_manifest() -> None:
     # §3.3/#6: onboarding must seed the version-source manifest with the dev tools the
     # default CI invokes (pytest-cov, build) so verify/build jobs are runnable.
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
     item = next(
         i
-        for i in materialize_items(reg, "python-library", {"distribution-name": "acme", "import-name": "acme"}, pin="0")
+        for i in resolved_artifacts(
+            reg,
+            "python-library",
+            {"distribution-name": "acme", "import-name": "acme"},
+            pin="0",
+        )
         if i.output == "pyproject.toml"
     )
     assert item.seed_once is True
@@ -328,12 +333,12 @@ def test_python_profile_scaffolds_pyproject_manifest() -> None:
 
 
 def test_node_typescript_manifest_has_tsc_and_engines() -> None:
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
     items = [
         i
-        for i in materialize_items(
+        for i in resolved_artifacts(
             reg, "node-service", {"project-name": "acme", "language-variant": "typescript"}, pin="0"
         )
         if i.output == "package.json"
@@ -351,12 +356,12 @@ def test_node_typescript_manifest_has_tsc_and_engines() -> None:
 def test_node_javascript_manifest_omits_typescript() -> None:
     # §12.2/#8: the JavaScript variant must not get tsc type-check/build or a
     # TypeScript dev dependency, but still declares engines.
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
     items = [
         i
-        for i in materialize_items(
+        for i in resolved_artifacts(
             reg, "node-service", {"project-name": "acme", "language-variant": "javascript"}, pin="0"
         )
         if i.output == "package.json"
@@ -372,7 +377,7 @@ def test_node_javascript_manifest_omits_typescript() -> None:
 def test_swift_caller_consumes_declared_variables() -> None:
     # §12.3/#7: the declared onboarding variables must be stamped into the generated
     # caller workflow — no hardcoded "App"/"com.example.app"/"TEAMID1234" left behind.
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {
@@ -387,7 +392,7 @@ def test_swift_caller_consumes_declared_variables() -> None:
     }
     ci = next(
         i
-        for i in materialize_items(reg, "swift-app", variables, pin="0")
+        for i in resolved_artifacts(reg, "swift-app", variables, pin="0")
         if i.output == ".github/workflows/aviato-ci.yml"
     )
     assert 'scheme: "Acme"' in ci.body
@@ -404,7 +409,7 @@ def test_swift_caller_consumes_declared_variables() -> None:
 
 def test_swift_caller_requires_workspace_or_project() -> None:
     from aviato.core.errors import DeclarationError
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {
@@ -414,7 +419,7 @@ def test_swift_caller_requires_workspace_or_project() -> None:
         "export-method": "app-store",
     }
     with pytest.raises(DeclarationError, match="workspace|project"):
-        materialize_items(reg, "swift-app", variables, pin="0")
+        resolved_artifacts(reg, "swift-app", variables, pin="0")
 
 
 @pytest.mark.parametrize("name", DAYZERO)
@@ -459,10 +464,10 @@ def test_node_eslint_config_is_runnable(variant: str) -> None:
     # it is materialized as `eslint.config.mjs` (ESM regardless of the package type), and
     # every plugin it imports must be a declared dependency or `eslint .` fails on a fresh
     # repo with "Cannot find module".
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": variant}, pin="0")
+    items = resolved_artifacts(reg, "node-service", {"project-name": "acme", "language-variant": variant}, pin="0")
     eslint = next(i for i in items if i.output == "eslint.config.mjs")
     assert 'import security from "eslint-plugin-security"' in eslint.body
     assert 'import js from "@eslint/js"' in eslint.body
@@ -473,10 +478,10 @@ def test_node_eslint_config_is_runnable(variant: str) -> None:
 
 @pytest.mark.parametrize("variant", ["typescript", "javascript"])
 def test_node_projects_scaffold_npm_hardening_config(variant: str) -> None:
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": variant}, pin="0")
+    items = resolved_artifacts(reg, "node-service", {"project-name": "acme", "language-variant": variant}, pin="0")
     npmrc = next(i for i in items if i.output == ".npmrc")
     assert "min-release-age=7" in npmrc.body
     assert "ignore-scripts=true" in npmrc.body
@@ -490,10 +495,10 @@ def test_node_javascript_has_no_fake_build_gate() -> None:
     # §16/#8: the JS variant must not pass a vacuous `npm run build`. There is no compile
     # step for plain JS (the production artifact is the Docker image), so the source-CI
     # build gate is disabled, and the placeholder build script does not silently succeed.
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": "javascript"}, pin="0")
+    items = resolved_artifacts(reg, "node-service", {"project-name": "acme", "language-variant": "javascript"}, pin="0")
     ci = next(i for i in items if i.output == ".github/workflows/aviato-ci.yml")
     assert "run-build: false" in ci.body
     pkg = next(i for i in items if i.output == "package.json")
@@ -501,10 +506,10 @@ def test_node_javascript_has_no_fake_build_gate() -> None:
 
 
 def test_node_typescript_runs_real_build_gate() -> None:
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "node-service", {"project-name": "acme", "language-variant": "typescript"}, pin="0")
+    items = resolved_artifacts(reg, "node-service", {"project-name": "acme", "language-variant": "typescript"}, pin="0")
     ci = next(i for i in items if i.output == ".github/workflows/aviato-ci.yml")
     assert "run-build: true" in ci.body
     pkg = next(i for i in items if i.output == "package.json")
@@ -515,7 +520,7 @@ def test_swift_caller_installs_apple_swift_format() -> None:
     # §12.3: the reusable Swift CI requires Apple's `swift-format`; the scaffold must
     # install that exact tool, not the differently-named `swiftformat` (which would make
     # the generated CI fail at `command -v swift-format`).
-    from aviato.core.onboarding import materialize_items
+    from aviato.core.onboarding import resolved_artifacts
 
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {
@@ -527,7 +532,7 @@ def test_swift_caller_installs_apple_swift_format() -> None:
     }
     ci = next(
         i
-        for i in materialize_items(reg, "swift-app", variables, pin="0")
+        for i in resolved_artifacts(reg, "swift-app", variables, pin="0")
         if i.output == ".github/workflows/aviato-ci.yml"
     )
     assert "swift-format" in ci.body

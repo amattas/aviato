@@ -13,6 +13,7 @@ from aviato.core.onboarding import (
     check_output_collisions,
     materialize_items,
     plan_onboarding,
+    resolved_artifacts,
 )
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT
@@ -40,8 +41,8 @@ def test_variant_exclusive_templates_sharing_a_path_are_allowed() -> None:
 def test_docs_true_scaffolds_gated_docs_workflow() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {"distribution-name": "acme", "import-name": "acme"}
-    without = {i.output for i in materialize_items(reg, "python-library", variables, pin="0")}
-    withdocs = {i.output: i for i in materialize_items(reg, "python-library", variables, pin="0", docs=True)}
+    without = {i.output for i in resolved_artifacts(reg, "python-library", variables, pin="0")}
+    withdocs = {i.output: i for i in resolved_artifacts(reg, "python-library", variables, pin="0", docs=True)}
     assert ".github/workflows/aviato-docs.yml" not in without
     docs = withdocs[".github/workflows/aviato-docs.yml"]
     # §4/§5.14: docs deploy is gated by the release gate AND the release-ref security baseline.
@@ -56,7 +57,7 @@ def test_docs_true_scaffolds_gated_docs_workflow() -> None:
 
 def test_pin_is_stamped_into_generated_workflows() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = {i.output: i for i in materialize_items(reg, "python-library", PYTHON_VARIABLES, pin="v1.2.3")}
+    items = {i.output: i for i in resolved_artifacts(reg, "python-library", PYTHON_VARIABLES, pin="v1.2.3")}
     ci = items[".github/workflows/aviato-ci.yml"].body
     assert "@v1.2.3" in ci  # reusable workflow refs pinned (§2.6/§6.1)
     assert "@main" not in ci
@@ -78,7 +79,7 @@ def test_library_repository_policy_drives_rendered_references(tmp_path: Path) ->
 
     items = {
         item.output: item
-        for item in materialize_items(
+        for item in resolved_artifacts(
             Registry(library),
             "python-library",
             PYTHON_VARIABLES,
@@ -106,7 +107,7 @@ def test_bootstrap_uses_local_workflow_refs_and_local_install() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     items = {
         i.output: i
-        for i in materialize_items(
+        for i in resolved_artifacts(
             reg,
             "python-library",
             {"distribution-name": "aviato", "import-name": "aviato"},
@@ -129,13 +130,13 @@ def test_javascript_variant_omits_tsconfig_and_disables_typecheck() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     ts_items = {
         i.output
-        for i in materialize_items(
+        for i in resolved_artifacts(
             reg, "node-service", {"project-name": "acme", "language-variant": "typescript"}, pin="0"
         )
     }
     js_items = {
         i.output
-        for i in materialize_items(
+        for i in resolved_artifacts(
             reg, "node-service", {"project-name": "acme", "language-variant": "javascript"}, pin="0"
         )
     }
@@ -165,9 +166,9 @@ def test_javascript_variant_omits_tsconfig_and_disables_typecheck() -> None:
 
 
 @pytest.mark.parametrize("value", ["ruby", "", 1, True])
-def test_materialize_rejects_invalid_enum(value: object) -> None:
+def test_read_only_resolution_rejects_invalid_enum(value: object) -> None:
     with pytest.raises(DeclarationError, match="language-variant"):
-        materialize_items(
+        resolved_artifacts(
             Registry(MODULE_SOURCE_ROOT),
             "node-service",
             {"language-variant": value},
@@ -175,9 +176,9 @@ def test_materialize_rejects_invalid_enum(value: object) -> None:
         )
 
 
-def test_materialize_rejects_unknown_variable() -> None:
+def test_read_only_resolution_rejects_unknown_variable() -> None:
     with pytest.raises(DeclarationError, match="language-varaint"):
-        materialize_items(
+        resolved_artifacts(
             Registry(MODULE_SOURCE_ROOT),
             "node-service",
             {"language-varaint": "typescript"},
@@ -216,13 +217,10 @@ def test_partial_when_expression_is_true_false_or_indeterminate() -> None:
     assert template_applies(template, {"enabled": True}) is model_module.Unknown
 
 
-def test_materialize_builds_scaffold_items_from_resolved_set() -> None:
+def test_legacy_materialize_requires_repin_before_building_scaffold_items() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "python-library", variables=PYTHON_VARIABLES, pin="0")
-    by_output = {item.output: item for item in items}
-    assert ".editorconfig" in by_output
-    assert by_output[".editorconfig"].seed_once is False
-    assert by_output["LICENSE"].seed_once is True  # non-annotatable, seed-once
+    with pytest.raises(CompositionError, match="repin"):
+        materialize_items(reg, "python-library", variables=PYTHON_VARIABLES, pin="0")
 
 
 def test_yaml_date_scalar_materializes_with_deterministic_input_hash(tmp_path: Path) -> None:
@@ -234,13 +232,13 @@ def test_yaml_date_scalar_materializes_with_deterministic_input_hash(tmp_path: P
     declaration = load_declaration(declaration_path)
     registry = Registry(MODULE_SOURCE_ROOT)
 
-    from_yaml = materialize_items(
+    from_yaml = resolved_artifacts(
         registry,
         declaration.profile,
         declaration.variables,
         pin=declaration.version,
     )
-    from_string = materialize_items(
+    from_string = resolved_artifacts(
         registry,
         declaration.profile,
         {"distribution-name": "2026-07-12", "import-name": "acme"},
@@ -251,23 +249,17 @@ def test_yaml_date_scalar_materializes_with_deterministic_input_hash(tmp_path: P
     assert [item.body for item in from_yaml] == [item.body for item in from_string]
 
 
-def test_materialize_renders_into_scaffold_then_writes(tmp_path: Path) -> None:
-    from aviato.core.scaffold import scaffold
-
+def test_legacy_materialize_fails_before_any_scaffold_write(tmp_path: Path) -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
-    items = materialize_items(reg, "python-library", variables=PYTHON_VARIABLES, pin="0")
-    result = scaffold(tmp_path, items, profile="python-library", version="v1")
-    assert ".editorconfig" in result.written
-    assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library")
-    # LICENSE is seed-once (no marker)
-    assert "aviato:managed" not in (tmp_path / "LICENSE").read_text()
+    with pytest.raises(CompositionError, match="repin"):
+        materialize_items(reg, "python-library", variables=PYTHON_VARIABLES, pin="0")
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_plan_onboarding_adopt_clean(tmp_path: Path) -> None:
+def test_plan_onboarding_legacy_adopt_requires_repin(tmp_path: Path) -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
-    plan = plan_onboarding(reg, profile="python-library", existing_declaration=None, variables=PYTHON_VARIABLES)
-    assert plan.profile == "python-library"
-    assert plan.outputs  # lists the files it would materialize
+    with pytest.raises(CompositionError, match="repin"):
+        plan_onboarding(reg, profile="python-library", existing_declaration=None, variables=PYTHON_VARIABLES)
 
 
 def test_plan_onboarding_refuses_profile_change_without_migrate() -> None:
@@ -277,21 +269,21 @@ def test_plan_onboarding_refuses_profile_change_without_migrate() -> None:
         plan_onboarding(reg, profile="python-library", existing_declaration=existing, variables={})
 
 
-def test_plan_onboarding_allows_same_profile_reonboard() -> None:
+def test_plan_onboarding_legacy_same_profile_requires_repin() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     existing = Declaration(profile="python-library", version="v1")
-    plan = plan_onboarding(reg, profile="python-library", existing_declaration=existing, variables=PYTHON_VARIABLES)
-    assert plan.profile == "python-library"
+    with pytest.raises(CompositionError, match="repin"):
+        plan_onboarding(reg, profile="python-library", existing_declaration=existing, variables=PYTHON_VARIABLES)
 
 
-def test_plan_onboarding_allows_profile_change_with_migrate() -> None:
+def test_plan_onboarding_legacy_profile_migration_requires_repin() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     existing = Declaration(profile="node-service", version="v1")
-    plan = plan_onboarding(
-        reg,
-        profile="python-library",
-        existing_declaration=existing,
-        variables=PYTHON_VARIABLES,
-        allow_migrate=True,
-    )
-    assert plan.profile == "python-library"
+    with pytest.raises(CompositionError, match="repin"):
+        plan_onboarding(
+            reg,
+            profile="python-library",
+            existing_declaration=existing,
+            variables=PYTHON_VARIABLES,
+            allow_migrate=True,
+        )

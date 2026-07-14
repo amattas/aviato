@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import cast
 
 import pytest
 
@@ -13,7 +12,7 @@ from aviato.github_platform import GitHubPlatform
 pytestmark = pytest.mark.usefixtures("task3_pinned_context")
 
 
-def test_onboard_open_pr_builds_proposal(
+def test_legacy_onboard_open_pr_requires_repin_without_proposal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # Simulate `gh repo clone OWNER/REPO <dest>` by materializing a clone dir that
@@ -54,24 +53,10 @@ def test_onboard_open_pr_builds_proposal(
             "import-name=acme",
         ]
     )
-    out = capsys.readouterr().out
-    assert rc == 0
-    files = cast(dict[str, str], captured["files"])
-    assert captured["repo"] == "acme-org/widget"
-    assert captured["branch"] == "aviato/onboard-python-library"
-    # the declaration and a managed (marker-stamped) artifact are in the proposal
-    assert ".github/aviato.yaml" in files
-    assert "profile: python-library" in files[".github/aviato.yaml"]
-    assert "ruff.toml" in files
-    # --pin v0 (legacy) is canonicalized to a bare marker pin; a leading v is never emitted (§6.1).
-    assert files["ruff.toml"].startswith("# aviato:managed profile=python-library version=0")
-    assert ".github/workflows/aviato-ci.yml" in files
-    # the pre-existing seed-once LICENSE is NOT overwritten and is enumerated as untouched
-    assert "LICENSE" not in files
-    assert "LICENSE" in cast(str, captured["body"])
-    assert "aviato complete-protection /path/to/checkout" in out
-    assert ("aviato apply-rulesets acme-org/widget --apply --declaration /path/to/checkout/.github/aviato.yaml") in out
-    assert "apply-rulesets acme-org/widget --apply --profile" not in out
+    captured_output = capsys.readouterr()
+    assert rc == 2
+    assert "repin" in captured_output.err
+    assert captured == {}
 
 
 def test_onboard_open_pr_rejects_symlinked_artifact_probe(
@@ -116,7 +101,7 @@ def test_onboard_open_pr_rejects_symlinked_artifact_probe(
     )
 
     assert rc != 0
-    assert "LICENSE" in capsys.readouterr().err
+    assert "repin" in capsys.readouterr().err
     assert outside.read_bytes() == original
     assert proposal_called is False
 
@@ -162,15 +147,13 @@ def test_reonboard_open_pr_refuses_legacy_or_mismatched_identity_without_proposa
 
     captured = capsys.readouterr()
     assert rc == 2
-    assert "profile identity" in captured.err.lower()
-    if identity_line:
-        assert "mismatch" in captured.err.lower()
-    else:
-        assert "aviato sync" in captured.err
+    assert "repin" in captured.err.lower()
     assert proposal_called is False
 
 
-def test_reonboard_open_pr_preserves_equal_profile_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_reonboard_open_pr_requires_repin_even_with_equal_identity(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     captured: dict[str, object] = {}
 
     def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
@@ -194,22 +177,9 @@ def test_reonboard_open_pr_preserves_equal_profile_identity(monkeypatch: pytest.
 
     monkeypatch.setattr(cli, "run", fake_run)
     monkeypatch.setattr(GitHubPlatform, "open_or_update_proposal", fake_proposal)
-    assert (
-        main(
-            [
-                "onboard",
-                "acme/widget",
-                "--open-pr",
-                "--profile",
-                "python-library",
-                "--pin",
-                "0",
-            ]
-        )
-        == 0
-    )
-    files = cast(dict[str, str], captured["files"])
-    assert "profile-identity: aviato-profile/python-library/v1" in files[".github/aviato.yaml"]
+    assert main(["onboard", "acme/widget", "--open-pr", "--profile", "python-library", "--pin", "0"]) == 2
+    assert "repin" in capsys.readouterr().err
+    assert captured == {}
 
 
 @pytest.mark.parametrize("allow_migrate", [False, True])
@@ -257,18 +227,9 @@ def test_onboard_open_pr_profile_migration_requires_flag_and_renders_requested_p
 
     rc = main(argv)
 
-    if not allow_migrate:
-        assert rc == 2
-        assert "--migrate-profile" in capsys.readouterr().err
-        assert captured == {}
-        return
-    assert rc == 0
-    files = cast(dict[str, str], captured["files"])
-    declaration = files[".github/aviato.yaml"]
-    assert "profile: node-service" in declaration
-    assert "profile-identity: aviato-profile/node-service/v1" in declaration
-    assert "eslint.config.mjs" in files
-    assert "tsconfig.json" in files
+    assert rc == 2
+    assert "repin" in capsys.readouterr().err
+    assert captured == {}
 
 
 def test_onboard_open_pr_profile_migration_does_not_propose_over_protected_target(
@@ -316,6 +277,5 @@ def test_onboard_open_pr_profile_migration_does_not_propose_over_protected_targe
 
     captured = capsys.readouterr()
     assert rc == 2
-    assert ".editorconfig" in captured.err
-    assert "unmanaged" in captured.err.lower()
+    assert "repin" in captured.err
     assert proposal_called is False

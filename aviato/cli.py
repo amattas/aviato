@@ -19,6 +19,7 @@ from . import __version__
 from .audit import audit_repos, render_json, render_tsv
 from .command import CommandError, run
 from .core.bootstrap import bootstrap_authorized, is_library
+from .core.compiler import compile_partial_desired_state, require_workflow_schema_v2
 from .core.composition import resolve_profile
 from .core.declaration import Declaration, declaration_to_yaml, dump_declaration, load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
@@ -471,13 +472,15 @@ def _deployment_environments(resolved: ResolvedSet, render_inputs: Mapping[str, 
     """
     environments: set[str] = set()
     for module in getattr(resolved, "pipeline_modules", ()):
-        environment = module.environment
-        if module.environment_input is not None:
-            selected = render_inputs.get(module.environment_input)
-            if selected is not None and selected is not Unknown:
-                environment = str(selected)
-        if environment:
-            environments.add(environment)
+        sources = module.jobs if resolved.workflow_schema == 2 else (module,)
+        for source in sources:
+            environment = source.environment
+            if source.environment_input is not None:
+                selected = render_inputs.get(source.environment_input)
+                if selected is not None and selected is not Unknown:
+                    environment = str(selected)
+            if environment:
+                environments.add(environment)
     return tuple(sorted(environments))
 
 
@@ -700,9 +703,7 @@ def _resolve_onboard_declaration(
         )
         resolve_declared_variables(current_resolved.variables, existing.variables)
         target_names = {spec.name for spec in resolved.variables}
-        declaration_variables = {
-            name: value for name, value in existing.variables.items() if name in target_names
-        }
+        declaration_variables = {name: value for name, value in existing.variables.items() if name in target_names}
 
     flags = _parse_var_flags(args.var)
     variables = resolve_variables(
@@ -873,6 +874,7 @@ def _onboard_proposal(args: argparse.Namespace) -> int:
         context = _open_consumer_context(clone, existing) if existing is not None else _open_new_context(clone, pin)
         registry = context.registry
         resolved = resolve_profile(registry, args.profile, docs=args.docs or (existing.docs if existing else False))
+        require_workflow_schema_v2(resolved, operation="onboarding proposal")
         declaration, variables = _resolve_onboard_declaration(args, registry, resolved, existing)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -1028,6 +1030,16 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     for pipeline in resolved.pipelines:
         print(f"- {pipeline}")
 
+    partial_desired = None
+    if resolved.workflow_schema == 2:
+        partial_desired = compile_partial_desired_state(
+            registry,
+            resolved,
+            known,
+            pin=canonical_pin or args.pin,
+            docs=args.docs,
+        )
+
     print("templates:")
     # Apply the §12.2/§6.1 conditional filter so the preview lists the *exact* artifacts
     # --write would materialize — no over-reporting. For an existing declaration these are
@@ -1035,9 +1047,34 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     # the known defaults plus supplied --var values. An unsupplied/unmatched variant is
     # excluded, not shown alongside its sibling.
     known["docs"] = "true" if args.docs else "false"
-    for template in applicable_templates(resolved, known):
-        kind = "seed-once" if template.seed_once else "managed"
-        print(f"- {template.output_path} ({kind})")
+    if partial_desired is not None:
+        for output in partial_desired.definite_artifacts:
+            print(f"- {output} (definite)")
+        for output in partial_desired.conditional_artifacts:
+            print(f"- {output} (conditional)")
+        if partial_desired.missing_inputs:
+            print("missing inputs:")
+            for name in partial_desired.missing_inputs:
+                print(f"- {name}")
+        preview_sections = (
+            ("definite settings", partial_desired.definite_settings),
+            ("conditional settings", partial_desired.conditional_settings),
+            ("definite environments", partial_desired.definite_environments),
+            ("conditional environments", partial_desired.conditional_environments),
+            ("definite status checks", partial_desired.definite_status_checks),
+            ("conditional status checks", partial_desired.conditional_status_checks),
+        )
+        for label, values in preview_sections:
+            print(f"{label}:")
+            if values:
+                for value in values:
+                    print(f"- {value}")
+            else:
+                print("- none")
+    else:
+        for template in applicable_templates(resolved, known):
+            kind = "seed-once" if template.seed_once else "managed"
+            print(f"- {template.output_path} ({kind})")
 
     if resolved.variables:
         print("variables:")
@@ -1058,7 +1095,11 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     ):
         print(f"- ruleset: {payload['name']}")
 
-    environments = _deployment_environments(resolved, known)
+    environments = (
+        list(partial_desired.definite_environments)
+        if partial_desired is not None
+        else _deployment_environments(resolved, known)
+    )
     if environments:
         print("protected deployment environments:")
         for environment in environments:
@@ -1189,22 +1230,22 @@ def cmd_sync(args: argparse.Namespace) -> int:
         if declaration.profile_identity is None:
             pinned_identity = registry.profile(declaration.profile).identity
             backfilled = Declaration(
-                    profile=declaration.profile,
-                    version=declaration.version,
-                    profile_identity=pinned_identity,
-                    docs=declaration.docs,
-                    bootstrap=declaration.bootstrap,
-                    variables=declaration.variables,
-                    overrides=declaration.overrides,
-                )
+                profile=declaration.profile,
+                version=declaration.version,
+                profile_identity=pinned_identity,
+                docs=declaration.docs,
+                bootstrap=declaration.bootstrap,
+                variables=declaration.variables,
+                overrides=declaration.overrides,
+            )
             items = materialize_items(
-                    registry,
-                    backfilled.profile,
-                    backfilled.variables,
-                    pin=backfilled.version,
-                    docs=backfilled.docs,
-                    bootstrap=backfilled.bootstrap,
-                    overrides=backfilled.overrides,
+                registry,
+                backfilled.profile,
+                backfilled.variables,
+                pin=backfilled.version,
+                docs=backfilled.docs,
+                bootstrap=backfilled.bootstrap,
+                overrides=backfilled.overrides,
             )
         else:
             items = materialize_items(
@@ -1411,6 +1452,7 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
     if not slug:
         raise AviatoError("could not determine OWNER/REPO from the repository remote")
     resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs)
+    require_workflow_schema_v2(resolved, operation="file-drift proposal")
     secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
     report = diagnose(
         root,
@@ -1486,9 +1528,7 @@ def _gate_repin_target(
         _require_published_pin(target_version, allow_unresolved=args.allow_unresolved_pin)
     except AviatoError as exc:
         return str(exc)
-    if args.override_version_pin or (
-        root is not None and bootstrap_authorized(root, declared=declaration.bootstrap)
-    ):
+    if args.override_version_pin or (root is not None and bootstrap_authorized(root, declared=declaration.bootstrap)):
         return None
     # Major-line check only: a same-major forward re-pin is the normal §5.12 move (the
     # CONSUMER runs the target's workflows, not this tool's); a CROSS-major target means
@@ -1539,15 +1579,15 @@ def cmd_repin(args: argparse.Namespace) -> int:
         target_registry = target_snapshot.registry
         plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
         items = (
-                materialize_items(
-                    target_registry,
-                    declaration.profile,
-                    declaration.variables,
-                    pin=plan.target_version,
-                    docs=declaration.docs,
-                    bootstrap=declaration.bootstrap,
-                    overrides=declaration.overrides,
-                )
+            materialize_items(
+                target_registry,
+                declaration.profile,
+                declaration.variables,
+                pin=plan.target_version,
+                docs=declaration.docs,
+                bootstrap=declaration.bootstrap,
+                overrides=declaration.overrides,
+            )
             if plan.ok and args.write
             else None
         )
@@ -1666,15 +1706,15 @@ def _repin_proposal(args: argparse.Namespace) -> int:
         target_registry = _open_published_snapshot(normalize_pin(args.version)).registry
         plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
         items = (
-                materialize_items(
-                    target_registry,
-                    declaration.profile,
-                    declaration.variables,
-                    pin=plan.target_version,
-                    docs=declaration.docs,
-                    bootstrap=declaration.bootstrap,
-                    overrides=declaration.overrides,
-                )
+            materialize_items(
+                target_registry,
+                declaration.profile,
+                declaration.variables,
+                pin=plan.target_version,
+                docs=declaration.docs,
+                bootstrap=declaration.bootstrap,
+                overrides=declaration.overrides,
+            )
             if plan.ok
             else None
         )
@@ -2126,6 +2166,11 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
     rc = 0  # R3-3: a file-drift channel failure sets rc=1 but must NOT abort the settings phase
 
     if do_file:
+        try:
+            require_workflow_schema_v2(resolved, operation="drift remediation proposal")
+        except AviatoError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
         # diagnose() rejects a bootstrap declaration in a non-Library repo (§5.4/§5.10) — surface
         # that as a clean operator error (exit 2), not an uncaught traceback.

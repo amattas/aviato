@@ -21,8 +21,11 @@ flowchart TD
     SB --> T2["Template module B"]
     GB --> SET["Declarative settings"]
 
-    PL1 --> A1["Action/step module"]
-    PL2 --> A2["Action/step module"]
+    PL1 --> E1["Workflow envelope"]
+    PL1 --> J1["Job fragment(s)"]
+    PL2 --> E2["Workflow envelope"]
+    PL2 --> J2["Job fragment(s)"]
+    PL1 --> PT1["Owned template refs"]
 
     subgraph Plugin["A language or deployment plug-in is ONLY this:"]
         WBx["+ Workflows bundle entries"]
@@ -45,6 +48,16 @@ should have kept.
   restates a bare list (which would silently replace).
 - **Map-valued** properties are merged by **deep merge** at the leaf — a child
   overriding one nested key must not drop sibling keys.
+- Trigger list leaves use the same explicit `add` / `remove` semantics. A bare
+  list, an orphan removal, or incompatible scalar contribution is a hard error.
+- The resolved template set is the stable union of scaffold-bundle templates
+  and template identities owned by selected pipelines. Removing the last
+  pipeline owner removes that artifact.
+- In workflow schema v2, job descriptors are the graph authority for runners,
+  checks, environments, permissions, inputs, and secrets. A pipeline may retain
+  legacy aggregate fields for compatibility, but they are optional and, when
+  present, must exactly describe a representable job union. Multi-job pipelines
+  may legitimately use distinct runners, checks, and environments.
 - **Edge-case rules (normative):**
   - `remove` of an element **not present** in the resolved base → **hard error**
     (it signals a stale assumption; fail loud).
@@ -102,8 +115,11 @@ unit, it calls it **through a module reference**, never by name.
 **Steps:** load the named profile → resolve each referenced bundle, applying
 `extends` + `add`/`remove` for lists (with §4.2 edge-case rules) and deep-merge
 for maps → apply Consumer overrides under the same rules → produce a
-fully-resolved convention set (pipelines, templates, settings, required
-variables, version-source).
+fully-resolved convention set (pipelines, pipeline-conditioned templates,
+settings, required variables, version-source, workflow schema). For schema v2,
+the compiler then validates the pipeline/job dependency graph and produces one
+deterministic desired state: callers, artifacts, settings, environments,
+privileges, and required checks all come from that same selected graph.
 **Purity:** *profile/bundle composition is pure and deterministic* (no side
 effects). **Variable resolution (§5.2) is a separate, impure step** — it reads
 host state — and its results are captured into the declaration so downstream
@@ -125,4 +141,7 @@ flowchart TD
     G -- no --> I{"All referenced<br/>modules exist?"}
     I -- no --> J["HARD ERROR: missing module"]
     I -- yes --> K["Resolved convention set<br/>(pure; pipelines · templates · settings · vars · version-source)"]
+    K --> L{"workflow schema v2?"}
+    L -- no --> M["Legacy read-only; mutation requires repin"]
+    L -- yes --> N["Compile + validate one DesiredState<br/>callers · artifacts · settings · envs · checks"]
 ```

@@ -7,7 +7,7 @@
 ```mermaid
 flowchart LR
     subgraph Library["LIBRARY (central, publishable, agnostic core + modules)"]
-        core["Core engine<br/>(resolve · compose · scaffold ·<br/>diagnose · reconcile)"]
+        core["Core engine<br/>(resolve · compose · compile · scaffold ·<br/>diagnose · reconcile)"]
         mods["Plug-in modules<br/>(language · docs · release ·<br/>deployment · protection)"]
         cli["CLI<br/>(operator + automation entrypoints)"]
         core --- mods
@@ -44,7 +44,9 @@ a single responsibility and a defined interface.
 | **Settings bundle** | The desired protected-resource settings a profile enforces. | Declarative settings map | — |
 | **Template module** | One generated artifact's content + render inputs. | A renderable artifact + its required variables | Variable values |
 | **Action/step module** | One reusable automation unit. | A callable automation unit | Inputs it declares |
-| **Pipeline module** | One reusable automation pipeline composed of action/step modules. | A callable pipeline + typed inputs/outputs | Action modules; declared privileges |
+| **Workflow-envelope module** | Shared, non-executable caller structure: name, output path, concurrency, and empty/read-only top-level permissions. | One generated caller shell | Selected pipeline modules |
+| **Workflow-job module** | Stable job identity plus a confined YAML fragment and its needs, permissions, inputs, secrets, runner, environment, and check; this is the schema-v2 graph authority. | One renderable job | One pipeline and one envelope |
+| **Pipeline module** | Owns trigger contributions, jobs, dependencies, template artifacts, checks, and privileges. | A graph fragment compiled into a caller | Workflow envelope/job modules; declared privileges |
 | **Version-source module** | Where and how a language records its version. | Read/write of the version location(s) | — |
 | **Language plug-in** | Everything specific to one language, expressed only as the bundles/templates/pipelines/version-source above. | A language's bundles/templates/pipelines/version-source | Core interfaces only |
 | **Deployment plug-in** | Everything specific to one deployment target, expressed only as pipeline + settings modules. | A target's pipeline + required privileges/inputs/secrets | Core interfaces only |
@@ -57,6 +59,9 @@ a single responsibility and a defined interface.
   This is falsifiable — see the core-level Definition of Done (§9).
 - A **profile** depends only on bundles. A **bundle** depends only on the modules
   of its kind.
+- A profile declares `workflow_schema`. Missing means legacy v1 and is read-only;
+  graph-changing generation requires v2. Module descriptors are closed-schema
+  data: executable YAML is confined to referenced job fragments.
 - **Version bumping is core orchestration over a plug-in interface.** The core
   Release process (§5.9) does not know any language's version location; it calls
   the language plug-in's **version-source module** (§3.2) to read/write the

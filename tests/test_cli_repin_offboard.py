@@ -14,7 +14,9 @@ from aviato.cli import main
 from aviato.core.declaration import Declaration
 from aviato.core.errors import AviatoError
 from aviato.core.model import VariableSpec
+from aviato.core.onboarding import resolved_artifacts
 from aviato.core.registry import Registry
+from aviato.core.scaffold import ScaffoldItem, scaffold
 from aviato.github_platform import GitHubPlatform
 from aviato.paths import MODULE_SOURCE_ROOT
 
@@ -24,23 +26,30 @@ _REAL_OPEN_CONSUMER_CONTEXT = cli._open_consumer_context
 
 def _adopt(tmp_path: Path) -> None:
     subprocess.run(["git", "-C", str(tmp_path), "init"], check=True, capture_output=True)
-    rc = main(
-        [
-            "onboard",
-            str(tmp_path),
-            "--profile",
-            "python-library",
-            "--write",
-            "--allow-dirty",
-            "--pin",
-            "v0",
-            "--var",
-            "distribution-name=acme",
-            "--var",
-            "import-name=acme",
-        ]
+    declaration = tmp_path / ".github/aviato.yaml"
+    declaration.parent.mkdir(parents=True, exist_ok=True)
+    declaration.write_text(
+        "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\nversion: '0'\n"
+        "variables:\n  distribution-name: acme\n  import-name: acme\n",
+        encoding="utf-8",
     )
-    assert rc == 0
+    artifacts = resolved_artifacts(
+        Registry(MODULE_SOURCE_ROOT),
+        "python-library",
+        {"distribution-name": "acme", "import-name": "acme"},
+        pin="0",
+    )
+    items = [
+        ScaffoldItem(
+            output=artifact.output,
+            body=artifact.body,
+            comment=artifact.comment,
+            seed_once=artifact.seed_once,
+            input_hash=artifact.input_hash,
+        )
+        for artifact in artifacts
+    ]
+    scaffold(tmp_path, items, profile="python-library", version="0", baseline_existing_seeds=True)
 
 
 def _git_init(root: Path) -> None:
@@ -71,7 +80,7 @@ def test_repin_target_gate_skip_requires_structure_and_bootstrap_declaration(
         assert "version-pin mismatch" in str(error)
 
 
-def test_repin_dry_run_then_write(
+def test_legacy_repin_dry_run_remains_readable_but_write_requires_v2(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _adopt(tmp_path)
@@ -91,20 +100,11 @@ def test_repin_dry_run_then_write(
     assert "re-pin 0 -> 1.0.0" in out
     assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "0"
 
-    # Write: records the new pin (bare) and re-scaffolds the pin-bearing workflows with it.
-    # The tool is 0.x and the target is major 1 — §2.6 requires the explicit override.
+    before = (tmp_path / ".github" / "aviato.yaml").read_text(encoding="utf-8")
     rc = main(["repin", str(tmp_path), "v1.0.0", "--write", "--override-version-pin"])
-    assert rc == 0
-    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "1.0.0"
-    ci = (tmp_path / ".github" / "workflows" / "aviato-ci.yml").read_text()
-    assert "@1.0.0" in ci  # the pin in `uses:` refs moved (bare)
-    assert "version=1.0.0" in ci  # marker updated where the body changed (bare)
-    assert "v1.0.0" not in ci  # no leading ``v`` is ever emitted (§6.1)
-    # §5.12/§2.6: a NON-pin-bearing managed file (body unchanged by the re-pin) must ALSO have
-    # its marker restamped to the new pin — not left stale (which would break the §2.6 gate on
-    # a later downgrade). This is the H2 regression guard.
-    assert "version=1.0.0" in (tmp_path / "ruff.toml").read_text()
-    assert "version=0" not in (tmp_path / "ruff.toml").read_text()
+    assert rc == 2
+    assert "repin" in capsys.readouterr().err
+    assert (tmp_path / ".github" / "aviato.yaml").read_text(encoding="utf-8") == before
 
 
 def test_repin_rejects_invalid_declared_enum_before_write(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -188,7 +188,7 @@ def test_repin_dry_run_reports_orphaned_overrides_from_plan(tmp_path: Path, caps
     assert "unknown settings override" not in captured.err
 
 
-def test_repin_reports_skipped_hand_edited_files(
+def test_legacy_repin_write_rejects_before_touching_hand_edited_files(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # §5.12: a re-pin must not silently leave hand-edited managed files at the old
@@ -199,10 +199,10 @@ def test_repin_reports_skipped_hand_edited_files(
     capsys.readouterr()
 
     rc = main(["repin", str(tmp_path), "1.0.0", "--write", "--override-version-pin"])
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert "aviato-ci.yml" in out
-    assert "skipped" in out.lower()
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "repin" in captured.err
+    assert ci_path.read_text(encoding="utf-8").endswith("# operator hand-edit\n")
 
 
 def test_repin_write_refuses_unpublished_target(
@@ -237,7 +237,7 @@ def test_repin_write_refuses_cross_major_without_override(
     rc = main(["repin", str(tmp_path), "9.0.0", "--write"])
     err = capsys.readouterr().err
     assert rc == 2
-    assert "version-pin mismatch" in err
+    assert "repin" in err
     assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "0"
 
 
@@ -254,7 +254,7 @@ def test_repin_write_unknown_seed_integrity_mutates_nothing(
     captured = capsys.readouterr()
     after = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     assert rc == 2
-    assert "--rebaseline-seeds" in captured.err
+    assert "repin" in captured.err
     assert after == before
 
 
@@ -289,13 +289,13 @@ def test_repin_open_pr_unknown_seed_integrity_opens_no_proposal(
 
     captured = capsys.readouterr()
     assert rc == 2
-    assert "--rebaseline-seeds" in captured.err
+    assert "repin" in captured.err
     assert proposal_called is False
     assert clone_path is not None
     assert (clone_path / ".github" / "aviato.yaml").read_text(encoding="utf-8") == original_declaration
 
 
-def test_legacy_sync_then_local_repin_materializes_distinct_target_registry(
+def test_legacy_sync_and_local_repin_require_v2_without_mutation(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     declaration = tmp_path / ".github" / "aviato.yaml"
@@ -323,15 +323,16 @@ def test_legacy_sync_then_local_repin_materializes_distinct_target_registry(
     monkeypatch.setattr(cli, "_open_consumer_context", fake_consumer_context)
     monkeypatch.setattr(cli, "_open_published_snapshot", fake_published_snapshot)
 
-    assert main(["sync", str(tmp_path), "--rebaseline-seeds"]) == 0
-    assert yaml.safe_load(declaration.read_text())["profile-identity"] == "aviato-profile/python-library/v1"
-    capsys.readouterr()
-    assert main(["repin", str(tmp_path), "0.1.0", "--write"]) == 0
-    assert fetched == ["0", "0", "0.1.0"]
-    assert sentinel.strip() in (tmp_path / "ruff.toml").read_text()
+    original = declaration.read_text(encoding="utf-8")
+    assert main(["sync", str(tmp_path), "--rebaseline-seeds"]) == 2
+    assert "repin" in capsys.readouterr().err
+    assert declaration.read_text(encoding="utf-8") == original
+    assert not (tmp_path / "ruff.toml").exists()
 
 
-def test_repin_proposal_materializes_target_registry_body(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_repin_proposal_requires_v2_before_opening_proposal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     source = tmp_path / "source"
     source.mkdir()
     _adopt(source)
@@ -358,8 +359,9 @@ def test_repin_proposal_materializes_target_registry_body(tmp_path: Path, monkey
     monkeypatch.setattr(cli, "run", fake_run)
     monkeypatch.setattr(GitHubPlatform, "open_worktree_proposal", fake_proposal)
 
-    assert main(["repin", "acme/widget", "0.1.0", "--open-pr"]) == 0
-    assert sentinel.strip() in captured["ruff"]
+    assert main(["repin", "acme/widget", "0.1.0", "--open-pr"]) == 2
+    assert "repin" in capsys.readouterr().err
+    assert captured == {}
 
 
 def test_repin_proposal_rejects_unauthorized_bootstrap_before_target_authority(
@@ -403,7 +405,7 @@ def test_repin_proposal_rejects_unauthorized_bootstrap_before_target_authority(
 
 
 def test_repin_proposal_validates_authorized_bootstrap_before_target_snapshot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     source = tmp_path / "source"
     source.mkdir()
@@ -437,7 +439,8 @@ def test_repin_proposal_validates_authorized_bootstrap_before_target_snapshot(
     monkeypatch.setattr(cli, "_open_published_snapshot", open_target)
     monkeypatch.setattr(GitHubPlatform, "open_worktree_proposal", lambda *_args, **_kwargs: "branch")
 
-    assert main(["repin", "acme/widget", "0.1.0", "--open-pr"]) == 0
+    assert main(["repin", "acme/widget", "0.1.0", "--open-pr"]) == 2
+    assert "repin" in capsys.readouterr().err
     assert events == ["current", "target"]
 
 

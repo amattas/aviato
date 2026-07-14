@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 import pytest
 
 from aviato.core.model import (
+    FrozenDict,
     PipelineModule,
     Profile,
     ResolvedSet,
@@ -13,8 +15,16 @@ from aviato.core.model import (
     TemplateModule,
     VariableSpec,
     VersionSourceModule,
+    WorkflowEnvelopeModule,
+    WorkflowJobModule,
     WorkflowsBundle,
 )
+
+
+def test_frozen_dict_never_string_coerces_non_string_keys() -> None:
+    values: Any = {1: "numeric"}
+    with pytest.raises(TypeError, match="string keys"):
+        FrozenDict(values)
 
 
 def test_variable_spec_defaults_non_secret_and_required() -> None:
@@ -38,6 +48,24 @@ def test_template_module_seed_once_default_false() -> None:
 def test_pipeline_module_declares_privileges() -> None:
     p = PipelineModule(name="pypi", privileges=("id-token: write", "contents: read"))
     assert "id-token: write" in p.privileges
+
+
+def test_workflow_graph_modules_are_frozen_and_carry_stable_identity() -> None:
+    envelope = WorkflowEnvelopeModule(
+        name="ci",
+        identity="workflow/ci/v1",
+        output_path=".github/workflows/ci.yml",
+        display_name="CI",
+    )
+    job = WorkflowJobModule(
+        name="verify",
+        identity="job/verify/v1",
+        fragment="workflow-fragments/verify.yml",
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        envelope.identity = "changed"  # type: ignore[misc]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        job.fragment = "changed"  # type: ignore[misc]
 
 
 def test_profile_is_frozen() -> None:

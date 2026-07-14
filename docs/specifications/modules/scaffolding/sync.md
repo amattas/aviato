@@ -4,10 +4,13 @@
 
 **Trigger:** onboarding, an explicit sync, or drift remediation.
 **Actor:** core engine.
-**Steps:** from the resolved set, build a map of *output path → source template*,
-where later/overlay sources override earlier ones for the same output (operating
-on the fully-§4.2-resolved set) → render each template with the resolved
-variables → stamp the **managed marker** (§6.2) → write **atomically** (render to
+**Steps:** for workflow schema v2, compile the pinned selected pipeline graph
+into one exact `DesiredState`. Its templates are the explicit union of scaffold
+base references and selected pipeline-owned artifact references; its generated
+callers contain only selected jobs and trigger contributions. Validate paths,
+collisions, dependencies, checks, environments, inputs/secrets, and privilege
+unions before output → render each desired artifact with the resolved variables
+→ stamp the **managed marker** (§6.2) → write **atomically** (render to
 a temporary file, then atomic swap) so a crash never leaves a half-written file →
 refusing to overwrite an **unmanaged** or **malformed-marker** file unless forced.
 **Seed-once files (§6.3):** files that cannot host a marker, and operator-owned
@@ -24,10 +27,13 @@ loudly (no silent placeholder); idempotent on a clean tree; atomic per file.
 When an operator explicitly forces a managed rewrite, the marker is restamped
 even if the rendered body is otherwise unchanged, so profile migrations and
 re-pins cannot leave a valid body carrying stale management metadata.
+Legacy workflow schema v1 is read-only at this boundary; sync that would change
+the graph requires a repin to v2. Partial desired states are preview-only and
+can never enter materialization.
 
 ```mermaid
 flowchart TD
-    A["Resolved set + variables + pinned toolchain"] --> B["Build output-path → template map<br/>(overlay on fully-resolved set; later wins)"]
+    A["Pinned resolved set + complete typed variables"] --> B["Compile selected graph → DesiredState<br/>base ∪ pipeline templates + generated callers"]
     B --> C["For each output path"]
     C --> S0{"Seed-once / non-annotatable?"}
     S0 -- yes --> S1{"Already present?"}

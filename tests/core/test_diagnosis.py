@@ -13,7 +13,7 @@ from aviato.core.diagnosis import (
     ExpectedArtifact as _ExpectedArtifact,
 )
 from aviato.core.errors import BootstrapError, PathConfinementError
-from aviato.core.onboarding import materialize_items
+from aviato.core.onboarding import resolved_artifacts
 from aviato.core.registry import Registry
 from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
 from aviato.core.scaffold import scaffold
@@ -85,8 +85,15 @@ def test_renderer_tracks_unused_optional_variable_and_docs_but_not_pin(tmp_path:
     base = {"distribution-name": "acme", "import-name": "acme"}
 
     def editorconfig(*, owner: str, pin: str, docs: bool = False) -> _ScaffoldItem:
-        items = materialize_items(registry, "python-library", {**base, "owner": owner}, pin=pin, docs=docs)
-        return next(item for item in items if item.output == ".editorconfig")
+        items = resolved_artifacts(registry, "python-library", {**base, "owner": owner}, pin=pin, docs=docs)
+        artifact = next(item for item in items if item.output == ".editorconfig")
+        return _ScaffoldItem(
+            output=artifact.output,
+            body=artifact.body,
+            comment=artifact.comment,
+            seed_once=artifact.seed_once,
+            input_hash=artifact.input_hash,
+        )
 
     original = editorconfig(owner="A", pin="v1")
     pin_only = editorconfig(owner="A", pin="v2")

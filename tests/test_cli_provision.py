@@ -8,7 +8,6 @@ import pytest
 from aviato import __version__, cli
 from aviato.cli import main
 from aviato.core.ports import Issue, Platform
-from aviato.core.provision import ProvisionOutcome
 
 pytestmark = pytest.mark.usefixtures("task3_pinned_context")
 
@@ -144,9 +143,7 @@ def test_provision_rejects_unknown_flag_variable_before_remote_mutation(
     monkeypatch.setattr(
         cli,
         "provision_repo",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("provision must not run for unknown variables")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("provision must not run for unknown variables")),
     )
 
     rc = main(
@@ -198,19 +195,14 @@ def test_provision_refuses_unpublished_pin(monkeypatch: pytest.MonkeyPatch, caps
     assert "does not resolve" in err
 
 
-def test_provision_partial_outcome_reports_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_provision_partial_path_requires_repin_before_remote_mutation(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: object())
     monkeypatch.setattr(
         cli,
         "provision_repo",
-        lambda *a, **k: ProvisionOutcome(
-            created=True,
-            minimal_applied=True,
-            scaffolded=True,
-            full_applied=False,
-            partial=True,
-            reason="protection rejected",
-        ),
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("legacy provision must not mutate remote state")),
     )
     rc = main(
         [
@@ -226,10 +218,11 @@ def test_provision_partial_outcome_reports_recovery(monkeypatch: pytest.MonkeyPa
             "import-name=acme",
         ]
     )
-    assert rc == 1  # partial provisioning is a non-zero exit pointing at complete-protection
+    assert rc == 2
+    assert "repin" in capsys.readouterr().err
 
 
-def test_provision_exposed_state_reports_unprotected_and_recovery(
+def test_legacy_provision_exposed_path_requires_repin_before_remote_mutation(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # §8.7: created but minimal protection failed → the repo EXISTS and is UNPROTECTED; the CLI
@@ -238,7 +231,7 @@ def test_provision_exposed_state_reports_unprotected_and_recovery(
     monkeypatch.setattr(
         cli,
         "provision_repo",
-        lambda *a, **k: ProvisionOutcome(created=True, minimal_applied=False, partial=True, reason="403"),
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("legacy provision must not mutate remote state")),
     )
     rc = main(
         [
@@ -254,19 +247,19 @@ def test_provision_exposed_state_reports_unprotected_and_recovery(
             "import-name=a",
         ]
     )
-    assert rc == 1
+    assert rc == 2
     err = capsys.readouterr().err
-    assert "UNPROTECTED" in err and "complete-protection" in err
+    assert "repin" in err
 
 
-def test_provision_success_exit_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_provision_success_path_requires_repin_before_remote_mutation(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: object())
     monkeypatch.setattr(
         cli,
         "provision_repo",
-        lambda *a, **k: ProvisionOutcome(
-            created=True, minimal_applied=True, scaffolded=True, full_applied=True, partial=False
-        ),
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("legacy provision must not mutate remote state")),
     )
     rc = main(
         [
@@ -282,10 +275,11 @@ def test_provision_success_exit_zero(monkeypatch: pytest.MonkeyPatch) -> None:
             "import-name=acme",
         ]
     )
-    assert rc == 0
+    assert rc == 2
+    assert "repin" in capsys.readouterr().err
 
 
-def test_provision_success_reports_skipped_unavailable_toggle(
+def test_legacy_provision_toggle_path_requires_repin_before_remote_mutation(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # R2-1-PROV/R2-5-F1: a successful provision that surfaced-and-skipped a §17 toggle must say so
@@ -294,14 +288,7 @@ def test_provision_success_reports_skipped_unavailable_toggle(
     monkeypatch.setattr(
         cli,
         "provision_repo",
-        lambda *a, **k: ProvisionOutcome(
-            created=True,
-            minimal_applied=True,
-            scaffolded=True,
-            full_applied=True,
-            partial=False,
-            skipped_security=["secret_scanning"],
-        ),
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("legacy provision must not mutate remote state")),
     )
     rc = main(
         [
@@ -317,6 +304,6 @@ def test_provision_success_reports_skipped_unavailable_toggle(
             "import-name=a",
         ]
     )
-    assert rc == 0
+    assert rc == 2
     err = capsys.readouterr().err
-    assert "SKIPPED" in err and "secret_scanning" in err and "§17" in err
+    assert "repin" in err

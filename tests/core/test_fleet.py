@@ -7,9 +7,9 @@ import pytest
 
 from aviato.core.diagnosis import diagnose as original_diagnose
 from aviato.core.fleet import scan_fleet
-from aviato.core.onboarding import materialize_items
+from aviato.core.onboarding import ResolvedArtifact, resolved_artifacts
 from aviato.core.registry import Registry
-from aviato.core.scaffold import scaffold
+from aviato.core.scaffold import ScaffoldItem, scaffold
 from aviato.paths import MODULE_SOURCE_ROOT
 
 
@@ -19,6 +19,20 @@ def _record_keyword_arguments[**P, R](fn: Callable[P, R], calls: list[dict[str, 
         return fn(*args, **kwargs)
 
     return recording
+
+
+def _scaffold_read_only_artifacts(root: Path, artifacts: list[ResolvedArtifact], *, profile: str) -> None:
+    items = [
+        ScaffoldItem(
+            output=artifact.output,
+            body=artifact.body,
+            comment=artifact.comment,
+            seed_once=artifact.seed_once,
+            input_hash=artifact.input_hash,
+        )
+        for artifact in artifacts
+    ]
+    scaffold(root, items, profile=profile, version="v1")
 
 
 def _make_consumer(root: Path, *, scaffold_all: bool) -> None:
@@ -32,13 +46,13 @@ def _make_consumer(root: Path, *, scaffold_all: bool) -> None:
         reg = Registry(MODULE_SOURCE_ROOT)
         # Scaffold with the same pin the declaration records, so the embedded
         # workflow refs match what fleet expects (parity, §5.11).
-        items = materialize_items(
+        artifacts = resolved_artifacts(
             reg,
             "python-library",
             variables={"distribution-name": "acme", "import-name": "acme"},
             pin="v1",
         )
-        scaffold(root, items, profile="python-library", version="v1")
+        _scaffold_read_only_artifacts(root, artifacts, profile="python-library")
 
 
 def test_scan_no_false_drift_for_javascript_consumer(tmp_path: Path) -> None:
@@ -53,8 +67,8 @@ def test_scan_no_false_drift_for_javascript_consumer(tmp_path: Path) -> None:
     )
     reg = Registry(MODULE_SOURCE_ROOT)
     variables = {"language-variant": "javascript", "project-name": "x"}
-    items = materialize_items(reg, "node-service", variables, pin="v1")
-    scaffold(root, items, profile="node-service", version="v1")
+    artifacts = resolved_artifacts(reg, "node-service", variables, pin="v1")
+    _scaffold_read_only_artifacts(root, artifacts, profile="node-service")
     assert not (root / "tsconfig.json").exists()  # JS omits tsconfig
 
     scan = scan_fleet([root], Registry(MODULE_SOURCE_ROOT))[0]

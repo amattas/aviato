@@ -1,11 +1,95 @@
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, NoReturn
 
 VariableType = Literal["string", "boolean", "enum"]
 VariableValue = str | bool | None
+
+
+class FrozenDict(Mapping[str, Any]):
+    """A recursively immutable mapping with ordinary mapping equality/access."""
+
+    __slots__ = ("_data",)
+
+    def __init__(self, values: Mapping[str, Any]) -> None:
+        if any(not isinstance(key, str) for key in values):
+            raise TypeError("FrozenDict requires string keys; keys are never coerced")
+        self._data = {key: deep_freeze(value) for key, value in values.items()}
+
+    def __getitem__(self, key: str) -> Any:
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __setitem__(self, _key: str, _value: Any) -> NoReturn:
+        raise TypeError("FrozenDict is immutable")
+
+    def __delitem__(self, _key: str) -> NoReturn:
+        raise TypeError("FrozenDict is immutable")
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> FrozenDict:
+        return self
+
+    def __repr__(self) -> str:
+        return repr(self._data)
+
+
+class FrozenList(tuple[Any, ...]):
+    """Tuple storage with list-like mutation methods that fail explicitly."""
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, (list, tuple)):
+            return tuple(self) == tuple(other)
+        return False
+
+    __hash__ = tuple.__hash__
+
+    def append(self, _value: Any) -> NoReturn:
+        raise TypeError("FrozenList is immutable")
+
+    def extend(self, _values: Any) -> NoReturn:
+        raise TypeError("FrozenList is immutable")
+
+    def insert(self, _index: int, _value: Any) -> NoReturn:
+        raise TypeError("FrozenList is immutable")
+
+    def pop(self, _index: int = -1) -> NoReturn:
+        raise TypeError("FrozenList is immutable")
+
+    def remove(self, _value: Any) -> NoReturn:
+        raise TypeError("FrozenList is immutable")
+
+    def clear(self) -> NoReturn:
+        raise TypeError("FrozenList is immutable")
+
+
+def deep_freeze(value: Any) -> Any:
+    if isinstance(value, (FrozenDict, FrozenList)):
+        return value
+    if isinstance(value, Mapping):
+        return FrozenDict(value)
+    if isinstance(value, (list, tuple)):
+        return FrozenList(deep_freeze(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(deep_freeze(item) for item in value)
+    return value
+
+
+def deep_thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: deep_thaw(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [deep_thaw(item) for item in value]
+    if isinstance(value, frozenset):
+        return {deep_thaw(item) for item in value}
+    return value
 
 
 class UnknownValue(Enum):
@@ -61,6 +145,35 @@ class TemplateModule:
 
 
 @dataclass(frozen=True)
+class WorkflowEnvelopeModule:
+    """Shared, non-executable structure for one generated Actions caller."""
+
+    name: str
+    identity: str
+    output_path: str
+    display_name: str
+    permissions: tuple[tuple[str, str], ...] = ()
+    concurrency: tuple[tuple[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class WorkflowJobModule:
+    """Data-only ownership metadata for one pipeline-contributed job."""
+
+    name: str
+    identity: str
+    fragment: str
+    needs: tuple[str, ...] = ()
+    permissions: tuple[str, ...] = ()
+    inputs: tuple[str, ...] = ()
+    secrets: tuple[str, ...] = ()
+    runner: str | None = None
+    environment: str | None = None
+    environment_input: str | None = None
+    status_check: str | None = None
+
+
+@dataclass(frozen=True)
 class PipelineModule:
     """One reusable automation pipeline with declared privileges (§3.2, §11.3)."""
 
@@ -87,6 +200,16 @@ class PipelineModule:
     # binding data-driven while allowing a caller workflow's rendered environment input
     # to select the actual protected environment (for example a production deploy).
     environment_input: str | None = None
+    identity: str | None = None
+    envelope: str | None = None
+    triggers: Mapping[str, Any] = field(default_factory=dict)
+    jobs: tuple[WorkflowJobModule, ...] = ()
+    required_pipelines: tuple[str, ...] = ()
+    artifacts: tuple[str, ...] = ()
+    declared_aggregates: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "triggers", deep_freeze(self.triggers))
 
 
 @dataclass(frozen=True)
@@ -124,7 +247,10 @@ class SettingsBundle:
 
     name: str
     extends: str | None = None
-    settings: dict[str, Any] = field(default_factory=dict)
+    settings: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "settings", deep_freeze(self.settings))
 
 
 @dataclass(frozen=True)
@@ -136,6 +262,7 @@ class Profile:
     workflows: str
     scaffold: str
     settings: str
+    workflow_schema: int = 1
     # review #17: a profile carries NO runner-OS flag. "Does this need a macOS runner?" is derived
     # from the resolved pipelines' data-driven PipelineModule.runner (§11.5), not a target-OS
     # boolean baked into the agnostic core model (adding e.g. a Windows target must never edit core).
@@ -148,8 +275,14 @@ class ResolvedSet:
     profile: str
     pipelines: tuple[str, ...]
     templates: tuple[TemplateModule, ...]
-    settings: dict[str, Any]
+    settings: Mapping[str, Any]
     variables: tuple[VariableSpec, ...]
     version_source: VersionSourceModule | None
-    toolchain: dict[str, Any]
+    toolchain: Mapping[str, Any]
     pipeline_modules: tuple[PipelineModule, ...] = ()
+    workflow_schema: int = 1
+    scaffold_templates: tuple[TemplateModule, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "settings", deep_freeze(self.settings))
+        object.__setattr__(self, "toolchain", deep_freeze(self.toolchain))

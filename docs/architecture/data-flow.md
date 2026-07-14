@@ -61,6 +61,33 @@ predicate and `bootstrap: true` hold, Aviato copies the operated checkout's
 context records the checkout Git HEAD and a deterministic digest of that same
 copy, and owns removal of the copy when the operation ends.
 
+## Desired-State Compilation
+
+Within that immutable operation context, schema-v2 profiles have one compiler
+boundary. Composition selects pipelines and the union of base plus
+pipeline-owned template references. The compiler loads only confined data
+descriptors and job fragments, validates workflow envelopes, dependencies,
+triggers, checks, environments, inputs, secrets, paths, and privilege unions,
+then emits deterministic managed callers and the rest of `DesiredState`.
+
+```mermaid
+flowchart LR
+    S["Pinned Registry + declaration"] --> R["Resolve bundles + typed variables"]
+    R --> G["Selected pipeline graph"]
+    G --> C["Pure compiler + graph validation"]
+    C --> D["DesiredState"]
+    D --> A["Artifacts / callers"]
+    D --> P["Settings / environments / checks"]
+    U["Unknown inputs"] --> Q["PartialDesiredState<br/>read-only; no plan ID"]
+    R --> Q
+```
+
+Exact compilation requires complete typed variables. A fresh preview preserves
+unknowns and labels definite versus conditional outputs; it has no applicable
+plan ID or mutation path. Missing `workflow_schema` means legacy v1. Legacy
+snapshots remain usable for read-only diagnosis/offboard and repin source reads,
+but generation or graph mutation requires repinning to v2.
+
 ## Release Architecture
 
 Release publishing is tag-driven only.

@@ -78,6 +78,17 @@ variable/secret requirements. **Documentation is opt-in** (`docs: true`, §6.1,
 the multi-version Zensical deploy. There is no profile without the security
 baseline.
 
+Schema-v2 pipeline modules own their workflow envelope, trigger contribution,
+job fragments and dependencies, non-workflow template references, permissions,
+inputs, secrets, runner/environment, and produced check. The compiler renders
+only the selected graph: removing a pipeline removes its jobs, triggers,
+artifacts, environments, checks, and privilege surface. Envelope and pipeline
+descriptors are closed-schema data; executable Actions content lives only in
+confined YAML job fragments. Every step selects exactly one non-empty `run` or
+`uses`. Pipeline-level privilege/input/secret/runner/check/environment fields
+are optional compatibility summaries; when supplied they must exactly match a
+single representable job union, while distinct multi-job values remain valid.
+
 ---
 
 ## 16. Per-Plug-in Definition of Done

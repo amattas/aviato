@@ -35,6 +35,30 @@ def _adopt(tmp_path: Path, *extra: str) -> int:
     )
 
 
+def _write_legacy_declaration(
+    tmp_path: Path,
+    *,
+    profile: str = "python-library",
+    version: str = "2.0.0",
+    variables: dict[str, str] | None = None,
+) -> Path:
+    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration.parent.mkdir(parents=True, exist_ok=True)
+    declaration.write_text(
+        yaml.safe_dump(
+            {
+                "profile": profile,
+                "profile-identity": f"aviato-profile/{profile}/v1",
+                "version": version,
+                "variables": variables or {"distribution-name": "acme", "import-name": "acme"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return declaration
+
+
 @pytest.mark.parametrize("from_slug_arg", [True, False])
 def test_autodetect_fills_owner_and_repo_from_slug(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, from_slug_arg: bool
@@ -137,8 +161,7 @@ def test_preview_profile_migration_guard_precedes_malformed_or_duplicate_variabl
     capsys: pytest.CaptureFixture[str],
     bad_vars: tuple[str, ...],
 ) -> None:
-    assert _adopt(tmp_path) == 0
-    capsys.readouterr()
+    _write_legacy_declaration(tmp_path)
 
     rc = main(["onboard", str(tmp_path), "--profile", "node-service", *bad_vars])
 
@@ -230,7 +253,7 @@ def test_swift_onboard_plan_uses_resolved_environment_name_override(
         (None, None, "app-store-connect"),
     ],
 )
-def test_swift_reonboard_plan_uses_write_precedence_without_mutating_declaration(
+def test_swift_legacy_reonboard_plan_requires_repin_without_mutating_declaration(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     saved_environment: str | None,
@@ -265,45 +288,55 @@ def test_swift_reonboard_plan_uses_write_precedence_without_mutating_declaration
     if cli_environment is not None:
         args += ["--var", f"environment-name={cli_environment}"]
 
-    assert main(args) == 0
-    output = capsys.readouterr().out
+    assert main(args) == 2
+    captured = capsys.readouterr()
 
-    assert f"- {expected_environment}: must exist with at least one required reviewer before deploy" in output
-    for other in {"app-store-connect", "production", "staging"} - {expected_environment}:
-        assert f"- {other}:" not in output
+    assert "repin" in captured.err
+    assert f"- {expected_environment}:" not in captured.out
     assert declaration.read_text(encoding="utf-8") == original
 
 
-def test_reonboard_without_pin_preserves_existing(tmp_path: Path) -> None:
-    # §5.12: onboarding is not a re-pin. A fresh adopt with a legacy ``v2.0.0`` is
-    # canonicalized to bare on write (§6.1); re-onboarding without --pin must preserve it.
-    assert _adopt(tmp_path, "--pin", "v2.0.0") == 0
-    decl = tmp_path / ".github" / "aviato.yaml"
-    assert yaml.safe_load(decl.read_text())["version"] == "2.0.0"
+def test_legacy_reonboard_without_pin_requires_repin_and_preserves_existing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    decl = _write_legacy_declaration(tmp_path)
+    original = decl.read_text(encoding="utf-8")
 
-    assert _adopt(tmp_path) == 0  # no --pin
-    assert yaml.safe_load(decl.read_text())["version"] == "2.0.0"
+    assert _adopt(tmp_path) == 2
+    assert "repin" in capsys.readouterr().err
+    assert decl.read_text(encoding="utf-8") == original
 
 
 def test_reonboard_with_differing_pin_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # §5.12: an explicit --pin that moves the recorded pin is refused — the operator
     # is directed to the dedicated re-pin path rather than silently moving it.
-    assert _adopt(tmp_path, "--pin", "2.0.0") == 0
-    capsys.readouterr()
+    decl = _write_legacy_declaration(tmp_path)
+    original = decl.read_text(encoding="utf-8")
     rc = _adopt(tmp_path, "--pin", "1.0.0")
     err = capsys.readouterr().err
     assert rc != 0
     assert "repin" in err
     # The pin was NOT moved.
-    decl = tmp_path / ".github" / "aviato.yaml"
-    assert yaml.safe_load(decl.read_text())["version"] == "2.0.0"
+    assert decl.read_text(encoding="utf-8") == original
 
 
-def test_reonboard_with_matching_pin_ok(tmp_path: Path) -> None:
-    assert _adopt(tmp_path, "--pin", "2.0.0") == 0
-    assert _adopt(tmp_path, "--pin", "v2.0.0") == 0  # legacy form, same pin → allowed
-    decl = tmp_path / ".github" / "aviato.yaml"
-    assert yaml.safe_load(decl.read_text())["version"] == "2.0.0"
+def test_legacy_reonboard_with_matching_pin_requires_repin_and_preserves_existing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    decl = _write_legacy_declaration(tmp_path)
+    original = decl.read_text(encoding="utf-8")
+
+    assert _adopt(tmp_path, "--pin", "v2.0.0") == 2
+    assert "repin" in capsys.readouterr().err
+    assert decl.read_text(encoding="utf-8") == original
+
+
+def test_legacy_fresh_write_requires_repin_and_creates_no_declaration(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _adopt(tmp_path) == 2
+    assert "repin" in capsys.readouterr().err
+    assert not (tmp_path / ".github/aviato.yaml").exists()
 
 
 def test_doctor_reports_clean_and_missing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

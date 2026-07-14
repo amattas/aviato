@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -14,6 +14,7 @@ from .model import (
     VariableSpec,
     VersionSourceModule,
     WorkflowsBundle,
+    deep_thaw,
 )
 from .registry import Registry
 from .settingsdrift import weakens
@@ -127,7 +128,7 @@ def _settings_override_lists(override: dict[str, Any], _prefix: str = "") -> lis
 
 
 def _unknown_settings_override_paths(
-    override: dict[str, Any], baseline: dict[str, Any], _prefix: str = ""
+    override: Mapping[str, Any], baseline: Mapping[str, Any], _prefix: str = ""
 ) -> list[str]:
     """Dotted paths in a settings override that are absent from the baseline schema (§4.2, CX#4).
 
@@ -143,7 +144,7 @@ def _unknown_settings_override_paths(
         path = f"{_prefix}{key}"
         if key not in baseline:
             unknown.append(path)
-        elif isinstance(value, dict) and isinstance(baseline.get(key), dict):
+        elif isinstance(value, Mapping) and isinstance(baseline.get(key), Mapping):
             unknown.extend(_unknown_settings_override_paths(value, baseline[key], f"{path}."))
     return unknown
 
@@ -240,14 +241,14 @@ def _resolve_settings(layers: list[SettingsBundle]) -> dict[str, Any]:
         # (e.g. emptying `rulesets`/`required_status_checks`) — the same bare-list hazard the consumer
         # override path already rejects. Only the root layer (the base) may declare list values.
         if index > 0:
-            bare = _settings_override_lists(layer.settings)
+            bare = _settings_override_lists(deep_thaw(layer.settings))
             if bare:
                 raise CompositionError(
                     f"settings bundle {layer.name!r} restates list-valued key(s) {sorted(bare)} "
                     f"under extends; settings lists are base-only and cannot be replaced by a child "
                     f"bundle (§4.2)"
                 )
-        resolved = deep_merge(resolved, layer.settings)
+        resolved = deep_merge(resolved, deep_thaw(layer.settings))
     return resolved
 
 
@@ -393,8 +394,6 @@ def resolve_profile(
                 "compose at least the baseline security toggles"
             )
 
-    templates = tuple(registry.template_module(ref) for ref in template_refs)
-
     doc = registry.profile_doc(name)
 
     if docs:
@@ -456,12 +455,26 @@ def resolve_profile(
     # are simply absent from pipeline_modules.
     pipeline_modules = tuple(module for ref in pipelines if (module := registry.pipeline_module(ref)) is not None)
 
+    # Workflow schema v2 pipelines own non-workflow TemplateModule references. The
+    # final scaffold is the stable union of the bundle base and the selected graph;
+    # removing the last pipeline owner therefore removes its artifact without a
+    # target-specific branch in core.
+    pipeline_template_refs = tuple(ref for module in pipeline_modules for ref in module.artifacts)
+    selected_template_refs = tuple(dict.fromkeys((*template_refs, *pipeline_template_refs)))
+    templates = tuple(registry.template_module(ref) for ref in selected_template_refs)
+    scaffold_templates = tuple(registry.template_module(ref) for ref in template_refs)
+
     # §10/#5: the merge gate must require exactly the checks the profile's composed
     # pipelines produce. Union the per-pipeline status_check contexts (e.g. the
     # language verify job) into the desired branch protection — single source of
     # truth, so a profile cannot require a check it never runs (or omit one it does).
-    status_checks = sorted({m.status_check for m in pipeline_modules if m.status_check})
-    if status_checks:
+    if profile.workflow_schema == 2:
+        status_checks = sorted(
+            {job.status_check for module in pipeline_modules for job in module.jobs if job.status_check}
+        )
+    else:
+        status_checks = sorted({module.status_check for module in pipeline_modules if module.status_check})
+    if status_checks or profile.workflow_schema == 2:
         # R2-3-1: a settings override may have replaced `default_branch` with a SCALAR (e.g.
         # {settings: {default_branch: "develop"}}) — it passes the bare-list/unknown-key/floor guards
         # but `dict(<scalar>)` would raise a raw ValueError here that escapes the fleet-scan guard.
@@ -473,8 +486,11 @@ def resolve_profile(
                 f"{type(default_branch_settings).__name__} (§4.2/§5.1) — a scalar override is invalid"
             )
         branch = dict(default_branch_settings)
-        existing = list(branch.get("required_status_checks", ()))
-        branch["required_status_checks"] = sorted(set(existing) | set(status_checks))
+        if profile.workflow_schema == 2:
+            branch["required_status_checks"] = status_checks
+        else:
+            existing = list(branch.get("required_status_checks", ()))
+            branch["required_status_checks"] = sorted(set(existing) | set(status_checks))
         settings = {**settings, "default_branch": branch}
 
     return ResolvedSet(
@@ -486,4 +502,6 @@ def resolve_profile(
         version_source=version_source,
         toolchain=toolchain,
         pipeline_modules=pipeline_modules,
+        workflow_schema=profile.workflow_schema,
+        scaffold_templates=scaffold_templates,
     )

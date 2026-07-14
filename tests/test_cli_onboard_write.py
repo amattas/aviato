@@ -17,7 +17,28 @@ def _git_init_clean(path: Path) -> None:
     # An empty repo with no changes is a clean working tree.
 
 
-def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def _write_legacy_declaration(tmp_path: Path, *, profile: str = "python-library", docs: bool = False) -> Path:
+    declaration = tmp_path / ".github/aviato.yaml"
+    declaration.parent.mkdir(parents=True, exist_ok=True)
+    declaration.write_text(
+        yaml.safe_dump(
+            {
+                "profile": profile,
+                "profile-identity": f"aviato-profile/{profile}/v1",
+                "version": "0",
+                "docs": docs,
+                "variables": {"distribution-name": "acme", "import-name": "acme"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return declaration
+
+
+def test_legacy_onboard_write_requires_repin_without_adopting(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     rc = main(
         [
             "onboard",
@@ -34,20 +55,10 @@ def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureF
             "import-name=acme",
         ]
     )
-    out = capsys.readouterr().out
-    assert rc == 0
-
-    decl = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
-    assert decl["profile"] == "python-library"
-    # --pin v0 (legacy form) is canonicalized to bare on write; a leading v is never emitted (§6.1).
-    assert decl["version"] == "0"
-    assert decl["variables"]["distribution-name"] == "acme"
-
-    # managed file scaffolded with marker (bare pin); seed-once LICENSE written without marker
-    assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library version=0")
-    assert "wrote .github/aviato.yaml" in out
-    assert f"aviato apply-rulesets OWNER/REPO --apply --declaration {tmp_path / '.github' / 'aviato.yaml'}" in out
-    assert "apply-rulesets OWNER/REPO --apply --profile" not in out
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "repin" in captured.err
+    assert not (tmp_path / ".github/aviato.yaml").exists()
 
 
 @pytest.mark.parametrize("sidecar_body", ["{}\n", "{ corrupt"])
@@ -86,7 +97,9 @@ def test_onboard_write_does_not_treat_lost_declaration_as_fresh(
     assert (tmp_path / "LICENSE").read_text(encoding="utf-8") == "operator license\n"
 
 
-def test_reonboard_preserves_docs_opt_in(tmp_path: Path) -> None:
+def test_legacy_reonboard_preserves_docs_while_requiring_repin(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     # §5.2/§6.1 (M-D): re-onboarding an adopted docs:true repo WITHOUT --docs must NOT silently
     # flip docs back to false. --docs only enables; a re-run preserves the existing choice.
     base = [
@@ -103,17 +116,16 @@ def test_reonboard_preserves_docs_opt_in(tmp_path: Path) -> None:
         "--var",
         "import-name=acme",
     ]
-    assert main(base + ["--docs"]) == 0
-    first = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
-    assert first["docs"] is True
-    # Re-onboard WITHOUT --docs → docs must stay true (preserved like overrides).
-    assert main(base) == 0
-    second = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
-    assert second["docs"] is True
-    assert second["profile-identity"] == first["profile-identity"]
+    declaration = _write_legacy_declaration(tmp_path, docs=True)
+    original = declaration.read_text(encoding="utf-8")
+    assert main(base) == 2
+    assert "repin" in capsys.readouterr().err
+    assert declaration.read_text(encoding="utf-8") == original
 
 
-def test_reonboard_docs_true_also_scaffolds_docs_workflow(tmp_path: Path) -> None:
+def test_legacy_reonboard_docs_true_requires_repin_without_scaffolding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     # §5.2/§6.1/§13.3 (FIX-1): a docs:true declaration re-onboarded WITHOUT --docs must keep
     # docs:true AND scaffold the docs workflow — the artifacts must match the declaration, not
     # silently omit docs (the partial-fix bug where scaffold used args.docs).
@@ -131,16 +143,12 @@ def test_reonboard_docs_true_also_scaffolds_docs_workflow(tmp_path: Path) -> Non
         "--var",
         "import-name=a",
     ]
-    assert main(base + ["--docs"]) == 0
-    docs_workflows = list((tmp_path / ".github" / "workflows").glob("*docs*"))
-    assert docs_workflows
-    for path in docs_workflows:
-        path.unlink()
-
-    rc = main(base)  # NO --docs on the re-onboard
-    assert rc == 0
-    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["docs"] is True
-    assert list((tmp_path / ".github" / "workflows").glob("*docs*")), "docs:true must scaffold the docs workflow"
+    declaration = _write_legacy_declaration(tmp_path, docs=True)
+    original = declaration.read_text(encoding="utf-8")
+    assert main(base) == 2
+    assert "repin" in capsys.readouterr().err
+    assert declaration.read_text(encoding="utf-8") == original
+    assert not (tmp_path / ".github/workflows").exists()
 
 
 def test_onboard_write_fails_on_missing_required_var(tmp_path: Path) -> None:
@@ -230,26 +238,11 @@ def test_onboard_write_refuses_profile_change_without_migrate(
     assert declaration.read_text(encoding="utf-8") == original
 
 
-def test_onboard_write_explicit_profile_migration_persists_new_identity_and_artifacts(tmp_path: Path) -> None:
-    assert (
-        main(
-            [
-                "onboard",
-                str(tmp_path),
-                "--profile",
-                "python-library",
-                "--write",
-                "--allow-dirty",
-                "--pin",
-                "0",
-                "--var",
-                "distribution-name=acme",
-                "--var",
-                "import-name=acme",
-            ]
-        )
-        == 0
-    )
+def test_legacy_onboard_write_profile_migration_requires_repin(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    declaration_path = _write_legacy_declaration(tmp_path)
+    original = declaration_path.read_text(encoding="utf-8")
 
     rc = main(
         [
@@ -269,13 +262,10 @@ def test_onboard_write_explicit_profile_migration_persists_new_identity_and_arti
         ]
     )
 
-    assert rc == 0
-    declaration = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
-    assert declaration["profile"] == "node-service"
-    assert declaration["profile-identity"] == "aviato-profile/node-service/v1"
-    assert (tmp_path / "eslint.config.mjs").exists()
-    assert (tmp_path / "tsconfig.json").exists()
-    assert (tmp_path / ".editorconfig").read_text().startswith("# aviato:managed profile=node-service version=0")
+    assert rc == 2
+    assert "repin" in capsys.readouterr().err
+    assert declaration_path.read_text(encoding="utf-8") == original
+    assert not (tmp_path / "eslint.config.mjs").exists()
 
 
 @pytest.mark.parametrize(
@@ -294,35 +284,14 @@ def test_onboard_write_profile_migration_protects_target_and_mutates_nothing(
     target_state: str,
     reason: str,
 ) -> None:
-    assert (
-        main(
-            [
-                "onboard",
-                str(tmp_path),
-                "--profile",
-                "python-library",
-                "--write",
-                "--allow-dirty",
-                "--pin",
-                "0",
-                "--var",
-                "distribution-name=acme",
-                "--var",
-                "import-name=acme",
-            ]
-        )
-        == 0
-    )
-    capsys.readouterr()
+    _write_legacy_declaration(tmp_path)
     target = tmp_path / ".editorconfig"
-    managed = target.read_text(encoding="utf-8")
-    marker, body = managed.split("\n", 1)
     replacements = {
         "unmanaged": "operator-owned\n",
-        "malformed": f"# aviato:managed malformed\n{body}",
-        "unrelated-profile": f"{marker.replace('profile=python-library', 'profile=swift-app')}\n{body}",
-        "unknown-version": f"{marker.replace('version=0', 'version=unknown')}\n{body}",
-        "hand-edited": managed + "\n# operator edit\n",
+        "malformed": "# aviato:managed malformed\nbody\n",
+        "unrelated-profile": "# aviato:managed profile=swift-app version=0 hash=abc\nbody\n",
+        "unknown-version": "# aviato:managed profile=python-library version=unknown hash=abc\nbody\n",
+        "hand-edited": "# aviato:managed profile=python-library version=0 hash=abc\n# operator edit\n",
     }
     target.write_text(replacements[target_state], encoding="utf-8")
     before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
@@ -348,34 +317,14 @@ def test_onboard_write_profile_migration_protects_target_and_mutates_nothing(
     captured = capsys.readouterr()
     after = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     assert rc == 2
-    assert ".editorconfig" in captured.err
-    assert reason in captured.err.lower()
+    assert "repin" in captured.err
     assert after == before
 
 
 def test_onboard_write_profile_migration_scaffold_rechecks_before_mutation(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert (
-        main(
-            [
-                "onboard",
-                str(tmp_path),
-                "--profile",
-                "python-library",
-                "--write",
-                "--allow-dirty",
-                "--pin",
-                "0",
-                "--var",
-                "distribution-name=acme",
-                "--var",
-                "import-name=acme",
-            ]
-        )
-        == 0
-    )
-    capsys.readouterr()
+    _write_legacy_declaration(tmp_path)
     (tmp_path / ".editorconfig").write_text("operator-owned\n", encoding="utf-8")
     before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     monkeypatch.setattr(cli, "classify_migration_targets", lambda *args, **kwargs: [])
@@ -400,7 +349,7 @@ def test_onboard_write_profile_migration_scaffold_rechecks_before_mutation(
 
     after = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     assert rc == 2
-    assert ".editorconfig" in capsys.readouterr().err
+    assert "repin" in capsys.readouterr().err
     assert after == before
 
 
@@ -427,7 +376,7 @@ def test_onboard_write_refuses_dirty_tree_without_override(tmp_path: Path) -> No
     assert not (tmp_path / ".github" / "aviato.yaml").exists()
 
 
-def test_onboard_write_adopts_clean_git_repo(tmp_path: Path) -> None:
+def test_legacy_onboard_write_clean_git_repo_requires_repin(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _git_init_clean(tmp_path)
     rc = main(
         [
@@ -444,8 +393,9 @@ def test_onboard_write_adopts_clean_git_repo(tmp_path: Path) -> None:
             "import-name=a",
         ]
     )
-    assert rc == 0
-    assert (tmp_path / ".github" / "aviato.yaml").exists()
+    assert rc == 2
+    assert "repin" in capsys.readouterr().err
+    assert not (tmp_path / ".github" / "aviato.yaml").exists()
 
 
 def test_onboard_without_write_only_prints_plan(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -33,6 +33,14 @@ from verified Library bytes. Before declaration inspection or any write, the
 target path is resolved and must equal its Git top level. The pin is resolved
 once to an exact tag-or-branch outcome and commit SHA, and all planning,
 rendering, policy, and ruleset reads share that one snapshot.
+For workflow schema v2 the pinned resolved set and typed variables are compiled
+once into `DesiredState`. The same graph owns generated callers, template
+artifacts, settings, environments, required checks, and privileges. Exact
+onboarding requires every typed variable. A fresh preview may instead compile a
+`PartialDesiredState` that lists definite and conditional outputs and missing
+inputs, but it never has a plan ID and cannot mutate. A missing schema is legacy
+v1: read-only inspection remains available, while graph-changing onboarding
+fails with repin guidance.
 **Two paths, one shape:**
 - *Provision-new*: create the repository, apply **minimal** protection (§2.11),
   scaffold, first commit, then apply **full** protection.
@@ -90,7 +98,8 @@ flowchart TD
     Pin --> Vars["Resolve required variables<br/>(flags > declaration > env > enumerated auto-detect),<br/>then write NON-SECRET into declaration (secret-typed = hard error, §8.15)"]
     Vars --> V{"All required vars present?"}
     V -- no --> Vfail["FAIL CLOSED: list missing vars + how to set"]
-    V -- yes --> Mode{"New or existing?"}
+    V -- yes --> Compile["Compile + validate one pinned DesiredState<br/>jobs · triggers · artifacts · settings · envs · checks"]
+    Compile --> Mode{"New or existing?"}
 
     Mode -- new --> N1["Create repository"]
     N1 --> N2["Apply MINIMAL protection<br/>(safe to persist; does not block first commit)"]

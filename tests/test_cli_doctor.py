@@ -172,6 +172,7 @@ def test_onboard_secret_value_never_prints_in_doctor_facing_plan(
         profile="test-profile",
         pipelines=(),
         variables=(VariableSpec(name="api-token", type="string", required=False, secret=True),),
+        workflow_schema=1,
     )
     monkeypatch.setattr(cli, "resolve_profile", lambda *args, **kwargs: resolved)
     monkeypatch.setattr(cli, "applicable_templates", lambda *args, **kwargs: ())

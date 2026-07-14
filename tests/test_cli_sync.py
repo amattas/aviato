@@ -9,7 +9,6 @@ import pytest
 import aviato.cli as cli
 from aviato.cli import main
 from aviato.core.errors import AviatoError
-from aviato.core.onboarding import materialize_items
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT
 
@@ -38,16 +37,15 @@ def _invalid_consumer(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_sync_materializes_managed_and_seed_once(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_legacy_sync_requires_repin_without_materializing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["sync", str(_consumer(tmp_path)), "--rebaseline-seeds"])
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert "wrote .editorconfig" in out
-    assert "seeded LICENSE" in out
-    assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library version=v0")
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "repin" in captured.err
+    assert not (tmp_path / "ruff.toml").exists()
 
 
-def test_sync_backfills_legacy_identity_from_its_declared_pin(
+def test_legacy_sync_without_identity_requires_repin_without_backfill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     consumer = _consumer(tmp_path)
@@ -62,10 +60,10 @@ def test_sync_backfills_legacy_identity_from_its_declared_pin(
     monkeypatch.setattr(cli, "_open_consumer_context", fake_context)
     rc = main(["sync", str(consumer), "--rebaseline-seeds"])
 
-    assert rc == 0
+    assert rc == 2
     assert fetched == ["v0"]
-    assert "wrote profile-identity aviato-profile/python-library/v1" in capsys.readouterr().out
-    assert "profile-identity: aviato-profile/python-library/v1" in declaration.read_text()
+    assert "repin" in capsys.readouterr().err
+    assert "profile-identity" not in declaration.read_text()
 
 
 @pytest.mark.parametrize("failure", ["unresolved", "identity-mismatch"])
@@ -95,15 +93,15 @@ def test_legacy_sync_fetch_failure_or_identity_mismatch_mutates_nothing(
     assert after == before
 
 
-def test_sync_is_idempotent(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_legacy_sync_repeated_attempts_remain_non_mutating(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     consumer = _consumer(tmp_path)
-    main(["sync", str(consumer), "--rebaseline-seeds"])
+    original = (consumer / ".github/aviato.yaml").read_text(encoding="utf-8")
+    assert main(["sync", str(consumer), "--rebaseline-seeds"]) == 2
     capsys.readouterr()
     rc = main(["sync", str(consumer)])
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert "wrote " not in out  # nothing rewritten on a clean tree
-    assert "unchanged .editorconfig" in out
+    assert rc == 2
+    assert "repin" in capsys.readouterr().err
+    assert (consumer / ".github/aviato.yaml").read_text(encoding="utf-8") == original
 
 
 def test_sync_without_declaration_fails(tmp_path: Path) -> None:
@@ -120,16 +118,14 @@ def test_sync_requires_explicit_rebaseline_for_missing_seed_record(
 
     captured = capsys.readouterr()
     assert rc == 2
-    assert "--rebaseline-seeds" in captured.err
+    assert "repin" in captured.err
     assert not (consumer / "ruff.toml").exists()
     assert not (consumer / ".github" / "aviato.seed.json").exists()
 
 
-def test_sync_rebaseline_prints_every_adopted_seed_and_writes_exact_sidecar(
+def test_legacy_sync_rebaseline_requires_repin_without_seed_sidecar(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    import json
-
     consumer = _consumer(tmp_path)
     (consumer / "LICENSE").write_text("operator license\n", encoding="utf-8")
     (consumer / "pyproject.toml").write_text("operator project\n", encoding="utf-8")
@@ -137,23 +133,12 @@ def test_sync_rebaseline_prints_every_adopted_seed_and_writes_exact_sidecar(
     rc = main(["sync", str(consumer), "--rebaseline-seeds"])
 
     captured = capsys.readouterr()
-    assert rc == 0
-    assert "baselined LICENSE" in captured.out
-    assert "baselined pyproject.toml" in captured.out
-    sidecar = json.loads((consumer / ".github" / "aviato.seed.json").read_text(encoding="utf-8"))
-    assert set(sidecar) == {
-        item.output
-        for item in materialize_items(
-            Registry(MODULE_SOURCE_ROOT),
-            "python-library",
-            {"distribution-name": "acme", "import-name": "acme"},
-            pin="v0",
-        )
-        if item.seed_once
-    }
+    assert rc == 2
+    assert "repin" in captured.err
+    assert not (consumer / ".github/aviato.seed.json").exists()
 
 
-def test_fresh_onboard_write_baselines_preexisting_seed_before_writes(
+def test_legacy_fresh_onboard_requires_repin_before_seed_baseline(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     (tmp_path / "LICENSE").write_text("operator license\n", encoding="utf-8")
@@ -176,9 +161,10 @@ def test_fresh_onboard_write_baselines_preexisting_seed_before_writes(
     )
 
     captured = capsys.readouterr()
-    assert rc == 0
-    assert "baselined LICENSE" in captured.out
-    assert captured.out.index("baselined LICENSE") < captured.out.index("wrote .github/aviato.yaml")
+    assert rc == 2
+    assert "repin" in captured.err
+    assert (tmp_path / "LICENSE").read_text(encoding="utf-8") == "operator license\n"
+    assert not (tmp_path / ".github/aviato.yaml").exists()
 
 
 @pytest.mark.parametrize("command", ["sync", "doctor"])
@@ -192,5 +178,8 @@ def test_materialization_commands_reject_invalid_declared_enum_before_writes(
 
     captured = capsys.readouterr()
     assert rc == 2
-    assert "language-variant" in captured.err
+    if command == "sync":
+        assert "repin" in captured.err
+    else:
+        assert "language-variant" in captured.err
     assert {path.relative_to(consumer) for path in consumer.rglob("*")} == before

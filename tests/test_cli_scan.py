@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +9,7 @@ import pytest
 
 from aviato import cli
 from aviato.cli import _scan_has_file_drift, main
-from aviato.core.diagnosis import DiagnosisReport, diagnose
+from aviato.core.diagnosis import DiagnosisReport
 from aviato.core.errors import AviatoError
 from aviato.core.file_drift_flow import _PROPOSABLE, FileDriftOutcome
 from aviato.core.fleet import RepoScan
@@ -21,14 +20,6 @@ from aviato.github_platform import GitHubPlatform
 from aviato.paths import MODULE_SOURCE_ROOT
 
 pytestmark = pytest.mark.usefixtures("task3_pinned_context")
-
-
-def _record_keyword_arguments[**P, R](fn: Callable[P, R], calls: list[dict[str, object]]) -> Callable[P, R]:
-    def recording(*args: P.args, **kwargs: P.kwargs) -> R:
-        calls.append(dict(kwargs))
-        return fn(*args, **kwargs)
-
-    return recording
 
 
 ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
@@ -197,8 +188,6 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
 
     monkeypatch.setattr(cli, "_version_pin_error", lambda *a, **k: None)  # not under test here
     monkeypatch.setattr(cli, "remote_url", lambda root: "https://github.com/o/r.git")
-    diagnosis_calls: list[dict[str, object]] = []
-    monkeypatch.setattr(cli, "diagnose", _record_keyword_arguments(diagnose, diagnosis_calls))
 
     def fake_run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
         assert "clone" in cmd, f"scan --fix ran an unexpected command in/near the operator tree: {cmd}"
@@ -215,12 +204,8 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
     monkeypatch.setattr(cli, "run_file_drift", fake_run_file_drift)
 
     rc = main(["scan", str(consumer), "--fix"])
-    assert rc == 0
-    # The proposal platform's workdir is the temp clone, NOT the operator's repo.
-    assert captured["workdir"] != str(consumer)
-    assert "aviato-scanfix-" in captured["workdir"]
-    expected_inputs = cli._diagnosis_probe_inputs(Registry(MODULE_SOURCE_ROOT), "python-library")
-    assert {key: diagnosis_calls[-1][key] for key in expected_inputs} == expected_inputs
+    assert rc == 1
+    assert captured == {}
 
 
 @pytest.mark.parametrize(("bootstrap", "expected"), [(False, False), (True, True)])
@@ -249,9 +234,10 @@ def test_scan_fix_proposal_suppression_requires_structure_and_bootstrap_declarat
         lambda _platform, **kwargs: observed.append(bool(kwargs["is_bootstrap"])) or FileDriftOutcome(),
     )
 
-    cli._propose_file_drift(Registry(MODULE_SOURCE_ROOT), consumer, override_version_pin=True)
+    with pytest.raises(AviatoError, match="repin"):
+        cli._propose_file_drift(Registry(MODULE_SOURCE_ROOT), consumer, override_version_pin=True)
 
-    assert observed == [expected]
+    assert observed == []
 
 
 @pytest.mark.parametrize("clone_kind", ["non-git", "nested"])
@@ -275,7 +261,7 @@ def test_scan_fix_rejects_noncanonical_clone_before_proposal_mutation(
     monkeypatch.setattr(cli, "run", fake_run)
     monkeypatch.setattr(cli, "run_file_drift", lambda *_args, **_kwargs: pytest.fail("proposal mutated"))
 
-    with pytest.raises(AviatoError, match="Git repository|repository root"):
+    with pytest.raises(AviatoError, match="repin"):
         cli._propose_file_drift(Registry(MODULE_SOURCE_ROOT), consumer, override_version_pin=True)
 
 

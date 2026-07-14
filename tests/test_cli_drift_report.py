@@ -1,26 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from aviato import cli
-from aviato.core.diagnosis import diagnose
 from aviato.core.ports import Issue, Platform
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT, POLICY_DATA_ROOT
 
 pytestmark = pytest.mark.usefixtures("task3_pinned_context")
-
-
-def _record_keyword_arguments[**P, R](fn: Callable[P, R], calls: list[dict[str, object]]) -> Callable[P, R]:
-    def recording(*args: P.args, **kwargs: P.kwargs) -> R:
-        calls.append(dict(kwargs))
-        return fn(*args, **kwargs)
-
-    return recording
 
 
 class FakePlatform:
@@ -117,8 +107,8 @@ def test_drift_proposal_suppression_requires_structure_and_bootstrap_declaration
     monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
     monkeypatch.setattr(cli, "remote_url", lambda _root: "git@github.com:owner/repo.git")
 
-    assert cli.main(["drift-report", str(consumer), "--file-only"]) == 0
-    assert ("open_or_update_proposal" in fake.call_names()) is proposal_expected
+    assert cli.main(["drift-report", str(consumer), "--file-only"]) == 2
+    assert "open_or_update_proposal" not in fake.call_names()
 
 
 def test_drift_report_rejects_invalid_declared_enum_before_proposal(
@@ -152,17 +142,9 @@ def test_drift_report_proposes_missing_files_and_reports_settings(
 
     rc = cli.main(["drift-report", str(consumer)])
     out = capsys.readouterr().out
-    assert rc == 0
-    # nothing scaffolded yet → managed files are "missing" and get proposed
-    assert "open_or_update_proposal" in fake.call_names()
-    assert "proposed=" in out
-    # the proposed files carry the managed marker (so a merged PR is not dirty-drift)
-    _, args = next(c for c in fake.calls if c[0] == "open_or_update_proposal")
-    files = args[3]
-    assert isinstance(files, dict)
-    assert files, "proposal had no files"
-    assert all("aviato:managed" in body for body in files.values())
-    # settings drift reported (never applied)
+    assert rc == 2
+    assert "proposed=" not in out
+    assert "open_or_update_proposal" not in fake.call_names()
     assert "apply_settings" not in fake.call_names()
 
 
@@ -208,15 +190,11 @@ def test_drift_report_file_only_skips_settings(
     fake = FakePlatform(settings={"required_reviews": 1})
     monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
     monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:owner/repo.git")
-    diagnosis_calls: list[dict[str, object]] = []
-    monkeypatch.setattr("aviato.cli.diagnose", _record_keyword_arguments(diagnose, diagnosis_calls))
     rc = cli.main(["drift-report", str(consumer), "--file-only"])
     out = capsys.readouterr().out
-    assert rc == 0
-    assert "open_or_update_proposal" in fake.call_names()  # file drift ran
+    assert rc == 2
+    assert "open_or_update_proposal" not in fake.call_names()
     assert "settings drift" not in out  # settings never attempted
-    expected_inputs = cli._diagnosis_probe_inputs(Registry(MODULE_SOURCE_ROOT), "python-library")
-    assert {key: diagnosis_calls[0][key] for key in expected_inputs} == expected_inputs
 
 
 def test_drift_report_settings_only_skips_file_drift(
@@ -260,10 +238,10 @@ def test_drift_report_skips_settings_when_unreadable(
     monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
     monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:owner/repo.git")
 
-    rc = cli.main(["drift-report", str(consumer)])
+    rc = cli.main(["drift-report", str(consumer), "--settings-only"])
     captured = capsys.readouterr()
     assert rc == 0  # did not crash
-    assert "open_or_update_proposal" in fake.call_names()  # file drift still ran
+    assert "open_or_update_proposal" not in fake.call_names()
     assert "settings drift: skipped" in captured.err
     assert "apply_settings" not in fake.call_names()  # never mutates
 
@@ -285,7 +263,7 @@ def test_drift_report_require_settings_fails_on_unreadable_settings(
     monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
     monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:owner/repo.git")
 
-    rc = cli.main(["drift-report", str(consumer), "--require-settings"])
+    rc = cli.main(["drift-report", str(consumer), "--settings-only", "--require-settings"])
     captured = capsys.readouterr()
     assert rc == 1  # skip is now a failure under --require-settings
     assert "settings drift: skipped" in captured.err
@@ -339,9 +317,12 @@ def test_drifted_rulesets_honors_required_reviews_override() -> None:
     live = render_all_rulesets(root=POLICY_DATA_ROOT, required_approvals=2, extra_status_checks=checks)
     platform = FakePlatform(rulesets=live)
     # With the override threaded through, desired==live → NO drift.
-    assert _drifted_rulesets(
-        "o/r", platform, policy_root=POLICY_DATA_ROOT, required_approvals=2, extra_status_checks=checks
-    ) == ()
+    assert (
+        _drifted_rulesets(
+            "o/r", platform, policy_root=POLICY_DATA_ROOT, required_approvals=2, extra_status_checks=checks
+        )
+        == ()
+    )
     # Without it (policy default 1), desired (1) != live (2) → the branch ruleset reports drift.
     assert _drifted_rulesets("o/r", platform, policy_root=POLICY_DATA_ROOT, extra_status_checks=checks) != ()
 

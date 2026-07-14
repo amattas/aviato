@@ -159,6 +159,41 @@ def resolved_artifacts(
     and includes the docs caller workflow.
     """
     resolved = resolve_profile(registry, profile, overrides=dict(overrides or {}), docs=docs)
+    if resolved.workflow_schema == 2:
+        # Schema-v2 mutations consume the compiler's one graph-derived artifact set;
+        # they must never fall back to the legacy independent template calculation.
+        from .compiler import compile_desired_state
+
+        desired = compile_desired_state(
+            registry,
+            resolved,
+            variables,
+            pin=pin,
+            docs=docs,
+            bootstrap=bootstrap,
+        )
+        secret_names = {spec.name for spec in resolved.variables if spec.secret}
+        effective_variables = resolve_declared_variables(resolved.variables, variables)
+        input_hash = canonical_input_hash(
+            {
+                **{
+                    name: value
+                    for name, value in effective_variables.items()
+                    if name not in secret_names and value is not None
+                },
+                "docs": docs,
+            }
+        )
+        return [
+            ResolvedArtifact(
+                artifact.output_path,
+                artifact.body,
+                artifact.comment,
+                artifact.seed_once,
+                input_hash,
+            )
+            for artifact in desired.artifacts
+        ]
     derived_rules = registry.profile_doc(profile).get("derived_variables", [])
     effective_variables = resolve_declared_variables(resolved.variables, variables)
     validate_variable_constraints(registry, profile, effective_variables)
@@ -216,6 +251,10 @@ def materialize_items(
     ``overrides`` are the consumer's declaration overrides (§4.2); they must be passed
     so the materialized set matches what diagnosis/drift expect for the same repo.
     """
+    from .compiler import require_workflow_schema_v2
+
+    resolved = resolve_profile(registry, profile, overrides=dict(overrides or {}), docs=docs)
+    require_workflow_schema_v2(resolved, operation="artifact materialization")
     return [
         ScaffoldItem(
             output=a.output,
