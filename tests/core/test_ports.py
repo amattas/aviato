@@ -51,6 +51,19 @@ def test_repository_identity_rejects_invalid_runtime_fields(overrides: dict[str,
         RepositoryIdentity(**values)
 
 
+@pytest.mark.parametrize("default_branch", ["@", "-leading"])
+def test_repository_identity_accepts_fully_qualified_api_ref_names(default_branch: str) -> None:
+    identity = RepositoryIdentity(17, "R_test", "owner/repo", default_branch)
+
+    assert identity.default_branch == default_branch
+
+
+def test_repository_identity_accepts_dot_leading_repository_segment() -> None:
+    identity = RepositoryIdentity(17, "R_test", "github/.github", "main")
+
+    assert identity.full_name == "github/.github"
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -100,3 +113,15 @@ def test_resolved_library_ref_rejects_invalid_runtime_fields(overrides: dict[str
 
     with pytest.raises(ValueError):
         ResolvedLibraryRef(**values)
+
+
+@pytest.mark.parametrize("ref_kind", [LibraryRefKind.BRANCH, LibraryRefKind.TAG])
+@pytest.mark.parametrize("requested_pin", ["@", "-leading"])
+def test_resolved_library_ref_accepts_fully_qualified_api_ref_names(
+    ref_kind: LibraryRefKind,
+    requested_pin: str,
+) -> None:
+    identity = RepositoryIdentity(17, "R_test", "owner/repo", "main")
+    resolved = ResolvedLibraryRef(identity, ref_kind, requested_pin, "a" * 40, "a" * 40)
+
+    assert resolved.requested_pin == requested_pin

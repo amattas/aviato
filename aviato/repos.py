@@ -9,7 +9,9 @@ from .command import run
 
 # R2-8: a slug is exactly `owner/repo` with safe chars — anything else (a `?`-bearing segment, a
 # sub-path) is rejected so it can't later alter an API endpoint it's interpolated into.
-_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+_OWNER_REPO_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*/(?:[A-Za-z0-9][A-Za-z0-9._-]*|\.[A-Za-z0-9_-][A-Za-z0-9._-]*)$"
+)
 # SCP-style / SSH remotes: `git@github.com:owner/repo(.git)`, `ssh://git@github.com/owner/repo`.
 # Anchored at the start with the host as a literal so `notgithub.com/...` cannot match (the old
 # unanchored `github.com` search did).
@@ -22,7 +24,10 @@ def is_owner_repo_slug(value: str) -> bool:
     The same rule ``normalize_slug`` enforces on remotes — exported so explicit slug
     ARGUMENTS (proposal paths) are validated identically instead of flowing raw into
     ``gh repo clone``."""
-    return _OWNER_REPO_RE.fullmatch(value) is not None
+    if _OWNER_REPO_RE.fullmatch(value) is None:
+        return False
+    repository = value.partition("/")[2]
+    return repository not in {".", ".."}
 
 
 def normalize_slug(remote_url: str) -> str:

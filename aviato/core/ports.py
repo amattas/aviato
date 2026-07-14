@@ -5,12 +5,22 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-_REPOSITORY_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+_REPOSITORY_SLUG_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*/(?:[A-Za-z0-9][A-Za-z0-9._-]*|\.[A-Za-z0-9_-][A-Za-z0-9._-]*)$"
+)
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _GIT_OBJECT_ENDPOINT_RE = re.compile(
-    r"^repos/[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*/git/"
+    r"^repos/[A-Za-z0-9][A-Za-z0-9._-]*/"
+    r"(?:[A-Za-z0-9][A-Za-z0-9._-]*|\.[A-Za-z0-9_-][A-Za-z0-9._-]*)/git/"
     r"(?:ref/(?:heads|tags)/[^/?#\\\s]+|tags/[0-9a-f]{40})$"
 )
+
+
+def _is_repository_slug(value: str) -> bool:
+    if _REPOSITORY_SLUG_RE.fullmatch(value) is None:
+        return False
+    repository = value.partition("/")[2]
+    return repository not in {".", ".."}
 
 
 def validate_git_ref_name(name: str) -> None:
@@ -19,8 +29,6 @@ def validate_git_ref_name(name: str) -> None:
     invalid = (
         not isinstance(name, str)
         or not name
-        or name == "@"
-        or name.startswith("-")
         or name.endswith(".")
         or ".." in name
         or "@{" in name
@@ -72,7 +80,7 @@ class RepositoryIdentity:
             raise ValueError("repository database_id must be a positive integer")
         if not isinstance(self.node_id, str) or not self.node_id.strip():
             raise ValueError("repository node_id must be a nonempty string")
-        if not isinstance(self.full_name, str) or _REPOSITORY_SLUG_RE.fullmatch(self.full_name) is None:
+        if not isinstance(self.full_name, str) or not _is_repository_slug(self.full_name):
             raise ValueError("repository full_name must be a canonical owner/repo slug")
         try:
             validate_git_ref_name(self.default_branch)

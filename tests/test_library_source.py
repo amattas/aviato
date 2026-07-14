@@ -343,7 +343,7 @@ def test_repository_metadata_requires_valid_default_branch(
     assert calls == [repository_endpoint]
 
 
-@pytest.mark.parametrize("pin", ["", "-leading", "release.lock", "foo..bar", "bad?query", r"bad\ref"])
+@pytest.mark.parametrize("pin", ["", "release.lock", "foo..bar", "bad?query", r"bad\ref"])
 def test_invalid_requested_ref_is_rejected_before_any_api_call(
     monkeypatch: pytest.MonkeyPatch,
     pin: str,
@@ -359,6 +359,44 @@ def test_invalid_requested_ref_is_rejected_before_any_api_call(
         library_source.resolve_library_ref(REPOSITORY, pin)
 
     assert calls == []
+
+
+@pytest.mark.parametrize("pin", ["@", "-leading"])
+@pytest.mark.parametrize("expected_kind", ["tag", "branch"])
+def test_valid_api_ref_names_resolve_through_correlated_tag_and_branch_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+    pin: str,
+    expected_kind: str,
+) -> None:
+    repository_endpoint = f"repos/{REPOSITORY}"
+    encoded_pin = "%40" if pin == "@" else pin
+    tag_endpoint = f"{repository_endpoint}/git/ref/tags/{encoded_pin}"
+    branch_endpoint = f"{repository_endpoint}/git/ref/heads/{encoded_pin}"
+    responses: dict[str, subprocess.CompletedProcess[str] | list[subprocess.CompletedProcess[str]]] = {
+        **_accessible_repository_responses(),
+        tag_endpoint: (
+            _ref_response(tag_endpoint, "commit", SHA)
+            if expected_kind == "tag"
+            else _not_found(tag_endpoint)
+        ),
+    }
+    if expected_kind == "branch":
+        responses[branch_endpoint] = _ref_response(branch_endpoint, "commit", BRANCH_SHA)
+    calls = _install_api(monkeypatch, responses)
+
+    resolved = library_source.resolve_library_ref(REPOSITORY, pin)
+
+    assert resolved.ref_kind.value == expected_kind
+    assert resolved.requested_pin == pin
+    assert resolved.commit_sha == (SHA if expected_kind == "tag" else BRANCH_SHA)
+    expected_calls = [
+        repository_endpoint,
+        f"{repository_endpoint}/git/ref/heads/{DEFAULT_BRANCH}",
+        tag_endpoint,
+    ]
+    if expected_kind == "branch":
+        expected_calls.append(branch_endpoint)
+    assert calls == expected_calls
 
 
 def test_invalid_default_ref_is_rejected_before_git_api_call(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -124,7 +124,20 @@ def test_repository_identity_launch_failure_is_a_github_api_error(monkeypatch: p
 
 @pytest.mark.parametrize(
     "slug",
-    ["", "owner", "owner/repo/extra", "owner//repo", "-owner/repo", "owner/repo?query", "owner/.."],
+    [
+        "",
+        "owner",
+        "owner/repo/extra",
+        "owner//repo",
+        ".owner/repo",
+        "-owner/repo",
+        "_owner/repo",
+        "owner/.",
+        "owner/..",
+        "owner/../repo",
+        "owner/repo?query",
+        "owner/repo#fragment",
+    ],
 )
 def test_invalid_repository_slug_is_rejected_before_api_call(
     monkeypatch: pytest.MonkeyPatch,
@@ -143,6 +156,49 @@ def test_invalid_repository_slug_is_rejected_before_api_call(
     assert calls == []
 
 
+def test_dot_leading_repository_segment_preserves_correlated_api_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slug = "github/.github"
+    repository_endpoint = f"repos/{slug}"
+    ref_endpoint = f"{repository_endpoint}/git/ref/heads/main"
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if command[2] == repository_endpoint:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "id": 17,
+                        "node_id": "R_dot",
+                        "full_name": slug,
+                        "default_branch": "main",
+                    }
+                ),
+                "",
+            )
+        if command[2] == ref_endpoint:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps({"object": {"type": "commit", "sha": "a" * 40}}),
+                "",
+            )
+        raise AssertionError(f"unexpected GitHub API read: {command[2]}")
+
+    monkeypatch.setattr(github, "run", fake_run)
+
+    identity = github.repository_identity(slug)
+    outcome = github.read_git_ref(identity, github.GitRefNamespace.HEADS, identity.default_branch)
+
+    assert identity.full_name == slug
+    assert outcome.endpoint == ref_endpoint
+    assert calls == [["gh", "api", repository_endpoint], ["gh", "api", ref_endpoint]]
+
+
 @pytest.mark.parametrize(
     "ref_name",
     [
@@ -154,7 +210,6 @@ def test_invalid_repository_slug_is_rejected_before_api_call(
         "bad?query",
         "bad\x01control",
         r"bad\ref",
-        "-leading",
         "release.lock",
         "foo@{bar",
         "bad~ref",
@@ -180,6 +235,36 @@ def test_invalid_git_ref_name_is_rejected_before_api_call(
         github.read_git_ref(identity, github.GitRefNamespace.HEADS, ref_name)
 
     assert calls == []
+
+
+@pytest.mark.parametrize("namespace", [github.GitRefNamespace.HEADS, github.GitRefNamespace.TAGS])
+@pytest.mark.parametrize(("ref_name", "encoded_name"), [("@", "%40"), ("-leading", "-leading")])
+def test_fully_qualified_api_refs_preserve_valid_at_and_leading_hyphen_names(
+    monkeypatch: pytest.MonkeyPatch,
+    namespace: github.GitRefNamespace,
+    ref_name: str,
+    encoded_name: str,
+) -> None:
+    identity = RepositoryIdentity(database_id=17, node_id="R_test", full_name="o/r", default_branch="main")
+    endpoint = f"repos/o/r/git/ref/{namespace.value}/{encoded_name}"
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps({"object": {"type": "commit", "sha": "a" * 40}}),
+            "",
+        )
+
+    monkeypatch.setattr(github, "run", fake_run)
+
+    outcome = github.read_git_ref(identity, namespace, ref_name)
+
+    assert outcome.status.value == "found"
+    assert outcome.endpoint == endpoint
+    assert calls == [["gh", "api", endpoint]]
 
 
 def test_valid_nested_ref_uses_typed_namespace_and_encoded_correlated_endpoint(
