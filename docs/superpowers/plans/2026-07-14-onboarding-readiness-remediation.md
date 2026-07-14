@@ -225,14 +225,21 @@ git commit -m "fix(library): resolve immutable refs fail closed"
 - Modify: `aviato/core/declaration.py`
 - Modify: `aviato/core/fleet.py`
 - Modify: `aviato/library_source.py`
+- Modify: `aviato/rulesets.py`
+- Modify: `aviato/audit.py`
+- Modify: `aviato/plugins/actionpins.py`
+- Modify: `aviato/plugins/zizmor_scan.py`
 - Modify: `aviato/cli.py`
 - Modify: `docs/architecture/data-flow.md`
+- Modify: `docs/architecture/infrastructure.md`
 - Modify: `docs/specifications/core/consumer-contract.md`
 - Modify: `docs/specifications/modules/onboarding/flow.md`
 - Modify: `docs/specifications/modules/onboarding/bootstrap.md`
 - Create: `tests/core/test_operation_context.py`
 - Test: `tests/core/test_bootstrap.py`
 - Test: `tests/test_cli_onboard.py`
+- Test: `tests/test_cli_onboard_write.py`
+- Test: `tests/test_cli_onboard_proposal.py`
 - Test: `tests/test_cli_sync.py`
 - Test: `tests/test_cli_doctor.py`
 - Test: `tests/test_cli_provision.py`
@@ -242,6 +249,12 @@ git commit -m "fix(library): resolve immutable refs fail closed"
 - Test: `tests/test_cli_apply_rulesets.py`
 - Test: `tests/test_cli_scan.py`
 - Test: `tests/test_cli_drift_report.py`
+- Test: `tests/test_cli_release.py`
+- Test: `tests/test_cli_lint_actions.py`
+- Test: `tests/test_audit.py`
+- Test: `tests/test_rulesets.py`
+- Test: `tests/core/test_actionpins.py`
+- Test: `tests/core/test_zizmor_scan.py`
 - Create: `tests/test_operation_context_boundaries.py`
 
 - [ ] Add failing tests named:
@@ -253,8 +266,13 @@ test_canonical_dot_tmp_alias_and_symlink_targets_resolve_before_any_write
 test_nested_repository_directory_and_non_repository_target_are_rejected
 test_bootstrap_snapshot_reads_operated_checkout_not_installed_package
 test_bootstrap_snapshot_records_head_and_deterministic_library_tree_digest
+test_bootstrap_snapshot_copies_then_hashes_the_same_immutable_tree
 test_reonboard_preserves_verified_bootstrap
 test_bootstrap_is_rejected_outside_a_structural_library_before_render
+test_symlinked_bootstrap_structure_is_rejected
+test_unresolved_pin_escape_hatch_is_rejected_before_render_or_write
+test_unpinned_consumer_modes_require_a_pin_or_declaration_context
+test_ruleset_audit_and_lint_consumers_use_snapshot_policy_not_installed_data
 test_consumer_modules_cannot_read_installed_source_or_policy_roots
 ```
 
@@ -267,22 +285,41 @@ their inconsistent `MODULE_SOURCE_ROOT`/`POLICY_DATA_ROOT` reads.
 - [ ] Implement frozen `LibrarySnapshot` and `OperationContext` types. A
   published snapshot owns its temporary extraction lifetime, Registry, policy
   root, requested pin, resolved ref kind, commit SHA, and repository identity.
-  Construct it exactly once and inject it through every pin-bearing path.
+  Construct it exactly once and inject it through every pin-bearing path. Refactor
+  the Task 2 fetcher so resolution, commit-addressed download, Registry creation,
+  and policy reads all share this one snapshot; a compatibility Registry wrapper
+  may delegate to it but may not resolve a second time. Require the snapshot
+  policy's Library repository to match the resolved canonical identity.
 - [ ] Canonicalize the target once with `resolve()`, locate the Git root, and
   require equality. Handle macOS `/tmp`/`/private/tmp` aliases, symlinks, `.`,
-  nonexistent targets, and nested paths before any declaration or artifact
-  write.
+  nonexistent targets, and nested paths before any declaration read, render, or
+  artifact write. Proposal clones and provision callbacks must become real Git
+  repositories and be canonicalized after cloning and before their first write.
 - [ ] Permit bootstrap only for a structurally verified operated Library checkout.
-  Read that checkout's `aviato/library` and policy tree, record Git HEAD and a
-  stable tree digest, preserve an existing valid bootstrap flag on re-onboard,
-  and reject bootstrap elsewhere before rendering.
+  Reject symlinked structural anchors, copy the checkout's `aviato/library` and
+  policy tree into a temporary immutable snapshot, hash that same copy, record
+  Git HEAD and a stable tree digest, preserve an existing valid bootstrap flag
+  on re-onboard, and reject bootstrap elsewhere before profile resolution or
+  rendering. Structural verification and `bootstrap: true` must both hold before
+  any compatibility gate is skipped.
+- [ ] Remove `_published_library_ref_exists`/`_require_published_pin` as a second
+  publication authority. The typed Task 2 resolution plus fetched bytes are the
+  only pin proof. Retain `--allow-unresolved-pin` only as a compatibility error:
+  if supplied, fail before render/write and explain that verified Library bytes
+  are mandatory; never fall back to installed data or add a test-only production
+  path.
 - [ ] Remove post-context reads of installed source roots from consumer command
   bodies, including profile-check derivation, ruleset declaration mode, expected
   artifacts, onboard/proposal, doctor/fleet scan, sync, file/settings drift,
   repin/proposal, offboard/proposal, complete-protection, provision,
-  bump-version, and reconcile. Installed roots remain usable only for validating
-  Aviato's own installed/source package. Add an AST-based boundary test that
-  rejects `MODULE_SOURCE_ROOT` or `POLICY_DATA_ROOT` in consumer paths.
+  bump-version, reconcile, audit, render-rulesets, and lint-actions. Make
+  `apply_rulesets` require an explicit snapshot policy root or pre-rendered
+  payloads rather than silently using its default. Modes without a declaration
+  must require an explicit pin; multi-repository audit/scan opens each declared
+  pin independently. Installed roots remain usable only for validating Aviato's
+  own installed/source package. Add an AST-based boundary test that rejects
+  `MODULE_SOURCE_ROOT`, `POLICY_DATA_ROOT`, and no-root `load_policy()`,
+  `render_all_rulesets()`, or `apply_rulesets()` calls in consumer paths.
 - [ ] Update the consumer contract, onboarding/bootstrap behavior, and operation
   data-flow diagram in this same commit with canonical-root, pinned snapshot,
   exact ref outcome, and checkout-local bootstrap ownership.
@@ -293,11 +330,15 @@ PATH="/Users/amattas/GitHub/aviato/.venv/bin:$PATH" \
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 python -m pytest -q \
   tests/core/test_operation_context.py tests/core/test_bootstrap.py \
-  tests/test_library_source.py tests/test_cli_onboard.py tests/test_cli_sync.py \
+  tests/test_library_source.py tests/test_cli_onboard.py \
+  tests/test_cli_onboard_write.py tests/test_cli_onboard_proposal.py \
+  tests/test_cli_sync.py \
   tests/test_cli_doctor.py tests/test_cli_provision.py \
   tests/test_cli_repin_offboard.py tests/test_cli_reconcile.py \
   tests/test_cli_version_pin.py tests/test_cli_apply_rulesets.py \
-  tests/test_cli_scan.py tests/test_cli_drift_report.py \
+  tests/test_cli_scan.py tests/test_cli_drift_report.py tests/test_cli_release.py \
+  tests/test_cli_lint_actions.py tests/test_audit.py tests/test_rulesets.py \
+  tests/core/test_actionpins.py tests/core/test_zizmor_scan.py \
   tests/test_operation_context_boundaries.py tests/core/test_pathguard.py \
   tests/core/test_declaration.py tests/core/test_fleet.py
 git diff --check
@@ -306,7 +347,25 @@ git diff --check
 - [ ] Commit:
 
 ```bash
-git add aviato/core/operation_context.py aviato/core/bootstrap.py aviato/core/pathguard.py aviato/core/declaration.py aviato/core/fleet.py aviato/library_source.py aviato/cli.py docs/architecture/data-flow.md docs/specifications/core/consumer-contract.md docs/specifications/modules/onboarding/flow.md docs/specifications/modules/onboarding/bootstrap.md tests/core/test_operation_context.py tests/core/test_bootstrap.py tests/core/test_pathguard.py tests/core/test_declaration.py tests/core/test_fleet.py tests/test_cli_onboard.py tests/test_cli_sync.py tests/test_cli_doctor.py tests/test_cli_provision.py tests/test_cli_repin_offboard.py tests/test_cli_reconcile.py tests/test_cli_version_pin.py tests/test_cli_apply_rulesets.py tests/test_cli_scan.py tests/test_cli_drift_report.py tests/test_operation_context_boundaries.py
+git add aviato/core/operation_context.py aviato/core/bootstrap.py \
+  aviato/core/pathguard.py aviato/core/declaration.py aviato/core/fleet.py \
+  aviato/library_source.py aviato/rulesets.py aviato/audit.py \
+  aviato/plugins/actionpins.py aviato/plugins/zizmor_scan.py aviato/cli.py \
+  docs/architecture/data-flow.md docs/architecture/infrastructure.md \
+  docs/specifications/core/consumer-contract.md \
+  docs/specifications/modules/onboarding/flow.md \
+  docs/specifications/modules/onboarding/bootstrap.md \
+  tests/core/test_operation_context.py tests/core/test_bootstrap.py \
+  tests/core/test_pathguard.py tests/core/test_declaration.py \
+  tests/core/test_fleet.py tests/core/test_actionpins.py \
+  tests/core/test_zizmor_scan.py tests/test_cli_onboard.py \
+  tests/test_cli_onboard_write.py tests/test_cli_onboard_proposal.py \
+  tests/test_cli_sync.py tests/test_cli_doctor.py tests/test_cli_provision.py \
+  tests/test_cli_repin_offboard.py tests/test_cli_reconcile.py \
+  tests/test_cli_version_pin.py tests/test_cli_apply_rulesets.py \
+  tests/test_cli_scan.py tests/test_cli_drift_report.py tests/test_cli_release.py \
+  tests/test_cli_lint_actions.py tests/test_audit.py tests/test_rulesets.py \
+  tests/test_operation_context_boundaries.py
 git commit -m "refactor(core): bind operations to pinned context"
 ```
 
