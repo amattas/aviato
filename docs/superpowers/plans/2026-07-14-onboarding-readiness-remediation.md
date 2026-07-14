@@ -146,8 +146,10 @@ tracked progress-ledger change, if repository policy requires it.
 - Modify: `aviato/library_source.py`
 - Modify: `aviato/github.py`
 - Modify: `aviato/core/ports.py`
+- Modify: `aviato/command.py`
 - Test: `tests/test_library_source.py`
 - Test: `tests/test_github.py`
+- Test: `tests/test_command_hardening.py`
 
 - [ ] Add failing tests named:
 
@@ -159,6 +161,10 @@ test_auth_rate_limit_timeout_server_and_malformed_reads_are_errors
 test_annotated_tag_peel_failure_never_falls_back_to_branch
 test_ref_movement_after_resolution_still_fetches_original_commit_archive
 test_archive_identity_must_match_the_resolved_commit
+test_metadata_visible_but_git_content_hidden_never_falls_back
+test_archive_download_uses_supported_binary_stdout_and_preserves_bytes
+test_binary_output_failure_timeout_and_launch_error_remove_partial_file
+test_terminal_http_status_controls_not_found_classification
 ```
 
 Use correlated fake GitHub responses for the API boundary and a real tar archive
@@ -170,29 +176,43 @@ expressed as an immutable result object.
   `ERROR` outcomes and a `ResolvedLibraryRef` containing ref kind, requested pin,
   object SHA, peeled 40-character commit SHA, and repository identity. Establish
   repository accessibility/authentication before accepting an endpoint 404 as
-  definite absence.
+  definite absence. Repository metadata visibility alone is insufficient: bind
+  the canonical identity/default branch and positively read its Git ref under
+  the same authentication context. A hidden, malformed, non-commit, or unreadable
+  default-branch ref is terminal.
 - [ ] Make tag resolution authoritative. Only a correlated tag `NOT_FOUND` may
   proceed to branch lookup; every other tag failure is terminal. Validate object
   kinds and recursively peel annotated tags without accepting cycles or
-  malformed SHAs.
+  malformed SHAs. Classify the terminal HTTP status rather than accepting a stale
+  embedded `HTTP 404` when the final response is a 403 or server failure.
 - [ ] Download the archive by the resolved commit SHA, validate the single archive
-  root and Library layout, and expose the resolved kind/SHA for operator output.
-  Move the ref between resolution and download in the test and prove byte
-  identity still comes from the original SHA.
+  root against the bound repository identity and GitHub's documented abbreviated
+  commit-root shape, validate the Library layout, and expose the resolved kind/SHA
+  for operator output. Move the ref between resolution and download in the test
+  and prove byte identity still comes from the original SHA.
+- [ ] Replace the unsupported `gh api --output` invocation with a centralized,
+  finite-timeout, shell-free binary-to-exclusive-file helper. Stream stdout bytes
+  directly to the destination, capture text stderr, preserve the command error
+  contract, and remove every partial destination on nonzero exit, timeout, or
+  launch failure. Exercise the supported real argv in tests; do not make a fake
+  implement a GitHub CLI flag that the installed CLI rejects.
 - [ ] Run focused verification:
 
 ```bash
 PATH="/Users/amattas/GitHub/aviato/.venv/bin:$PATH" \
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-python -m pytest -q tests/test_library_source.py tests/test_github.py
+python -m pytest -q tests/test_library_source.py tests/test_github.py \
+  tests/test_command_hardening.py
 git diff --check
 ```
 
 - [ ] Commit:
 
 ```bash
-git add aviato/library_source.py aviato/github.py aviato/core/ports.py tests/test_library_source.py tests/test_github.py
-git commit -m "fix(source): resolve immutable library snapshots"
+git add aviato/library_source.py aviato/github.py aviato/core/ports.py \
+  aviato/command.py tests/test_library_source.py tests/test_github.py \
+  tests/test_command_hardening.py
+git commit -m "fix(library): resolve immutable refs fail closed"
 ```
 
 ### Task 3: Introduce the canonical operation context and bootstrap snapshot
