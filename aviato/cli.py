@@ -26,7 +26,7 @@ from .core.errors import AviatoError, CompatibilityError, DeclarationError
 from .core.file_drift_flow import _PROPOSABLE, FileDriftOutcome, run_file_drift
 from .core.fleet import RepoScan, scan_fleet
 from .core.marker import parse_marker_from_text
-from .core.model import ResolvedSet, VariableSpec
+from .core.model import ResolvedSet, Unknown, VariableSpec
 from .core.offboarding import offboard as offboard_repo
 from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, resolved_artifacts
 from .core.operation_context import (
@@ -51,7 +51,12 @@ from .core.scaffold import (
     scaffold,
 )
 from .core.settings_drift_flow import run_settings_drift
-from .core.variables import resolve_declared_variables, resolve_variables, writeback_variables
+from .core.variables import (
+    resolve_declared_variables,
+    resolve_partial_variables,
+    resolve_variables,
+    writeback_variables,
+)
 from .core.version import is_compatible, is_known_version_pin, most_restrictive_recorded, normalize_pin
 from .core.versioning import classify_commits, is_highest, next_version
 from .github import GitHubAPIError, SettingsReadError, gh_json_paginated_optional, is_archived
@@ -265,11 +270,11 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
             root = canonical_repository_root(supplied_declaration.parent.parent)
             declaration = _load_consumer_declaration(root)
             context = _open_consumer_context(root, declaration)
+            resolved = resolve_profile(context.registry, declaration.profile, overrides=declaration.overrides)
+            resolve_declared_variables(resolved.variables, declaration.variables)
             extra_checks = _profile_status_checks(context.registry, declaration.profile, declaration.overrides)
             if required_approvals is None:
-                _db = resolve_profile(
-                    context.registry, declaration.profile, overrides=declaration.overrides
-                ).settings.get("default_branch", {})
+                _db = resolved.settings.get("default_branch", {})
                 required_approvals = _db.get("required_reviews")
         else:
             if not getattr(args, "pin", None):
@@ -469,7 +474,7 @@ def _deployment_environments(resolved: ResolvedSet, render_inputs: Mapping[str, 
         environment = module.environment
         if module.environment_input is not None:
             selected = render_inputs.get(module.environment_input)
-            if selected is not None:
+            if selected is not None and selected is not Unknown:
                 environment = str(selected)
         if environment:
             environments.add(environment)
@@ -674,11 +679,36 @@ def _resolve_onboard_declaration(
     else:
         profile_identity = resolved_identity
 
+    if existing is not None and existing.profile != args.profile and not args.migrate_profile:
+        raise DeclarationError(
+            f"repository already declares profile {existing.profile!r}; "
+            f"pass --migrate-profile (allow_migrate) to change it to {args.profile!r}"
+        )
+
+    declaration_variables: Mapping[str, Any] = existing.variables if existing else {}
+    if existing is not None and existing.profile != args.profile:
+        # An explicit profile migration crosses two closed variable schemas. First
+        # prove the saved declaration is valid for its current profile, then carry
+        # only names also declared by the target profile into target resolution.
+        # Old-profile-only values are deliberately retired; arbitrary unknown keys
+        # still fail at the current-profile validation boundary.
+        current_resolved = resolve_profile(
+            registry,
+            existing.profile,
+            overrides=existing.overrides,
+            docs=existing.docs,
+        )
+        resolve_declared_variables(current_resolved.variables, existing.variables)
+        target_names = {spec.name for spec in resolved.variables}
+        declaration_variables = {
+            name: value for name, value in existing.variables.items() if name in target_names
+        }
+
     flags = _parse_var_flags(args.var)
     variables = resolve_variables(
         resolved.variables,
         flags=flags,
-        declaration=(existing.variables if existing else {}),
+        declaration=declaration_variables,
         env=_env_vars(resolved.variables),
         # §5.2 day-zero: the auto-detection tier maps no identity-bearing variable that
         # would be a GUESS — a resolved value is PERSISTED into the declaration and a
@@ -968,7 +998,6 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     # write/proposal paths use BEFORE emitting any plan, so the dry-run never prints a partial plan
     # for an invalid --var/--pin, nor a plan for an action --write would refuse (a profile change
     # without --migrate-profile).
-    flag_vars = _parse_var_flags(args.var)
     canonical_pin = normalize_pin(args.pin)
     if existing is not None:
         # Resolve through the exact write-path precedence and guards, but discard the
@@ -980,8 +1009,14 @@ def cmd_onboard(args: argparse.Namespace) -> int:
         # A fresh plan intentionally remains usable before required variables and a pin
         # are known. Resolve the subset available to preview conditional artifacts and
         # configurable environments without weakening the stricter --write preflight.
-        known = {spec.name: spec.default for spec in resolved.variables if spec.default is not None}
-        known.update(flag_vars)
+        flag_vars = _parse_var_flags(args.var)
+        known = resolve_partial_variables(
+            resolved.variables,
+            flags=flag_vars,
+            declaration={},
+            env=_env_vars(resolved.variables),
+            autodetect=_autodetect_vars(args.target),
+        ).values
 
     print(f"Onboarding plan for {args.target}")
     print(f"profile: {resolved.profile}")

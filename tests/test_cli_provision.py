@@ -137,6 +137,39 @@ def test_provision_requires_explicit_pin(capsys: pytest.CaptureFixture[str]) -> 
     assert "--pin" in err
 
 
+def test_provision_rejects_unknown_flag_variable_before_remote_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "provision_repo",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("provision must not run for unknown variables")
+        ),
+    )
+
+    rc = main(
+        [
+            "provision",
+            "o/r",
+            "--profile",
+            "python-library",
+            "--pin",
+            "0",
+            "--var",
+            "distribution-name=acme",
+            "--var",
+            "import-name=acme",
+            "--var",
+            "distribution-naem=typo",
+        ]
+    )
+
+    assert rc == 2
+    assert "distribution-naem" in capsys.readouterr().err
+
+
 def test_provision_refuses_unpublished_pin(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     from aviato.core.errors import AviatoError
 

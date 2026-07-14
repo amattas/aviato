@@ -7,6 +7,7 @@ from typing import Never, cast
 import pytest
 
 from aviato import cli
+from aviato.core.declaration import Declaration
 from aviato.core.ports import RulesetApplyResult
 from aviato.github import GitHubAPIError
 from aviato.paths import POLICY_DATA_ROOT
@@ -68,6 +69,37 @@ def test_apply_rulesets_declaration_preserves_zero_approval_override(monkeypatch
             ],
         }
     ]
+
+
+def test_apply_rulesets_rejects_unknown_declaration_variable_before_protection(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    declaration_path = Path(__file__).resolve().parents[1] / ".github" / "aviato.yaml"
+    monkeypatch.setattr(
+        cli,
+        "_load_consumer_declaration",
+        lambda _root: Declaration(
+            profile="python-library",
+            version="0",
+            profile_identity="aviato-profile/python-library/v1",
+            variables={
+                "distribution-name": "acme",
+                "import-name": "acme",
+                "distribution-naem": "typo",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "apply_rulesets",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("protection must not run for unknown declaration variables")
+        ),
+    )
+
+    assert cli.main(["apply-rulesets", "amattas/aviato", "--declaration", str(declaration_path)]) == 2
+    assert "distribution-naem" in capsys.readouterr().err
 
 
 def test_apply_rulesets_requires_a_slug(capsys: pytest.CaptureFixture[str]) -> None:

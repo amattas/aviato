@@ -200,6 +200,22 @@ def test_template_applies_canonicalizes_booleans() -> None:
     assert template_applies(t2, {"docs": True}) is True
 
 
+def test_partial_when_expression_is_true_false_or_indeterminate() -> None:
+    from aviato.core import model as model_module
+    from aviato.core.onboarding import template_applies
+
+    template = TemplateModule(
+        output_path="conditional.yml",
+        source="conditional.yml",
+        when=(("enabled", "true"), ("mode", "safe")),
+    )
+
+    assert template_applies(template, {"enabled": True, "mode": "safe"}) is True
+    assert template_applies(template, {"enabled": False, "mode": model_module.Unknown}) is False
+    assert template_applies(template, {"enabled": True, "mode": model_module.Unknown}) is model_module.Unknown
+    assert template_applies(template, {"enabled": True}) is model_module.Unknown
+
+
 def test_materialize_builds_scaffold_items_from_resolved_set() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     items = materialize_items(reg, "python-library", variables=PYTHON_VARIABLES, pin="0")

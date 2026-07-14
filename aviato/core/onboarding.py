@@ -9,7 +9,7 @@ from .composition import resolve_profile
 from .declaration import Declaration
 from .errors import CompositionError, DeclarationError
 from .marker import canonical_input_hash
-from .model import ResolvedSet, TemplateModule
+from .model import ResolvedSet, TemplateModule, Unknown, UnknownValue
 from .registry import Registry
 from .render import render
 from .scaffold import ScaffoldItem
@@ -29,9 +29,17 @@ def _canon(value: Any) -> str:
     return text.lower() if text.lower() in ("true", "false") else text
 
 
-def template_applies(template: TemplateModule, variables: Mapping[str, Any]) -> bool:
-    """True if a conditional template's ``when`` matches the resolved variables (§12.2)."""
-    return all(_canon(variables.get(key)) == _canon(value) for key, value in template.when)
+def template_applies(template: TemplateModule, variables: Mapping[str, Any]) -> bool | UnknownValue:
+    """Evaluate a template condition as true, false, or indeterminate."""
+
+    result: bool | UnknownValue = True
+    for key, expected in template.when:
+        actual = variables.get(key, Unknown)
+        if actual is Unknown:
+            result = Unknown
+        elif _canon(actual) != _canon(expected):
+            return False
+    return result
 
 
 def render_variables(
@@ -103,7 +111,7 @@ def validate_variable_constraints(registry: Registry, profile: str, variables: M
 
 def applicable_templates(resolved: ResolvedSet, variables: Mapping[str, Any]) -> list[TemplateModule]:
     """The resolved templates that apply given the variables (filters §12.2/§6.1 conditionals)."""
-    return [t for t in resolved.templates if template_applies(t, variables)]
+    return [t for t in resolved.templates if template_applies(t, variables) is True]
 
 
 def check_output_collisions(templates: Iterable[TemplateModule]) -> None:

@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import Any
 
 from .errors import DeclarationError
-from .model import VariableSpec
+from .model import PartialVariableResolution, Unknown, UnknownValue, VariableSpec, VariableValue
 
 _TRUE = {"true", "1", "yes", "on"}
 _FALSE = {"false", "0", "no", "off"}
@@ -20,7 +20,7 @@ def _string_scalar(spec: VariableSpec, value: Any) -> str | None:
     return str(value)
 
 
-def _coerce(spec: VariableSpec, value: Any) -> Any:
+def _coerce(spec: VariableSpec, value: Any) -> VariableValue:
     if spec.type == "boolean":
         if isinstance(value, bool):
             return value
@@ -43,6 +43,49 @@ def _coerce(spec: VariableSpec, value: Any) -> Any:
     return _string_scalar(spec, value)
 
 
+def _coerce_supplied(spec: VariableSpec, value: Any) -> VariableValue:
+    """Coerce one supplied value and keep required values complete."""
+
+    coerced = _coerce(spec, value)
+    if coerced is None and spec.required:
+        raise DeclarationError(f"required variable {spec.name!r} cannot be null")
+    return coerced
+
+
+def _validate_source_keys(
+    specs: Sequence[VariableSpec],
+    sources: Sequence[tuple[str, Mapping[str, Any]]],
+) -> None:
+    """Reject every undeclared source key before precedence or coercion."""
+
+    known_names = {spec.name for spec in specs}
+    unknown_by_source = {
+        source_name: sorted(set(source) - known_names)
+        for source_name, source in sources
+        if set(source) - known_names
+    }
+    if unknown_by_source:
+        details = "; ".join(
+            f"{source_name}={unknown_names}" for source_name, unknown_names in unknown_by_source.items()
+        )
+        raise DeclarationError(f"unknown variable key(s): {details}")
+
+
+def _sources(
+    *,
+    flags: Mapping[str, Any],
+    declaration: Mapping[str, Any],
+    env: Mapping[str, Any],
+    autodetect: Mapping[str, Any],
+) -> tuple[tuple[str, Mapping[str, Any]], ...]:
+    return (
+        ("flags", flags),
+        ("declaration", declaration),
+        ("environment", env),
+        ("auto-detection", autodetect),
+    )
+
+
 def resolve_variables(
     specs: Sequence[VariableSpec],
     *,
@@ -50,17 +93,19 @@ def resolve_variables(
     declaration: Mapping[str, Any],
     env: Mapping[str, Any],
     autodetect: Mapping[str, Any],
-) -> dict[str, Any]:
+) -> dict[str, VariableValue]:
     """Resolve declared variables by §5.2 precedence: flags > declaration > env > autodetect.
 
     Fails closed (§2.7): a missing *required* variable raises, naming the
     variable. Enum values are validated against their declared domain (§6.6).
     """
-    resolved: dict[str, Any] = {}
+    named_sources = _sources(flags=flags, declaration=declaration, env=env, autodetect=autodetect)
+    _validate_source_keys(specs, named_sources)
+    resolved: dict[str, VariableValue] = {}
     for spec in specs:
-        for source in (flags, declaration, env, autodetect):
+        for _, source in named_sources:
             if spec.name in source:
-                resolved[spec.name] = _coerce(spec, source[spec.name])
+                resolved[spec.name] = _coerce_supplied(spec, source[spec.name])
                 break
         else:
             if spec.required and spec.default is None:
@@ -72,7 +117,39 @@ def resolve_variables(
     return resolved
 
 
-def resolve_declared_variables(specs: Sequence[VariableSpec], values: Mapping[str, Any]) -> dict[str, Any]:
+def resolve_partial_variables(
+    specs: Sequence[VariableSpec],
+    *,
+    flags: Mapping[str, Any],
+    declaration: Mapping[str, Any],
+    env: Mapping[str, Any],
+    autodetect: Mapping[str, Any],
+) -> PartialVariableResolution:
+    """Resolve known preview inputs while preserving absent values as ``Unknown``.
+
+    The same closed-key and coercion rules as exact resolution apply, but missing
+    values without declared defaults do not make a read-only preview fail.
+    """
+
+    named_sources = _sources(flags=flags, declaration=declaration, env=env, autodetect=autodetect)
+    _validate_source_keys(specs, named_sources)
+    values: dict[str, VariableValue | UnknownValue] = {}
+    missing: list[str] = []
+    for spec in specs:
+        for _, source in named_sources:
+            if spec.name in source:
+                values[spec.name] = _coerce_supplied(spec, source[spec.name])
+                break
+        else:
+            if spec.default is not None:
+                values[spec.name] = _coerce(spec, spec.default)
+            else:
+                values[spec.name] = Unknown
+                missing.append(spec.name)
+    return PartialVariableResolution(values=values, missing=tuple(missing))
+
+
+def resolve_declared_variables(specs: Sequence[VariableSpec], values: Mapping[str, Any]) -> dict[str, VariableValue]:
     """Validate and resolve the declaration tier through the trusted resolver.
 
     Declaration mappings are closed over the profile's variable specifications:

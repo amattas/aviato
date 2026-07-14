@@ -1,9 +1,37 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from enum import Enum
+from typing import Any, Final, Literal
 
 VariableType = Literal["string", "boolean", "enum"]
+VariableValue = str | bool | None
+
+
+class UnknownValue(Enum):
+    """Singleton marker for a variable whose value is not yet known."""
+
+    VALUE = "unknown"
+
+    def __repr__(self) -> str:
+        return "Unknown"
+
+    def __str__(self) -> str:
+        return "Unknown"
+
+    def __bool__(self) -> bool:
+        raise TypeError("Unknown cannot be collapsed to a boolean")
+
+
+Unknown: Final[UnknownValue] = UnknownValue.VALUE
+
+
+@dataclass(frozen=True)
+class PartialVariableResolution:
+    """Typed variable values available to a non-applicable partial preview."""
+
+    values: dict[str, VariableValue | UnknownValue]
+    missing: tuple[str, ...]
 
 
 @dataclass(frozen=True)

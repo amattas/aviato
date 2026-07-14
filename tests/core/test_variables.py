@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 from datetime import date
 
 import pytest
 
+from aviato.core import model as model_module
 from aviato.core import variables as variables_module
 from aviato.core.errors import DeclarationError
 from aviato.core.model import VariableSpec
@@ -54,6 +56,31 @@ def test_boolean_coercion() -> None:
     assert resolved["flag"] is True
 
 
+def test_partial_resolution_coerces_supplied_values_and_marks_absent_values_unknown() -> None:
+    specs = (
+        VariableSpec("enabled", "boolean"),
+        VariableSpec("name", "string"),
+        VariableSpec("mode", "enum", required=False, default="safe", domain=("safe", "fast")),
+    )
+
+    partial = variables_module.resolve_partial_variables(
+        specs,
+        flags={"enabled": "true"},
+        declaration={},
+        env={},
+        autodetect={},
+    )
+
+    assert partial.values == {"enabled": True, "name": model_module.Unknown, "mode": "safe"}
+    assert partial.missing == ("name",)
+
+
+def test_unknown_is_identity_stable_and_cannot_collapse_to_boolean() -> None:
+    assert copy.deepcopy(model_module.Unknown) is model_module.Unknown
+    with pytest.raises(TypeError, match="Unknown"):
+        bool(model_module.Unknown)
+
+
 @pytest.mark.parametrize("value", [42, 3.5, True, date(2026, 7, 12)])
 def test_string_variables_canonicalize_non_none_yaml_scalars(value: object) -> None:
     specs = (VariableSpec("name", "string"),)
@@ -85,6 +112,48 @@ def test_missing_required_variable_fails_closed_listing_name() -> None:
     with pytest.raises(DeclarationError) as exc:
         resolve_variables(specs, flags={}, declaration={}, env={}, autodetect={})
     assert "dist" in str(exc.value)
+
+
+def test_exact_variable_resolution_still_requires_complete_typed_values() -> None:
+    specs = (VariableSpec("enabled", "boolean"), VariableSpec("name", "string"))
+
+    resolved = resolve_variables(
+        specs,
+        flags={"enabled": "true", "name": 42},
+        declaration={},
+        env={},
+        autodetect={},
+    )
+    assert resolved == {"enabled": True, "name": "42"}
+
+    with pytest.raises(DeclarationError, match="name"):
+        resolve_variables(
+            specs,
+            flags={"enabled": "true"},
+            declaration={},
+            env={},
+            autodetect={},
+        )
+
+    with pytest.raises(DeclarationError, match="name"):
+        resolve_variables(
+            specs,
+            flags={"enabled": "true", "name": None},
+            declaration={},
+            env={},
+            autodetect={},
+        )
+
+    # Closed keys are validated before completeness/coercion: the typo is the
+    # actionable error even though a required declared value is also absent.
+    with pytest.raises(DeclarationError, match="enabeld"):
+        resolve_variables(
+            specs,
+            flags={"enabeld": "true"},
+            declaration={},
+            env={},
+            autodetect={},
+        )
 
 
 def test_optional_variable_uses_default() -> None:

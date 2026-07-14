@@ -94,6 +94,61 @@ def test_malformed_var_on_plan_path_is_clean_error_not_traceback(capsys: pytest.
     assert "KEY=VALUE" in err or "novalue" in err
 
 
+@pytest.mark.parametrize("mode", ["preview", "write"])
+def test_unknown_flag_variable_is_rejected_before_preview_or_mutation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
+) -> None:
+    target = "owner/repo" if mode == "preview" else str(tmp_path)
+    args = [
+        "onboard",
+        target,
+        "--profile",
+        "python-library",
+        "--pin",
+        "0",
+        "--var",
+        "distribution-name=acme",
+        "--var",
+        "import-name=acme",
+        "--var",
+        "distribution-naem=typo",
+    ]
+    if mode == "write":
+        args.extend(("--write", "--allow-dirty"))
+
+    assert main(args) == 2
+    captured = capsys.readouterr()
+    assert "distribution-naem" in captured.err
+    assert "Onboarding plan" not in captured.out
+    assert not (tmp_path / ".github/aviato.yaml").exists()
+
+
+@pytest.mark.parametrize(
+    "bad_vars",
+    [
+        ("--var", "malformed"),
+        ("--var", "project-name=one", "--var", "project-name=two"),
+    ],
+)
+def test_preview_profile_migration_guard_precedes_malformed_or_duplicate_variables(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    bad_vars: tuple[str, ...],
+) -> None:
+    assert _adopt(tmp_path) == 0
+    capsys.readouterr()
+
+    rc = main(["onboard", str(tmp_path), "--profile", "node-service", *bad_vars])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "--migrate-profile" in captured.err
+    assert "KEY=VALUE" not in captured.err
+    assert "given more than once" not in captured.err
+
+
 def test_onboard_plan_hides_docs_artifacts_unless_opted_in(capsys: pytest.CaptureFixture[str]) -> None:
     # §6.1: the plan must list the EXACT artifacts that would be written. With docs off
     # (the default) the docs caller workflow and website artifacts must not appear.
