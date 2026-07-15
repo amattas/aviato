@@ -140,7 +140,7 @@ jobs:
           [ "$(jq -r .can_admins_bypass <<<"${environment}")" = "false" ] || { echo "::error::fresh environment permits admin bypass"; exit 1; }
 
       - name: Checkout consumer repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
           # C12-W2: build from the IMMUTABLE gated commit, not the mutable tag.
@@ -297,12 +297,12 @@ jobs:
 
       - name: Upload image scan results
         if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9
         with:
           sarif_file: trivy-sarif
 
       - name: Upload image SBOMs
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: aviato-image-sboms
           path: oci/*.sbom.cdx.json
@@ -379,7 +379,11 @@ jobs:
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
-          body = base64.b64decode(payload["content"], validate=True)
+          content = payload["content"]
+          if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
+          encoded = content.replace("\r", "").replace("\n", "")
+          if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
+          body = base64.b64decode(encoded, validate=True)
           if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
           actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
           if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
@@ -430,9 +434,9 @@ jobs:
           echo "digest=${tag_digest}" >> "${GITHUB_OUTPUT}"
 
       # §13.2/§11.7: keyless OIDC build provenance attestation for the pushed image.
-      - name: Attest image provenance
+      - name: Attest published image provenance
         if: ${{ inputs.push }}
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e
         with:
           subject-name: ${{ steps.vars.outputs.image }}
           subject-digest: ${{ steps.build.outputs.digest }}
@@ -506,7 +510,11 @@ jobs:
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
-          body = base64.b64decode(payload["content"], validate=True)
+          content = payload["content"]
+          if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
+          encoded = content.replace("\r", "").replace("\n", "")
+          if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
+          body = base64.b64decode(encoded, validate=True)
           if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
           actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
           if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")

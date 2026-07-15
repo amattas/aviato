@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ import pathlib
 import subprocess
 import tempfile
 import time
+import urllib.request
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote
@@ -52,6 +54,28 @@ def git_blob_sha(body: bytes) -> str:
     return hashlib.sha1(framed).hexdigest()
 
 
+def decode_contents_payload(payload: dict[str, Any], *, max_bytes: int) -> bytes:
+    """Decode GitHub Contents API bytes without accepting generic whitespace."""
+
+    content = payload.get("content")
+    if payload.get("encoding") != "base64" or not isinstance(content, str):
+        raise ValueError("verifier content encoding is not base64")
+    if any(character.isspace() and character not in "\r\n" for character in content):
+        raise ValueError("verifier content contains forbidden whitespace")
+    encoded = content.replace("\r", "").replace("\n", "")
+    if len(encoded) > ((max_bytes + 2) // 3) * 4:
+        raise ValueError("verifier content is too large")
+    try:
+        body = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("verifier content is invalid base64") from exc
+    if not 1 <= len(body) <= max_bytes:
+        raise ValueError("verifier content is too large")
+    if payload.get("sha") != git_blob_sha(body):
+        raise ValueError("verifier content Git blob SHA mismatch")
+    return body
+
+
 def project_authority_snapshot(repository: dict[str, Any], live_state: dict[str, Any]) -> dict[str, Any]:
     """The one canonical projection used by receipt creation and fresh verification."""
 
@@ -87,11 +111,64 @@ def project_authority_snapshot(repository: dict[str, Any], live_state: dict[str,
 
 
 def _gh(endpoint: str, paginated: bool = False) -> Any:
-    command = ["gh", "api", "-H", "Cache-Control: no-cache"]
-    if paginated:
-        command += ["--paginate", "--slurp"]
-    completed = subprocess.run(command + [endpoint], check=True, capture_output=True, text=True, env=os.environ)
-    return json.loads(completed.stdout)
+    token = os.environ.get("GH_TOKEN")
+    if not token:
+        raise RuntimeError("GH_TOKEN is required for authority verification")
+    url: str | None = f"https://api.github.com/{endpoint.lstrip('/')}"
+    pages: list[Any] = []
+    while url:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "Cache-Control": "no-cache",
+                "User-Agent": "aviato-authority-verifier",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - fixed GitHub API origin
+            pages.append(json.loads(response.read()))
+            link = response.headers.get("Link", "")
+        next_url = None
+        if paginated:
+            for item in link.split(","):
+                if 'rel="next"' in item:
+                    candidate = item.split(";", 1)[0].strip()
+                    if candidate.startswith("<https://api.github.com/") and candidate.endswith(">"):
+                        next_url = candidate[1:-1]
+                    else:
+                        raise RuntimeError("GitHub pagination escaped the API origin")
+        url = next_url
+    return pages if paginated else pages[0]
+
+
+def verify_ssh_signature(message: bytes, signature: bytes, reviewer: str, public_key: str) -> None:
+    """Verify a checkpoint signature without PATH lookup or ambient secrets."""
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = pathlib.Path(directory)
+        (root / "allowed").write_text(f"{reviewer} {public_key}\n")
+        (root / "signature").write_bytes(signature)
+        result = subprocess.run(
+            [
+                "/usr/bin/ssh-keygen",
+                "-Y",
+                "verify",
+                "-f",
+                str(root / "allowed"),
+                "-I",
+                reviewer,
+                "-n",
+                "aviato",
+                "-s",
+                str(root / "signature"),
+            ],
+            input=message,
+            env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+        )
+        if result.returncode:
+            raise ValueError("checkpoint SSH signature is invalid")
 
 
 def _classic(rules: list[dict[str, Any]], protection: dict[str, Any]) -> dict[str, Any]:
@@ -297,28 +374,15 @@ def main(argv: list[str] | None = None) -> int:
     if permission.get("permission") != "admin":
         raise SystemExit("reviewer admin/key authority is not current")
     signature = base64.urlsafe_b64decode(envelope["signature"] + "=" * (-len(envelope["signature"]) % 4))
-    with tempfile.TemporaryDirectory() as directory:
-        root = pathlib.Path(directory)
-        (root / "allowed").write_text(f"{reviewer} {selected['key']}\n")
-        (root / "signature").write_bytes(signature)
-        result = subprocess.run(
-            [
-                "ssh-keygen",
-                "-Y",
-                "verify",
-                "-f",
-                str(root / "allowed"),
-                "-I",
-                reviewer,
-                "-n",
-                "aviato",
-                "-s",
-                str(root / "signature"),
-            ],
-            input=json.dumps(checkpoint, sort_keys=True, separators=(",", ":")).encode("ascii"),
+    try:
+        verify_ssh_signature(
+            json.dumps(checkpoint, sort_keys=True, separators=(",", ":")).encode("ascii"),
+            signature,
+            reviewer,
+            selected["key"],
         )
-        if result.returncode:
-            raise SystemExit("checkpoint SSH signature is invalid")
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     expected = checkpoint["authority_snapshot"]
     require_exact_authority_snapshot(expected, collect_live_authority_snapshot(args.repository, expected))
     return 0

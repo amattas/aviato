@@ -77,11 +77,12 @@ on:
         type: string
         default: build/App.xcarchive
       export-path:
+        description: Deprecated. Trusted signing writes only beneath RUNNER_TEMP.
         required: false
         type: string
         default: build/export
       export-options-plist:
-        description: Path to an ExportOptions.plist. If empty, one is generated from export-method/team-id.
+        description: Deprecated. Trusted signing generates options from export-method/team-id.
         required: false
         type: string
         default: ""
@@ -151,10 +152,7 @@ jobs:
     name: Build unsigned App Store archive
     runs-on: macos-latest
     permissions:
-      actions: read
       contents: read
-      attestations: write
-      id-token: write
     outputs:
       artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
       archive-sha256: ${{ steps.package.outputs.archive-sha256 }}
@@ -170,13 +168,44 @@ jobs:
       SDK: ${{ inputs.sdk }}
       ARCHIVE_PATH: ${{ inputs.archive-path }}
     steps:
+      - name: Validate untrusted build paths
+        working-directory: "."
+        shell: bash
+        env:
+          WORKING_DIRECTORY_INPUT: ${{ inputs.working-directory }}
+          ARCHIVE_PATH_INPUT: ${{ inputs.archive-path }}
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 -I - "${WORKING_DIRECTORY_INPUT}" "${ARCHIVE_PATH_INPUT}" <<'PY'
+          import pathlib, sys
+          for label, raw in zip(("working-directory", "archive-path"), sys.argv[1:]):
+              path = pathlib.PurePosixPath(raw)
+              if not raw or path.is_absolute() or ".." in path.parts:
+                  raise SystemExit(f"{label} must be a non-traversing relative path")
+          PY
       - name: Checkout immutable consumer source without credentials
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
           ref: ${{ inputs.gated-sha }}
           fetch-depth: 0
           fetch-tags: true
+      - name: Verify build path containment after checkout
+        working-directory: "."
+        shell: bash
+        env:
+          WORKING_DIRECTORY_INPUT: ${{ inputs.working-directory }}
+          ARCHIVE_PATH_INPUT: ${{ inputs.archive-path }}
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 -I - "${GITHUB_WORKSPACE}" "${WORKING_DIRECTORY_INPUT}" "${ARCHIVE_PATH_INPUT}" <<'PY'
+          import pathlib, sys
+          workspace = pathlib.Path(sys.argv[1]).resolve(strict=True)
+          working = (workspace / sys.argv[2]).resolve(strict=True)
+          archive = (working / sys.argv[3]).resolve(strict=False)
+          if not working.is_dir() or not working.is_relative_to(workspace) or not archive.is_relative_to(workspace):
+              raise SystemExit("build paths must remain beneath the checked-out workspace")
+          PY
       - name: Select Xcode
         if: ${{ inputs.xcode-version != '' }}
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90
@@ -241,25 +270,51 @@ jobs:
         run: |
           set -euo pipefail
           [ -d "${SOURCE}" ]
-          /usr/bin/ditto -c -k --keepParent "${SOURCE}" unsigned-xcarchive.zip
+          stage="$(mktemp -d "${RUNNER_TEMP}/aviato-build-package.XXXXXX")"
+          trap 'rm -rf "${stage}"' EXIT
+          /usr/bin/ditto "${SOURCE}" "${stage}/App.xcarchive"
+          /usr/bin/ditto -c -k --keepParent "${stage}/App.xcarchive" unsigned-xcarchive.zip
           digest="$(shasum -a 256 unsigned-xcarchive.zip | awk '{print $1}')"
           echo "archive-sha256=${digest}" >> "${GITHUB_OUTPUT}"
-      - name: Attest unsigned archive provenance
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: unsigned-xcarchive.zip
       - name: Upload unsigned archive
         id: upload
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: app-store-unsigned-xcarchive
           path: unsigned-xcarchive.zip
           if-no-files-found: error
           retention-days: 1
 
+  attest-unsigned:
+    name: Attest exact unsigned archive on an isolated runner
+    needs: build-unsigned
+    runs-on: macos-latest
+    permissions:
+      actions: read
+      attestations: write
+      id-token: write
+    steps:
+      - name: Download exact unsigned archive for attestation
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: app-store-unsigned-xcarchive
+          path: unsigned-attestation-input
+      - name: Validate exact unsigned archive digest
+        shell: bash
+        env:
+          EXPECTED_SHA256: ${{ needs.build-unsigned.outputs.archive-sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "${EXPECTED_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          [ "$(shasum -a 256 unsigned-attestation-input/unsigned-xcarchive.zip | awk '{print $1}')" = "${EXPECTED_SHA256}" ]
+      - name: Attest unsigned archive provenance
+        uses: actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e
+        with:
+          subject-path: unsigned-attestation-input/unsigned-xcarchive.zip
+
   app-store-connect:
     name: Publish to App Store Connect
-    needs: build-unsigned
+    needs: [build-unsigned, attest-unsigned]
     runs-on: macos-latest
     permissions:
       actions: read
@@ -272,20 +327,9 @@ jobs:
       verified-envelope-digest: ${{ inputs.verified-envelope-digest }}
     environment:
       name: ${{ inputs.environment-name }}
-    defaults:
-      run:
-        working-directory: ${{ inputs.working-directory }}
     env:
-      SCHEME: ${{ inputs.scheme }}
-      WORKSPACE: ${{ inputs.workspace }}
-      PROJECT: ${{ inputs.project }}
       BUNDLE_IDENTIFIER: ${{ inputs.bundle-identifier }}
       TEAM_ID: ${{ inputs.team-id }}
-      CONFIGURATION: ${{ inputs.configuration }}
-      SDK: ${{ inputs.sdk }}
-      ARCHIVE_PATH: ${{ inputs.archive-path }}
-      EXPORT_PATH: ${{ inputs.export-path }}
-      EXPORT_OPTIONS_PLIST: ${{ inputs.export-options-plist }}
       EXPORT_METHOD: ${{ inputs.export-method }}
       # This trusted job starts on a fresh runner and never checks out or executes
       # consumer source.  The unsigned archive is an attested data artifact only.
@@ -368,7 +412,7 @@ jobs:
           xcode-version: ${{ inputs.xcode-version }}
 
       - name: Download attested unsigned archive
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: app-store-unsigned-xcarchive
           path: unsigned-input
@@ -378,8 +422,6 @@ jobs:
         env:
           EXPECTED_SHA256: ${{ needs.build-unsigned.outputs.archive-sha256 }}
           EXPECTED_ARTIFACT_DIGEST: ${{ needs.build-unsigned.outputs.artifact-digest }}
-          ARCHIVE_PATH_INPUT: ${{ inputs.archive-path }}
-          WORKING_DIRECTORY_INPUT: ${{ inputs.working-directory }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -387,26 +429,75 @@ jobs:
           [[ "${EXPECTED_ARTIFACT_DIGEST}" =~ ^[0-9a-f]{64}$ ]]
           [ "$(shasum -a 256 "${zip}" | awk '{print $1}')" = "${EXPECTED_SHA256}" ]
           gh attestation verify "${zip}" --repo "${GITHUB_REPOSITORY}" >/dev/null
-          /usr/bin/python3 -I - "${zip}" "$(basename "${ARCHIVE_PATH_INPUT}")" <<'PY'
-          import pathlib, stat, sys, zipfile
-          archive, expected_root = sys.argv[1:]
+
+      - name: Extract trusted unsigned archive
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          trusted_root="$(mktemp -d "${RUNNER_TEMP}/aviato-app-archive.XXXXXX")"
+          /usr/bin/python3 -I - unsigned-input/unsigned-xcarchive.zip "${trusted_root}" <<'PY'
+          import os, pathlib, stat, sys, zipfile
+          archive = pathlib.Path(sys.argv[1])
+          root = pathlib.Path(sys.argv[2]).resolve(strict=True)
+          if any(root.iterdir()):
+              raise SystemExit("trusted extraction root is not fresh")
           with zipfile.ZipFile(archive) as handle:
               infos = handle.infolist()
               if not infos or len(infos) > 100_000 or sum(item.file_size for item in infos) > 8 * 1024**3:
                   raise SystemExit("unsigned archive inventory is empty or exceeds bounds")
+              names = [item.filename for item in infos]
+              if len(names) != len(set(names)):
+                  raise SystemExit("unsigned archive contains duplicate members")
+              directories = set()
+              files = []
               for item in infos:
                   path = pathlib.PurePosixPath(item.filename)
                   mode = item.external_attr >> 16
-                  if path.is_absolute() or ".." in path.parts or path.parts[0] != expected_root:
-                      raise SystemExit("unsigned archive path escapes its declared root")
                   file_type = stat.S_IFMT(mode)
-                  if file_type not in {0, stat.S_IFREG, stat.S_IFDIR}:
-                      raise SystemExit("unsigned archive contains a non-regular member")
+                  is_directory = item.is_dir() or file_type == stat.S_IFDIR
+                  if (
+                      not item.filename
+                      or "\\" in item.filename
+                      or path.is_absolute()
+                      or ".." in path.parts
+                      or not path.parts
+                      or path.parts[0] != "App.xcarchive"
+                      or item.flag_bits & 1
+                      or file_type not in {0, stat.S_IFREG, stat.S_IFDIR}
+                  ):
+                      raise SystemExit("unsigned archive contains an unsafe member")
+                  if is_directory:
+                      directories.add(path)
+                  else:
+                      files.append((item, path))
+                      directories.update(pathlib.PurePosixPath(*path.parts[:index]) for index in range(1, len(path.parts)))
+              directories.add(pathlib.PurePosixPath("App.xcarchive"))
+              for relative in sorted(directories, key=lambda item: (len(item.parts), item.parts)):
+                  destination = root.joinpath(*relative.parts)
+                  os.mkdir(destination, 0o755)
+              flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+              if hasattr(os, "O_NOFOLLOW"):
+                  flags |= os.O_NOFOLLOW
+              for item, relative in files:
+                  destination = root.joinpath(*relative.parts)
+                  descriptor = os.open(destination, flags, 0o600)
+                  written = 0
+                  try:
+                      with os.fdopen(descriptor, "wb") as output, handle.open(item) as source:
+                          while chunk := source.read(1024 * 1024):
+                              output.write(chunk)
+                              written += len(chunk)
+                  except BaseException:
+                      destination.unlink(missing_ok=True)
+                      raise
+                  if written != item.file_size:
+                      destination.unlink(missing_ok=True)
+                      raise SystemExit("unsigned archive member size changed")
+                  os.chmod(destination, 0o644)
           PY
-          destination="${WORKING_DIRECTORY_INPUT}/$(dirname "${ARCHIVE_PATH_INPUT}")"
-          mkdir -p "${destination}"
-          /usr/bin/ditto -x -k "${zip}" "${destination}"
-          [ -d "${WORKING_DIRECTORY_INPUT}/${ARCHIVE_PATH_INPUT}" ]
+          [ -d "${trusted_root}/App.xcarchive" ]
+          echo "TRUSTED_ARCHIVE_PATH=${trusted_root}/App.xcarchive" >> "${GITHUB_ENV}"
 
       - name: Verify full authority before importing signing secrets
         working-directory: "."
@@ -428,7 +519,11 @@ jobs:
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
-          body = base64.b64decode(payload["content"], validate=True)
+          content = payload["content"]
+          if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
+          encoded = content.replace("\r", "").replace("\n", "")
+          if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
+          body = base64.b64decode(encoded, validate=True)
           if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
           actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
           if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
@@ -504,12 +599,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Use the caller-supplied plist if given; otherwise generate one from the
-          # declared export-method + team-id (§13.4) so the consumer need not hand-author it.
-          if [ -n "${EXPORT_OPTIONS_PLIST}" ]; then
-            echo "RESOLVED_EXPORT_OPTIONS=${EXPORT_OPTIONS_PLIST}" >> "${GITHUB_ENV}"
-            exit 0
-          fi
+          # Generate trusted export options from bounded declarative inputs. A
+          # caller path is never dereferenced on the signing runner.
           case "${EXPORT_METHOD}" in
             app-store|ad-hoc|development) ;;
             *) echo "::error::Unsupported export-method '${EXPORT_METHOD}' (app-store, ad-hoc, development)."; exit 1 ;;
@@ -533,10 +624,12 @@ jobs:
 
       - name: Export signed app
         shell: bash
+        env:
+          EXPORT_PATH: ${{ runner.temp }}/aviato-export
         run: |
           set -euo pipefail
           xcodebuild -exportArchive \
-            -archivePath "${ARCHIVE_PATH}" \
+            -archivePath "${TRUSTED_ARCHIVE_PATH}" \
             -exportPath "${EXPORT_PATH}" \
             -exportOptionsPlist "${RESOLVED_EXPORT_OPTIONS}"
 
@@ -553,6 +646,8 @@ jobs:
           CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
           VERIFIED_ENVELOPE_DIGEST: ${{ inputs.verified-envelope-digest }}
           ENV_NAME: ${{ inputs.environment-name }}
+          EXPORT_PATH: ${{ runner.temp }}/aviato-export
+          RECEIPT_PATH: ${{ runner.temp }}/app-store-upload.log
         run: |
           set -euo pipefail
           envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
@@ -580,7 +675,11 @@ jobs:
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
-          body = base64.b64decode(payload["content"], validate=True)
+          content = payload["content"]
+          if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
+          encoded = content.replace("\r", "").replace("\n", "")
+          if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
+          body = base64.b64decode(encoded, validate=True)
           if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
           actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
           if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
@@ -593,13 +692,12 @@ jobs:
             exit 1
           fi
 
-          mkdir -p build
           xcrun altool --upload-app \
             --type ios \
             --file "${ipa_path}" \
             --apiKey "${APP_STORE_CONNECT_KEY_ID}" \
             --apiIssuer "${APP_STORE_CONNECT_ISSUER_ID}" \
-            2>&1 | tee build/app-store-upload.log
+            2>&1 | tee "${RECEIPT_PATH}"
 
       # C12-W6: the built-in DECLARATIVE submit replaces the key-bearing operator eval.
       # It is a bounded fastlane invocation — no arbitrary code runs with the ASC
@@ -632,7 +730,11 @@ jobs:
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
-          body = base64.b64decode(payload["content"], validate=True)
+          content = payload["content"]
+          if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
+          encoded = content.replace("\r", "").replace("\n", "")
+          if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
+          body = base64.b64decode(encoded, validate=True)
           if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
           actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
           if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
@@ -691,10 +793,10 @@ jobs:
         # deploy. if-no-files-found is ERROR (a publish that produced no receipt must not
         # pass silently); on already-failed runs the extra error line is truthful noise.
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: app-store-connect-upload
-          path: ${{ inputs.working-directory }}/build/app-store-upload.log
+          path: ${{ runner.temp }}/app-store-upload.log
           if-no-files-found: error
           retention-days: 90
 
@@ -778,7 +880,7 @@ jobs:
           done < <(jq -r '.checkpoint.authority_snapshot.environments | keys[]' "${envelope}")
 
       - name: Download App Store Connect receipt
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: app-store-connect-upload
           path: receipt
@@ -815,7 +917,11 @@ jobs:
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
-          body = base64.b64decode(payload["content"], validate=True)
+          content = payload["content"]
+          if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
+          encoded = content.replace("\r", "").replace("\n", "")
+          if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
+          body = base64.b64decode(encoded, validate=True)
           if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
           actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
           if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")

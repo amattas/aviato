@@ -105,7 +105,6 @@ jobs:
           VERIFIED_ENVELOPE_DIGEST: ${{ needs.release-gate.outputs.verified-envelope-digest
             }}
           GH_TOKEN: ${{ github.token }}
-          VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
         run: 'set -euo pipefail
 
           [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ && "${CHECKPOINT_RUN_ID}" =~
@@ -142,7 +141,7 @@ jobs:
 
           '
       - name: Download vetted build artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: ${{ needs.pypi.outputs.artifact-name }}
           path: .
@@ -162,11 +161,11 @@ jobs:
           \ \"::error::Fresh remote tag ${RELEASE_TAG} does not peel to gated commit\
           \ ${GATED_SHA} (type=${object_type}, sha=${actual}).\"\n  exit 1\nfi\n"
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e
         with:
           subject-path: dist/*
       - name: Attest SBOM
-        uses: actions/attest-sbom@v4
+        uses: actions/attest-sbom@36590ecaf038d6630c74f2da259095627d52ac11
         with:
           subject-path: dist/*
           sbom-path: sbom.cyclonedx.json
@@ -289,7 +288,11 @@ jobs:
           AVIATO_VERIFIER_JSON\"))\nexpected = os.environ.pop(\"AVIATO_VERIFIER_BLOB\"\
           )\nif payload.get(\"encoding\") != \"base64\" or not isinstance(payload.get(\"\
           content\"), str):\n    raise SystemExit(\"verifier Contents response is\
-          \ not exact base64\")\nbody = base64.b64decode(payload[\"content\"], validate=True)\n\
+          \ not exact base64\")\ncontent = payload[\"content\"]\nif any(character.isspace()\
+          \ and character not in \"\\r\\n\" for character in content): raise SystemExit(\"\
+          invalid verifier whitespace\")\nencoded = content.replace(\"\\r\", \"\"\
+          ).replace(\"\\n\", \"\")\nif len(encoded) > 349_528: raise SystemExit(\"\
+          invalid verifier size\")\nbody = base64.b64decode(encoded, validate=True)\n\
           if not 1 <= len(body) <= 262_144:\n    raise SystemExit(\"verifier body\
           \ exceeds the bounded size\")\nactual = hashlib.sha1(b\"blob \" + str(len(body)).encode(\"\
           ascii\") + b\"\\0\" + body).hexdigest()\nif actual != expected or payload.get(\"\
@@ -325,13 +328,18 @@ jobs:
           import base64, hashlib, json, os, sys\npayload = json.loads(os.environ.pop(\"\
           AVIATO_VERIFIER_JSON\")); expected = os.environ.pop(\"AVIATO_VERIFIER_BLOB\"\
           )\nif payload.get(\"encoding\") != \"base64\" or not isinstance(payload.get(\"\
-          content\"), str): raise SystemExit(\"invalid verifier encoding\")\nbody\
-          \ = base64.b64decode(payload[\"content\"], validate=True)\nif not 1 <= len(body)\
-          \ <= 262_144: raise SystemExit(\"invalid verifier size\")\nactual = hashlib.sha1(b\"\
-          blob \" + str(len(body)).encode(\"ascii\") + b\"\\0\" + body).hexdigest()\n\
-          if actual != expected or payload.get(\"sha\") != expected: raise SystemExit(\"\
-          verifier blob mismatch\")\nsys.argv = [\"authority_verifier.py\", \"--envelope\"\
-          , sys.argv[1], \"--repository\", sys.argv[2]]\nexec(compile(body, \"<checkpoint-bound-authority-verifier>\"\
+          content\"), str): raise SystemExit(\"invalid verifier encoding\")\ncontent\
+          \ = payload[\"content\"]\nif any(character.isspace() and character not in\
+          \ \"\\r\\n\" for character in content): raise SystemExit(\"invalid verifier\
+          \ whitespace\")\nencoded = content.replace(\"\\r\", \"\").replace(\"\\n\"\
+          , \"\")\nif len(encoded) > 349_528: raise SystemExit(\"invalid verifier\
+          \ size\")\nbody = base64.b64decode(encoded, validate=True)\nif not 1 <=\
+          \ len(body) <= 262_144: raise SystemExit(\"invalid verifier size\")\nactual\
+          \ = hashlib.sha1(b\"blob \" + str(len(body)).encode(\"ascii\") + b\"\\0\"\
+          \ + body).hexdigest()\nif actual != expected or payload.get(\"sha\") !=\
+          \ expected: raise SystemExit(\"verifier blob mismatch\")\nsys.argv = [\"\
+          authority_verifier.py\", \"--envelope\", sys.argv[1], \"--repository\",\
+          \ sys.argv[2]]\nexec(compile(body, \"<checkpoint-bound-authority-verifier>\"\
           , \"exec\"), {\"__name__\": \"__main__\", \"__file__\": \"<memory>\"})\n\
           PY\n"
       - name: Publish distributions to alternate repository

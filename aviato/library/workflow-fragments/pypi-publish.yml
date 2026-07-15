@@ -19,7 +19,6 @@ steps:
       CHECKPOINT_RUN_ID: ${{ needs.release-gate.outputs.checkpoint-run-id }}
       VERIFIED_ENVELOPE_DIGEST: ${{ needs.release-gate.outputs.verified-envelope-digest }}
       GH_TOKEN: ${{ github.token }}
-      VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
     run: |
       set -euo pipefail
       [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ && "${CHECKPOINT_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "::error::managed checkpoint is absent"; exit 1; }
@@ -35,7 +34,7 @@ steps:
       gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "([flatten[] | select((.id|tostring) == \"${key_id}\")] | length) == 1" | grep -qx true
       [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/pypi" --jq .can_admins_bypass)" = "false" ]
   - name: Download vetted build artifacts
-    uses: actions/download-artifact@v7
+    uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
     with:
       name: ${{ needs.pypi.outputs.artifact-name }}
       path: .
@@ -57,11 +56,11 @@ steps:
         exit 1
       fi
   - name: Attest build provenance
-    uses: actions/attest-build-provenance@v4
+    uses: actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e
     with:
       subject-path: "dist/*"
   - name: Attest SBOM
-    uses: actions/attest-sbom@v4
+    uses: actions/attest-sbom@36590ecaf038d6630c74f2da259095627d52ac11
     with:
       subject-path: "dist/*"
       sbom-path: sbom.cyclonedx.json
@@ -183,7 +182,11 @@ steps:
       expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
       if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str):
           raise SystemExit("verifier Contents response is not exact base64")
-      body = base64.b64decode(payload["content"], validate=True)
+      content = payload["content"]
+      if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
+      encoded = content.replace("\r", "").replace("\n", "")
+      if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
+      body = base64.b64decode(encoded, validate=True)
       if not 1 <= len(body) <= 262_144:
           raise SystemExit("verifier body exceeds the bounded size")
       actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
@@ -218,7 +221,11 @@ steps:
       import base64, hashlib, json, os, sys
       payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
       if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
-      body = base64.b64decode(payload["content"], validate=True)
+      content = payload["content"]
+      if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
+      encoded = content.replace("\r", "").replace("\n", "")
+      if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
+      body = base64.b64decode(encoded, validate=True)
       if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
       actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
       if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")

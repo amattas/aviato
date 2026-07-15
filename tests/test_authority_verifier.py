@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib
+import inspect
 from typing import Any
 
 import pytest
@@ -94,6 +95,80 @@ def test_verifier_blob_hash_uses_git_blob_framing() -> None:
     body = b"print('bound')\n"
     expected = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
     assert _module().git_blob_sha(body) == expected
+
+
+def test_contents_decoder_accepts_only_crlf_wrapped_base64_and_binds_api_sha() -> None:
+    module = _module()
+    body = b"print('real GitHub payload')\n"
+    encoded = module.base64.b64encode(body).decode("ascii")
+    wrapped = "\r\n".join(encoded[index : index + 7] for index in range(0, len(encoded), 7))
+    payload = {"encoding": "base64", "content": wrapped, "sha": module.git_blob_sha(body)}
+
+    assert module.decode_contents_payload(payload, max_bytes=1_000) == body
+
+    for invalid in (encoded + " ", encoded + "\t", encoded + "\v", encoded + "!", encoded[:-1]):
+        with pytest.raises(ValueError):
+            module.decode_contents_payload(
+                {"encoding": "base64", "content": invalid, "sha": module.git_blob_sha(body)},
+                max_bytes=1_000,
+            )
+    with pytest.raises(ValueError, match="too large"):
+        module.decode_contents_payload(payload, max_bytes=3)
+    with pytest.raises(ValueError, match="encoding"):
+        module.decode_contents_payload({**payload, "encoding": "utf-8"}, max_bytes=1_000)
+    with pytest.raises(ValueError, match="blob"):
+        module.decode_contents_payload({**payload, "sha": "0" * 40}, max_bytes=1_000)
+
+
+def test_verifier_github_reads_use_stdlib_https_and_bearer_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+    calls: list[Any] = []
+
+    class Response:
+        headers: dict[str, str] = {}
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"id": 7}'
+
+    def fake_urlopen(request: Any, timeout: int) -> Response:
+        calls.append((request, timeout))
+        return Response()
+
+    monkeypatch.setenv("GH_TOKEN", "verifier-token")
+    monkeypatch.setenv("PATH", "/attacker")
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    assert module._gh("repos/o/r") == {"id": 7}
+    request, timeout = calls[0]
+    assert request.full_url == "https://api.github.com/repos/o/r"
+    assert request.get_header("Authorization") == "Bearer verifier-token"
+    assert timeout <= 30
+    source = inspect.getsource(module._gh)
+    assert "subprocess" not in source and "env=os.environ" not in source
+
+
+def test_signature_verifier_uses_absolute_binary_and_minimal_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+    captured: dict[str, Any] = {}
+
+    def fake_run(command: list[str], **kwargs: Any) -> Any:
+        captured.update(command=command, **kwargs)
+        return type("Completed", (), {"returncode": 0})()
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setenv("PATH", "/attacker")
+    monkeypatch.setenv("GH_TOKEN", "must-not-leak")
+    module.verify_ssh_signature(b"message", b"signature", "alice", "ssh-ed25519 AAAA")
+    assert captured["command"][0] == "/usr/bin/ssh-keygen"
+    assert captured["env"] == {"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"}
+    assert "must-not-leak" not in repr(captured)
 
 
 def test_live_collector_explicitly_excludes_parent_rulesets() -> None:

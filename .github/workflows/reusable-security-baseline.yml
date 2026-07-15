@@ -75,7 +75,7 @@ jobs:
           echo "canonical-ref=${canonical_ref}" >> "${GITHUB_OUTPUT}"
 
       - name: Fetch requested ref and tags
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
           ref: ${{ steps.canonicalize.outputs.canonical-ref }}
@@ -155,21 +155,21 @@ jobs:
     runs-on: ${{ inputs.codeql-runner }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
           ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9
         with:
           languages: ${{ inputs.codeql-languages }}
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v4
+        uses: github/codeql-action/autobuild@99df26d4f13ea111d4ec1a7dddef6063f76b97e9
 
       - name: Analyze
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9
         with:
           ref: ${{ needs.resolve-target.outputs.canonical-ref }}
           sha: ${{ needs.resolve-target.outputs.analyzed-sha }}
@@ -264,13 +264,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
           ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
 
       - name: Dependency review
-        uses: actions/dependency-review-action@v5
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
         with:
           fail-on-severity: ${{ inputs.dependency-review-fail-on-severity }}
 
@@ -282,7 +282,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
           ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
@@ -305,7 +305,7 @@ jobs:
 
       - name: Upload dependency findings
         if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9
         with:
           sarif_file: trivy-deps.sarif
           category: aviato-dependency-scan
@@ -331,7 +331,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
           ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
@@ -348,7 +348,7 @@ jobs:
 
       - name: Upload secret findings
         if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9
         with:
           sarif_file: trivy-secrets.sarif
           category: aviato-secret-scan
@@ -422,7 +422,7 @@ jobs:
       # Only reached when the gate above passed (default step success-gating) → the heartbeat
       # signals a CLEAN run. A broken run skips this, leaving no fresh artifact (absent = broken).
       - name: Upload heartbeat
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: aviato-security-heartbeat-${{ needs.resolve-target.outputs.analyzed-sha }}
           path: heartbeat/aviato-security-heartbeat.json

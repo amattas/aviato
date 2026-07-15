@@ -118,7 +118,7 @@ jobs:
     steps:
       - name: Checkout proposal source (full history)
         if: ${{ !inputs.promotion }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
           # The derive job never pushes; do not leave the job token in .git/config
@@ -127,7 +127,7 @@ jobs:
 
       - name: Set up Python
         if: ${{ !inputs.promotion }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: ${{ inputs.python-version }}
 
@@ -312,7 +312,11 @@ jobs:
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
-          body = base64.b64decode(payload["content"], validate=True)
+          content = payload["content"]
+          if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
+          encoded = content.replace("\r", "").replace("\n", "")
+          if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
+          body = base64.b64decode(encoded, validate=True)
           if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
           actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
           if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
@@ -347,7 +351,7 @@ jobs:
     steps:
       - name: Checkout proposal source (full history)
         if: ${{ !inputs.promotion }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
           # This job pushes (release branch, tags, floating major) — credentials persist.
@@ -355,7 +359,7 @@ jobs:
 
       - name: Set up Python
         if: ${{ !inputs.promotion }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: ${{ inputs.python-version }}
 
@@ -542,7 +546,11 @@ jobs:
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
-          body = base64.b64decode(payload["content"], validate=True)
+          content = payload["content"]
+          if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
+          encoded = content.replace("\r", "").replace("\n", "")
+          if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
+          body = base64.b64decode(encoded, validate=True)
           if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
           actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
           if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")

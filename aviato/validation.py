@@ -12,6 +12,7 @@ import yaml
 
 from .core.selfcheck import core_import_violations, denylist_violations, load_denylist
 from .paths import DENYLIST_FILE, REPO_ROOT
+from .plugins.release_mutations import verify_mutation_inventory
 from .policy import (
     default_required_approvals,
     get_path,
@@ -335,9 +336,11 @@ def _check_reusable_metadata_contract(
         )
     if expected_environment is not None and isinstance(job.get("with"), dict) and "environment-name" in job["with"]:
         called_environments = {
-            value.get("environment", {}).get("name")
-            if isinstance(value.get("environment"), dict)
-            else value.get("environment")
+            (
+                value.get("environment", {}).get("name")
+                if isinstance(value.get("environment"), dict)
+                else value.get("environment")
+            )
             for value in called_jobs.values()
             if isinstance(value, dict) and value.get("environment") is not None
         }
@@ -1104,6 +1107,19 @@ def _check_pypi_privilege_split(root: Path, errors: list[str]) -> None:
         errors.append("PyPI pipeline privileges must equal reusable plus local publisher privileges")
 
 
+def _check_hosted_mutation_inventory(root: Path, errors: list[str]) -> None:
+    try:
+        body = _rendered_caller(root, "python-library", ".github/workflows/aviato-ci.yml")
+        rendered = yaml.safe_load(body) if body is not None else {}
+        if not isinstance(rendered, dict):
+            raise ValueError("rendered Python workflow is not a mapping")
+        inventory_errors = verify_mutation_inventory(root / ".github" / "workflows", rendered)
+    except Exception as exc:  # noqa: BLE001 - validation reports a single actionable error
+        errors.append(f"hosted mutation inventory could not be validated: {exc}")
+        return
+    errors.extend(f"hosted mutation inventory: {error}" for error in inventory_errors)
+
+
 def validate(root: Path = REPO_ROOT) -> list[str]:
     errors: list[str] = []
 
@@ -1148,5 +1164,6 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_scaffold_workflow_yaml(root, repository, errors)
     _check_library_bootstrap(root, repository, errors)
     _check_monotonic_alias_parity(root, errors)
+    _check_hosted_mutation_inventory(root, errors)
 
     return errors

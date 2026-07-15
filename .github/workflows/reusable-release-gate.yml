@@ -170,7 +170,7 @@ jobs:
           echo "checkpoint-digest=${CHECKPOINT_DIGEST}" >> "${GITHUB_OUTPUT}"
           echo "verified-envelope-digest=${actual}" >> "${GITHUB_OUTPUT}"
       - name: Checkout consumer repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
           fetch-depth: 0

@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
+import sys
+import zipfile
 from pathlib import Path
 from typing import Any, cast
 
@@ -388,7 +391,7 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
     assert deploy_step == {
         "name": "Deploy GitHub Pages",
         "id": "deployment",
-        "uses": "actions/deploy-pages@v4",
+        "uses": "actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e",
     }
     recheck = next(
         step for step in deploy["steps"] if step.get("name") == "Recheck exact authorization before Pages OIDC"
@@ -500,7 +503,7 @@ def test_pypi_reusable_only_builds_vetted_artifact_and_local_caller_publishes() 
     assert "attest-build-provenance" not in reusable_body
     assert reusable["jobs"]["build"]["permissions"] == {"contents": "read"}
     upload = next(step for step in reusable["jobs"]["build"]["steps"] if step.get("name") == "Upload build artifacts")
-    assert upload["uses"] == "actions/upload-artifact@v7"
+    assert upload["uses"] == "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
     assert upload["with"]["name"] == "aviato-pypi-dist"
     assert upload["with"]["if-no-files-found"] == "error"
     assert upload["with"]["retention-days"] == 1
@@ -510,7 +513,7 @@ def test_pypi_reusable_only_builds_vetted_artifact_and_local_caller_publishes() 
     )
     assert "consumer-publisher-present: true" in caller_body
     assert "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b" in caller_body
-    assert "actions/download-artifact@v7" in caller_body
+    assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in caller_body
     assert "environment: pypi" in caller_body
     assert "id-token: write" in caller_body and "attestations: write" in caller_body
     caller = _rendered_python_library_workflow()
@@ -644,7 +647,6 @@ def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
     # retain them: the release write job and the isolated docs-branch push job.
     credentialed_push_jobs = {
         ("reusable-release.yml", "release"),
-        ("reusable-docs-pages.yml", "push"),
     }
     for path in sorted(WORKFLOWS.glob("*.yml")):
         wf = _load(path.name)
@@ -658,12 +660,16 @@ def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
                 expected = (path.name, job_name) in credentialed_push_jobs
                 assert persist is expected, f"{path.name}:{job_name}: persist-credentials must be {expected}"
 
-    # The exempted docs push job legitimately persists credentials to push.
+    # The docs mutation gets a step-scoped credential only after its verifier;
+    # consumer-controlled branch contents never run with a persisted token.
     docs_wf = _load("reusable-docs-pages.yml")
     push_checkout = next(
         s for s in docs_wf["jobs"]["push"]["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
     )
-    assert push_checkout["with"]["persist-credentials"] is True
+    assert push_checkout["with"]["persist-credentials"] is False
+    mutation = next(step for step in docs_wf["jobs"]["push"]["steps"] if step.get("name") == "Fast-forward docs branch")
+    assert mutation["env"]["PUSH_TOKEN"] == "${{ github.token }}"
+    assert docs_wf["jobs"]["push"]["steps"].index(mutation) > docs_wf["jobs"]["push"]["steps"].index(push_checkout)
 
 
 @pytest.mark.parametrize(
@@ -776,10 +782,50 @@ def test_app_store_mutations_immediately_recheck_current_checkpoint_key_and_envi
 
 
 def test_every_final_privileged_mutation_is_dominated_by_shared_executable_verifier() -> None:
-    from aviato.plugins.release_mutations import HOSTED_MUTATIONS, verify_mutation_inventory
+    from aviato.plugins.release_mutations import HOSTED_MUTATIONS, discover_hosted_mutations, verify_mutation_inventory
 
     assert len(HOSTED_MUTATIONS) >= 13
     assert verify_mutation_inventory(WORKFLOWS, _rendered_python_library_workflow()) == []
+    discovered = discover_hosted_mutations(WORKFLOWS, _rendered_python_library_workflow())
+    identities = {(item.workflow, item.job, item.step, item.kind) for item in discovered}
+    assert (
+        "reusable-app-store-connect.yml",
+        "attest-unsigned",
+        "Attest unsigned archive provenance",
+        "oidc-attestation",
+    ) in identities
+    assert (
+        "reusable-docker-ghcr.yml",
+        "docker",
+        "Attest published image provenance",
+        "oidc-attestation",
+    ) in identities
+
+
+def test_mutation_inventory_rejects_undeclared_and_stale_entries() -> None:
+    from aviato.plugins.release_mutations import HOSTED_MUTATIONS, HostedMutation, verify_mutation_inventory
+
+    rendered = _rendered_python_library_workflow()
+    rendered["jobs"]["pypi-publish"]["steps"].append(
+        {"name": "Injected mutation", "run": "gh release upload 1 attacker.bin"}
+    )
+    rendered["jobs"]["pypi-publish"]["steps"].append(
+        {"name": "Injected API mutation", "run": "gh api --method DELETE repos/o/r/releases/1"}
+    )
+    errors = verify_mutation_inventory(WORKFLOWS, rendered)
+    assert any("undeclared hosted mutation" in error and "Injected mutation" in error for error in errors)
+    assert any("undeclared hosted mutation" in error and "Injected API mutation" in error for error in errors)
+
+    stale = HOSTED_MUTATIONS + (
+        HostedMutation("rendered-python", "pypi-publish", "Missing declared mutation", "git push", kind="shell"),
+    )
+    errors = verify_mutation_inventory(WORKFLOWS, _rendered_python_library_workflow(), manifest=stale)
+    assert any("stale declared mutation" in error and "Missing declared mutation" in error for error in errors)
+
+
+def test_normal_validation_wires_the_bijective_mutation_inventory() -> None:
+    source = (REPO_ROOT / "aviato" / "validation.py").read_text(encoding="utf-8")
+    assert "_check_hosted_mutation_inventory(root, errors)" in source
 
 
 def test_secure_verifier_bootstrap_is_in_memory_and_locally_hash_bound() -> None:
@@ -799,6 +845,27 @@ def test_secure_verifier_bootstrap_is_in_memory_and_locally_hash_bound() -> None
         assert "hashlib.sha1" in body, path
         assert "exec(compile(" in body, path
         assert "python3 -I" in body, path
+        assert '.replace("\\r", "").replace("\\n", "")' in body, path
+        assert "isspace()" in body, path
+
+
+def test_every_action_in_privileged_or_oidc_jobs_uses_a_full_commit_pin() -> None:
+    documents = {path.name: _load(path.name) for path in WORKFLOWS.glob("*.yml")}
+    documents["rendered-python"] = _rendered_python_library_workflow()
+    for workflow_name, document in documents.items():
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            permissions = job.get("permissions") or document.get("permissions") or {}
+            privileged = any(value == "write" for value in permissions.values())
+            oidc = permissions.get("id-token") == "write"
+            if not (privileged or oidc):
+                continue
+            for step in job.get("steps") or ():
+                uses = str(step.get("uses", ""))
+                if not uses or uses.startswith("./"):
+                    continue
+                assert re.search(r"@[0-9a-f]{40}$", uses), f"{workflow_name}:{job_name}:{uses}"
 
 
 def test_privileged_verifier_jobs_mint_only_a_pinned_read_only_app_token() -> None:
@@ -824,10 +891,11 @@ def test_privileged_verifier_jobs_mint_only_a_pinned_read_only_app_token() -> No
 def test_app_store_consumer_code_and_secrets_use_fresh_runner_boundaries() -> None:
     workflow = _load("reusable-app-store-connect.yml")
     build = workflow["jobs"]["build-unsigned"]
+    attest = workflow["jobs"]["attest-unsigned"]
     publish = workflow["jobs"]["app-store-connect"]
     custom = workflow["jobs"]["custom-submit"]
 
-    assert build["permissions"] == {"actions": "read", "contents": "read", "attestations": "write", "id-token": "write"}
+    assert build["permissions"] == {"contents": "read"}
     assert "environment" not in build
     assert "secrets." not in json.dumps(build)
     assert "actions/checkout" in json.dumps(build)
@@ -836,8 +904,18 @@ def test_app_store_consumer_code_and_secrets_use_fresh_runner_boundaries() -> No
     )
     assert 'eval "$VERSION_COMMAND"' in version["run"]
     assert "CODE_SIGNING_ALLOWED=NO" in json.dumps(build)
+    assert "attest-build-provenance" not in json.dumps(build)
 
-    assert publish["needs"] == "build-unsigned"
+    assert attest["permissions"] == {"actions": "read", "attestations": "write", "id-token": "write"}
+    assert attest["needs"] == "build-unsigned"
+    encoded_attest = json.dumps(attest)
+    assert "actions/checkout" not in encoded_attest
+    for consumer_command in ("eval ", "xcodebuild", "npm ", "pip install"):
+        assert consumer_command not in encoded_attest
+    assert "actions/download-artifact" in encoded_attest
+    assert "actions/attest-build-provenance" in encoded_attest
+
+    assert set(publish["needs"]) == {"build-unsigned", "attest-unsigned"}
     assert "actions/checkout" not in json.dumps(publish)
     assert "eval " not in json.dumps(publish)
     assert "xcodebuild archive" not in json.dumps(publish)
@@ -849,9 +927,14 @@ def test_app_store_consumer_code_and_secrets_use_fresh_runner_boundaries() -> No
         if step.get("name") == "Validate digest, attestation, and safe archive members"
     )
     assert "^[0-9a-f]{64}$" in validation["run"]
-    assert "stat.S_IFMT" in validation["run"]
-    assert "stat.S_IFREG" in validation["run"]
-    assert "stat.S_IFDIR" in validation["run"]
+    extractor = next(step for step in publish["steps"] if step.get("name") == "Extract trusted unsigned archive")
+    assert "stat.S_IFMT" in extractor["run"]
+    assert "stat.S_IFREG" in extractor["run"]
+    assert "stat.S_IFDIR" in extractor["run"]
+    assert "inputs.working-directory" not in json.dumps(publish)
+    assert "inputs.archive-path" not in json.dumps(publish)
+    assert "TRUSTED_ARCHIVE_PATH" in json.dumps(publish)
+    assert "${{ runner.temp }}" in json.dumps(publish)
 
     assert custom["needs"] == "app-store-connect"
     assert "environment" not in custom
@@ -859,6 +942,104 @@ def test_app_store_consumer_code_and_secrets_use_fresh_runner_boundaries() -> No
     assert "actions/checkout" not in json.dumps(custom)
     submit = next(step for step in custom["steps"] if step.get("name") == "Submit for review (custom command)")
     assert 'eval "$SUBMIT_FOR_REVIEW_COMMAND"' in submit["run"]
+
+
+def test_app_store_paths_are_relative_and_traversal_is_rejected_before_build(tmp_path: Path) -> None:
+    workflow = _load("reusable-app-store-connect.yml")
+    build = workflow["jobs"]["build-unsigned"]
+    guard = next(step for step in build["steps"] if step.get("name") == "Validate untrusted build paths")
+    script = _single_python_heredoc(guard["run"])
+    for working, archive, expected in (
+        (".", "build/App.xcarchive", True),
+        ("ios", "build/App.xcarchive", True),
+        ("/usr/local/bin", "build/App.xcarchive", False),
+        ("..", "build/App.xcarchive", False),
+        ("ios/../secrets", "build/App.xcarchive", False),
+        (".", "/tmp/App.xcarchive", False),
+        (".", "../App.xcarchive", False),
+    ):
+        result = subprocess.run([sys.executable, "-c", script, working, archive], capture_output=True, text=True)
+        assert (result.returncode == 0) is expected, (working, archive, result.stderr)
+
+    containment = next(
+        step for step in build["steps"] if step.get("name") == "Verify build path containment after checkout"
+    )
+    containment_script = _single_python_heredoc(containment["run"])
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "ios").mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (workspace / "escape").symlink_to(outside, target_is_directory=True)
+    assert (
+        subprocess.run(
+            [sys.executable, "-c", containment_script, str(workspace), "ios", "build/App.xcarchive"]
+        ).returncode
+        == 0
+    )
+    assert (
+        subprocess.run(
+            [sys.executable, "-c", containment_script, str(workspace), "escape", "build/App.xcarchive"]
+        ).returncode
+        != 0
+    )
+
+
+def test_app_store_trusted_archive_extractor_rejects_escape_types_and_overwrite(tmp_path: Path) -> None:
+    workflow = _load("reusable-app-store-connect.yml")
+    publish = workflow["jobs"]["app-store-connect"]
+    extract = next(step for step in publish["steps"] if step.get("name") == "Extract trusted unsigned archive")
+    script = _single_python_heredoc(extract["run"])
+
+    def archive(name: str, entries: list[tuple[str, bytes, int | None]]) -> Path:
+        path = tmp_path / f"{name}.zip"
+        with zipfile.ZipFile(path, "w") as bundle:
+            for member, body, mode in entries:
+                info = zipfile.ZipInfo(member)
+                if mode is not None:
+                    info.create_system = 3
+                    info.external_attr = mode << 16
+                bundle.writestr(info, body)
+        return path
+
+    good_root = tmp_path / "good-root"
+    good_root.mkdir()
+    good = archive(
+        "good",
+        [
+            ("App.xcarchive/", b"", stat.S_IFDIR | 0o755),
+            ("App.xcarchive/Info.plist", b"safe", stat.S_IFREG | 0o644),
+        ],
+    )
+    subprocess.run([sys.executable, "-c", script, str(good), str(good_root)], check=True)
+    assert (good_root / "App.xcarchive" / "Info.plist").read_bytes() == b"safe"
+
+    hostile = {
+        "absolute": [("/usr/local/bin/aviato", b"owned", stat.S_IFREG | 0o755)],
+        "traversal": [("App.xcarchive/../../../../../usr/local/bin/aviato", b"owned", stat.S_IFREG | 0o755)],
+        "symlink": [("App.xcarchive/link", b"/usr/local/bin", stat.S_IFLNK | 0o777)],
+        "device": [("App.xcarchive/device", b"", stat.S_IFCHR | 0o600)],
+    }
+    for name, entries in hostile.items():
+        root = tmp_path / f"root-{name}"
+        root.mkdir()
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(archive(name, entries)), str(root)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0, name
+        assert not any(root.iterdir()), name
+
+    overwrite_root = tmp_path / "overwrite-root"
+    (overwrite_root / "App.xcarchive").mkdir(parents=True)
+    target = overwrite_root / "App.xcarchive" / "Info.plist"
+    target.write_bytes(b"original")
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(good), str(overwrite_root)], capture_output=True, text=True
+    )
+    assert result.returncode != 0
+    assert target.read_bytes() == b"original"
 
 
 def test_promotion_accepts_two_person_actor_submitter_and_only_rejects_reviewer_overlap() -> None:
@@ -1070,7 +1251,7 @@ def test_app_store_connect_secrets_are_step_scoped() -> None:
     version = next(s for s in build["steps"] if s.get("name") == "Apply version command without any release secret")
     signing = next(s for s in steps if s.get("name") == "Install signing assets")
     upload = next(s for s in steps if s.get("name") == "Upload to App Store Connect")
-    assert job["needs"] == "build-unsigned"
+    assert set(job["needs"]) == {"build-unsigned", "attest-unsigned"}
     assert "APP_STORE_CONNECT" not in str(version.get("env", {}))
     assert "APPLE_" not in str(version.get("env", {}))
     assert "APP_STORE_CONNECT_API_PRIVATE_KEY" in signing.get("env", {})
@@ -1223,7 +1404,9 @@ def _codeql_severity_gate() -> tuple[JsonDict, JsonDict]:
 def test_codeql_severity_gate_runs_after_processed_analysis_and_before_heartbeat() -> None:
     job, gate = _codeql_severity_gate()
     analyze_index = next(
-        i for i, step in enumerate(job["steps"]) if step.get("uses") == "github/codeql-action/analyze@v4"
+        i
+        for i, step in enumerate(job["steps"])
+        if step.get("uses") == "github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9"
     )
     gate_index = job["steps"].index(gate)
 
@@ -1368,7 +1551,11 @@ def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
     }
     steps = resolver["steps"]
     canonicalize_index = next(i for i, step in enumerate(steps) if step.get("id") == "canonicalize")
-    checkout_index = next(i for i, step in enumerate(steps) if step.get("uses") == "actions/checkout@v4")
+    checkout_index = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("uses") == "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+    )
     assert canonicalize_index < checkout_index, "bare tags must be canonicalized before checkout resolves them"
     canonicalize_script = steps[canonicalize_index]["run"]
     assert 'canonical_ref="refs/tags/${REQUESTED_REF}"' in canonicalize_script
@@ -1380,10 +1567,18 @@ def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
     canonical_ref = "${{ needs.resolve-target.outputs.canonical-ref }}"
     analyzed_sha = "${{ needs.resolve-target.outputs.analyzed-sha }}"
     for job_name in ("codeql", "dependency-review", "dependency-scan", "secret-scan"):
-        checkout = next(step for step in jobs[job_name]["steps"] if step.get("uses") == "actions/checkout@v4")
+        checkout = next(
+            step
+            for step in jobs[job_name]["steps"]
+            if step.get("uses") == "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+        )
         assert checkout["with"]["ref"] == analyzed_sha, job_name
 
-    analyze = next(step for step in jobs["codeql"]["steps"] if step.get("uses") == "github/codeql-action/analyze@v4")
+    analyze = next(
+        step
+        for step in jobs["codeql"]["steps"]
+        if step.get("uses") == "github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9"
+    )
     assert analyze["with"]["ref"] == canonical_ref
     assert analyze["with"]["sha"] == analyzed_sha
 
@@ -1391,7 +1586,7 @@ def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
         step
         for job_name in ("dependency-scan", "secret-scan")
         for step in jobs[job_name]["steps"]
-        if step.get("uses") == "github/codeql-action/upload-sarif@v4"
+        if step.get("uses") == "github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9"
     ]
     assert len(uploads) == 2
     for upload in uploads:
@@ -1400,7 +1595,11 @@ def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
 
     heartbeat = jobs["heartbeat"]
     assert "resolve-target" in heartbeat["needs"]
-    upload = next(step for step in heartbeat["steps"] if step.get("uses") == "actions/upload-artifact@v7")
+    upload = next(
+        step
+        for step in heartbeat["steps"]
+        if step.get("uses") == "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    )
     assert upload["with"]["name"] == "aviato-security-heartbeat-${{ needs.resolve-target.outputs.analyzed-sha }}"
 
 

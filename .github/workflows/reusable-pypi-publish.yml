@@ -119,7 +119,7 @@ jobs:
       package-version: ${{ steps.metadata.outputs.package-version }}
     steps:
       - name: Checkout consumer repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
           # C12-W2: build from the IMMUTABLE gated commit, not the mutable tag.
@@ -166,7 +166,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: ${{ inputs.python-version }}
 
@@ -315,7 +315,7 @@ jobs:
 
       # Hand the built distributions + SBOM back to the consumer-local publisher.
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: aviato-pypi-dist
           path: |
