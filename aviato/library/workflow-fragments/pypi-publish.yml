@@ -74,21 +74,46 @@ steps:
     shell: bash
     env:
       AVIATO_AUTHORITY_VERIFIER_CONTRACT: aviato-full-authority-verifier/v1
-      VERIFIED_ENVELOPE_DIGEST: ${{ needs.release-gate.outputs.verified-envelope-digest }}
-      VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
+      AVIATO_ENVELOPE_PATH: ${{ runner.temp }}/fresh-authority/verified-checkpoint-envelope.json
+      AVIATO_REPOSITORY: ${{ github.repository }}
+      AVIATO_VERIFIED_ENVELOPE_DIGEST: ${{ needs.release-gate.outputs.verified-envelope-digest }}
+      AVIATO_VERIFIER_TOKEN: ${{ steps.verifier-token.outputs.token }}
     run: |
-      set -euo pipefail
-      envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
-      [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
-      repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
-      ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
-      path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
-      blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
-      payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
       # AVIATO_SECURE_VERIFIER_BOOTSTRAP: execute checkpoint-bound bytes in a cleared environment.
-      /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
-      import base64, hashlib, json, os, sys
-      payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
+      verifier_token="${AVIATO_VERIFIER_TOKEN}"
+      unset AVIATO_VERIFIER_TOKEN
+      /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C GH_TOKEN="${verifier_token}" VERIFIED_ENVELOPE_DIGEST="${AVIATO_VERIFIED_ENVELOPE_DIGEST}" /usr/bin/python3 -I - "${AVIATO_ENVELOPE_PATH}" "${AVIATO_REPOSITORY}" <<'PY'
+      import base64, hashlib, json, os, ssl, sys, urllib.parse, urllib.request
+      class NoRedirect(urllib.request.HTTPRedirectHandler):
+          def redirect_request(self, *args, **kwargs): return None
+      envelope_path, repository = sys.argv[1:]
+      envelope_bytes = open(envelope_path, "rb").read()
+      if hashlib.sha256(envelope_bytes).hexdigest() != os.environ.pop("VERIFIED_ENVELOPE_DIGEST"): raise SystemExit("verified envelope digest mismatch")
+      envelope = json.loads(envelope_bytes)
+      descriptor = envelope["checkpoint"]["authority_snapshot"]["guard"]["verifier"]
+      expected = descriptor["blob_sha"]
+      repo = urllib.parse.quote(descriptor["repository"], safe="/")
+      path = urllib.parse.quote(descriptor["path"], safe="/")
+      ref = urllib.parse.quote(descriptor["ref"], safe="")
+      url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={ref}"
+      token = os.environ.pop("GH_TOKEN")
+      request = urllib.request.Request(
+          url,
+          headers={
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "Cache-Control": "no-cache",
+              "User-Agent": "aviato-authority-bootstrap",
+              "X-GitHub-Api-Version": "2022-11-28",
+          },
+      )
+      opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ssl.create_default_context()), NoRedirect())
+      with opener.open(request, timeout=30) as response:
+          parsed = urllib.parse.urlsplit(response.geturl())
+          if not (parsed.scheme == "https" and parsed.netloc == "api.github.com"): raise SystemExit("verifier fetch escaped GitHub API origin")
+          raw = response.read(400_001)
+      if len(raw) > 400_000: raise SystemExit("verifier response exceeds bounded size")
+      payload = json.loads(raw)
       if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
       content = payload["content"]
       if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
@@ -98,6 +123,7 @@ steps:
       if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
       actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
       if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
+      os.environ["GH_TOKEN"] = token
       sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
       exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
       PY
@@ -172,106 +198,71 @@ steps:
       fi
   - name: Fail-closed verifier capability probe
     env:
-      GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
+      AVIATO_REPOSITORY: ${{ github.repository }}
+      AVIATO_VERIFIER_TOKEN: ${{ steps.verifier-token.outputs.token }}
     shell: bash
     run: |
-      set -euo pipefail
-      branch="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}" --jq .default_branch)"
-      gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/branches/${branch}/protection" >/dev/null
-      gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=false&per_page=100" >/dev/null
-      gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments?per_page=100" >/dev/null
-  - name: Final checkpoint recheck immediately before PyPI mutation
-    id: aviato-verify-pypi-publish
-    shell: bash
-    env:
-      AVIATO_AUTHORITY_VERIFIER_CONTRACT: aviato-full-authority-verifier/v1
-      CHECKPOINT_RUN_ID: ${{ needs.release-gate.outputs.checkpoint-run-id }}
-      VERIFIED_ENVELOPE_DIGEST: ${{ needs.release-gate.outputs.verified-envelope-digest }}
-      GH_TOKEN: ${{ github.token }}
-      VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
-    run: |
-      set -euo pipefail
-      envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
-      [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
-      gh attestation verify "${envelope}" --repo "${GITHUB_REPOSITORY}" >/dev/null
-      jq -e '.checkpoint.authority_snapshot.schema == "aviato-protection-authority-snapshot/v1" and .checkpoint.issued_at <= (now + 30) and .checkpoint.expires_at > now' "${envelope}" >/dev/null
-      [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/actions/runs/${CHECKPOINT_RUN_ID}" --jq '.status + ":" + .conclusion')" = "completed:success" ]
-      reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
-      key_id="$(jq -r .key_id "${envelope}")"
-      [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
-      gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "([flatten[] | select((.id|tostring) == \"${key_id}\")] | length) == 1" | grep -qx true
-      [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/pypi" --jq .can_admins_bypass)" = "false" ]
-      public_key="$(gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end")"
-      authority_dir="$(mktemp -d)"
-      printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
-      jq -cS .checkpoint "${envelope}" > "${authority_dir}/message"
-      jq -r .signature "${envelope}" | python3 -c 'import base64,sys; value=sys.stdin.read().strip(); sys.stdout.buffer.write(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)))' > "${authority_dir}/signature"
-      ssh-keygen -Y verify -f "${authority_dir}/allowed" -I "${reviewer}" -n aviato -s "${authority_dir}/signature" < "${authority_dir}/message"
-      verifier_repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
-      verifier_ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
-      verifier_blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
-      verifier_path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
-      verifier_json="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${verifier_repo}/contents/${verifier_path}" -f "ref=${verifier_ref}")"
-      # AVIATO_SECURE_VERIFIER_BOOTSTRAP: decode, locally Git-hash, compile, and execute only in memory.
-      /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${verifier_json}" AVIATO_VERIFIER_BLOB="${verifier_blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" \
-        /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
-      import base64, hashlib, json, os, sys
-      payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON"))
-      expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
-      if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str):
-          raise SystemExit("verifier Contents response is not exact base64")
-      content = payload["content"]
-      if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
-      encoded = content.replace("\r", "").replace("\n", "")
-      if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
-      body = base64.b64decode(encoded, validate=True)
-      if not 1 <= len(body) <= 262_144:
-          raise SystemExit("verifier body exceeds the bounded size")
-      actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
-      if actual != expected or payload.get("sha") != expected:
-          raise SystemExit("verifier bytes differ from signed Git blob")
-      sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
-      exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
+      verifier_token="${AVIATO_VERIFIER_TOKEN}"
+      unset AVIATO_VERIFIER_TOKEN
+      /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+        GH_TOKEN="${verifier_token}" \
+        REPOSITORY="${AVIATO_REPOSITORY}" \
+        /usr/bin/python3 -I - <<'PY'
+      import json
+      import os
+      import ssl
+      import urllib.parse
+      import urllib.request
+
+      class NoRedirect(urllib.request.HTTPRedirectHandler):
+          def redirect_request(self, req, fp, code, msg, headers, newurl):
+              raise RuntimeError(f"GitHub API redirect rejected: {newurl}")
+
+      token = os.environ.pop("GH_TOKEN")
+      repository = os.environ.pop("REPOSITORY")
+      opener = urllib.request.build_opener(
+          urllib.request.ProxyHandler({}),
+          urllib.request.HTTPSHandler(context=ssl.create_default_context()),
+          NoRedirect(),
+      )
+
+      def get(suffix):
+          url = f"https://api.github.com/repos/{repository}{suffix}"
+          parsed = urllib.parse.urlsplit(url)
+          if parsed.scheme != "https" or parsed.netloc != "api.github.com":
+              raise RuntimeError(f"unexpected GitHub API origin: {url}")
+          request = urllib.request.Request(
+              url,
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "Cache-Control": "no-cache",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with opener.open(request, timeout=30) as response:
+              payload = response.read(2_000_001)
+          if len(payload) > 2_000_000:
+              raise RuntimeError(f"GitHub API response too large: {url}")
+          return json.loads(payload)
+
+      branch = get("")["default_branch"]
+      get(f"/branches/{urllib.parse.quote(branch, safe='')}/protection")
+      get("/rulesets?includes_parents=false&per_page=100")
+      get("/environments?per_page=100")
       PY
+  - <<: *pypi_full_verifier
+    name: Final checkpoint recheck immediately before PyPI mutation
+    id: aviato-verify-pypi-publish
   - name: Publish distributions
     if: ${{ vars.PYPI_REPOSITORY_URL == '' }}
     uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
     with:
       packages-dir: dist
-  - name: Final checkpoint recheck immediately before alternate PyPI mutation
+  - <<: *pypi_full_verifier
+    name: Final checkpoint recheck immediately before alternate PyPI mutation
     id: aviato-verify-pypi-alternate
     if: ${{ vars.PYPI_REPOSITORY_URL != '' }}
-    shell: bash
-    env:
-      AVIATO_AUTHORITY_VERIFIER_CONTRACT: aviato-full-authority-verifier/v1
-      VERIFIED_ENVELOPE_DIGEST: ${{ needs.release-gate.outputs.verified-envelope-digest }}
-      VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
-    run: |
-      set -euo pipefail
-      envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
-      [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
-      repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
-      ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
-      path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
-      blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
-      payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
-      # AVIATO_SECURE_VERIFIER_BOOTSTRAP: alternate endpoint receives its own adjacent verifier.
-      /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" \
-        /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
-      import base64, hashlib, json, os, sys
-      payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
-      if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
-      content = payload["content"]
-      if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
-      encoded = content.replace("\r", "").replace("\n", "")
-      if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
-      body = base64.b64decode(encoded, validate=True)
-      if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
-      actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
-      if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
-      sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
-      exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
-      PY
   - name: Publish distributions to alternate repository
     if: ${{ vars.PYPI_REPOSITORY_URL != '' }}
     uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b

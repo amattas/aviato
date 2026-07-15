@@ -1,0 +1,2294 @@
+[
+  {
+    "job": "pypi-publish",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "f567caa3201112be6c2a6b52dfe39c54abe7ee8c77629c983a9608831c4b822a",
+    "needs_sha256": "a7c6bc0a50dbddc4353b16d74acc68e7ec5eb4634b2bb5f73627e4e454eb094c",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "attestations",
+        "write"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "id-token",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [
+        "CHECKPOINT_DIGEST",
+        "CHECKPOINT_RUN_ID",
+        "GH_TOKEN",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [],
+      [
+        "GATED_SHA",
+        "GH_TOKEN",
+        "RELEASE_TAG"
+      ],
+      [],
+      [
+        "AVIATO_AUTHORITY_VERIFIER_CONTRACT",
+        "AVIATO_ENVELOPE_PATH",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [],
+      [
+        "AVIATO_AUTHORITY_VERIFIER_CONTRACT",
+        "AVIATO_ENVELOPE_PATH",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [],
+      [
+        "REPOSITORY_URL",
+        "SIMPLE_INDEX_URL"
+      ],
+      [
+        "GATED_SHA",
+        "GH_TOKEN",
+        "RELEASE_TAG"
+      ],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [
+        "AVIATO_AUTHORITY_VERIFIER_CONTRACT",
+        "AVIATO_ENVELOPE_PATH",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [],
+      [
+        "AVIATO_AUTHORITY_VERIFIER_CONTRACT",
+        "AVIATO_ENVELOPE_PATH",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [],
+      [
+        "DISTRIBUTION_NAME",
+        "DIST_DIR",
+        "EXPECTED_VERSION",
+        "RELEASE_TAG",
+        "SIMPLE_INDEX_URL"
+      ]
+    ],
+    "step_env_sha256": [
+      "19f5805f98fe5d3e1e388125644517cfe8172ee330fd4016d1e8a9f88f84b79a",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "ef9f4e0f0edd150bad8e0619337766f88c3c7a70b94665c1d6202034bc9fb76f",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "498ac97f4bdd032678416fb16eac922cf4ac48efad9283806bfbb4dd5ceb1839",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "498ac97f4bdd032678416fb16eac922cf4ac48efad9283806bfbb4dd5ceb1839",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "88d5ff4e0a0ad1c2dbfbdf71aedcf68c3126abbfcea95d99db6438b97bd6b86d",
+      "ef9f4e0f0edd150bad8e0619337766f88c3c7a70b94665c1d6202034bc9fb76f",
+      "c9813ec7f1daf7aa5dd6019586cfbacc8f0fb9f046195bf00902e9acb746b8ef",
+      "498ac97f4bdd032678416fb16eac922cf4ac48efad9283806bfbb4dd5ceb1839",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "498ac97f4bdd032678416fb16eac922cf4ac48efad9283806bfbb4dd5ceb1839",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "ee33556dee9ae5cebf168f6137c17780de779fb90c00eb4dea9a76bbdadfc073"
+    ],
+    "step_order": [
+      [
+        "",
+        "Recheck managed checkpoint before OIDC"
+      ],
+      [
+        "",
+        "Download vetted build artifacts"
+      ],
+      [
+        "",
+        "Verify fresh remote tag after artifact download"
+      ],
+      [
+        "verifier-token",
+        "Mint verifier-only read token"
+      ],
+      [
+        "aviato-verify-pypi-provenance",
+        "Verify full authority immediately before provenance attestation"
+      ],
+      [
+        "",
+        "Attest build provenance"
+      ],
+      [
+        "aviato-verify-pypi-sbom",
+        "Verify full authority immediately before SBOM attestation"
+      ],
+      [
+        "",
+        "Attest SBOM"
+      ],
+      [
+        "index",
+        "Resolve simple index endpoint"
+      ],
+      [
+        "",
+        "Final fresh remote tag verification"
+      ],
+      [
+        "",
+        "Fail-closed verifier capability probe"
+      ],
+      [
+        "aviato-verify-pypi-publish",
+        "Final checkpoint recheck immediately before PyPI mutation"
+      ],
+      [
+        "",
+        "Publish distributions"
+      ],
+      [
+        "aviato-verify-pypi-alternate",
+        "Final checkpoint recheck immediately before alternate PyPI mutation"
+      ],
+      [
+        "",
+        "Publish distributions to alternate repository"
+      ],
+      [
+        "",
+        "Confirm published artifacts"
+      ]
+    ],
+    "step_run_sha256": [
+      "5a6198879c2d3d218958637fbc2decee7a1a0eb2155e4d43d72da1a5cac98613",
+      "",
+      "c2a904680253b7cdff502694a427f4970d00fe10b4727a7a621a96356fb25bed",
+      "",
+      "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+      "",
+      "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+      "",
+      "b6797c7d841172d80e56397bb3e2ba3e464cc073e076856ebdffca095e7eccaa",
+      "c2a904680253b7cdff502694a427f4970d00fe10b4727a7a621a96356fb25bed",
+      "7060c39f6ec37c4ac1b80f4d00a832db77c11c1184493bab6c3ceb09842da6f5",
+      "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+      "",
+      "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+      "",
+      "d220cbc007226073a0ff7d35bdf48f70fcb292307f33e8913c6020e088e1d4e5"
+    ],
+    "step_shells": [
+      "bash",
+      "",
+      "bash",
+      "",
+      "bash",
+      "",
+      "bash",
+      "",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "",
+      "bash",
+      "",
+      "bash"
+    ],
+    "step_uses": [
+      "",
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      "",
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      "actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e",
+      "",
+      "actions/attest-sbom@36590ecaf038d6630c74f2da259095627d52ac11",
+      "",
+      "",
+      "",
+      "",
+      "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b",
+      "",
+      "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b",
+      ""
+    ],
+    "trust_edge": "adjacent-live-verifier",
+    "workflow": "aviato-ci.yml"
+  },
+  {
+    "job": "release",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "1d29d016e5c0d612eecb149e84d7b837964e4474d10dcbbc8a941ad93f0a74dc",
+    "needs_sha256": "20bd0ae2737ff71af48692c8b765612ad04019512eff15546c6a750608861733",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "write"
+      ],
+      [
+        "contents",
+        "write"
+      ],
+      [
+        "issues",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "write"
+      ]
+    ],
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "aviato-ci.yml"
+  },
+  {
+    "job": "security",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "65acbb523c941b4af216031cd427b858853fe5c0af39cf66d4bee3f2c14a6d90",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ],
+      [
+        "security-events",
+        "write"
+      ]
+    ],
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "aviato-ci.yml"
+  },
+  {
+    "job": "status-bridge",
+    "job_env_keys": [
+      "GH_TOKEN"
+    ],
+    "job_env_sha256": "8d6d5a00f0028c6c6de3b43136fa79ad478e1ddae2a30581ef2f07ed9c6c8fba",
+    "job_sha256": "bdcffcf2a5089971db74300e30508e5f6f0d95b0677b08ac4c4f382b7bd0c268",
+    "needs_sha256": "20bd0ae2737ff71af48692c8b765612ad04019512eff15546c6a750608861733",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "statuses",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [
+        "STATUS_CONTEXT",
+        "STATUS_STATE"
+      ],
+      [
+        "STATUS_CONTEXT",
+        "STATUS_STATE"
+      ],
+      [
+        "STATUS_CONTEXT",
+        "STATUS_STATE"
+      ]
+    ],
+    "step_env_sha256": [
+      "81a084f459fc41a350b3ec09dcf15b6e9d5d1a30aee3b317b982a4f013bb261c",
+      "53905ab76f11fa34309d23d0c9f0950f0d79c2b3644c1160cf779159eb7a0af7",
+      "3c0e4a64714eaef1bac1eb3cc94f410bbe5de476473704c289c95a907679927b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Publish verify status"
+      ],
+      [
+        "",
+        "Publish security baseline status"
+      ],
+      [
+        "",
+        "Publish common lint status"
+      ]
+    ],
+    "step_run_sha256": [
+      "0e6996023478f2e223cf5e63de2addcbf18df3b41eee63e50201760f956e7e70",
+      "0e6996023478f2e223cf5e63de2addcbf18df3b41eee63e50201760f956e7e70",
+      "0e6996023478f2e223cf5e63de2addcbf18df3b41eee63e50201760f956e7e70"
+    ],
+    "step_shells": [
+      "",
+      "",
+      ""
+    ],
+    "step_uses": [
+      "",
+      "",
+      ""
+    ],
+    "trust_edge": "generated-status-bridge",
+    "workflow": "aviato-ci.yml"
+  },
+  {
+    "job": "drift",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "1a8e4f1001fe5112b832bc23339d98cb4426003792138cb59c50255c9ca2196b",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "contents",
+        "write"
+      ],
+      [
+        "issues",
+        "write"
+      ],
+      [
+        "pull-requests",
+        "write"
+      ]
+    ],
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "aviato-drift.yml"
+  },
+  {
+    "job": "attest",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "0b837f6dbe5c0fee83d52b9511818796e423886ad28ed8072dc64d08536dfc78",
+    "needs_sha256": "898c74c2eed0452b1e51e567f237c37f1caa1e52f747466d56e76e15d07dc331",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "attestations",
+        "write"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "id-token",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      []
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Download only verified artifact"
+      ],
+      [
+        "",
+        "Attest fixed verified artifact"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      ""
+    ],
+    "step_shells": [
+      "",
+      ""
+    ],
+    "step_uses": [
+      "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+      "actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be"
+    ],
+    "trust_edge": "fixed-verified-artifact",
+    "workflow": "aviato-protection-checkpoint.yml"
+  },
+  {
+    "job": "pypi-publish",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "f567caa3201112be6c2a6b52dfe39c54abe7ee8c77629c983a9608831c4b822a",
+    "needs_sha256": "a7c6bc0a50dbddc4353b16d74acc68e7ec5eb4634b2bb5f73627e4e454eb094c",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "attestations",
+        "write"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "id-token",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [
+        "CHECKPOINT_DIGEST",
+        "CHECKPOINT_RUN_ID",
+        "GH_TOKEN",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [],
+      [
+        "GATED_SHA",
+        "GH_TOKEN",
+        "RELEASE_TAG"
+      ],
+      [],
+      [
+        "AVIATO_AUTHORITY_VERIFIER_CONTRACT",
+        "AVIATO_ENVELOPE_PATH",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [],
+      [
+        "AVIATO_AUTHORITY_VERIFIER_CONTRACT",
+        "AVIATO_ENVELOPE_PATH",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [],
+      [
+        "REPOSITORY_URL",
+        "SIMPLE_INDEX_URL"
+      ],
+      [
+        "GATED_SHA",
+        "GH_TOKEN",
+        "RELEASE_TAG"
+      ],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [
+        "AVIATO_AUTHORITY_VERIFIER_CONTRACT",
+        "AVIATO_ENVELOPE_PATH",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [],
+      [
+        "AVIATO_AUTHORITY_VERIFIER_CONTRACT",
+        "AVIATO_ENVELOPE_PATH",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [],
+      [
+        "DISTRIBUTION_NAME",
+        "DIST_DIR",
+        "EXPECTED_VERSION",
+        "RELEASE_TAG",
+        "SIMPLE_INDEX_URL"
+      ]
+    ],
+    "step_env_sha256": [
+      "19f5805f98fe5d3e1e388125644517cfe8172ee330fd4016d1e8a9f88f84b79a",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "ef9f4e0f0edd150bad8e0619337766f88c3c7a70b94665c1d6202034bc9fb76f",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "498ac97f4bdd032678416fb16eac922cf4ac48efad9283806bfbb4dd5ceb1839",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "498ac97f4bdd032678416fb16eac922cf4ac48efad9283806bfbb4dd5ceb1839",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "88d5ff4e0a0ad1c2dbfbdf71aedcf68c3126abbfcea95d99db6438b97bd6b86d",
+      "ef9f4e0f0edd150bad8e0619337766f88c3c7a70b94665c1d6202034bc9fb76f",
+      "c9813ec7f1daf7aa5dd6019586cfbacc8f0fb9f046195bf00902e9acb746b8ef",
+      "498ac97f4bdd032678416fb16eac922cf4ac48efad9283806bfbb4dd5ceb1839",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "498ac97f4bdd032678416fb16eac922cf4ac48efad9283806bfbb4dd5ceb1839",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "ee33556dee9ae5cebf168f6137c17780de779fb90c00eb4dea9a76bbdadfc073"
+    ],
+    "step_order": [
+      [
+        "",
+        "Recheck managed checkpoint before OIDC"
+      ],
+      [
+        "",
+        "Download vetted build artifacts"
+      ],
+      [
+        "",
+        "Verify fresh remote tag after artifact download"
+      ],
+      [
+        "verifier-token",
+        "Mint verifier-only read token"
+      ],
+      [
+        "aviato-verify-pypi-provenance",
+        "Verify full authority immediately before provenance attestation"
+      ],
+      [
+        "",
+        "Attest build provenance"
+      ],
+      [
+        "aviato-verify-pypi-sbom",
+        "Verify full authority immediately before SBOM attestation"
+      ],
+      [
+        "",
+        "Attest SBOM"
+      ],
+      [
+        "index",
+        "Resolve simple index endpoint"
+      ],
+      [
+        "",
+        "Final fresh remote tag verification"
+      ],
+      [
+        "",
+        "Fail-closed verifier capability probe"
+      ],
+      [
+        "aviato-verify-pypi-publish",
+        "Final checkpoint recheck immediately before PyPI mutation"
+      ],
+      [
+        "",
+        "Publish distributions"
+      ],
+      [
+        "aviato-verify-pypi-alternate",
+        "Final checkpoint recheck immediately before alternate PyPI mutation"
+      ],
+      [
+        "",
+        "Publish distributions to alternate repository"
+      ],
+      [
+        "",
+        "Confirm published artifacts"
+      ]
+    ],
+    "step_run_sha256": [
+      "5a6198879c2d3d218958637fbc2decee7a1a0eb2155e4d43d72da1a5cac98613",
+      "",
+      "c2a904680253b7cdff502694a427f4970d00fe10b4727a7a621a96356fb25bed",
+      "",
+      "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+      "",
+      "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+      "",
+      "b6797c7d841172d80e56397bb3e2ba3e464cc073e076856ebdffca095e7eccaa",
+      "c2a904680253b7cdff502694a427f4970d00fe10b4727a7a621a96356fb25bed",
+      "7060c39f6ec37c4ac1b80f4d00a832db77c11c1184493bab6c3ceb09842da6f5",
+      "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+      "",
+      "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+      "",
+      "d220cbc007226073a0ff7d35bdf48f70fcb292307f33e8913c6020e088e1d4e5"
+    ],
+    "step_shells": [
+      "bash",
+      "",
+      "bash",
+      "",
+      "bash",
+      "",
+      "bash",
+      "",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "",
+      "bash",
+      "",
+      "bash"
+    ],
+    "step_uses": [
+      "",
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      "",
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      "actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e",
+      "",
+      "actions/attest-sbom@36590ecaf038d6630c74f2da259095627d52ac11",
+      "",
+      "",
+      "",
+      "",
+      "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b",
+      "",
+      "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b",
+      ""
+    ],
+    "trust_edge": "adjacent-live-verifier",
+    "workflow": "rendered-python"
+  },
+  {
+    "job": "release",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "7188d5b8accd86f1d13a845e72b3dc405feebba4e19204cb9ffa1a0c8a37b4c2",
+    "needs_sha256": "20bd0ae2737ff71af48692c8b765612ad04019512eff15546c6a750608861733",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "write"
+      ],
+      [
+        "contents",
+        "write"
+      ],
+      [
+        "issues",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "write"
+      ]
+    ],
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "rendered-python"
+  },
+  {
+    "job": "security",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "4a46c0e163241bdd69ffcfc59fb7d8f7069677ef6068bae69d4c0c02a9a52669",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ],
+      [
+        "security-events",
+        "write"
+      ]
+    ],
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "rendered-python"
+  },
+  {
+    "job": "status-bridge",
+    "job_env_keys": [
+      "GH_TOKEN"
+    ],
+    "job_env_sha256": "8d6d5a00f0028c6c6de3b43136fa79ad478e1ddae2a30581ef2f07ed9c6c8fba",
+    "job_sha256": "bdcffcf2a5089971db74300e30508e5f6f0d95b0677b08ac4c4f382b7bd0c268",
+    "needs_sha256": "20bd0ae2737ff71af48692c8b765612ad04019512eff15546c6a750608861733",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "statuses",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [
+        "STATUS_CONTEXT",
+        "STATUS_STATE"
+      ],
+      [
+        "STATUS_CONTEXT",
+        "STATUS_STATE"
+      ],
+      [
+        "STATUS_CONTEXT",
+        "STATUS_STATE"
+      ]
+    ],
+    "step_env_sha256": [
+      "81a084f459fc41a350b3ec09dcf15b6e9d5d1a30aee3b317b982a4f013bb261c",
+      "53905ab76f11fa34309d23d0c9f0950f0d79c2b3644c1160cf779159eb7a0af7",
+      "3c0e4a64714eaef1bac1eb3cc94f410bbe5de476473704c289c95a907679927b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Publish verify status"
+      ],
+      [
+        "",
+        "Publish security baseline status"
+      ],
+      [
+        "",
+        "Publish common lint status"
+      ]
+    ],
+    "step_run_sha256": [
+      "0e6996023478f2e223cf5e63de2addcbf18df3b41eee63e50201760f956e7e70",
+      "0e6996023478f2e223cf5e63de2addcbf18df3b41eee63e50201760f956e7e70",
+      "0e6996023478f2e223cf5e63de2addcbf18df3b41eee63e50201760f956e7e70"
+    ],
+    "step_shells": [
+      "",
+      "",
+      ""
+    ],
+    "step_uses": [
+      "",
+      "",
+      ""
+    ],
+    "trust_edge": "generated-status-bridge",
+    "workflow": "rendered-python"
+  },
+  {
+    "job": "attest-unsigned",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "699587a5d25f34b535575942da147fde8c0d980f7750ec78416253b85421bc94",
+    "needs_sha256": "b87a4f01c8e36a30c5ff5fc8158dc2fbbbbb71fe3c1c942b8f399ab3e1a1a613",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "attestations",
+        "write"
+      ],
+      [
+        "id-token",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      [
+        "EXPECTED_SHA256"
+      ],
+      [],
+      [
+        "CHECKPOINT_RUN_ID",
+        "GH_TOKEN",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [
+        "AVIATO_AUTHORITY_VERIFIER_CONTRACT",
+        "AVIATO_ENVELOPE_PATH",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      []
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "dd1f0ddc9d9d3f408d56df887f7c05ed7df47f40bfcf6f7012113fab1c0fc3f9",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "439b5d1a3f0485b16ec05058dc747e461d280415eb85f3c619800fe5f0e853b9",
+      "18792149ed341420baee607f7c013c9e696196e2bb531536bc36ffd303e6d831",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Download exact unsigned archive for attestation"
+      ],
+      [
+        "",
+        "Validate exact unsigned archive digest"
+      ],
+      [
+        "verifier-token",
+        "Mint verifier-only read token"
+      ],
+      [
+        "",
+        "Download fixed checkpoint envelope for attestation"
+      ],
+      [
+        "aviato-verify-app-archive-attestation",
+        "Verify full authority immediately before unsigned archive attestation"
+      ],
+      [
+        "",
+        "Attest unsigned archive provenance"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      "7b3fd5f4d70395280a385bd52e815454d4c380bc352633d442b84b86bc5904b8",
+      "",
+      "d245d5218ad51a9c9c54a2bd9a65f432140d3585fd76ac73ef72c706cc137930",
+      "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+      ""
+    ],
+    "step_shells": [
+      "",
+      "bash",
+      "",
+      "bash",
+      "bash",
+      ""
+    ],
+    "step_uses": [
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      "",
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      "",
+      "actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e"
+    ],
+    "trust_edge": "adjacent-live-verifier",
+    "workflow": "reusable-app-store-connect.yml"
+  },
+  {
+    "job": "release-evidence",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "195bbd29d02d4c785f187afc9f8a83939703359f48a70f7a216b1b3187a57d29",
+    "needs_sha256": "286c3623cd81dbad7ee0770c3bed0a4a2c78c6f4df2c46b3c995ad3f108f9ba6",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [
+        "CHECKPOINT_DIGEST",
+        "CHECKPOINT_RUN_ID",
+        "GH_TOKEN",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [],
+      [
+        "ASSET_NAME",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN",
+        "GH_REPO",
+        "GH_TOKEN",
+        "RELEASE_TAG"
+      ]
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "c9813ec7f1daf7aa5dd6019586cfbacc8f0fb9f046195bf00902e9acb746b8ef",
+      "80dc5a535ac6a7ccb0b0652ae17d4be28baf6f380eea41e97092abf7f261ed60",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "ffd7ee7250f691199645155f29fd138a8008f2fecac82a2a75f3ef111f0c1018"
+    ],
+    "step_order": [
+      [
+        "verifier-token",
+        "Mint verifier-only read token"
+      ],
+      [
+        "",
+        "Fail-closed verifier capability probe"
+      ],
+      [
+        "",
+        "Recheck authorization before release mutation"
+      ],
+      [
+        "",
+        "Download App Store Connect receipt"
+      ],
+      [
+        "",
+        "Persist receipt asset and release-note evidence"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      "7060c39f6ec37c4ac1b80f4d00a832db77c11c1184493bab6c3ceb09842da6f5",
+      "448d3c249cc713f1aa71846e0d043be33b4139afa20a774d2d2dea3e871c9125",
+      "",
+      "f0e854489278e3786950cf2e0e34e69dac63e31c39a256d89911c907682c314f"
+    ],
+    "step_shells": [
+      "",
+      "bash",
+      "bash",
+      "",
+      "bash"
+    ],
+    "step_uses": [
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      "",
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      ""
+    ],
+    "trust_edge": "exact-privileged-job",
+    "workflow": "reusable-app-store-connect.yml"
+  },
+  {
+    "job": "drift-report",
+    "job_env_keys": [
+      "AVIATO_LOCAL_INSTALL",
+      "AVIATO_REF"
+    ],
+    "job_env_sha256": "ccdc83f75a70d361c2319b59676faa23b8de2a06c5d84e6c2ac3e58c2837b388",
+    "job_sha256": "8ec7e1c842a6b5bba4e5ee2d528c0ac6e5578990a9560c14a970f0a4660cc0fc",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "contents",
+        "write"
+      ],
+      [
+        "issues",
+        "write"
+      ],
+      [
+        "pull-requests",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      [],
+      [],
+      [],
+      [],
+      [
+        "GH_TOKEN"
+      ],
+      [
+        "AVIATO_SETTINGS_READ_TOKEN",
+        "GH_TOKEN"
+      ]
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "8d6d5a00f0028c6c6de3b43136fa79ad478e1ddae2a30581ef2f07ed9c6c8fba",
+      "d233ddf04c2b8186c4bf9b1dfcccba414522c7961077cea2ab7ea0979cb4556c"
+    ],
+    "step_order": [
+      [
+        "",
+        "Jitter"
+      ],
+      [
+        "",
+        "Checkout"
+      ],
+      [
+        "",
+        "Set up Python"
+      ],
+      [
+        "",
+        "Verify Aviato ref is pinned (\u00a711.3 fail-closed)"
+      ],
+      [
+        "",
+        "Install Aviato (pinned)"
+      ],
+      [
+        "",
+        "File drift (platform token; contents/PR/issue writes only)"
+      ],
+      [
+        "",
+        "Settings drift (platform token for issue writes; admin token READ-only for reads)"
+      ]
+    ],
+    "step_run_sha256": [
+      "016a6c9f334a34f3c3da8ca414e5c7412264a4270ea53a0953cb71724710ba63",
+      "",
+      "",
+      "f0310d2fd464ab8469324791cd2957599e7464aec919ee205ff76618926fe775",
+      "2fe15133ca153f7503be7f193cf2bf290053cd1e9cd537f8b3fd4bf8ca8ce3ef",
+      "e6dfdac55f25c0c8718826ede2948fff5d19c11e531558c7213b53a4eb9c1557",
+      "c2bf9817142dc71345a3e7bfb1e44a3437d31ddb08b4adcfcff91b4f825aa187"
+    ],
+    "step_shells": [
+      "bash",
+      "",
+      "",
+      "bash",
+      "bash",
+      "bash",
+      "bash"
+    ],
+    "step_uses": [
+      "",
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "trust_edge": "exact-privileged-job",
+    "workflow": "reusable-consumer-automation.yml"
+  },
+  {
+    "job": "attest-image",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "afda8ec6e0bfd1cef930eb9438abd1e16022a7e352a99ff57cb0e5db751de4e7",
+    "needs_sha256": "f320b810ea61ce6405c478a1a67befdcc117a307e62f17deb2417be2f98b1864",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "attestations",
+        "write"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "id-token",
+        "write"
+      ],
+      [
+        "packages",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      [
+        "CHECKPOINT_RUN_ID",
+        "GH_TOKEN",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [
+        "AVIATO_AUTHORITY_VERIFIER_CONTRACT",
+        "AVIATO_ENVELOPE_PATH",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      []
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "439b5d1a3f0485b16ec05058dc747e461d280415eb85f3c619800fe5f0e853b9",
+      "18792149ed341420baee607f7c013c9e696196e2bb531536bc36ffd303e6d831",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "verifier-token",
+        "Mint verifier-only read token"
+      ],
+      [
+        "",
+        "Download fixed checkpoint envelope for image attestation"
+      ],
+      [
+        "aviato-verify-image-attestation",
+        "Verify full authority immediately before image attestation"
+      ],
+      [
+        "",
+        "Attest published image provenance"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      "d245d5218ad51a9c9c54a2bd9a65f432140d3585fd76ac73ef72c706cc137930",
+      "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+      ""
+    ],
+    "step_shells": [
+      "",
+      "bash",
+      "bash",
+      ""
+    ],
+    "step_uses": [
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      "",
+      "actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e"
+    ],
+    "trust_edge": "adjacent-live-verifier",
+    "workflow": "reusable-docker-ghcr.yml"
+  },
+  {
+    "job": "docker",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "1141c30742f974c98fbd2d9a672d6f5661ca411b0f13a20446716a5985aae85f",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "343c4fbbaaef190dbad1ebf54cd617d7f93c224650cb1149b6cdb5901147c3a4",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "packages",
+        "write"
+      ],
+      [
+        "security-events",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [
+        "CHECKPOINT_DIGEST",
+        "CHECKPOINT_RUN_ID",
+        "ENV_NAME",
+        "GATED_SHA",
+        "GH_TOKEN",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [],
+      [
+        "RELEASE_TAG_INPUT",
+        "TAG_FORMAT_DESCRIPTION",
+        "TAG_PATTERN"
+      ],
+      [
+        "GATED_SHA",
+        "RELEASE_TAG"
+      ],
+      [
+        "IMAGE_NAME",
+        "RELEASE_TAG"
+      ],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [
+        "CONTEXT",
+        "DOCKERFILE",
+        "LABELS",
+        "PLATFORMS"
+      ],
+      [],
+      [],
+      [],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN",
+        "CHECKPOINT_RUN_ID",
+        "ENV_NAME",
+        "GH_TOKEN",
+        "IMAGE",
+        "PLATFORMS",
+        "TAG",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [
+        "GH_TOKEN",
+        "RELEASE_TAG"
+      ],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN",
+        "GH_TOKEN",
+        "IMAGE",
+        "TAG",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ]
+    ],
+    "step_env_sha256": [
+      "e92e1eca791296cd69986965414101f3c28e7f563684c2b3a53485231942b31c",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "80c727bd17bf541f37f471ff21d15c8b8256b7b52f9797ea8c26e914c90a2dfc",
+      "82f63b5da6e53bcf8f14cf301e9d957b58ce82b69c96d48e32fc26e29b948c75",
+      "6899264cea765607dc296c4728eaac1d017e4889a1b3a134514a421154533410",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "95eb19dbd9efa2d9fc3202eaffd859e4cc5903d909a23283f5c83aaf244ed478",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "c9813ec7f1daf7aa5dd6019586cfbacc8f0fb9f046195bf00902e9acb746b8ef",
+      "e99f3b80f2603dd3940d05a0c417b5deae7f5a98e2dd01b90288300b6fa0499e",
+      "06019f72bb5ffaad37cf7341e3eee3950ac1381cee560e274234275cb42444c6",
+      "b28cea600ca22e0bccbecea0cef9e9d1cfc9d81f2c5764a4f900ed3b8ff4b520"
+    ],
+    "step_order": [
+      [
+        "",
+        "Recheck exact authorization outputs before registry or OIDC use"
+      ],
+      [
+        "",
+        "Checkout consumer repository"
+      ],
+      [
+        "release",
+        "Validate release tag"
+      ],
+      [
+        "",
+        "Verify tag still points at the gated commit (C12-W2)"
+      ],
+      [
+        "vars",
+        "Determine image name"
+      ],
+      [
+        "",
+        "Set up QEMU"
+      ],
+      [
+        "",
+        "Set up Docker Buildx"
+      ],
+      [
+        "",
+        "Log in to GitHub Container Registry"
+      ],
+      [
+        "meta",
+        "Extract metadata"
+      ],
+      [
+        "",
+        "Install Trivy"
+      ],
+      [
+        "",
+        "Build and scan each target platform (gate before publish)"
+      ],
+      [
+        "",
+        "Upload image scan results"
+      ],
+      [
+        "",
+        "Upload image SBOMs"
+      ],
+      [
+        "verifier-token",
+        "Mint verifier-only read token"
+      ],
+      [
+        "",
+        "Fail-closed verifier capability probe"
+      ],
+      [
+        "build",
+        "Push scanned digests and assemble release tag (C12-W3)"
+      ],
+      [
+        "monotonic",
+        "Determine highest released version"
+      ],
+      [
+        "",
+        "Tag and push latest (monotonic guard)"
+      ]
+    ],
+    "step_run_sha256": [
+      "76330eee2bb8bbd70d1b63ff83abb2197bf65025dc56385328067af696f0202d",
+      "",
+      "177ca317820639a9350954c204004b2c2dfd0e9301af5b517ccc883abc4a3426",
+      "89c17e55d1176f2fa558f673330ad7f73c589208d979e6641184f0478a5766ce",
+      "0e22564052d1c3a309b70d3701345cc1f8862a434983d979749f20d6295beb6d",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "032a8de5c3ace0cb39b6a4eed0f4fdea863403082421d05184b904604b19ed88",
+      "",
+      "",
+      "",
+      "7060c39f6ec37c4ac1b80f4d00a832db77c11c1184493bab6c3ceb09842da6f5",
+      "c1932da78aa4a98f321c9bb2880a63c7e297a50cc6e7284d26e54b06b22d8ff2",
+      "3d9ad5bc6dd1ffbf3ca4f81e07bdbb0249243e3991f47a15b1d2656ec03ac484",
+      "9524eba2e29adee93a0db331a7c89e04f91ceced31f8ccc6ed0b069643e74f89"
+    ],
+    "step_shells": [
+      "bash",
+      "",
+      "bash",
+      "bash",
+      "bash",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "bash",
+      "",
+      "",
+      "",
+      "bash",
+      "bash",
+      "bash",
+      "bash"
+    ],
+    "step_uses": [
+      "",
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "",
+      "",
+      "",
+      "docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a",
+      "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
+      "docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee",
+      "docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9",
+      "aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514",
+      "",
+      "github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "trust_edge": "exact-privileged-job",
+    "workflow": "reusable-docker-ghcr.yml"
+  },
+  {
+    "job": "deploy",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "5c6827eefdbaaec61c1db80bb01aa583630d00300e0fe6e35ae7ec2692aebd8d",
+    "needs_sha256": "cded3d45f3f492f13922453aae96788ccf46223ca7170acd5c2c12cb84bcd80b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "id-token",
+        "write"
+      ],
+      [
+        "pages",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [
+        "CHECKPOINT_DIGEST",
+        "CHECKPOINT_RUN_ID",
+        "GH_TOKEN",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [
+        "AVIATO_AUTHORITY_VERIFIER_CONTRACT",
+        "AVIATO_ENVELOPE_PATH",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      []
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "c9813ec7f1daf7aa5dd6019586cfbacc8f0fb9f046195bf00902e9acb746b8ef",
+      "ca9050ee4fb3d373bb41c721aec0b1118a39655cd5149c72e5e548bbb3c5f112",
+      "273393fc73b751a7765e808f3fd382f56d2eb91c31b4c034ac701e350ed364f2",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "verifier-token",
+        "Mint verifier-only read token"
+      ],
+      [
+        "",
+        "Fail-closed verifier capability probe"
+      ],
+      [
+        "",
+        "Download fixed checkpoint envelope for Pages attestation"
+      ],
+      [
+        "aviato-verify-pages-deploy",
+        "Recheck exact authorization before Pages OIDC"
+      ],
+      [
+        "deployment",
+        "Deploy GitHub Pages"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      "7060c39f6ec37c4ac1b80f4d00a832db77c11c1184493bab6c3ceb09842da6f5",
+      "0b505f129728466f42881f031d3e34170fdcfc933fae55368bc33308b7d0995a",
+      "db8b8c4dc67b220b6cc067a6b572a17c15915d9284b65970a73660b065609f51",
+      ""
+    ],
+    "step_shells": [
+      "",
+      "bash",
+      "bash",
+      "bash",
+      ""
+    ],
+    "step_uses": [
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      "",
+      "",
+      "actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e"
+    ],
+    "trust_edge": "adjacent-live-verifier",
+    "workflow": "reusable-docs-pages.yml"
+  },
+  {
+    "job": "push",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "18c825c3b1c408f4d0b8bed33a08946f9f69111a9690d80529095b7da3836406",
+    "needs_sha256": "e99adbe058517220ccf009fde7ac217b5e4d41a23615e5f358aabdda5b696e87",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [
+        "CHECKPOINT_DIGEST",
+        "CHECKPOINT_RUN_ID",
+        "GH_TOKEN",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [],
+      [],
+      [
+        "AVIATO_AUTHORITY_VERIFIER_CONTRACT",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIED_ENVELOPE_DIGEST",
+        "AVIATO_VERIFIER_TOKEN",
+        "DOCS_BRANCH"
+      ],
+      [
+        "DOCS_BRANCH",
+        "PUSH_TOKEN"
+      ]
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "c9813ec7f1daf7aa5dd6019586cfbacc8f0fb9f046195bf00902e9acb746b8ef",
+      "fbdf47f8e7332bdc97f2cd68add537da961278e57b473656288db7c10d101604",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "43f2629d4bb0a1d96ca6b06091f5cd7cbb2710011d2de515d740420f8e544bf9",
+      "33d3650775b410ed11268cf25deac5f2e1d8a7723bd0b8efb7b9cc8f883e3bb1"
+    ],
+    "step_order": [
+      [
+        "verifier-token",
+        "Mint verifier-only read token"
+      ],
+      [
+        "",
+        "Fail-closed verifier capability probe"
+      ],
+      [
+        "",
+        "Recheck authorization before branch mutation"
+      ],
+      [
+        "",
+        "Checkout"
+      ],
+      [
+        "",
+        "Fetch docs branch bundle"
+      ],
+      [
+        "aviato-verify-docs-push",
+        "Verify docs bundle and final push authority"
+      ],
+      [
+        "",
+        "Fast-forward docs branch"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      "7060c39f6ec37c4ac1b80f4d00a832db77c11c1184493bab6c3ceb09842da6f5",
+      "e950b308fae570ba816e00bb39eb737df2ba9fa293db3bf6b66aa1b90d261e62",
+      "",
+      "",
+      "e2d12ded6f222e8ed92cb5195b4bd11d26406eb776e909c42aa721b9153864d8",
+      "b17952592054deba2df99dfa6f777f60364967c1d343027461cd31be07ef4833"
+    ],
+    "step_shells": [
+      "",
+      "bash",
+      "bash",
+      "",
+      "",
+      "bash",
+      "bash"
+    ],
+    "step_uses": [
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      "",
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      "",
+      ""
+    ],
+    "trust_edge": "exact-privileged-job",
+    "workflow": "reusable-docs-pages.yml"
+  },
+  {
+    "job": "release",
+    "job_env_keys": [
+      "AVIATO_LOCAL_INSTALL",
+      "AVIATO_REF",
+      "BUILD_NUMBER",
+      "GH_TOKEN"
+    ],
+    "job_env_sha256": "c4ad244e1dce0a5b704e6bf6135a521ea9d4e4f98bbd1fe72c129f6c5b0a24b1",
+    "job_sha256": "e5ddadd13dca706bbd480fdf9b59dd74915ec2f052c067d1d55e1121384180b3",
+    "needs_sha256": "3cd3120805ec8f8a13d029f25600c8d18a615baa0d6dc45c80b459a356ea67d6",
+    "outputs_sha256": "96ee64f770ccdb868759bc8ed52c63e974aeb959a6b89f04bbed93f8e013546a",
+    "permissions": [
+      [
+        "actions",
+        "write"
+      ],
+      [
+        "contents",
+        "write"
+      ],
+      [
+        "pull-requests",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      [],
+      [],
+      [],
+      [],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [
+        "LAST",
+        "NEXT"
+      ],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN",
+        "CHECKPOINT_DIGEST",
+        "CHECKPOINT_RUN_ID",
+        "INTENDED_ACTOR",
+        "MERGED_SHA",
+        "NEXT"
+      ]
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "c9813ec7f1daf7aa5dd6019586cfbacc8f0fb9f046195bf00902e9acb746b8ef",
+      "7ada45eb9b2a41cd8f39ef987aafa4dd49321d8c91a7e2865de62be6e6236619",
+      "2375b21e2f42cf0d4dc544712335ec72f79e1055a21f2f9d894a6c6e561dfa24"
+    ],
+    "step_order": [
+      [
+        "",
+        "Checkout proposal source (full history)"
+      ],
+      [
+        "",
+        "Set up Python"
+      ],
+      [
+        "",
+        "Verify Aviato ref is pinned (\u00a711.3 fail-closed)"
+      ],
+      [
+        "",
+        "Install Aviato (pinned)"
+      ],
+      [
+        "verifier-token",
+        "Mint verifier-only read token"
+      ],
+      [
+        "",
+        "Fail-closed verifier capability probe"
+      ],
+      [
+        "",
+        "Propose release PR"
+      ],
+      [
+        "promote",
+        "Verify checkpoint and perform closed promotion"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      "",
+      "fb510f1363e0a2cb49d7a8acd9f26ca914792857dab22d5fcb4077819ce18043",
+      "2fe15133ca153f7503be7f193cf2bf290053cd1e9cd537f8b3fd4bf8ca8ce3ef",
+      "",
+      "7060c39f6ec37c4ac1b80f4d00a832db77c11c1184493bab6c3ceb09842da6f5",
+      "3efa4418ceba6ac0455b897d7c635a292057c8aaedcc9cd36e03337bda7af1d6",
+      "61b6661c9142b272372a34f5275fe5fcd79388c701037d77516f12cc706a7c6e"
+    ],
+    "step_shells": [
+      "",
+      "",
+      "bash",
+      "bash",
+      "",
+      "bash",
+      "bash",
+      "bash"
+    ],
+    "step_uses": [
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+      "",
+      "",
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      "",
+      ""
+    ],
+    "trust_edge": "exact-privileged-job",
+    "workflow": "reusable-release.yml"
+  },
+  {
+    "job": "codeql",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "c5093c771d6442e227aa504cbfb52aa62121d6b2b8b4c65965a40dc045403869",
+    "needs_sha256": "da89b7ba7a53466158e54515eded66bc09b67d6cd9812a97c64913640bf2d0b8",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ],
+      [
+        "security-events",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      [],
+      [],
+      [],
+      [
+        "ANALYZED_REF",
+        "GH_TOKEN"
+      ]
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "c6131d030bea7958f4b66fdce68132bd7285850c55e6eb970d2810ed4478178a"
+    ],
+    "step_order": [
+      [
+        "",
+        "Checkout"
+      ],
+      [
+        "",
+        "Initialize CodeQL"
+      ],
+      [
+        "",
+        "Autobuild"
+      ],
+      [
+        "",
+        "Analyze"
+      ],
+      [
+        "",
+        "Gate CodeQL high/critical alerts"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      "",
+      "",
+      "",
+      "a08750ffbfbb7e6051e85b7aa4461a478f38d29ea459c67b9bf97d2dc1dbd424"
+    ],
+    "step_shells": [
+      "",
+      "",
+      "",
+      "",
+      "bash"
+    ],
+    "step_uses": [
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9",
+      "github/codeql-action/autobuild@99df26d4f13ea111d4ec1a7dddef6063f76b97e9",
+      "github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9",
+      ""
+    ],
+    "trust_edge": "exact-privileged-job",
+    "workflow": "reusable-security-baseline.yml"
+  },
+  {
+    "job": "dependency-review",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "fb5247db5dcabe33caf0907fd58c43a2c2ad97b194ab167647e1a7753fdf955a",
+    "needs_sha256": "da89b7ba7a53466158e54515eded66bc09b67d6cd9812a97c64913640bf2d0b8",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ],
+      [
+        "security-events",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      []
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Checkout"
+      ],
+      [
+        "",
+        "Dependency review"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      ""
+    ],
+    "step_shells": [
+      "",
+      ""
+    ],
+    "step_uses": [
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294"
+    ],
+    "trust_edge": "exact-privileged-job",
+    "workflow": "reusable-security-baseline.yml"
+  },
+  {
+    "job": "dependency-scan",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "c7bfb07cec1fe9642e84845b7961221b061dc0e20eada025dcd927e70dcc723f",
+    "needs_sha256": "da89b7ba7a53466158e54515eded66bc09b67d6cd9812a97c64913640bf2d0b8",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ],
+      [
+        "security-events",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      [],
+      [],
+      []
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Checkout"
+      ],
+      [
+        "",
+        "Report dependency findings (all severities, no gate)"
+      ],
+      [
+        "",
+        "Upload dependency findings"
+      ],
+      [
+        "",
+        "Gate on high/critical dependencies (\u00a72.13)"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      "",
+      "",
+      ""
+    ],
+    "step_shells": [
+      "",
+      "",
+      "",
+      ""
+    ],
+    "step_uses": [
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25",
+      "github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9",
+      "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25"
+    ],
+    "trust_edge": "exact-privileged-job",
+    "workflow": "reusable-security-baseline.yml"
+  },
+  {
+    "job": "heartbeat",
+    "job_env_keys": [
+      "ANALYZED_REF",
+      "ANALYZED_SHA",
+      "CODEQL_LANGUAGES",
+      "CODEQL_RESULT",
+      "DEPREVIEW_RESULT",
+      "DEPSCAN_RESULT",
+      "RUN_CODEQL",
+      "SECRET_RESULT"
+    ],
+    "job_env_sha256": "a074bc6c9c347670dcd5cf2d87eab998fcd73a3063cc3b876dd95647f1ba3316",
+    "job_sha256": "fb726a0ab64f62fcb6b814d48df22cbb85a056827168612a285597cd994e13c3",
+    "needs_sha256": "829e56d4e29a0be8365b337162fb087d7a9ece02db871a45b827d1fe9cd9c359",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ],
+      [
+        "security-events",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      [],
+      []
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Emit heartbeat"
+      ],
+      [
+        "",
+        "Gate on required scans"
+      ],
+      [
+        "",
+        "Upload heartbeat"
+      ]
+    ],
+    "step_run_sha256": [
+      "32d51ff56ab1397814108d9d21bd467babd4df23b10c15a7b795a5c20c2336dc",
+      "0ec5664dcc5c6ae85120822cf26793499024c060e0918ae9cdd3ce5f86da2306",
+      ""
+    ],
+    "step_shells": [
+      "bash",
+      "bash",
+      ""
+    ],
+    "step_uses": [
+      "",
+      "",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    ],
+    "trust_edge": "exact-privileged-job",
+    "workflow": "reusable-security-baseline.yml"
+  },
+  {
+    "job": "privilege-probe",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "8fb7f3912e53ac2ebe849e6595d40d6be724c3e82c0981e3efa91f2c47de9bbf",
+    "needs_sha256": "f606d09afd3740c80e646dbc898059bc22e4640b64582e49d338e09062330e3d",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ],
+      [
+        "security-events",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      [
+        "GH_TOKEN",
+        "REPO"
+      ]
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "1dda7306234c3f23f7d8a24d333c60ac278001c1b5887303919d3c3b796e5a59"
+    ],
+    "step_order": [
+      [
+        "",
+        "Jitter (scheduled runs only)"
+      ],
+      [
+        "",
+        "Verify security-events scope"
+      ]
+    ],
+    "step_run_sha256": [
+      "016a6c9f334a34f3c3da8ca414e5c7412264a4270ea53a0953cb71724710ba63",
+      "a2b5ba31edc164f7ce083a4e56a9de7c9df0da7d1417d8bc22657ed519bdf41a"
+    ],
+    "step_shells": [
+      "bash",
+      "bash"
+    ],
+    "step_uses": [
+      "",
+      ""
+    ],
+    "trust_edge": "exact-privileged-job",
+    "workflow": "reusable-security-baseline.yml"
+  },
+  {
+    "job": "resolve-target",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "cd61384e4615d610b005bcefc909dca17ae1c81a9909ffb7eff2179e9ace8ef1",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "8eca68c189229f60d21bce34f4e42b46b1a247844fe57b047bab0e8ffa508cba",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ],
+      [
+        "security-events",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [
+        "EVENT_REF",
+        "REQUESTED_REF"
+      ],
+      [],
+      [
+        "CANONICAL_REF",
+        "CUSTOM_REF",
+        "EVENT_SHA",
+        "REQUESTED_SHA"
+      ]
+    ],
+    "step_env_sha256": [
+      "e5993cd93dadc5af7cf02d20c77bcfcb096f239e85282c42d83e57947635dc2e",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "21f6385b625537fc8297e5ce4d2021d3c5f2f76ab1a6402ded5be2b01560a100"
+    ],
+    "step_order": [
+      [
+        "canonicalize",
+        "Canonicalize requested ref"
+      ],
+      [
+        "",
+        "Fetch requested ref and tags"
+      ],
+      [
+        "resolve",
+        "Resolve canonical ref and commit"
+      ]
+    ],
+    "step_run_sha256": [
+      "760320d8be317a6c11426dcb848d3215021b0b2eaf5b2c3394628b277bb8f1b6",
+      "",
+      "12ac26b9e15be5abd05af545ee8ef34bc749f0542fb2bcb743fca0af284c41d8"
+    ],
+    "step_shells": [
+      "bash",
+      "",
+      "bash"
+    ],
+    "step_uses": [
+      "",
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      ""
+    ],
+    "trust_edge": "exact-privileged-job",
+    "workflow": "reusable-security-baseline.yml"
+  },
+  {
+    "job": "secret-scan",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "bebc8d2be070b944444869873bf5f616a9f05eabdb3704d032127c6cf6d80a59",
+    "needs_sha256": "da89b7ba7a53466158e54515eded66bc09b67d6cd9812a97c64913640bf2d0b8",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ],
+      [
+        "security-events",
+        "write"
+      ]
+    ],
+    "step_env_keys": [
+      [],
+      [],
+      []
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Checkout"
+      ],
+      [
+        "",
+        "Scan for secrets"
+      ],
+      [
+        "",
+        "Upload secret findings"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      "",
+      ""
+    ],
+    "step_shells": [
+      "",
+      "",
+      ""
+    ],
+    "step_uses": [
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25",
+      "github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9"
+    ],
+    "trust_edge": "exact-privileged-job",
+    "workflow": "reusable-security-baseline.yml"
+  }
+]

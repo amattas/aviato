@@ -18,7 +18,7 @@ from aviato.core.composition import resolve_profile
 from aviato.core.onboarding import resolved_artifacts
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT, REPO_ROOT
-from aviato.validation import _TEMPLATE_EXAMPLE_VARS
+from aviato.validation import _TEMPLATE_EXAMPLE_VARS, TEMPLATE_EXAMPLE_PIN
 
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 SCAFFOLD_FILES = REPO_ROOT / "aviato" / "library" / "scaffold" / "files"
@@ -43,7 +43,7 @@ def _rendered_python_library_workflow() -> JsonDict:
         Registry(MODULE_SOURCE_ROOT),
         "python-library",
         _TEMPLATE_EXAMPLE_VARS["python-library"],
-        pin="1",
+        pin=TEMPLATE_EXAMPLE_PIN,
         docs=False,
     )
     body = next(a.body for a in artifacts if a.output == ".github/workflows/aviato-ci.yml")
@@ -913,10 +913,15 @@ def test_every_oidc_mutation_has_an_adjacent_canonical_full_verifier() -> None:
                 action = str(step.get("uses", "")).split("@", 1)[0]
                 if action not in OIDC_ACTIONS:
                     continue
+                if workflow_name == "aviato-protection-checkpoint.yml" and job_name == "attest":
+                    assert [candidate.get("name") for candidate in steps] == [
+                        "Download only verified artifact",
+                        "Attest fixed verified artifact",
+                    ]
+                    continue
                 assert index > 0, f"{workflow_name}:{job_name}:{action} has no verifier predecessor"
-                assert is_canonical_verifier_step(steps[index - 1]), (
-                    f"{workflow_name}:{job_name}:{action} lacks an adjacent canonical full verifier"
-                )
+                message = f"{workflow_name}:{job_name}:{action} lacks an adjacent canonical full verifier"
+                assert is_canonical_verifier_step(steps[index - 1]), message
 
 
 def test_canonical_verifier_run_digest_rejects_executable_drift() -> None:
@@ -927,6 +932,181 @@ def test_canonical_verifier_run_digest_rejects_executable_drift() -> None:
     assert is_canonical_verifier_step(step)
     step["run"] += "\ntrue\n"
     assert not is_canonical_verifier_step(step)
+
+
+def _privileged_documents() -> dict[str, JsonDict]:
+    documents = {path.name: _load(path.name) for path in WORKFLOWS.glob("*.yml")}
+    documents["rendered-python"] = _rendered_python_library_workflow()
+    return documents
+
+
+def test_exact_privileged_execution_manifest_accepts_only_generated_graph() -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_manifest
+
+    assert verify_privileged_execution_manifest(WORKFLOWS, _rendered_python_library_workflow()) == []
+
+
+def test_exact_privileged_manifest_matches_normal_validation_render() -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_manifest
+    from aviato.validation import _rendered_caller
+
+    body = _rendered_caller(REPO_ROOT, "python-library", ".github/workflows/aviato-ci.yml")
+    assert body is not None
+    rendered = yaml.safe_load(body)
+    assert isinstance(rendered, dict)
+    assert verify_privileged_execution_manifest(WORKFLOWS, rendered) == []
+
+
+@pytest.mark.parametrize(
+    "step",
+    (
+        {"name": "implicit post", "run": "gh api repos/o/r/releases -f tag_name=v1"},
+        {"name": "input post", "run": "gh api repos/o/r/releases --input body.json"},
+        {"name": "alias", "run": "alias publish='git push'; publish"},
+        {"name": "variable", "run": "writer='git push'; $writer origin HEAD"},
+        {"name": "eval", "run": "eval 'git push origin HEAD'"},
+        {"name": "bash c", "run": "bash -c 'git push origin HEAD'"},
+        {"name": "env command", "run": "env -u BASH_ENV command -- git push origin HEAD"},
+        {"name": "curl delete", "run": "curl -X DELETE https://api.github.com/repos/o/r/releases/1"},
+        {"name": "git config push", "run": "git -c credential.helper=x push origin HEAD"},
+        {"name": "global gh repo", "run": "gh --repo o/r release create v1"},
+        {"name": "unknown action", "uses": "attacker/write-action@" + "a" * 40},
+        {"name": "no-op verifier", "run": "aviato_verify_authority() { true; }; git push origin HEAD"},
+        {"name": "short circuit", "run": "true || aviato_verify_authority; git push origin HEAD"},
+    ),
+)
+def test_privileged_manifest_rejects_every_undeclared_executable_shape(step: JsonDict) -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_documents
+
+    documents = _privileged_documents()
+    documents["reusable-docs-pages.yml"]["jobs"]["push"]["steps"].append(step)
+    errors = verify_privileged_execution_documents(documents)
+    assert any("privileged execution manifest mismatch" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("scope", "key", "value"),
+    (
+        ("workflow", "LD_PRELOAD", "/tmp/evil.so"),
+        ("workflow", "HTTPS_PROXY", "http://attacker.invalid"),
+        ("workflow", "PATH", "/tmp/attacker:/usr/bin"),
+        ("job", "GITHUB_REPOSITORY", "attacker/repo"),
+        ("job", "BASH_ENV", "/tmp/evil"),
+        ("step", "PYTHONPATH", "/tmp/evil"),
+        ("step", "GH_TOKEN", "${{ github.token }}"),
+    ),
+)
+def test_privileged_manifest_rejects_dangerous_context_and_changed_provenance(scope: str, key: str, value: str) -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_documents
+
+    documents = _privileged_documents()
+    workflow = documents["reusable-docs-pages.yml"]
+    job = workflow["jobs"]["deploy"]
+    if scope == "workflow":
+        workflow.setdefault("env", {})[key] = value
+    elif scope == "job":
+        job.setdefault("env", {})[key] = value
+    else:
+        verifier = next(step for step in job["steps"] if step.get("id") == "aviato-verify-pages-deploy")
+        verifier.setdefault("env", {})[key] = value
+    errors = verify_privileged_execution_documents(documents)
+    assert any(
+        "dangerous privileged context" in error or "privileged execution manifest mismatch" in error for error in errors
+    )
+
+
+def test_privileged_manifest_rejects_changed_token_provenance() -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_documents
+
+    documents = _privileged_documents()
+    job = documents["reusable-docs-pages.yml"]["jobs"]["deploy"]
+    verifier = next(step for step in job["steps"] if step.get("id") == "aviato-verify-pages-deploy")
+    verifier["env"]["AVIATO_VERIFIER_TOKEN"] = "${{ github.token }}"
+    errors = verify_privileged_execution_documents(documents)
+    assert any("privileged execution manifest mismatch" in error for error in errors)
+
+
+def test_privileged_manifest_discovers_yaml_workflows(tmp_path: Path) -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_manifest
+
+    workflows = tmp_path / "workflows"
+    workflows.mkdir()
+    (workflows / "undeclared.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "jobs": {
+                    "publish": {
+                        "permissions": {"contents": "write"},
+                        "runs-on": "ubuntu-latest",
+                        "steps": [{"name": "publish", "run": "true"}],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    errors = verify_privileged_execution_manifest(workflows, {"jobs": {}})
+    assert "undeclared privileged execution job: undeclared.yaml:publish" in errors
+
+
+def test_canonical_bootstrap_fetches_with_stdlib_only_inside_isolated_python() -> None:
+    from aviato.plugins.release_mutations import OIDC_ACTIONS
+
+    for workflow_name, document in _privileged_documents().items():
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for index, step in enumerate(job.get("steps") or ()):
+                action = str(step.get("uses", "")).split("@", 1)[0]
+                if action not in OIDC_ACTIONS or workflow_name == "aviato-protection-checkpoint.yml":
+                    continue
+                verifier = job["steps"][index - 1]
+                run = verifier["run"]
+                isolated = run.index("/usr/bin/env -i")
+                assert "gh api" not in run[:isolated], f"{workflow_name}:{job_name} exposes verifier token before env-i"
+                assert "urllib.request.ProxyHandler({})" in run
+                assert "HTTPRedirectHandler" in run
+                assert 'parsed.netloc == "api.github.com"' in run
+                assert "base64.b64decode" in run and "validate=True" in run
+                assert 'b"blob "' in run and "exec(compile(" in run
+
+
+def test_capability_probes_keep_the_verifier_token_out_of_step_env_and_path_gh() -> None:
+    for workflow_name, document in _privileged_documents().items():
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or ():
+                if step.get("name") != "Fail-closed verifier capability probe":
+                    continue
+                assert "GH_TOKEN" not in (step.get("env") or {}), f"{workflow_name}:{job_name}"
+                run = str(step.get("run", ""))
+                assert "${{" not in run, f"{workflow_name}:{job_name}"
+                assert run.startswith(
+                    'verifier_token="${AVIATO_VERIFIER_TOKEN}"\nunset AVIATO_VERIFIER_TOKEN\n/usr/bin/env -i '
+                ), f"{workflow_name}:{job_name}"
+                assert "gh api" not in run, f"{workflow_name}:{job_name}"
+                assert "/usr/bin/python3 -I" in run, f"{workflow_name}:{job_name}"
+                assert "urllib.request.ProxyHandler({})" in run, f"{workflow_name}:{job_name}"
+                assert "HTTPRedirectHandler" in run, f"{workflow_name}:{job_name}"
+                assert 'parsed.netloc != "api.github.com"' in run, f"{workflow_name}:{job_name}"
+
+
+def test_secure_verifier_bootstraps_keep_expressions_out_of_shell_code() -> None:
+    for workflow_name, document in _privileged_documents().items():
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or ():
+                run = str(step.get("run", ""))
+                if "AVIATO_SECURE_VERIFIER_BOOTSTRAP" not in run:
+                    continue
+                assert "${{" not in run, f"{workflow_name}:{job_name}:{step.get('name')}"
+                assert step.get("env", {}).get("AVIATO_VERIFIER_TOKEN") == "${{ steps.verifier-token.outputs.token }}"
+                capture = 'verifier_token="${AVIATO_VERIFIER_TOKEN}"\nunset AVIATO_VERIFIER_TOKEN'
+                assert capture in run, f"{workflow_name}:{job_name}:{step.get('name')}"
+                message = f"{workflow_name}:{job_name}:{step.get('name')}"
+                assert run.index(capture) < run.index("/usr/bin/env -i"), message
 
 
 def test_normal_validation_wires_the_bijective_mutation_inventory() -> None:

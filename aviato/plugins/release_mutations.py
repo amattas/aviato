@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shlex
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -22,15 +23,14 @@ OIDC_ACTIONS = frozenset(
     }
 )
 CANONICAL_VERIFIER_RUN_SHA256 = {
-    "aviato-verify-app-archive-attestation": "1529213bfffd2ae9b30c12d06ce5b524a87611cd37903437735c04ef6f1ebc57",
-    "aviato-verify-checkpoint-attestation": "f41dfccda5aa233f0a2b4ee0f1a22f6e7154baf53feef8d64015114a1cb7f3d8",
-    "aviato-verify-docs-push": "dd7155343fc4100532861e7308a030a001553bf5baaad8c7ddd28cf43af196fd",
-    "aviato-verify-image-attestation": "1529213bfffd2ae9b30c12d06ce5b524a87611cd37903437735c04ef6f1ebc57",
-    "aviato-verify-pages-deploy": "bc296b6d030df2763b78b471031e2c2cba7f902964c9b614ccdb1c36d94dd2f3",
-    "aviato-verify-pypi-alternate": "a6a2a03268cd1c8912a50ce183b9a0615afd0f0c6ee87d731daad8be209a8aee",
-    "aviato-verify-pypi-provenance": "c98c3b03a75fcc1142e298b6b391146b82e64add51d0b01ed6428071eff35af8",
-    "aviato-verify-pypi-publish": "53dc3785e0dc31fda0569be43f0a63784de17f2c22d3073e1fcdd10ad4e52bb7",
-    "aviato-verify-pypi-sbom": "c98c3b03a75fcc1142e298b6b391146b82e64add51d0b01ed6428071eff35af8",
+    "aviato-verify-app-archive-attestation": "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+    "aviato-verify-docs-push": "e2d12ded6f222e8ed92cb5195b4bd11d26406eb776e909c42aa721b9153864d8",
+    "aviato-verify-image-attestation": "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+    "aviato-verify-pages-deploy": "db8b8c4dc67b220b6cc067a6b572a17c15915d9284b65970a73660b065609f51",
+    "aviato-verify-pypi-alternate": "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+    "aviato-verify-pypi-provenance": "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+    "aviato-verify-pypi-publish": "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
+    "aviato-verify-pypi-sbom": "f8112a52550b2393624b054c7de393de06535eb2570680e4d55da20132f3b258",
 }
 ActionKind = Literal["shell", "action", "oidc-attestation"]
 
@@ -51,6 +51,7 @@ class HostedMutation:
         "authority-job",
         "isolated-attestation",
         "status-bridge",
+        "fixed-artifact-attestation",
     ] = "same-step"
 
     @property
@@ -171,8 +172,7 @@ HOSTED_MUTATIONS: tuple[HostedMutation, ...] = (
         "Attest fixed verified artifact",
         "actions/attest-build-provenance",
         "oidc-attestation",
-        verifier_step_id="aviato-verify-checkpoint-attestation",
-        boundary="isolated-attestation",
+        boundary="fixed-artifact-attestation",
     ),
     HostedMutation(
         "reusable-docker-ghcr.yml",
@@ -296,6 +296,181 @@ _GITHUB_API_MARKERS = (
     'repos/${GITHUB_REPOSITORY}/releases"',
     "statuses/${GITHUB_SHA}",
 )
+
+
+@dataclass(frozen=True)
+class PrivilegedJobContract:
+    workflow: str
+    job: str
+    trust_edge: str
+    permissions: tuple[tuple[str, str], ...]
+    needs_sha256: str
+    outputs_sha256: str
+    job_env_keys: tuple[str, ...]
+    job_env_sha256: str
+    step_order: tuple[tuple[str, str], ...]
+    step_uses: tuple[str, ...]
+    step_run_sha256: tuple[str, ...]
+    step_shells: tuple[str, ...]
+    step_env_keys: tuple[tuple[str, ...], ...]
+    step_env_sha256: tuple[str, ...]
+    job_sha256: str
+
+
+_PRIVILEGED_MANIFEST_PATH = Path(__file__).parents[1] / "library" / "privileged-execution-manifest.json"
+
+
+def _load_privileged_execution_manifest() -> tuple[dict[str, Any], ...]:
+    if not _PRIVILEGED_MANIFEST_PATH.is_file():
+        return ()
+    loaded = json.loads(_PRIVILEGED_MANIFEST_PATH.read_text(encoding="utf-8"))
+    return tuple(item for item in loaded if isinstance(item, dict)) if isinstance(loaded, list) else ()
+
+
+# Generated from the exact reviewed workflow graph. Validation reads this package-owned contract;
+# it never derives expected contracts from the consumer documents being checked.
+PRIVILEGED_EXECUTION_MANIFEST = _load_privileged_execution_manifest()
+
+
+_DANGEROUS_EXACT_CONTEXT = {
+    "BASH_ENV",
+    "CURL_CA_BUNDLE",
+    "ENV",
+    "LD_PRELOAD",
+    "PATH",
+    "REQUESTS_CA_BUNDLE",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+}
+
+
+def _dangerous_context_key(key: object) -> bool:
+    name = str(key).upper()
+    return (
+        name in _DANGEROUS_EXACT_CONTEXT or name.startswith(("DYLD_", "GITHUB_", "PYTHON")) or name.endswith("_PROXY")
+    )
+
+
+def _pairs(value: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, dict):
+        return ()
+    return tuple(sorted((str(key), str(item)) for key, item in value.items()))
+
+
+def _json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _digest(value: object) -> str:
+    return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
+
+
+def _privileged_job_contract(
+    workflow: str,
+    job_name: str,
+    job: dict[str, Any],
+    permissions: dict[str, Any],
+    trust_edge: str,
+) -> PrivilegedJobContract:
+    steps = tuple(step for step in job.get("steps") or () if isinstance(step, dict))
+    return PrivilegedJobContract(
+        workflow=workflow,
+        job=job_name,
+        trust_edge=trust_edge,
+        permissions=_pairs(permissions),
+        needs_sha256=_digest(job.get("needs")),
+        outputs_sha256=_digest(job.get("outputs")),
+        job_env_keys=tuple(sorted(str(key) for key in (job.get("env") or {}))),
+        job_env_sha256=_digest(job.get("env")),
+        step_order=tuple((str(step.get("id", "")), str(step.get("name", ""))) for step in steps),
+        step_uses=tuple(str(step.get("uses", "")) for step in steps),
+        step_run_sha256=tuple(
+            hashlib.sha256(str(step.get("run", "")).encode("utf-8")).hexdigest() if "run" in step else ""
+            for step in steps
+        ),
+        step_shells=tuple(str(step.get("shell", "")) for step in steps),
+        step_env_keys=tuple(tuple(sorted(str(key) for key in (step.get("env") or {}))) for step in steps),
+        step_env_sha256=tuple(_digest(step.get("env")) for step in steps),
+        job_sha256=hashlib.sha256(_json(job).encode("utf-8")).hexdigest(),
+    )
+
+
+def _actual_trust_edge(
+    workflow: str,
+    job_name: str,
+    job: dict[str, Any],
+    permissions: dict[str, Any],
+) -> str:
+    if workflow == "aviato-protection-checkpoint.yml" and job_name == "attest":
+        return "fixed-verified-artifact"
+    if permissions.get("id-token") == "write":
+        return "adjacent-live-verifier"
+    if "uses" in job:
+        return "delegated-reusable-workflow"
+    if job_name == "status-bridge":
+        return "generated-status-bridge"
+    return "exact-privileged-job"
+
+
+def _privileged_jobs(documents: dict[str, dict[str, Any]]) -> dict[tuple[str, str], PrivilegedJobContract]:
+    found: dict[tuple[str, str], PrivilegedJobContract] = {}
+    for workflow, document in documents.items():
+        top_permissions = document.get("permissions") or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            permissions = job.get("permissions") if "permissions" in job else top_permissions
+            if not isinstance(permissions, dict) or not any(value == "write" for value in permissions.values()):
+                continue
+            key = (workflow, str(job_name))
+            found[key] = _privileged_job_contract(
+                workflow,
+                str(job_name),
+                job,
+                permissions,
+                _actual_trust_edge(workflow, str(job_name), job, permissions),
+            )
+    return found
+
+
+def verify_privileged_execution_documents(documents: dict[str, dict[str, Any]]) -> list[str]:
+    """Compare every privileged/OIDC execution context to the exact reviewed manifest."""
+
+    expected = {(str(item.get("workflow")), str(item.get("job"))): item for item in PRIVILEGED_EXECUTION_MANIFEST}
+    actual = _privileged_jobs(documents)
+    errors: list[str] = []
+    for key in sorted(actual.keys() - expected.keys()):
+        errors.append(f"undeclared privileged execution job: {key[0]}:{key[1]}")
+    for key in sorted(expected.keys() - actual.keys()):
+        errors.append(f"stale privileged execution job: {key[0]}:{key[1]}")
+    for key in sorted(actual.keys() & expected.keys()):
+        actual_document = json.loads(_json(asdict(actual[key])))
+        if actual_document != expected[key]:
+            errors.append(f"privileged execution manifest mismatch: {key[0]}:{key[1]}")
+
+    privileged_workflows = {workflow for workflow, _job in actual}
+    for workflow, document in documents.items():
+        if workflow not in privileged_workflows:
+            continue
+        scopes: list[tuple[str, object]] = [(f"{workflow}:workflow", document.get("env"))]
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict) or (workflow, str(job_name)) not in actual:
+                continue
+            scopes.append((f"{workflow}:{job_name}:job", job.get("env")))
+            for index, step in enumerate(job.get("steps") or ()):
+                if isinstance(step, dict):
+                    scopes.append((f"{workflow}:{job_name}:step-{index}", step.get("env")))
+        for label, env in scopes:
+            if not isinstance(env, dict):
+                continue
+            for key in env:
+                if _dangerous_context_key(key):
+                    errors.append(f"dangerous privileged context: {label}:{key}")
+    return errors
+
+
+def verify_privileged_execution_manifest(workflows: Path, rendered_python: dict[str, Any]) -> list[str]:
+    return verify_privileged_execution_documents(_documents(workflows, rendered_python))
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -493,6 +668,17 @@ def _guard_errors(mutation: HostedMutation, document: dict[str, Any]) -> list[st
     if len(matches) != 1:
         return [f"{label}: stale declared mutation step is absent or ambiguous"]
     index, step = matches[0]
+    if mutation.boundary == "fixed-artifact-attestation":
+        expected_permissions = {"contents": "read", "id-token": "write", "attestations": "write"}
+        expected_names = ["Download only verified artifact", "Attest fixed verified artifact"]
+        if (
+            job.get("permissions") != expected_permissions
+            or [candidate.get("name") for candidate in steps] != expected_names
+        ):
+            return [f"{label}: fixed verified-artifact trust edge changed"]
+        if mutation.marker != str(step.get("uses", "")).split("@", 1)[0]:
+            return [f"{label}: fixed verified-artifact attestation action changed"]
+        return []
     if mutation.kind in {"action", "oidc-attestation"}:
         if mutation.marker != str(step.get("uses", "")).split("@", 1)[0]:
             return [f"{label}: declared action marker is absent"]
@@ -570,7 +756,7 @@ def verify_mutation_inventory(
     discovered = discover_hosted_mutations(workflows, rendered_python)
     declared_counts = Counter(item.identity for item in manifest)
     discovered_counts = Counter(item.identity for item in discovered)
-    errors: list[str] = []
+    errors = verify_privileged_execution_documents(_documents(workflows, rendered_python))
     for identity, count in sorted((discovered_counts - declared_counts).items()):
         errors.append(f"undeclared hosted mutation: {':'.join(identity)} ({count})")
     for identity, count in sorted((declared_counts - discovered_counts).items()):

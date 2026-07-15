@@ -12,6 +12,7 @@ python3 -m compileall aviato >/dev/null
 python3 -m aviato.cli validate
 python3 scripts/sync-docs-toolchain-pins.py --check
 python3 scripts/regen-templates.py --check
+python3 scripts/regen-privileged-execution-manifest.py --check
 
 if command -v ruff >/dev/null 2>&1; then
   ruff check .
@@ -62,7 +63,11 @@ with zipfile.ZipFile(wheel) as archive:
 wheel_version = metadata["Version"]
 if not wheel_version:
     sys.exit(f"wheel {wheel} METADATA is missing Version")
-required = ["aviato/library/policy.yml", "aviato/plugins/denylist.txt"]
+required = [
+    "aviato/library/policy.yml",
+    "aviato/library/privileged-execution-manifest.json",
+    "aviato/plugins/denylist.txt",
+]
 missing = [r for r in required if r not in names]
 if missing:
     sys.exit(f"wheel {wheel} is missing packaged data: {missing}")
