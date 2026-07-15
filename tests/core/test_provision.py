@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from typing import Any
+
 from aviato.core.protection import ProtectionReceipt
-from aviato.core.provision import minimal_settings, provision_repo
+from aviato.core.provision import minimal_settings
+from aviato.core.provision import provision_repo as _provision_repo
 
 from .fakeplatform import FakePlatform
 
@@ -15,6 +18,11 @@ DESIRED = {
     "secret_push_protection": True,
     "dependency_scanning": True,
 }
+
+
+def provision_repo(*args: Any, **kwargs: Any) -> Any:
+    kwargs.setdefault("authorize", lambda: None)
+    return _provision_repo(*args, **kwargs)
 
 
 def _ready_receipt() -> ProtectionReceipt:
@@ -131,3 +139,55 @@ def test_provision_rejects_ready_but_non_durable_composite_receipt() -> None:
         full_protection=lambda: receipt,
     )
     assert outcome.partial and not outcome.full_applied
+
+
+def test_provision_refreshes_before_create_minimal_scaffold_and_full_stages() -> None:
+    platform = FakePlatform()
+    stages: list[str] = []
+
+    def authorize() -> None:
+        stages.append("authorize")
+
+    def full_protection() -> ProtectionReceipt:
+        stages.append("full")
+        return _ready_receipt()
+
+    outcome = _provision_repo(
+        platform,
+        repo="o/new",
+        desired=DESIRED,
+        private=True,
+        scaffold_push=lambda: stages.append("scaffold"),
+        authorize=authorize,
+        full_protection=full_protection,
+    )
+    assert outcome.ok
+    assert stages == ["authorize", "authorize", "authorize", "scaffold", "authorize", "full"]
+
+
+def test_provision_stops_before_scaffold_when_adjacent_authority_expires() -> None:
+    platform = FakePlatform()
+    reads = 0
+    scaffolded = False
+
+    def authorize() -> None:
+        nonlocal reads
+        reads += 1
+        if reads == 3:
+            raise ValueError("live review expired")
+
+    def scaffold() -> None:
+        nonlocal scaffolded
+        scaffolded = True
+
+    outcome = _provision_repo(
+        platform,
+        repo="o/new",
+        desired=DESIRED,
+        private=True,
+        scaffold_push=scaffold,
+        authorize=authorize,
+        full_protection=_ready_receipt,
+    )
+    assert outcome.partial and outcome.minimal_applied and not outcome.scaffolded
+    assert not scaffolded and reads == 3

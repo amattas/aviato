@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import re
 import shlex
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -303,6 +307,7 @@ class PrivilegedJobContract:
     workflow: str
     job: str
     trust_edge: str
+    workflow_sha256: str
     permissions: tuple[tuple[str, str], ...]
     workflow_env_keys: tuple[str, ...]
     workflow_env_sha256: str
@@ -335,11 +340,14 @@ _PRIVILEGED_PROTECTED_PATHS = (
     "/.github/aviato-privileged-review.json",
     "/.github/aviato.yaml",
     "/aviato/library/privileged-execution-manifest.json",
-    "/aviato/library/privileged-review-attestation.json",
     "/aviato/library/privileged-review-policy.json",
     "/aviato/library/policy.yml",
     "/aviato/library/rulesets/protect-default-branch.json",
+    "/aviato/cli.py",
+    "/aviato/plugins/privileged_review.py",
     "/aviato/plugins/release_mutations.py",
+    "/MANIFEST.in",
+    "/pyproject.toml",
     "/scripts/regen-privileged-execution-manifest.py",
 )
 
@@ -405,9 +413,16 @@ def verify_privileged_review_declaration(
     if policy is None or record is None or not codeowners or ruleset is None:
         return errors
 
+    if policy.get("schema_version") != 2:
+        errors.append("protected review policy must use schema_version 2")
     if not isinstance(policy.get("minimum_approvals"), int) or policy["minimum_approvals"] < 2:
         errors.append("protected review policy must require at least two approvals")
-    for key in ("require_non_author", "require_code_owner_review", "require_last_push_approval"):
+    for key in (
+        "require_non_author",
+        "require_code_owner_review",
+        "require_last_push_approval",
+        "dismiss_stale_reviews_on_push",
+    ):
         if policy.get(key) is not True:
             errors.append(f"protected review policy must set {key}=true")
     for key in ("reviewer_database_ids", "team_database_ids"):
@@ -426,6 +441,25 @@ def verify_privileged_review_declaration(
     for path in _PRIVILEGED_PROTECTED_PATHS:
         if f"{path} @amattas" not in codeowners:
             errors.append(f"protected review CODEOWNERS route is missing: {path}")
+    if (
+        policy.get("trusted_issuer") != "aviato-privileged-review"
+        or policy.get("trusted_workflow_path") != ".github/workflows/aviato-privileged-review.yml"
+        or policy.get("trusted_environment") != "privileged-review"
+        or not isinstance(policy.get("maximum_attestation_ttl_seconds"), int)
+        or not 31_536_000 <= policy["maximum_attestation_ttl_seconds"] <= 63_072_000
+    ):
+        errors.append("protected review policy has an invalid trusted issuer/workflow/TTL")
+    if not isinstance(policy.get("trusted_signing_keys"), list) or not isinstance(
+        policy.get("revoked_key_versions"), list
+    ):
+        errors.append("protected review policy signing-key lifecycle is invalid")
+    required_checks = policy.get("required_status_checks")
+    if (
+        not isinstance(required_checks, list)
+        or len(required_checks) < 2
+        or any(not isinstance(check, str) or not check for check in required_checks)
+    ):
+        errors.append("protected review policy must declare its required status checks")
 
     pull_request: dict[str, Any] | None = None
     for rule in ruleset.get("rules") or ():
@@ -440,16 +474,28 @@ def verify_privileged_review_declaration(
         for key in ("dismiss_stale_reviews_on_push", "require_code_owner_review", "require_last_push_approval"):
             if pull_request.get(key) is not True:
                 errors.append(f"protected review ruleset must set {key}=true")
+    if ruleset.get("enforcement") != "active" or ruleset.get("bypass_actors") != []:
+        errors.append("protected review ruleset must be active without bypass actors")
+    if ruleset.get("conditions") != {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}}:
+        errors.append("protected review ruleset must target only the default branch")
+    _pull, status_checks = _ruleset_review_parameters(ruleset)
+    actual_status_checks = {
+        item.get("context") for item in status_checks.get("required_status_checks", []) if isinstance(item, dict)
+    }
+    if status_checks.get("strict_required_status_checks_policy") is not True or any(
+        check not in actual_status_checks for check in (required_checks if isinstance(required_checks, list) else ())
+    ):
+        errors.append("protected review ruleset does not enforce the required strict status checks")
 
     expected_hashes = {
         "candidate_manifest_sha256": privileged_manifest_sha256(manifest),
         "policy_sha256": _file_sha256(policy_path),
         "codeowners_sha256": _file_sha256(codeowners_path),
     }
-    if record.get("schema_version") != 1:
+    if record.get("schema_version") != 2:
         errors.append("protected review record has an unsupported schema_version")
-    if record.get("status") not in {"pending", "approved"}:
-        errors.append("protected review record status must be pending or approved")
+    if record.get("status") != "pending" or record.get("lifecycle") != "pending":
+        errors.append("source protected review record must remain an honest pending prerequisite")
     for key, expected in expected_hashes.items():
         if record.get(key) != expected:
             errors.append(f"protected review record {key} does not bind the current protected candidate")
@@ -470,6 +516,8 @@ def verify_privileged_review_readiness(
         return errors
     policy = _load_json_mapping(root / _PRIVILEGED_REVIEW_POLICY_REL) or {}
     record = _load_json_mapping(root / _PRIVILEGED_REVIEW_RECORD_REL) or {}
+    # Source-tree declarations never self-authorize. The only operationally
+    # approved form is the separately signed packaged envelope verified live.
     if record.get("status") != "approved":
         return ["protected review is pending: configure reviewer/team IDs and record protected approvals"]
     reviewer_ids = policy.get("reviewer_database_ids") or []
@@ -504,7 +552,598 @@ def verify_privileged_review_readiness(
     return errors
 
 
-def verify_packaged_privileged_review_readiness(data_root: Path) -> list[str]:
+def _positive_int(value: object) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int) and value > 0
+
+
+def _hex_digest(value: object, length: int) -> bool:
+    return isinstance(value, str) and re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is not None
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return None
+    try:
+        return datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        return None
+
+
+def _canonical_base64url(value: object) -> bytes | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        decoded = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    if not decoded or base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=") != value:
+        return None
+    return decoded
+
+
+def _ruleset_review_parameters(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    pull_request: dict[str, Any] = {}
+    status_checks: dict[str, Any] = {}
+    rules = payload.get("rules")
+    if not isinstance(rules, list):
+        return pull_request, status_checks
+    for rule in rules:
+        if not isinstance(rule, dict) or not isinstance(rule.get("parameters"), dict):
+            continue
+        if rule.get("type") == "pull_request":
+            pull_request = rule["parameters"]
+        elif rule.get("type") == "required_status_checks":
+            status_checks = rule["parameters"]
+    return pull_request, status_checks
+
+
+def _protected_path_covered(path: str, protected: list[str]) -> bool:
+    return any(path == candidate or (candidate.endswith("/") and path.startswith(candidate)) for candidate in protected)
+
+
+def verify_privileged_review_envelope(
+    envelope: dict[str, Any],
+    *,
+    trusted_base_policy: dict[str, Any],
+    current_policy: dict[str, Any],
+    live_evidence: dict[str, Any] | None,
+    now: int,
+    verify_signature: Callable[[bytes, bytes, bytes, str], bool],
+) -> list[str]:
+    """Verify one canonical signed review envelope against fresh external state.
+
+    ``trusted_base_policy`` is deliberately separate from candidate/package
+    policy. The operational collector obtains it from the evidence PR's base
+    SHA (or an installed predecessor trust root); a candidate cannot replace a
+    key and then use that replacement to self-approve.
+    """
+
+    errors: list[str] = []
+    if not isinstance(current_policy, dict):
+        current_policy = {}
+        errors.append("protected review current default-branch policy is unavailable")
+    if (
+        current_policy.get("trusted_issuer") != trusted_base_policy.get("trusted_issuer")
+        or current_policy.get("trusted_workflow_path") != trusted_base_policy.get("trusted_workflow_path")
+        or current_policy.get("trusted_environment") != trusted_base_policy.get("trusted_environment")
+    ):
+        errors.append("protected review current policy changed the immutable issuer/workflow trust identity")
+    for flag in (
+        "require_non_author",
+        "require_code_owner_review",
+        "require_last_push_approval",
+        "dismiss_stale_reviews_on_push",
+    ):
+        if trusted_base_policy.get(flag) is not True or current_policy.get(flag) is not True:
+            errors.append(f"protected review base/current policy intersection does not require {flag}")
+    if not isinstance(envelope, dict) or set(envelope) != {"schema", "algorithm", "evidence", "signature"}:
+        return ["protected review requires one exact canonical envelope with a signature"]
+    if envelope.get("schema") != "aviato-privileged-review-envelope/v1":
+        errors.append("protected review envelope schema is unsupported")
+    if envelope.get("algorithm") != "ssh-ed25519":
+        errors.append("protected review envelope signature algorithm is unsupported")
+    evidence = envelope.get("evidence")
+    if not isinstance(evidence, dict):
+        return [*errors, "protected review envelope evidence is missing"]
+    signature = _canonical_base64url(envelope.get("signature"))
+    if signature is None:
+        errors.append("protected review envelope signature is missing or non-canonical")
+
+    required_evidence = {
+        "schema",
+        "status",
+        "lifecycle",
+        "repository",
+        "pull_request",
+        "protected_files",
+        "changed_protected_paths",
+        "reviews",
+        "ruleset",
+        "collector",
+        "environment",
+        "issuer",
+        "workflow",
+        "trust_root",
+        "issued_at",
+        "expires_at",
+        "key_id",
+        "key_version",
+        "nonce",
+    }
+    if set(evidence) != required_evidence:
+        errors.append("protected review evidence keys are not exact")
+    if (
+        evidence.get("schema") != "aviato-privileged-review-evidence/v1"
+        or evidence.get("status") != "approved"
+        or evidence.get("lifecycle") != "consumed"
+    ):
+        errors.append("protected review evidence did not complete pending, approved, consumed lifecycle")
+
+    repository = evidence.get("repository")
+    pull_request = evidence.get("pull_request")
+    workflow = evidence.get("workflow")
+    trust_root = evidence.get("trust_root")
+    if not isinstance(repository, dict) or set(repository) != {
+        "database_id",
+        "node_id",
+        "full_name",
+        "default_branch",
+    }:
+        errors.append("protected review repository identity is incomplete")
+        repository = {}
+    if (
+        not _positive_int(repository.get("database_id"))
+        or not isinstance(repository.get("node_id"), str)
+        or not repository.get("node_id")
+        or not isinstance(repository.get("full_name"), str)
+        or "/" not in str(repository.get("full_name"))
+        or not isinstance(repository.get("default_branch"), str)
+        or not repository.get("default_branch")
+    ):
+        errors.append("protected review repository identity is invalid")
+    if not isinstance(pull_request, dict) or set(pull_request) != {
+        "number",
+        "author_database_id",
+        "author_login",
+        "base_sha",
+        "head_sha",
+        "last_push_sha",
+        "last_push_at",
+        "merged_sha",
+        "protected_tree_root",
+    }:
+        errors.append("protected review pull request identity is incomplete")
+        pull_request = {}
+    if not _positive_int(pull_request.get("number")) or not _positive_int(pull_request.get("author_database_id")):
+        errors.append("protected review pull request/author identity is invalid")
+    for name in ("base_sha", "head_sha", "last_push_sha", "merged_sha"):
+        if not _hex_digest(pull_request.get(name), 40):
+            errors.append(f"protected review pull request {name} is invalid")
+    if pull_request.get("head_sha") != pull_request.get("last_push_sha"):
+        errors.append("protected review head does not equal the latest pushed commit")
+    last_push_at = _parse_timestamp(pull_request.get("last_push_at"))
+    if last_push_at is None:
+        errors.append("protected review last-push time is invalid")
+
+    protected_files = evidence.get("protected_files")
+    protected_policy_paths = trusted_base_policy.get("protected_paths")
+    if not isinstance(protected_files, list) or not protected_files:
+        errors.append("protected review protected-file inventory is empty")
+        protected_files = []
+    if not isinstance(protected_policy_paths, list) or any(
+        not isinstance(path, str) for path in protected_policy_paths
+    ):
+        errors.append("trusted base policy protected paths are invalid")
+        protected_policy_paths = []
+    seen_paths: set[str] = set()
+    for item in protected_files:
+        if not isinstance(item, dict) or set(item) != {"path", "mode", "sha256"}:
+            errors.append("protected review file entries must bind exact path, mode, and SHA-256")
+            continue
+        path = item.get("path")
+        mode = item.get("mode")
+        if (
+            not isinstance(path, str)
+            or not path.startswith("/")
+            or path in seen_paths
+            or not isinstance(mode, str)
+            or re.fullmatch(r"100(?:644|755)", mode) is None
+            or not _hex_digest(item.get("sha256"), 64)
+        ):
+            errors.append("protected review file identity is invalid, duplicate, or non-regular")
+            continue
+        seen_paths.add(path)
+        if not _protected_path_covered(path, protected_policy_paths):
+            errors.append(f"protected review file is outside trusted base policy: {path}")
+    if [item.get("path") for item in protected_files if isinstance(item, dict)] != sorted(seen_paths):
+        errors.append("protected review file inventory is not unique canonical path order")
+    for protected_path in protected_policy_paths:
+        if not any(
+            path == protected_path or (protected_path.endswith("/") and path.startswith(protected_path))
+            for path in seen_paths
+        ):
+            errors.append(f"protected review omitted trusted protected path: {protected_path}")
+    if pull_request.get("protected_tree_root") != _digest(protected_files):
+        errors.append("protected review protected-tree root is invalid")
+    changed_paths = evidence.get("changed_protected_paths")
+    if not isinstance(changed_paths, list) or changed_paths != sorted(set(changed_paths)):
+        errors.append("protected review changed protected paths are ambiguous or non-canonical")
+        changed_paths = []
+    if any(path not in seen_paths for path in changed_paths):
+        errors.append("protected review changed path lacks a content/mode identity")
+
+    required_workflow = {
+        "repository_id",
+        "path",
+        "ref",
+        "blob_sha",
+        "blob_sha256",
+        "run_head_sha",
+        "run_id",
+        "workflow_database_id",
+        "run_attempt",
+        "event",
+        "status",
+        "conclusion",
+        "actor_database_id",
+        "actor_login",
+        "triggering_actor_database_id",
+        "triggering_actor_login",
+        "environment",
+    }
+    if not isinstance(workflow, dict) or set(workflow) != required_workflow:
+        errors.append("protected review trusted workflow identity is incomplete")
+        workflow = {}
+    expected_ref = f"refs/heads/{repository.get('default_branch')}"
+    if (
+        workflow.get("repository_id") != repository.get("database_id")
+        or workflow.get("path") != trusted_base_policy.get("trusted_workflow_path")
+        or workflow.get("ref") != expected_ref
+        or not _hex_digest(workflow.get("blob_sha"), 40)
+        or not _hex_digest(workflow.get("blob_sha256"), 64)
+        or workflow.get("run_head_sha") != pull_request.get("merged_sha")
+        or not _positive_int(workflow.get("run_id"))
+        or not _positive_int(workflow.get("workflow_database_id"))
+        or not _positive_int(workflow.get("run_attempt"))
+        or workflow.get("event") != "workflow_dispatch"
+        or workflow.get("status") != "completed"
+        or workflow.get("conclusion") != "success"
+        or not _positive_int(workflow.get("actor_database_id"))
+        or not isinstance(workflow.get("actor_login"), str)
+        or not workflow.get("actor_login")
+        or not _positive_int(workflow.get("triggering_actor_database_id"))
+        or not isinstance(workflow.get("triggering_actor_login"), str)
+        or not workflow.get("triggering_actor_login")
+        or workflow.get("environment") != trusted_base_policy.get("trusted_environment")
+    ):
+        errors.append("protected review was not issued by the trusted default-branch workflow")
+    required_trust_root = {"base_sha", "policy_blob_sha", "policy_sha256"}
+    if not isinstance(trust_root, dict) or set(trust_root) != required_trust_root:
+        errors.append("protected review trusted-base policy root is incomplete")
+        trust_root = {}
+    if (
+        trust_root.get("base_sha") != pull_request.get("base_sha")
+        or not _hex_digest(trust_root.get("policy_blob_sha"), 40)
+        or trust_root.get("policy_sha256") != _digest(trusted_base_policy)
+    ):
+        errors.append("protected review does not bind the immutable trusted base policy")
+
+    issued_at = evidence.get("issued_at")
+    expires_at = evidence.get("expires_at")
+    base_ttl = trusted_base_policy.get("maximum_attestation_ttl_seconds")
+    current_ttl = current_policy.get("maximum_attestation_ttl_seconds")
+    base_ttl_seconds = base_ttl if _positive_int(base_ttl) else 0
+    current_ttl_seconds = current_ttl if _positive_int(current_ttl) else 0
+    assert isinstance(base_ttl_seconds, int) and isinstance(current_ttl_seconds, int)
+    maximum_ttl = min(base_ttl_seconds, current_ttl_seconds)
+    issued_epoch = issued_at if _positive_int(issued_at) else 0
+    expiry_epoch = expires_at if _positive_int(expires_at) else 0
+    maximum_ttl_seconds = maximum_ttl if _positive_int(maximum_ttl) else 0
+    assert isinstance(issued_epoch, int) and isinstance(expiry_epoch, int) and isinstance(maximum_ttl_seconds, int)
+    if (
+        not issued_epoch
+        or not expiry_epoch
+        or not maximum_ttl_seconds
+        or expiry_epoch <= issued_epoch
+        or expiry_epoch - issued_epoch > maximum_ttl_seconds
+        or now < issued_epoch - 30
+        or now >= expiry_epoch
+    ):
+        errors.append("protected review signed evidence is not currently fresh")
+    if evidence.get("issuer") != trusted_base_policy.get("trusted_issuer"):
+        errors.append("protected review issuer is not trusted")
+    if not _hex_digest(evidence.get("nonce"), 64):
+        errors.append("protected review replay nonce is invalid")
+
+    key_id = evidence.get("key_id")
+    key_version = evidence.get("key_version")
+    signing_keys = trusted_base_policy.get("trusted_signing_keys")
+    current_signing_keys = current_policy.get("trusted_signing_keys")
+    revoked = trusted_base_policy.get("revoked_key_versions")
+    current_revoked = current_policy.get("revoked_key_versions")
+    selected: list[dict[str, Any]] = []
+    current_selected: list[dict[str, Any]] = []
+    if isinstance(signing_keys, list):
+        selected = [
+            item
+            for item in signing_keys
+            if isinstance(item, dict)
+            and item.get("key_id") == key_id
+            and item.get("key_version") == key_version
+            and item.get("issuer") == evidence.get("issuer")
+        ]
+    if isinstance(current_signing_keys, list):
+        current_selected = [
+            item
+            for item in current_signing_keys
+            if isinstance(item, dict)
+            and item.get("key_id") == key_id
+            and item.get("key_version") == key_version
+            and item.get("issuer") == evidence.get("issuer")
+        ]
+    if not isinstance(revoked, list):
+        revoked = []
+    if not isinstance(current_revoked, list):
+        current_revoked = []
+    if key_version in revoked or key_version in current_revoked:
+        errors.append("protected review signing key version is revoked")
+    if (
+        len(selected) != 1
+        or len(current_selected) != 1
+        or not isinstance(selected[0].get("public_key"), str)
+        or current_selected[0].get("public_key") != selected[0].get("public_key")
+    ):
+        errors.append("protected review signing key is absent or changed in base/current policy intersection")
+    elif signature is not None:
+        try:
+            verified = verify_signature(
+                selected[0]["public_key"].encode("ascii"),
+                _json(evidence).encode("ascii"),
+                signature,
+                str(evidence.get("issuer")),
+            )
+        except Exception:  # fail closed across binary/key/API verifier failures
+            verified = False
+        if verified is not True:
+            errors.append("protected review signature verification failed")
+
+    reviews = evidence.get("reviews")
+    base_minimum = trusted_base_policy.get("minimum_approvals")
+    current_minimum = current_policy.get("minimum_approvals")
+    base_minimum_count = base_minimum if _positive_int(base_minimum) else 0
+    current_minimum_count = current_minimum if _positive_int(current_minimum) else 0
+    assert isinstance(base_minimum_count, int) and isinstance(current_minimum_count, int)
+    minimum = max(base_minimum_count, current_minimum_count)
+    base_reviewers = trusted_base_policy.get("reviewer_database_ids")
+    current_reviewers = current_policy.get("reviewer_database_ids")
+    base_teams = trusted_base_policy.get("team_database_ids")
+    current_teams = current_policy.get("team_database_ids")
+    allowed_reviewers = (
+        sorted(set(base_reviewers) & set(current_reviewers))
+        if isinstance(base_reviewers, list) and isinstance(current_reviewers, list)
+        else []
+    )
+    allowed_teams = (
+        sorted(set(base_teams) & set(current_teams))
+        if isinstance(base_teams, list) and isinstance(current_teams, list)
+        else []
+    )
+    if not isinstance(reviews, list) or not _positive_int(minimum):
+        errors.append("protected review approval evidence or minimum is invalid")
+        reviews = []
+        minimum = 2
+    if not isinstance(allowed_reviewers, list):
+        allowed_reviewers = []
+    if not isinstance(allowed_teams, list):
+        allowed_teams = []
+    reviewer_ids: set[int] = set()
+    review_ids: set[int] = set()
+    for review in reviews:
+        if not isinstance(review, dict):
+            errors.append("protected review approval entries must be mappings")
+            continue
+        required_review = {
+            "review_id",
+            "node_id",
+            "reviewer_database_id",
+            "reviewer_login",
+            "state",
+            "commit_sha",
+            "submitted_at",
+            "dismissed",
+            "edited",
+            "is_author",
+            "eligible_codeowner_paths",
+            "team_database_id",
+            "team_membership",
+        }
+        if set(review) != required_review:
+            errors.append("protected review approval identity is incomplete")
+            continue
+        reviewer_id = review.get("reviewer_database_id")
+        review_id = review.get("review_id")
+        team_id = review.get("team_database_id")
+        submitted = _parse_timestamp(review.get("submitted_at"))
+        reviewer_database_id = reviewer_id if _positive_int(reviewer_id) else None
+        immutable_review_id = review_id if _positive_int(review_id) else None
+        assert reviewer_database_id is None or isinstance(reviewer_database_id, int)
+        assert immutable_review_id is None or isinstance(immutable_review_id, int)
+        if reviewer_database_id is None or reviewer_database_id in reviewer_ids:
+            errors.append("protected review requires distinct concrete reviewer database IDs")
+        else:
+            reviewer_ids.add(reviewer_database_id)
+        if (
+            immutable_review_id is None
+            or immutable_review_id in review_ids
+            or not str(review.get("node_id", "")).startswith("PRR_")
+        ):
+            errors.append("protected review requires unique immutable review IDs/node IDs")
+        else:
+            review_ids.add(immutable_review_id)
+        if reviewer_id == pull_request.get("author_database_id") or review.get("is_author") is not False:
+            errors.append("protected review approval must be from a live-proven non-author")
+        eligible = reviewer_database_id in allowed_reviewers
+        if team_id is not None:
+            eligible = eligible or (team_id in allowed_teams and review.get("team_membership") is True)
+        if not eligible:
+            errors.append("protected review approval is not a current eligible reviewer/team member")
+        if (
+            review.get("state") != "APPROVED"
+            or review.get("dismissed") is not False
+            or review.get("edited") is not False
+            or review.get("commit_sha") != pull_request.get("last_push_sha")
+            or submitted is None
+            or last_push_at is None
+            or submitted <= last_push_at
+        ):
+            errors.append("protected review approval is stale, dismissed, edited, or for the wrong commit")
+        owned = review.get("eligible_codeowner_paths")
+        if not isinstance(owned, list) or any(path not in owned for path in changed_paths):
+            errors.append("protected review approval is not an eligible CODEOWNER for every changed protected path")
+    minimum_count = minimum if _positive_int(minimum) else 2
+    assert isinstance(minimum_count, int)
+    if len(reviewer_ids) < minimum_count:
+        errors.append(f"protected review requires {minimum_count} distinct current approving reviewers")
+
+    environment = evidence.get("environment")
+    if not isinstance(environment, dict) or set(environment) != {
+        "name",
+        "can_admins_bypass",
+        "prevent_self_review",
+        "reviewers",
+        "deployment_branch_policy",
+        "payload_sha256",
+    }:
+        errors.append("protected review environment authority is incomplete")
+        environment = {}
+    environment_body = {key: value for key, value in environment.items() if key != "payload_sha256"}
+    environment_reviewers = environment.get("reviewers")
+    eligible_environment_reviewers: set[tuple[str, int]] = set()
+    if isinstance(environment_reviewers, list):
+        for reviewer in environment_reviewers:
+            if not isinstance(reviewer, dict) or set(reviewer) != {"type", "database_id", "node_id", "login"}:
+                continue
+            database_id = reviewer.get("database_id")
+            concrete_database_id = database_id if _positive_int(database_id) else None
+            assert concrete_database_id is None or isinstance(concrete_database_id, int)
+            kind = reviewer.get("type")
+            if (
+                concrete_database_id is not None
+                and kind in {"User", "Team"}
+                and isinstance(reviewer.get("node_id"), str)
+                and reviewer.get("node_id")
+                and isinstance(reviewer.get("login"), str)
+                and reviewer.get("login")
+                and (
+                    (kind == "User" and concrete_database_id in allowed_reviewers)
+                    or (kind == "Team" and concrete_database_id in allowed_teams)
+                )
+            ):
+                eligible_environment_reviewers.add((kind, concrete_database_id))
+    if (
+        environment.get("name") != trusted_base_policy.get("trusted_environment")
+        or environment.get("can_admins_bypass") is not False
+        or environment.get("prevent_self_review") is not True
+        or environment.get("deployment_branch_policy") != {"protected_branches": True, "custom_branch_policies": False}
+        or environment.get("payload_sha256") != _digest(environment_body)
+        or len(eligible_environment_reviewers) < minimum_count
+    ):
+        errors.append("protected review environment lacks independent protected reviewers or permits bypass")
+
+    collector = evidence.get("collector")
+    required_app_permissions = {
+        "actions": "read",
+        "administration": "read",
+        "contents": "read",
+        "members": "read",
+        "metadata": "read",
+        "pull_requests": "read",
+    }
+    if not isinstance(collector, dict) or set(collector) != {
+        "app_id",
+        "installation_id",
+        "app_slug",
+        "permissions",
+        "repository_ids",
+        "suspended_at",
+    }:
+        errors.append("protected review collector is not one exact GitHub App installation")
+    elif (
+        not _positive_int(collector.get("app_id"))
+        or not _positive_int(collector.get("installation_id"))
+        or not isinstance(collector.get("app_slug"), str)
+        or not collector.get("app_slug")
+        or collector.get("permissions") != required_app_permissions
+        or collector.get("suspended_at") is not None
+        or not isinstance(collector.get("repository_ids"), list)
+        or collector["repository_ids"].count(repository.get("database_id")) != 1
+    ):
+        errors.append("protected review collector App is suspended, over-scoped, or does not select this repository")
+
+    ruleset = evidence.get("ruleset")
+    if not isinstance(ruleset, dict) or set(ruleset) != {"payload", "payload_sha256"}:
+        errors.append("protected review live ruleset identity is incomplete")
+        ruleset = {}
+    payload = ruleset.get("payload")
+    if not isinstance(payload, dict) or ruleset.get("payload_sha256") != _digest(payload):
+        errors.append("protected review live ruleset canonical payload/hash is invalid")
+        payload = {}
+    if (
+        not _positive_int(payload.get("id"))
+        or not isinstance(payload.get("node_id"), str)
+        or not payload.get("node_id")
+        or payload.get("source") != repository.get("full_name")
+        or payload.get("source_type") != "Repository"
+        or payload.get("target") != "branch"
+        or payload.get("enforcement") != "active"
+        or payload.get("bypass_actors") != []
+        or payload.get("current_user_can_bypass") is not False
+        or payload.get("conditions") != {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}}
+    ):
+        errors.append("protected review ruleset is disabled, bypassed, or targets the wrong repository/branch")
+    pull_parameters, check_parameters = _ruleset_review_parameters(payload)
+    if (
+        pull_parameters.get("required_approving_review_count", 0) < minimum
+        or pull_parameters.get("dismiss_stale_reviews_on_push") is not True
+        or pull_parameters.get("require_code_owner_review") is not True
+        or pull_parameters.get("require_last_push_approval") is not True
+    ):
+        errors.append("protected review ruleset does not enforce the complete review policy")
+    base_checks = trusted_base_policy.get("required_status_checks")
+    current_checks = current_policy.get("required_status_checks")
+    required_checks = (
+        sorted(set(base_checks) | set(current_checks))
+        if isinstance(base_checks, list)
+        and isinstance(current_checks, list)
+        and all(isinstance(item, str) and item for item in [*base_checks, *current_checks])
+        else None
+    )
+    actual_checks = {
+        item.get("context")
+        for item in check_parameters.get("required_status_checks", [])
+        if isinstance(item, dict) and isinstance(item.get("context"), str)
+    }
+    if (
+        check_parameters.get("strict_required_status_checks_policy") is not True
+        or not isinstance(required_checks, list)
+        or any(check not in actual_checks for check in required_checks)
+    ):
+        errors.append("protected review ruleset lacks required strict status checks")
+
+    if live_evidence is None:
+        errors.append("protected review live API evidence is unavailable")
+    elif _json(live_evidence) != _json(evidence):
+        errors.append("protected review signed evidence does not exactly match one current unambiguous live snapshot")
+    return errors
+
+
+def verify_packaged_privileged_review_readiness(
+    data_root: Path,
+    *,
+    collect_live: Callable[[dict[str, Any]], tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] | None = None,
+    verify_signature: Callable[[bytes, bytes, bytes, str], bool] | None = None,
+    now: int | None = None,
+) -> list[str]:
     """Verify the protected review evidence shipped with an installed Library snapshot."""
 
     policy_path = data_root / "privileged-review-policy.json"
@@ -521,55 +1160,53 @@ def verify_packaged_privileged_review_readiness(data_root: Path) -> list[str]:
     manifest = tuple(item for item in loaded_manifest if isinstance(item, dict))
     if len(manifest) != len(loaded_manifest):
         return ["protected review package manifest must contain only job contracts"]
-    errors: list[str] = []
-    if record.get("candidate_manifest_sha256") != privileged_manifest_sha256(manifest):
-        errors.append("protected review package attestation does not bind its privileged manifest")
-    if record.get("policy_sha256") != _file_sha256(policy_path):
-        errors.append("protected review package attestation does not bind its review policy")
-    codeowners_hash = record.get("codeowners_sha256")
-    if not isinstance(codeowners_hash, str) or re.fullmatch(r"[0-9a-f]{64}", codeowners_hash) is None:
-        errors.append("protected review package attestation lacks a valid CODEOWNERS identity")
-    if record.get("status") != "approved":
-        errors.append("protected review is pending: configure reviewer/team IDs and record protected approvals")
-        return errors
-    minimum = policy.get("minimum_approvals")
-    reviewer_ids = policy.get("reviewer_database_ids")
-    team_ids = policy.get("team_database_ids")
-    author_id = record.get("author_database_id")
-    approvals = record.get("approvals")
-    if not isinstance(minimum, int) or minimum < 2:
-        errors.append("protected review package policy must require at least two approvals")
-        return errors
-    if not isinstance(reviewer_ids, list) or not isinstance(team_ids, list):
-        errors.append("protected review package reviewer/team database IDs must be lists")
-        return errors
-    if not reviewer_ids and not team_ids:
-        errors.append("protected review has no configured reviewer or team database IDs")
-    if isinstance(author_id, bool) or not isinstance(author_id, int) or author_id <= 0:
-        errors.append("protected review package attestation requires a positive author_database_id")
-    if not isinstance(approvals, list):
-        errors.append("protected review package approvals must be a list")
-        return errors
-    approved_reviewers: set[int] = set()
-    for approval in approvals:
-        if not isinstance(approval, dict):
-            errors.append("protected review package approval entries must be mappings")
-            continue
-        reviewer_id = approval.get("reviewer_database_id")
-        review_id = approval.get("review_id")
-        if isinstance(reviewer_id, bool) or not isinstance(reviewer_id, int) or reviewer_id <= 0:
-            errors.append("protected review package approval requires a positive reviewer_database_id")
-            continue
-        if isinstance(review_id, bool) or not isinstance(review_id, int) or review_id <= 0:
-            errors.append("protected review package approval requires a positive immutable review_id")
-        if reviewer_id == author_id:
-            errors.append("protected review package approval must be from a non-author")
-        team_id = approval.get("team_database_id")
-        if reviewer_id not in reviewer_ids and team_id not in team_ids:
-            errors.append("protected review package approval is not bound to a configured reviewer or team database ID")
-        approved_reviewers.add(reviewer_id)
-    if len(approved_reviewers) < minimum:
-        errors.append(f"protected review requires {minimum} distinct recorded approving reviewers")
+    if record.get("status") == "pending":
+        return ["protected review is pending: configure real identities, active ruleset, and signed live approvals"]
+    if record.get("schema") != "aviato-privileged-review-envelope/v1":
+        return ["protected review package requires a canonical signed live evidence envelope"]
+    if collect_live is None or verify_signature is None or now is None:
+        try:
+            from .privileged_review import collect_live_privileged_review_evidence, verify_ssh_review_signature
+
+            collect_live = collect_live or collect_live_privileged_review_evidence
+            verify_signature = verify_signature or verify_ssh_review_signature
+            if now is None:
+                import time
+
+                now = int(time.time())
+        except (ImportError, OSError, ValueError) as exc:
+            return [f"protected review live verifier is unavailable: {exc}"]
+    try:
+        trusted_base_policy, current_policy, live_evidence = collect_live(record)
+    except Exception as exc:
+        return [f"protected review live API evidence is unavailable or ambiguous: {exc}"]
+    errors = verify_privileged_review_envelope(
+        record,
+        trusted_base_policy=trusted_base_policy,
+        current_policy=current_policy,
+        live_evidence=live_evidence,
+        now=now,
+        verify_signature=verify_signature,
+    )
+    evidence = record.get("evidence") if isinstance(record, dict) else None
+    if isinstance(evidence, dict):
+        protected = evidence.get("protected_files")
+        if isinstance(protected, list):
+            hashes = {
+                item.get("path"): item.get("sha256")
+                for item in protected
+                if isinstance(item, dict) and isinstance(item.get("path"), str)
+            }
+            local_bindings = {
+                "/aviato/library/privileged-execution-manifest.json": manifest_path,
+                "/aviato/library/privileged-review-policy.json": policy_path,
+                "/aviato/plugins/release_mutations.py": Path(__file__),
+                "/aviato/plugins/privileged_review.py": Path(__file__).with_name("privileged_review.py"),
+                "/aviato/cli.py": Path(__file__).parents[1] / "cli.py",
+            }
+            for logical, path in local_bindings.items():
+                if hashes.get(logical) != _file_sha256(path):
+                    errors.append(f"protected review package does not match reviewed protected file: {logical}")
     return errors
 
 
@@ -613,6 +1250,25 @@ def _digest(value: object) -> str:
     return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
 
 
+def _workflow_document_digest(document: dict[str, Any]) -> str:
+    """Canonicalize PyYAML's YAML-1.1 boolean `on` key before hashing."""
+
+    def normalize(value: object) -> object:
+        if isinstance(value, dict):
+            normalized: dict[str, object] = {}
+            for key, item in value.items():
+                name = "on" if key is True else "off" if key is False else str(key)
+                if name in normalized:
+                    raise ValueError(f"workflow has colliding canonical key: {name}")
+                normalized[name] = normalize(item)
+            return normalized
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        return value
+
+    return _digest(normalize(document))
+
+
 def _privileged_job_contract(
     workflow: str,
     job_name: str,
@@ -626,6 +1282,11 @@ def _privileged_job_contract(
         workflow=workflow,
         job=job_name,
         trust_edge=trust_edge,
+        # Bind the complete canonical workflow, not only the selected job. This
+        # covers every trigger (including pull_request_target), the complete
+        # workflow_call interface, concurrency, name/run-name, defaults/env,
+        # permissions, and sibling authority producers in one exact identity.
+        workflow_sha256=_workflow_document_digest(document),
         permissions=_pairs(permissions),
         workflow_env_keys=tuple(sorted(str(key) for key in (document.get("env") or {}))),
         workflow_env_sha256=_digest(document.get("env")),
@@ -792,7 +1453,10 @@ def verify_privileged_execution_documents(
 
     source_manifest = PRIVILEGED_EXECUTION_MANIFEST if manifest is None else manifest
     expected = {(str(item.get("workflow")), str(item.get("job"))): json.loads(_json(item)) for item in source_manifest}
-    actual = _privileged_jobs(documents)
+    try:
+        actual = _privileged_jobs(documents)
+    except (TypeError, ValueError) as exc:
+        return [f"privileged execution manifest mismatch: malformed workflow document: {exc}"]
     errors: list[str] = []
     for key in sorted(actual.keys() - expected.keys()):
         errors.append(f"undeclared privileged execution job: {key[0]}:{key[1]}")

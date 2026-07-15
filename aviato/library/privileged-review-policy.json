@@ -1,4 +1,6 @@
 {
+  "dismiss_stale_reviews_on_push": true,
+  "maximum_attestation_ttl_seconds": 34560000,
   "minimum_approvals": 2,
   "protected_paths": [
     "/.github/workflows/",
@@ -6,17 +8,29 @@
     "/.github/aviato-privileged-review.json",
     "/.github/aviato.yaml",
     "/aviato/library/privileged-execution-manifest.json",
-    "/aviato/library/privileged-review-attestation.json",
     "/aviato/library/privileged-review-policy.json",
     "/aviato/library/policy.yml",
     "/aviato/library/rulesets/protect-default-branch.json",
+    "/aviato/cli.py",
+    "/aviato/plugins/privileged_review.py",
     "/aviato/plugins/release_mutations.py",
+    "/MANIFEST.in",
+    "/pyproject.toml",
     "/scripts/regen-privileged-execution-manifest.py"
   ],
   "require_code_owner_review": true,
   "require_last_push_approval": true,
   "require_non_author": true,
+  "required_status_checks": [
+    "common-lint / Common lint",
+    "security / Security baseline heartbeat"
+  ],
+  "revoked_key_versions": [],
   "reviewer_database_ids": [],
-  "schema_version": 1,
-  "team_database_ids": []
+  "schema_version": 2,
+  "team_database_ids": [],
+  "trusted_issuer": "aviato-privileged-review",
+  "trusted_environment": "privileged-review",
+  "trusted_signing_keys": [],
+  "trusted_workflow_path": ".github/workflows/aviato-privileged-review.yml"
 }

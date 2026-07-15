@@ -15,7 +15,18 @@ SHA = "a" * 40
 
 
 def _api() -> Any:
-    return importlib.import_module("aviato.core.protection")
+    module = importlib.import_module("aviato.core.protection")
+
+    class API:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(module, name)
+
+        @staticmethod
+        def execute_protection_plan(*args: Any, **kwargs: Any) -> Any:
+            kwargs.setdefault("authorize", lambda: None)
+            return module.execute_protection_plan(*args, **kwargs)
+
+    return API()
 
 
 def _repo(**changes: Any) -> RepositoryIdentity:
@@ -233,6 +244,64 @@ def test_each_write_has_full_semantic_readback() -> None:
 
     api.execute_protection_plan(plan, confirmation=plan.plan_id, recompute=recompute, write=write)
     assert reads >= 2 * sum(op.action != "noop" for op in plan.operations) + 1
+
+
+def test_each_composite_write_and_receipt_persistence_refreshes_authority() -> None:
+    module = importlib.import_module("aviato.core.protection")
+    plan = _plan()
+    state = plan
+    writes: list[str] = []
+    authority_reads = 0
+
+    def authorize() -> None:
+        nonlocal authority_reads
+        authority_reads += 1
+
+    def write(operation: Any) -> None:
+        nonlocal state
+        writes.append(operation.identity)
+        state = module.plan_with_operation_converged(state, operation.identity)
+
+    result = module.execute_protection_plan(
+        plan,
+        confirmation=plan.plan_id,
+        recompute=lambda: state,
+        write=write,
+        authorize=authorize,
+        persist_receipt=lambda _canonical: _persistence_evidence(),
+    )
+    assert result.receipt.ready
+    assert authority_reads == len(writes) + 1
+
+
+def test_composite_executor_stops_before_next_write_when_live_authority_expires() -> None:
+    module = importlib.import_module("aviato.core.protection")
+    plan = _plan()
+    state = plan
+    writes: list[str] = []
+    reads = 0
+
+    def authorize() -> None:
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            raise ValueError("signed live evidence expired")
+
+    def write(operation: Any) -> None:
+        nonlocal state
+        writes.append(operation.identity)
+        state = module.plan_with_operation_converged(state, operation.identity)
+
+    result = module.execute_protection_plan(
+        plan,
+        confirmation=plan.plan_id,
+        recompute=lambda: state,
+        write=write,
+        authorize=authorize,
+        persist_receipt=lambda _canonical: _persistence_evidence(),
+    )
+    assert len(writes) == 1 and reads == 2
+    assert result.receipt.status == "failed"
 
 
 def test_lost_response_is_completed_only_when_readback_proves_desired_state() -> None:

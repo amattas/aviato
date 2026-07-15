@@ -1,0 +1,4 @@
+include .github/CODEOWNERS
+include .github/aviato-privileged-review.json
+include .github/workflows/aviato-privileged-review.yml
+include scripts/regen-privileged-execution-manifest.py

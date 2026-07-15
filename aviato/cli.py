@@ -118,6 +118,13 @@ def _require_privileged_mutation_readiness(policy_root: Path) -> bool:
     return not errors
 
 
+def _refresh_privileged_mutation_authority(policy_root: Path) -> None:
+    """Raise at mutation adjacency unless a new signed/live decision is ready."""
+
+    if not _require_privileged_mutation_readiness(policy_root):
+        raise AviatoError("privileged activation authority changed or expired before mutation")
+
+
 def _cleanup_transition_workdir(workdir: Path, repository: Path) -> None:
     """Remove a temporary clone unless it contains a recoverable transition.
 
@@ -422,6 +429,7 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
             recompute=lambda: plan_for(slug),
             upsert=upsert,
             delete=delete,
+            authorize=lambda: _refresh_privileged_mutation_authority(policy_root),
         )
         for result_operation in result.operations:
             print(
@@ -431,7 +439,7 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
         if not result.success:
             return 1
         return 0
-    except (GitHubAPIError, SettingsReadError, CommandError) as exc:
+    except (AviatoError, GitHubAPIError, SettingsReadError, CommandError) as exc:
         # R3-2: the apply WRITE (upsert_ruleset PUT/POST) raises CommandError, not GitHubAPIError;
         # map both to the documented exit 1 instead of letting CommandError fall to main()'s exit 2.
         print(f"GitHub API error: {exc}", file=sys.stderr)
@@ -2469,6 +2477,7 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
         confirmation=args.confirm,
         recompute=recompute,
         write=lambda operation: platform.apply_protection_operation(slug, operation),
+        authorize=lambda: _refresh_privileged_mutation_authority(context.policy_root),
         persist_receipt=lambda canonical: persist_signed_protection_receipt(
             repository=slug,
             canonical_receipt=canonical,
@@ -2721,6 +2730,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
             confirmation=args.confirm or "",
             recompute=recompute,
             write=lambda operation: platform.apply_protection_operation(slug, operation),
+            authorize=lambda: _refresh_privileged_mutation_authority(snapshot.policy_root),
             persist_receipt=lambda canonical: persist_signed_protection_receipt(
                 repository=slug,
                 canonical_receipt=canonical,
@@ -2738,9 +2748,10 @@ def cmd_provision(args: argparse.Namespace) -> int:
             desired=desired,
             private=not args.public,
             scaffold_push=scaffold_push,
+            authorize=lambda: _refresh_privileged_mutation_authority(snapshot.policy_root),
             full_protection=full_protection,
         )
-    except (GitHubAPIError, CommandError) as exc:
+    except (AviatoError, GitHubAPIError, CommandError, ValueError) as exc:
         # Reached only if create_repo itself failed (nothing was created); post-create failures
         # are returned as a partial outcome below, never raised (§8.7).
         print(f"provisioning failed before the repository was created: {exc}", file=sys.stderr)
@@ -3170,10 +3181,14 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             tool_version=__version__,
             recorded_version=recorded_version,
             confirmed_diff_id=args.confirm,
+            authorize=lambda: _refresh_privileged_mutation_authority(context.policy_root),
             override_version_pin=args.override_version_pin,
         )
     except GitHubAPIError as exc:
         print(f"GitHub API error: {exc}", file=sys.stderr)
+        return 1
+    except (AviatoError, ValueError) as exc:
+        print(f"reconcile aborted (fail-closed): {exc}", file=sys.stderr)
         return 1
     except UnmodeledProtectionError as exc:
         # Fail closed: the live protection surface this reconcile cannot safely write

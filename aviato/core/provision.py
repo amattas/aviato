@@ -55,6 +55,7 @@ def provision_repo(
     desired: dict[str, Any],
     private: bool,
     scaffold_push: Callable[[], None],
+    authorize: Callable[[], None],
     full_protection: Callable[[], ProtectionReceipt] | None = None,
 ) -> ProvisionOutcome:
     """Provision-new staged protection order (§5.2/§2.11), operator-direct (§2.3).
@@ -74,12 +75,15 @@ def provision_repo(
     # create_repo is intentionally OUTSIDE the try: if it fails, nothing was created and the
     # caller's pre-create error path is correct. Everything after it operates on a repo that
     # now exists, so it must fail soft (§8.7).
+    authorize()
     platform.create_repo(repo, private=private)
     outcome.created = True
 
     try:
+        authorize()
         platform.apply_settings(repo, minimal_settings())
         outcome.minimal_applied = True
+        authorize()
         scaffold_push()
         outcome.scaffolded = True
         # R2-1-PROV: the full-protection apply can surface-and-skip an unavailable §17 toggle;
@@ -87,6 +91,7 @@ def provision_repo(
         # (The minimal apply carries no security keys, so its skipped set is always empty.)
         if full_protection is None:
             raise RuntimeError("full protection requires the confirmed composite executor and durable receipt")
+        authorize()
         outcome.protection_receipt = full_protection()
         if not outcome.protection_receipt.ready or outcome.protection_receipt.persistence_status != "attached":
             raise RuntimeError(

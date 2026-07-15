@@ -8,6 +8,7 @@ import pytest
 
 from aviato import cli
 from aviato.core.declaration import Declaration
+from aviato.core.errors import AviatoError
 from aviato.core.ports import RepositoryIdentity, RulesetApplyResult
 from aviato.github import GitHubAPIError
 from aviato.paths import POLICY_DATA_ROOT
@@ -18,9 +19,11 @@ pytestmark = pytest.mark.usefixtures("task3_pinned_context")
 def _patch_apply(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
     """Capture semantic-plan repository reads instead of touching GitHub."""
     calls: list[dict[str, object]] = []
+
     def identity(_self: object, slug: str) -> RepositoryIdentity:
         calls.append({"slug": slug})
         return RepositoryIdentity(17 + len(calls), f"R_{len(calls)}", slug, "main")
+
     monkeypatch.setattr(cli.GitHubPlatform, "repository_identity", identity)
     monkeypatch.setattr(cli.GitHubPlatform, "read_rulesets", lambda _self, _slug: [])
     return calls
@@ -32,9 +35,7 @@ def test_apply_rulesets_aggregates_slugs_from_all_sources(
     calls = _patch_apply(monkeypatch)
     repos_file = tmp_path / "repos.txt"
     repos_file.write_text("o/three\n# comment\n\no/four\n")
-    rc = cli.main(
-        ["apply-rulesets", "o/one", "--repo", "o/two", "--repos-file", str(repos_file), "--pin", "0"]
-    )
+    rc = cli.main(["apply-rulesets", "o/one", "--repo", "o/two", "--repos-file", str(repos_file), "--pin", "0"])
     assert rc == 0
     assert [call["slug"] for call in calls] == ["o/one", "o/two", "o/three", "o/four"]
 
@@ -95,6 +96,35 @@ def test_apply_rulesets_warns_on_direct_apply(
     assert calls == [{"slug": "o/r"}]
     err = capsys.readouterr().err
     assert "--confirm" in err
+
+
+def test_apply_rulesets_authority_expiry_at_write_is_clean_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _patch_apply(monkeypatch)
+    monkeypatch.setattr(
+        cli.GitHubPlatform,
+        "repository_identity",
+        lambda _self, slug: RepositoryIdentity(17, "R_17", slug, "main"),
+    )
+    assert cli.main(["apply-rulesets", "o/r", "--pin", "0"]) == 0
+    output = capsys.readouterr().out
+    plan_id = next(line.rsplit(": ", 1)[1] for line in output.splitlines() if line.startswith("Ruleset plan for"))
+    writes: list[str] = []
+    monkeypatch.setattr(
+        cli,
+        "_refresh_privileged_mutation_authority",
+        lambda _root: (_ for _ in ()).throw(AviatoError("live privileged review expired")),
+    )
+    monkeypatch.setattr(
+        cli.GitHubPlatform,
+        "apply_planned_ruleset",
+        lambda *_args, **_kwargs: writes.append("write"),
+    )
+    rc = cli.main(["apply-rulesets", "o/r", "--pin", "0", "--apply", "--confirm", plan_id])
+    captured = capsys.readouterr()
+    assert rc == 1 and writes == []
+    assert "expired" in captured.err and "Traceback" not in captured.err
 
 
 def test_apply_rulesets_maps_github_error_to_exit_1(

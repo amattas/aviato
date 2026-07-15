@@ -186,8 +186,7 @@ def _evidence_value(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, bool)):
         return {type(value).__name__: value}
     raise ValueError(
-        "cannot canonically bind malformed ruleset value of type "
-        f"{type(value).__module__}.{type(value).__qualname__}"
+        f"cannot canonically bind malformed ruleset value of type {type(value).__module__}.{type(value).__qualname__}"
     )
 
 
@@ -195,9 +194,7 @@ def _payload_evidence(value: Any) -> Any:
     if not isinstance(value, Mapping):
         return _evidence_value(value)
     sanitized = {
-        key: item
-        for key, item in value.items()
-        if not isinstance(key, str) or key not in _EVIDENCE_EXCLUDED_KEYS
+        key: item for key, item in value.items() if not isinstance(key, str) or key not in _EVIDENCE_EXCLUDED_KEYS
     }
     return _evidence_value(sanitized)
 
@@ -502,9 +499,7 @@ def build_ruleset_plan(
             )
         operations.append(operation)
 
-    canonical = _canonical_json(
-        _plan_payload(repository, tool_version, declaration_pin, snapshot_sha, operations)
-    )
+    canonical = _canonical_json(_plan_payload(repository, tool_version, declaration_pin, snapshot_sha, operations))
     plan_id = hashlib.sha256(canonical.encode("ascii")).hexdigest()
 
     authorized: list[RulesetOperation] = []
@@ -647,6 +642,7 @@ def execute_ruleset_plan(
     recompute: Callable[[], RulesetPlan],
     upsert: Callable[[RulesetOperation], object],
     delete: Callable[[RulesetOperation], object],
+    authorize: Callable[[], None],
 ) -> RulesetExecutionResult:
     require_apply_confirmation([plan], apply=True, confirmation=confirmation)
     indeterminate = [operation for operation in plan.operations if operation.disposition == "indeterminate"]
@@ -696,6 +692,10 @@ def execute_ruleset_plan(
         current_operation = current_by_key.get(operation.identity.key)
         if current_operation is None or current_operation.disposition != "ready":
             raise ValueError("ruleset operation lost apply authorization during recheck")
+        # Live review/ruleset/signature authority is deliberately refreshed at
+        # mutation adjacency, after plan recheck and before each individual API
+        # write. A multi-operation plan cannot reuse an earlier fresh result.
+        authorize()
         if operation.action == "delete":
             delete(current_operation)
         else:

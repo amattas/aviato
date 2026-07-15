@@ -25,7 +25,8 @@
     "workflow": "aviato-ci.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "5430fb47fa0b717f18026671f3448f3082cb0f2a870905928c013fbdab637397"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -53,7 +54,8 @@
     "workflow": "aviato-ci.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "5430fb47fa0b717f18026671f3448f3082cb0f2a870905928c013fbdab637397"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -81,7 +83,8 @@
     "workflow": "aviato-ci.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "5430fb47fa0b717f18026671f3448f3082cb0f2a870905928c013fbdab637397"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -320,7 +323,8 @@
     "workflow": "aviato-ci.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "5430fb47fa0b717f18026671f3448f3082cb0f2a870905928c013fbdab637397"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -360,7 +364,8 @@
     "workflow": "aviato-ci.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "5430fb47fa0b717f18026671f3448f3082cb0f2a870905928c013fbdab637397"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -396,7 +401,8 @@
     "workflow": "aviato-ci.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "5430fb47fa0b717f18026671f3448f3082cb0f2a870905928c013fbdab637397"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -436,7 +442,8 @@
     "workflow": "aviato-ci.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "5430fb47fa0b717f18026671f3448f3082cb0f2a870905928c013fbdab637397"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -508,7 +515,8 @@
     "workflow": "aviato-ci.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "5430fb47fa0b717f18026671f3448f3082cb0f2a870905928c013fbdab637397"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -544,7 +552,231 @@
     "workflow": "aviato-drift.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "4f5e74cd58d04022e0d42f3f62cef0715b82236942fa9bfd96afc985b9a05f3a"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "collect",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "16cbd0ed5d32521aa546074c8723a3418ce3cc089c080303617ed3cc71571b66",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [
+      [
+        "DEFAULT_BRANCH",
+        "EXACT_REF",
+        "KEY_ID",
+        "KEY_VERSION",
+        "PULL_REQUEST",
+        "RULESET_ID",
+        "SIGNED_ENVELOPE"
+      ],
+      [],
+      [],
+      [],
+      [
+        "AVIATO_PRIVILEGED_REVIEW_TOKEN",
+        "REVIEW_KEY_ID",
+        "REVIEW_KEY_VERSION",
+        "REVIEW_OUTPUT",
+        "REVIEW_PULL_REQUEST",
+        "REVIEW_REPOSITORY",
+        "REVIEW_RULESET_ID",
+        "REVIEW_RUN_ID"
+      ],
+      []
+    ],
+    "step_env_sha256": [
+      "f1df1617f655d43eac8a674feba80649ed8629005ffc27f9f67e9b046419fcab",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "199e6acac55e861580574c38961b5a760188fab8efa99ecfd062c63c03709342",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Require the protected default-branch revision"
+      ],
+      [
+        "",
+        "Check out the exact trusted run revision"
+      ],
+      [
+        "",
+        "Use Python 3.12"
+      ],
+      [
+        "app-token",
+        "Mint dedicated read-only verifier App token"
+      ],
+      [
+        "",
+        "Collect canonical unsigned live evidence"
+      ],
+      [
+        "",
+        "Upload unsigned evidence for external offline signing"
+      ]
+    ],
+    "step_run_sha256": [
+      "d768522b6c3364fa5d846008e8904560c258d84cb9c0ad7a2f27ba089c069fdf",
+      "",
+      "",
+      "",
+      "6c67c9bf73790818c21fe1010220be0666aa7b11c4867f9cb78dc348f044f1f9",
+      ""
+    ],
+    "step_shells": [
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "step_uses": [
+      "",
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    ],
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "aviato-privileged-review.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "cade3a4407c8f5eb7f68a4a64f39ac3ad15d9a92394e970c6460d701bb599d5a"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "verify",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "3561777a31db3ede289418354a8e8122a307c5320a9eba500958d3000108872f",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [
+      [
+        "DEFAULT_BRANCH",
+        "EXACT_REF",
+        "KEY_ID",
+        "KEY_VERSION",
+        "PULL_REQUEST",
+        "RULESET_ID",
+        "SIGNED_ENVELOPE"
+      ],
+      [],
+      [],
+      [],
+      [
+        "AVIATO_PRIVILEGED_REVIEW_ENVELOPE_BASE64",
+        "AVIATO_PRIVILEGED_REVIEW_TOKEN",
+        "REVIEW_OUTPUT"
+      ],
+      []
+    ],
+    "step_env_sha256": [
+      "f1df1617f655d43eac8a674feba80649ed8629005ffc27f9f67e9b046419fcab",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "23fad14d0a171000e62e8b9c44d198c12f16ff66956a31b632c447f271b67b0d",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Require the protected default-branch revision"
+      ],
+      [
+        "",
+        "Check out the exact trusted run revision"
+      ],
+      [
+        "",
+        "Use Python 3.12"
+      ],
+      [
+        "app-token",
+        "Mint dedicated read-only verifier App token"
+      ],
+      [
+        "",
+        "Freshly verify and consume the externally signed envelope"
+      ],
+      [
+        "",
+        "Upload the live-verified package input"
+      ]
+    ],
+    "step_run_sha256": [
+      "017c33dc32122b87fad42239fbd3c193dc36452a89c3cc5311dfef474385f7b5",
+      "",
+      "",
+      "",
+      "ace58b962d428fef7b4fce33fb2fd40f4f80e69b94f97793f42ce1256ad58488",
+      ""
+    ],
+    "step_shells": [
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "step_uses": [
+      "",
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    ],
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "aviato-privileged-review.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "cade3a4407c8f5eb7f68a4a64f39ac3ad15d9a92394e970c6460d701bb599d5a"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -604,7 +836,8 @@
     "workflow": "aviato-protection-checkpoint.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "4e9062e538476227b786def8441e62a33dd8ee05b820d569728f306e23c4fdca"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -674,7 +907,8 @@
     "workflow": "aviato-protection-checkpoint.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "4e9062e538476227b786def8441e62a33dd8ee05b820d569728f306e23c4fdca"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -702,7 +936,8 @@
     "workflow": "rendered-python",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "a9395e594915165526808a66a8569311aa5f27f9716b23e929a47abf9418bd6e"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -730,7 +965,8 @@
     "workflow": "rendered-python",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "a9395e594915165526808a66a8569311aa5f27f9716b23e929a47abf9418bd6e"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -758,7 +994,8 @@
     "workflow": "rendered-python",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "a9395e594915165526808a66a8569311aa5f27f9716b23e929a47abf9418bd6e"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -997,7 +1234,8 @@
     "workflow": "rendered-python",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "a9395e594915165526808a66a8569311aa5f27f9716b23e929a47abf9418bd6e"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1037,7 +1275,8 @@
     "workflow": "rendered-python",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "a9395e594915165526808a66a8569311aa5f27f9716b23e929a47abf9418bd6e"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1073,7 +1312,8 @@
     "workflow": "rendered-python",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "a9395e594915165526808a66a8569311aa5f27f9716b23e929a47abf9418bd6e"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1113,7 +1353,8 @@
     "workflow": "rendered-python",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "a9395e594915165526808a66a8569311aa5f27f9716b23e929a47abf9418bd6e"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1185,7 +1426,8 @@
     "workflow": "rendered-python",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "a9395e594915165526808a66a8569311aa5f27f9716b23e929a47abf9418bd6e"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1440,7 +1682,8 @@
     "workflow": "reusable-app-store-connect.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "12700b6bf508d74b96cc8c1c10ce83f7054129b1c671c7dfffd29ad3066460dd"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1548,7 +1791,8 @@
     "workflow": "reusable-app-store-connect.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "12700b6bf508d74b96cc8c1c10ce83f7054129b1c671c7dfffd29ad3066460dd"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1688,7 +1932,8 @@
     "workflow": "reusable-app-store-connect.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "12700b6bf508d74b96cc8c1c10ce83f7054129b1c671c7dfffd29ad3066460dd"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1730,7 +1975,8 @@
     "workflow": "reusable-app-store-connect.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "12700b6bf508d74b96cc8c1c10ce83f7054129b1c671c7dfffd29ad3066460dd"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1829,7 +2075,8 @@
     "workflow": "reusable-app-store-connect.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "12700b6bf508d74b96cc8c1c10ce83f7054129b1c671c7dfffd29ad3066460dd"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1942,7 +2189,8 @@
     "workflow": "reusable-consumer-automation.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "d8f94f3aecbee95fa6c2b7a161a29158cc09d82d5e10ee2bbc780c6bbc66b337"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -2038,7 +2286,8 @@
     "workflow": "reusable-docker-ghcr.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "35f93ddbdbecce76c3cca61bdbe1e5b05f32af215bb5a5d7a65932c260a12e78"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -2291,7 +2540,8 @@
     "workflow": "reusable-docker-ghcr.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "35f93ddbdbecce76c3cca61bdbe1e5b05f32af215bb5a5d7a65932c260a12e78"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -2513,7 +2763,8 @@
     "workflow": "reusable-docs-pages.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "432ef1d5f5b0eb23934f600be4c5a02597f35d1a2630e991043faeb88cffa1cc"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -2614,7 +2865,8 @@
     "workflow": "reusable-docs-pages.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "432ef1d5f5b0eb23934f600be4c5a02597f35d1a2630e991043faeb88cffa1cc"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -2732,7 +2984,8 @@
     "workflow": "reusable-docs-pages.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "432ef1d5f5b0eb23934f600be4c5a02597f35d1a2630e991043faeb88cffa1cc"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -2885,7 +3138,8 @@
     "workflow": "reusable-pypi-publish.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "65ca877576b2d838054ea823f184e8bdc7771776a50093fb5820998dd28741d1"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -2923,7 +3177,8 @@
     "workflow": "reusable-pypi-publish.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "65ca877576b2d838054ea823f184e8bdc7771776a50093fb5820998dd28741d1"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -3053,7 +3308,8 @@
     "workflow": "reusable-release-gate.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "94370dbf05490074910525df9cffbd6c6e331483c0f9e9a4537ea6bbfe37b70b"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -3146,7 +3402,8 @@
     "workflow": "reusable-release.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "ae1f9bac0c6d23fc0221eb704ba3248332087440db66ed7cd8cb31bd0295c781"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -3240,7 +3497,8 @@
     "workflow": "reusable-release.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "ae1f9bac0c6d23fc0221eb704ba3248332087440db66ed7cd8cb31bd0295c781"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -3373,7 +3631,8 @@
     "workflow": "reusable-release.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "ae1f9bac0c6d23fc0221eb704ba3248332087440db66ed7cd8cb31bd0295c781"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -3467,7 +3726,8 @@
     "workflow": "reusable-security-baseline.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "183544701c3cf2f2500de200aa0f0b5c4cca6bb178d57e401d5a8677cb5a1b41"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -3531,7 +3791,8 @@
     "workflow": "reusable-security-baseline.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "183544701c3cf2f2500de200aa0f0b5c4cca6bb178d57e401d5a8677cb5a1b41"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -3613,7 +3874,8 @@
     "workflow": "reusable-security-baseline.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "183544701c3cf2f2500de200aa0f0b5c4cca6bb178d57e401d5a8677cb5a1b41"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -3695,7 +3957,8 @@
     "workflow": "reusable-security-baseline.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "183544701c3cf2f2500de200aa0f0b5c4cca6bb178d57e401d5a8677cb5a1b41"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -3762,7 +4025,8 @@
     "workflow": "reusable-security-baseline.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "183544701c3cf2f2500de200aa0f0b5c4cca6bb178d57e401d5a8677cb5a1b41"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -3843,7 +4107,8 @@
     "workflow": "reusable-security-baseline.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "183544701c3cf2f2500de200aa0f0b5c4cca6bb178d57e401d5a8677cb5a1b41"
   },
   {
     "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -3916,6 +4181,7 @@
     "workflow": "reusable-security-baseline.yml",
     "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "workflow_env_keys": [],
-    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_sha256": "183544701c3cf2f2500de200aa0f0b5c4cca6bb178d57e401d5a8677cb5a1b41"
   }
 ]

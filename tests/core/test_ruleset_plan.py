@@ -15,7 +15,18 @@ PRIOR_SNAPSHOT = "b" * 40
 
 
 def _api() -> Any:
-    return importlib.import_module("aviato.core.ruleset_plan")
+    module = importlib.import_module("aviato.core.ruleset_plan")
+
+    class API:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(module, name)
+
+        @staticmethod
+        def execute_ruleset_plan(*args: Any, **kwargs: Any) -> Any:
+            kwargs.setdefault("authorize", lambda: None)
+            return module.execute_ruleset_plan(*args, **kwargs)
+
+    return API()
 
 
 def _repository(**changes: object) -> RepositoryIdentity:
@@ -388,6 +399,39 @@ def test_two_sequential_writes_recheck_explicitly_evolving_live_state() -> None:
     assert result.success is True
     assert writes == ["A", "B"]
     assert len(rechecks) == 2
+
+
+def test_each_ruleset_write_requires_a_new_adjacent_authority_decision() -> None:
+    module = importlib.import_module("aviato.core.ruleset_plan")
+    desired = [_desired(name="A"), _desired(name="B")]
+    mutable_live = [_live(ruleset_id=41, desired=item) for item in desired]
+    for payload in mutable_live:
+        payload["rules"][0]["parameters"]["required_approving_review_count"] = 1
+    plan = _plan(desired=desired, live=mutable_live)
+    writes: list[str] = []
+    authority_reads = 0
+
+    def authorize() -> None:
+        nonlocal authority_reads
+        authority_reads += 1
+        if authority_reads == 2:
+            raise ValueError("live review expired")
+
+    def upsert(operation: Any) -> None:
+        writes.append(operation.identity.name)
+        index = 0 if operation.identity.name == "A" else 1
+        mutable_live[index] = _api_live(ruleset_id=41 + index, desired=desired[index])
+
+    with pytest.raises(ValueError, match="expired"):
+        module.execute_ruleset_plan(
+            plan,
+            confirmation=plan.plan_id,
+            recompute=lambda: _plan(desired=desired, live=mutable_live),
+            upsert=upsert,
+            delete=lambda _operation: pytest.fail("no delete expected"),
+            authorize=authorize,
+        )
+    assert writes == ["A"] and authority_reads == 2
 
 
 def test_ready_delete_rechecks_receipt_authorization_and_uses_no_stale_operation() -> None:

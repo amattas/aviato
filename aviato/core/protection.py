@@ -615,6 +615,7 @@ def execute_protection_plan(
     confirmation: str,
     recompute: Callable[[], ProtectionPlan],
     write: Callable[[ProtectionOperation], object],
+    authorize: Callable[[], None],
     persist_receipt: Callable[[bytes], ReceiptPersistenceEvidence] | None = None,
 ) -> ProtectionExecutionResult:
     try:
@@ -659,6 +660,9 @@ def execute_protection_plan(
         lost = False
         write_result: object | None = None
         try:
+            # Reverify the external signed/live authority after the operation's
+            # state recheck and immediately before this exact mutation.
+            authorize()
             write_result = write(current_operation)
         except ResponseLostError:
             lost = True
@@ -754,6 +758,9 @@ def execute_protection_plan(
     )
     if persist_receipt is not None:
         try:
+            # Durable persistence is itself a hosted mutation and therefore
+            # receives its own fresh authority decision.
+            authorize()
             evidence = persist_receipt(receipt.canonical_bytes)
             if not isinstance(evidence, ReceiptPersistenceEvidence) or not receipt_persistence_ready(evidence):
                 raise ValueError("receipt persistence did not return immutable current-authority evidence")

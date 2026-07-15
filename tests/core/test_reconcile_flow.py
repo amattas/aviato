@@ -6,11 +6,16 @@ import pytest
 
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from aviato.core.ports import Issue
-from aviato.core.reconcile_flow import run_reconcile
+from aviato.core.reconcile_flow import run_reconcile as _run_reconcile
 from aviato.core.settings_drift_flow import diff_identity
 from aviato.core.settingsdrift import classify_settings
 
 from .fakeplatform import FakePlatform
+
+
+def run_reconcile(*args: Any, **kwargs: Any) -> Any:
+    kwargs.setdefault("authorize", lambda: None)
+    return _run_reconcile(*args, **kwargs)
 
 
 def _current_diff_id(desired: dict[str, Any], live: dict[str, Any]) -> str:
@@ -348,3 +353,38 @@ def test_apply_reads_consent_again_and_aborts_if_revoked_before_apply() -> None:
     )
     assert outcome.action != "apply"  # re-read saw the revoke → refused
     assert "apply_settings" not in platform.call_names()  # nothing was written
+
+
+def test_reconcile_refreshes_external_authority_after_consent_recheck_and_before_apply() -> None:
+    desired = {"required_reviews": 2}
+    live = {"required_reviews": 1}
+    diff_id = _current_diff_id(desired, live)
+    issue = Issue(
+        key="k",
+        open=True,
+        consent_diff_id=diff_id,
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
+        consent_role_lookup_ok=True,
+    )
+    platform = FakePlatform(settings=dict(live), issues={"k": issue})
+    calls = 0
+
+    def expired() -> None:
+        nonlocal calls
+        calls += 1
+        raise ValueError("live privileged review expired")
+
+    with pytest.raises(ValueError, match="expired"):
+        _run_reconcile(
+            platform,
+            repo="o/r",
+            issue_key="k",
+            desired_settings=desired,
+            pin="v1",
+            tool_version="1.0.0",
+            recorded_version="1.0.0",
+            confirmed_diff_id=diff_id,
+            authorize=expired,
+        )
+    assert calls == 1 and "apply_settings" not in platform.call_names()

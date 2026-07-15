@@ -10,5 +10,9 @@
 /aviato/library/privileged-review-policy.json @amattas
 /aviato/library/policy.yml @amattas
 /aviato/library/rulesets/protect-default-branch.json @amattas
+/aviato/cli.py @amattas
+/aviato/plugins/privileged_review.py @amattas
 /aviato/plugins/release_mutations.py @amattas
+/MANIFEST.in @amattas
+/pyproject.toml @amattas
 /scripts/regen-privileged-execution-manifest.py @amattas

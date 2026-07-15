@@ -10,6 +10,7 @@ from aviato.cli import _desired_settings, main
 from aviato.command import CommandError
 from aviato.core.composition import resolve_profile
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
+from aviato.core.errors import AviatoError
 from aviato.core.ports import Issue, Platform
 from aviato.core.registry import Registry
 from aviato.core.settings_drift_flow import diff_identity
@@ -121,6 +122,35 @@ def test_reconcile_matching_confirm_applies(tmp_path: Path, monkeypatch: pytest.
     rc = main(["reconcile", str(root), "drift", "--confirm", current_id])
     assert rc == 0
     assert platform.applied, "a confirmed, consented, in-version reconcile must apply"
+
+
+def test_reconcile_authority_expiry_after_consent_recheck_is_clean_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _consumer(tmp_path)
+    live: dict[str, Any] = {}
+    current_id = _current_diff_id(live)
+    issue = Issue(
+        key="drift",
+        open=True,
+        consent_diff_id=current_id,
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
+        consent_role_lookup_ok=True,
+    )
+    platform = _FakePlatform(settings=live, issue=issue)
+    _wire(monkeypatch, platform)
+    monkeypatch.setattr(
+        cli,
+        "_refresh_privileged_mutation_authority",
+        lambda _root: (_ for _ in ()).throw(AviatoError("live privileged review expired")),
+    )
+    rc = main(["reconcile", str(root), "drift", "--confirm", current_id])
+    captured = capsys.readouterr()
+    assert rc == 1 and platform.applied == []
+    assert "fail-closed" in captured.err and "expired" in captured.err and "Traceback" not in captured.err
 
 
 def test_reconcile_considers_all_markers_not_just_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

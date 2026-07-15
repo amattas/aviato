@@ -1,15 +1,19 @@
 {
   "approvals": [],
   "author_database_id": null,
-  "candidate_manifest_sha256": "95d8ebd59b3301e9f272205e90129e74c9fb95c7ce279f6041bdc22509509f9f",
-  "codeowners_sha256": "44934339ce00e36bb939666d9ff1814acf050bb3064d74c344f406e15717fa4e",
+  "candidate_manifest_sha256": "cde2aff92625d24c6ae9f0848686027d2084a30e142798f14c1ac8a63cd88da1",
+  "codeowners_sha256": "e49fe4f86f27a3d85c259b072267fc9d9b786028f97c59c6e920b73555551f19",
+  "lifecycle": "pending",
   "manual_prerequisites": [
     "Configure real reviewer_database_ids and/or team_database_ids without guessing GitHub identities.",
     "Add the corresponding independent eligible code owner or team to every privileged CODEOWNERS route.",
     "Apply the confirmation-bound default-branch ruleset with two approvals, code-owner review, stale-review dismissal, and last-push approval.",
-    "Obtain and record at least two distinct non-author approvals for the exact protected candidate."
+    "Create the protected privileged-review environment with at least two configured independent reviewers, prevent-self-review, no admin bypass, and only protected branches; scope the verifier App credentials to that environment.",
+    "Obtain at least two distinct current non-author CODEOWNER approvals for the exact last-pushed protected tree.",
+    "Collect the exact merged live PR/review/ruleset/environment evidence in the protected default-branch workflow, sign it offline with a trusted predecessor key, and package only the freshly live-verified envelope.",
+    "Renew the durable signed review snapshot before its 400-day supported-release lifetime expires or before the release reaches end of support."
   ],
-  "policy_sha256": "3ac0c5f92da8da77458bfca46c7d646150833cfecefa3d55d295237ac7a92538",
-  "schema_version": 1,
+  "policy_sha256": "6b29e4d093a32876a5b251d0d3d978cc6db95057ff0aa5d86f2694b0d0a1c9d5",
+  "schema_version": 2,
   "status": "pending"
 }

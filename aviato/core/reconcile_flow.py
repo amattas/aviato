@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import sys
+from collections.abc import Callable
 from typing import Any
 
 from .ports import Platform
@@ -21,6 +22,7 @@ def run_reconcile(
     tool_version: str,
     recorded_version: str,
     confirmed_diff_id: str | None,
+    authorize: Callable[[], None],
     override_version_pin: bool = False,
 ) -> ReconcileOutcome:
     """Operator-gated settings reconcile against a tracking issue (§5.7).
@@ -117,6 +119,7 @@ def run_reconcile(
         try:
             # Pass the decision-time live snapshot so the binding can fail closed if the modeled
             # branch state drifted since the diff/consent were computed (§2.8/§5.7, review #14).
+            authorize()
             skipped = platform.apply_settings(repo, desired_settings, expected_live=live)
         except Exception as exc:
             # §5.7 audit: an apply that throws mid-flight may have PARTIALLY landed, so it

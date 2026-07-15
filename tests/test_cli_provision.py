@@ -9,6 +9,7 @@ import pytest
 
 from aviato import __version__, cli
 from aviato.cli import main
+from aviato.core.errors import AviatoError
 from aviato.core.ports import Issue, Platform, RepositoryIdentity
 from aviato.core.provision import ProvisionOutcome
 
@@ -130,12 +131,95 @@ def test_complete_protection_apply_requires_exact_confirmation(
     assert platform.applied == []
 
 
+def test_complete_protection_authority_expiry_before_operation_is_clean_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _consumer(tmp_path)
+    platform = _FakePlatform()
+    plan = SimpleNamespace(plan_id="a" * 64, ready=True, blockers=())
+    writes: list[str] = []
+    monkeypatch.setattr(cli, "remote_url", lambda _root: "git@github.com:o/r.git")
+    monkeypatch.setattr(cli, "normalize_slug", lambda _remote: "o/r")
+    monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: platform)
+    monkeypatch.setattr(cli, "build_protection_plan", lambda **_kwargs: plan)
+    monkeypatch.setattr(cli, "require_protection_confirmation", lambda *_args, **_kwargs: plan)
+    monkeypatch.setattr(cli, "resolve_receipt_signing_identity", lambda **_kwargs: {"principal": "reviewer"})
+    monkeypatch.setattr(
+        cli,
+        "_refresh_privileged_mutation_authority",
+        lambda _root: (_ for _ in ()).throw(AviatoError("live privileged review expired")),
+    )
+
+    def execute(*_args: object, **kwargs: object) -> object:
+        authorize = kwargs["authorize"]
+        assert callable(authorize)
+        try:
+            authorize()
+        except AviatoError:
+            return SimpleNamespace(receipt=SimpleNamespace(ready=False, status="failed"))
+        writes.append("write")
+        raise AssertionError("expired authority must not write")
+
+    monkeypatch.setattr(cli, "execute_protection_plan", execute)
+    rc = main(
+        [
+            "complete-protection",
+            str(root),
+            "--apply",
+            "--confirm",
+            "a" * 64,
+            "--receipt-principal",
+            "reviewer",
+            "--receipt-key-id",
+            "1",
+            "--receipt-signing-key",
+            str(tmp_path / "key"),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert rc == 1 and writes == []
+    assert "did not converge: failed" in captured.err and "Traceback" not in captured.err
+
+
 def test_complete_protection_missing_declaration_errors(tmp_path: Path) -> None:
     assert main(["complete-protection", str(tmp_path)]) == 2
 
 
 def test_provision_rejects_bad_slug() -> None:
     assert main(["provision", "no-slash", "--profile", "python-library"]) == 2
+
+
+def test_provision_authority_expiry_before_create_is_clean_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    platform = _FakePlatform()
+    created: list[str] = []
+    monkeypatch.setattr(platform, "create_repo", lambda repo, **_kwargs: created.append(repo))
+    monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: platform)
+    monkeypatch.setattr(
+        cli,
+        "_refresh_privileged_mutation_authority",
+        lambda _root: (_ for _ in ()).throw(AviatoError("live privileged review expired")),
+    )
+    rc = main(
+        [
+            "provision",
+            "o/r",
+            "--profile",
+            "python-library",
+            "--pin",
+            "0",
+            "--var",
+            "distribution-name=acme",
+            "--var",
+            "import-name=acme",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert rc == 1 and created == []
+    assert "expired" in captured.err and "Traceback" not in captured.err
 
 
 def test_release_checkpoint_parser_exposes_real_lifecycle_commands() -> None:

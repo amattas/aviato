@@ -1032,6 +1032,48 @@ def test_contract_explicitly_binds_workflow_defaults_and_all_job_execution_conte
     assert any("manifest mismatch" in error for error in errors)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("on", {"pull_request_target": {"types": ["opened"]}}),
+        ("concurrency", {"group": "attacker", "cancel-in-progress": False}),
+        ("run-name", "attacker controlled"),
+        ("name", "Changed privileged interface"),
+    ),
+)
+def test_privileged_manifest_binds_complete_workflow_document(field: str, value: object) -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_documents
+
+    documents = _privileged_documents()
+    workflow = documents["reusable-app-store-connect.yml"]
+    workflow[True if field == "on" else field] = value  # type: ignore[index]
+    errors = verify_privileged_execution_documents(documents)
+    assert any("manifest mismatch" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value"),
+    (
+        ("inputs", "tag", {"description": "changed", "type": "string", "required": False, "default": "evil"}),
+        ("secrets", "AVIATO_VERIFIER_APP_ID", {"required": False}),
+        ("outputs", "forged", {"description": "forged", "value": "${{ jobs.publish.outputs.value }}"}),
+    ),
+)
+def test_privileged_manifest_binds_full_workflow_call_interface(section: str, key: str, value: object) -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_documents
+
+    documents = _privileged_documents()
+    workflow = documents["reusable-app-store-connect.yml"]
+    # PyYAML's YAML-1.1 resolver parses the unquoted workflow `on` key as True.
+    trigger = workflow.get("on", workflow.get(True))  # type: ignore[call-overload]
+    assert isinstance(trigger, dict)
+    workflow_call = trigger["workflow_call"]
+    assert isinstance(workflow_call, dict)
+    workflow_call.setdefault(section, {})[key] = value
+    errors = verify_privileged_execution_documents(documents)
+    assert any("manifest mismatch" in error for error in errors)
+
+
 @pytest.mark.parametrize(("job_name", "output_name"), (("authority", "authorized"), ("derive", "phase")))
 def test_authority_producer_output_drift_invalidates_privileged_manifest(job_name: str, output_name: str) -> None:
     from aviato.plugins.release_mutations import verify_privileged_execution_documents

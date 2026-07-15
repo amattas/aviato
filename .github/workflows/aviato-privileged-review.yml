@@ -1,0 +1,190 @@
+name: Aviato privileged review
+run-name: Aviato privileged review ${{ inputs.phase }} by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Lifecycle phase; signing is always offline.
+        required: true
+        type: choice
+        options:
+          - collect
+          - verify
+      pull_request:
+        description: Merged privileged pull request number (collect only).
+        required: false
+        type: string
+      ruleset_id:
+        description: Active repository ruleset database ID (collect only).
+        required: false
+        type: string
+      key_id:
+        description: Active predecessor signing-key ID (collect only).
+        required: false
+        type: string
+      key_version:
+        description: Active predecessor signing-key version (collect only).
+        required: false
+        type: string
+      signed_envelope:
+        description: Canonical base64url signed envelope (verify only; maximum 60000 characters).
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: aviato-privileged-review-${{ github.repository_id }}-${{ inputs.phase }}
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    if: ${{ inputs.phase == 'collect' }}
+    runs-on: ubuntu-24.04
+    environment: privileged-review
+    timeout-minutes: 10
+    steps:
+      - name: Require the protected default-branch revision
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXACT_REF: ${{ github.ref }}
+          PULL_REQUEST: ${{ inputs.pull_request }}
+          RULESET_ID: ${{ inputs.ruleset_id }}
+          KEY_ID: ${{ inputs.key_id }}
+          KEY_VERSION: ${{ inputs.key_version }}
+          SIGNED_ENVELOPE: ${{ inputs.signed_envelope }}
+        run: |
+          set -euo pipefail
+          test "$EXACT_REF" = "refs/heads/$DEFAULT_BRANCH"
+          test -n "$PULL_REQUEST"
+          test -n "$RULESET_ID"
+          test -n "$KEY_ID"
+          test -n "$KEY_VERSION"
+          test -z "$SIGNED_ENVELOPE"
+
+      - name: Check out the exact trusted run revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Use Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Mint dedicated read-only verifier App token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+          private-key: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: read
+          permission-administration: read
+          permission-contents: read
+          permission-members: read
+          permission-metadata: read
+          permission-pull-requests: read
+
+      - name: Collect canonical unsigned live evidence
+        env:
+          AVIATO_PRIVILEGED_REVIEW_TOKEN: ${{ steps.app-token.outputs.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          REVIEW_PULL_REQUEST: ${{ inputs.pull_request }}
+          REVIEW_RULESET_ID: ${{ inputs.ruleset_id }}
+          REVIEW_KEY_ID: ${{ inputs.key_id }}
+          REVIEW_KEY_VERSION: ${{ inputs.key_version }}
+          REVIEW_RUN_ID: ${{ github.run_id }}
+          REVIEW_OUTPUT: ${{ runner.temp }}/aviato-privileged-review-unsigned.json
+        run: |
+          set -euo pipefail
+          python -m aviato.plugins.privileged_review collect \
+            --repository "$REVIEW_REPOSITORY" \
+            --pull-request "$REVIEW_PULL_REQUEST" \
+            --ruleset-id "$REVIEW_RULESET_ID" \
+            --workflow-run-id "$REVIEW_RUN_ID" \
+            --key-id "$REVIEW_KEY_ID" \
+            --key-version "$REVIEW_KEY_VERSION" \
+            --output "$REVIEW_OUTPUT"
+
+      - name: Upload unsigned evidence for external offline signing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: aviato-privileged-review-unsigned-${{ github.run_id }}
+          path: ${{ runner.temp }}/aviato-privileged-review-unsigned.json
+          if-no-files-found: error
+          retention-days: 1
+
+  verify:
+    if: ${{ inputs.phase == 'verify' }}
+    runs-on: ubuntu-24.04
+    environment: privileged-review
+    timeout-minutes: 10
+    steps:
+      - name: Require the protected default-branch revision
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXACT_REF: ${{ github.ref }}
+          PULL_REQUEST: ${{ inputs.pull_request }}
+          RULESET_ID: ${{ inputs.ruleset_id }}
+          KEY_ID: ${{ inputs.key_id }}
+          KEY_VERSION: ${{ inputs.key_version }}
+          SIGNED_ENVELOPE: ${{ inputs.signed_envelope }}
+        run: |
+          set -euo pipefail
+          test "$EXACT_REF" = "refs/heads/$DEFAULT_BRANCH"
+          test -z "$PULL_REQUEST"
+          test -z "$RULESET_ID"
+          test -z "$KEY_ID"
+          test -z "$KEY_VERSION"
+          test -n "$SIGNED_ENVELOPE"
+          test "${#SIGNED_ENVELOPE}" -le 60000
+
+      - name: Check out the exact trusted run revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Use Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Mint dedicated read-only verifier App token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+          private-key: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: read
+          permission-administration: read
+          permission-contents: read
+          permission-members: read
+          permission-metadata: read
+          permission-pull-requests: read
+
+      - name: Freshly verify and consume the externally signed envelope
+        env:
+          AVIATO_PRIVILEGED_REVIEW_TOKEN: ${{ steps.app-token.outputs.token }}
+          AVIATO_PRIVILEGED_REVIEW_ENVELOPE_BASE64: ${{ inputs.signed_envelope }}
+          REVIEW_OUTPUT: ${{ runner.temp }}/aviato-privileged-review-consumed.json
+        run: |
+          set -euo pipefail
+          python -m aviato.plugins.privileged_review verify --output "$REVIEW_OUTPUT"
+
+      - name: Upload the live-verified package input
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: aviato-privileged-review-consumed-${{ github.run_id }}
+          path: ${{ runner.temp }}/aviato-privileged-review-consumed.json
+          if-no-files-found: error
+          retention-days: 1
