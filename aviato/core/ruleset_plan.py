@@ -31,6 +31,18 @@ _RESPONSE_METADATA_KEYS = frozenset(
         "current_user_can_bypass",
     }
 )
+_EVIDENCE_EXCLUDED_KEYS = frozenset(
+    {
+        "id",
+        "created_at",
+        "updated_at",
+        "html_url",
+        "url",
+        "_links",
+        "display",
+        "current_user_can_bypass",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -179,6 +191,17 @@ def _evidence_value(value: Any) -> Any:
     )
 
 
+def _payload_evidence(value: Any) -> Any:
+    if not isinstance(value, Mapping):
+        return _evidence_value(value)
+    sanitized = {
+        key: item
+        for key, item in value.items()
+        if not isinstance(key, str) or key not in _EVIDENCE_EXCLUDED_KEYS
+    }
+    return _evidence_value(sanitized)
+
+
 def _normalize_ref_values(values: object, *, target: str, default_branch: str) -> tuple[str, ...]:
     if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
         raise ValueError("ruleset ref_name include/exclude must be string arrays")
@@ -313,7 +336,7 @@ def _response_identity(
         return None, None, None, ""
     fields = (payload.get("node_id"), payload.get("source_type"), payload.get("source"))
     if fields == (None, None, None):
-        return None, None, None, ""
+        return None, None, None, "ruleset response is missing repository authority metadata"
     node_id, source_type, source = fields
     if not all(isinstance(value, str) and value for value in fields):
         return None, None, None, "ruleset response identity metadata is incomplete or malformed"
@@ -439,8 +462,8 @@ def build_ruleset_plan(
                 detail,
                 {
                     "classification": detail,
-                    "desired": _evidence_value(desired_raw),
-                    "live": _evidence_value(live_raw),
+                    "desired": _payload_evidence(desired_raw),
+                    "live": _payload_evidence(live_raw),
                 },
             )
         elif desired_security is None:

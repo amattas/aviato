@@ -1423,6 +1423,9 @@ def test_read_rulesets_returns_full_payloads(monkeypatch: pytest.MonkeyPatch) ->
 def test_read_rulesets_preserves_degraded_payload_for_non_clean_drift(monkeypatch: pytest.MonkeyPatch) -> None:
     degraded = {
         "id": 7,
+        "node_id": "RRS_7",
+        "source_type": "Repository",
+        "source": "o/r",
         "name": "Common: release tag format",
         "target": "tag",
         "enforcement": "active",

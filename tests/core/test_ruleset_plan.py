@@ -57,6 +57,9 @@ def _live(*, ruleset_id: int = 41, desired: dict[str, Any] | None = None) -> dic
     payload["conditions"] = {"ref_name": {"include": ["refs/heads/main"], "exclude": []}}
     payload.update(
         {
+            "node_id": f"RRS_{ruleset_id}",
+            "source_type": "Repository",
+            "source": "owner/repo",
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-02T00:00:00Z",
             "html_url": "https://example.test/rules/41",
@@ -68,15 +71,7 @@ def _live(*, ruleset_id: int = 41, desired: dict[str, Any] | None = None) -> dic
 
 
 def _api_live(*, ruleset_id: int, desired: dict[str, Any]) -> dict[str, Any]:
-    payload = _live(ruleset_id=ruleset_id, desired=desired)
-    payload.update(
-        {
-            "node_id": f"RRS_{ruleset_id}",
-            "source_type": "Repository",
-            "source": "owner/repo",
-        }
-    )
-    return payload
+    return _live(ruleset_id=ruleset_id, desired=desired)
 
 
 def _plan(
@@ -174,7 +169,15 @@ def test_plan_fetches_full_detail_for_every_paginated_ruleset_summary(monkeypatc
 
     def full(_repo: str, ruleset_id: int) -> dict[str, Any]:
         fetched.append(ruleset_id)
-        return {"id": ruleset_id, "name": str(ruleset_id), "target": "branch", "rules": []}
+        return {
+            "id": ruleset_id,
+            "node_id": f"RRS_{ruleset_id}",
+            "source_type": "Repository",
+            "source": "owner/repo",
+            "name": str(ruleset_id),
+            "target": "branch",
+            "rules": [],
+        }
 
     monkeypatch.setattr(github, "repository_ruleset", full)
 
@@ -369,8 +372,7 @@ def test_two_sequential_writes_recheck_explicitly_evolving_live_state() -> None:
         writes.append(operation.identity.name)
         for index, payload in enumerate(mutable_live):
             if payload["name"] == operation.identity.name:
-                replacement = copy.deepcopy(desired[index])
-                replacement["id"] = payload["id"]
+                replacement = _api_live(ruleset_id=payload["id"], desired=desired[index])
                 replacement["conditions"] = copy.deepcopy(payload["conditions"])
                 mutable_live[index] = replacement
                 break
@@ -515,3 +517,65 @@ def test_order_distinct_unknown_security_arrays_have_distinct_plan_ids() -> None
     second_plan = _plan(desired=[second])
 
     assert first_plan.plan_id != second_plan.plan_id
+
+
+def test_absent_live_authority_is_indeterminate_and_cannot_authorize_delete() -> None:
+    api = _api()
+    prior_payload = _desired(name="Retired")
+    live = _live(desired=prior_payload)
+    for key in ("node_id", "source_type", "source"):
+        live.pop(key)
+    fingerprint = api.ruleset_payload_fingerprint(prior_payload, target="branch", default_branch="main")
+    inventory = ManagedInventory(
+        schema_version=1,
+        profile="python-library",
+        profile_identity="aviato-profile/python-library/v1",
+        pin="1.0.0",
+        snapshot_commit=PRIOR_SNAPSHOT,
+        entries={},
+        owned_rulesets=(OwnedRulesetEntry("Retired", "branch", PRIOR_SNAPSHOT, fingerprint),),
+    )
+    plan = _plan(
+        desired=[],
+        live=[live],
+        prior_inventory=inventory,
+        prior_desired_payloads=[prior_payload],
+        deletion_receipt={"receipt": 1},
+        receipt_verifier=lambda _receipt, _binding: True,
+    )
+    writes: list[str] = []
+
+    assert plan.operations[0].comparison.state == "indeterminate"
+    assert plan.operations[0].disposition == "indeterminate"
+    with pytest.raises(ValueError, match="indeterminate"):
+        api.execute_ruleset_plan(
+            plan,
+            confirmation=plan.plan_id,
+            recompute=lambda: plan,
+            upsert=lambda _operation: writes.append("upsert"),
+            delete=lambda _operation: writes.append("delete"),
+        )
+    assert writes == []
+
+
+def test_indeterminate_plan_id_ignores_display_only_evidence_changes() -> None:
+    desired = _desired()
+    desired["conditions"] = {"ref_name": {"include": ["~FUTURE"], "exclude": []}}
+    baseline_live = _live()
+    changed_live = copy.deepcopy(baseline_live)
+    changed_live.update(
+        {
+            "created_at": "2040-01-01T00:00:00Z",
+            "updated_at": "2040-01-02T00:00:00Z",
+            "html_url": "https://different.invalid/rules/41",
+            "_links": {"self": {"href": "https://different.invalid/api/41"}},
+            "display": {"source_name": "changed display"},
+        }
+    )
+
+    baseline = _plan(desired=[desired], live=[baseline_live])
+    changed = _plan(desired=[desired], live=[changed_live])
+
+    assert baseline.operations[0].comparison.state == "indeterminate"
+    assert changed.operations[0].comparison.state == "indeterminate"
+    assert baseline.plan_id == changed.plan_id
