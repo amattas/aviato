@@ -76,6 +76,16 @@ on:
         required: false
         type: number
         default: 0
+      verifier-app-owner:
+        description: GitHub owner whose Aviato verifier App installation is selected.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      AVIATO_VERIFIER_APP_ID:
+        required: true
+      AVIATO_VERIFIER_APP_PRIVATE_KEY:
+        required: true
 
 # C12-W4 (adapted for branch deploys): permissions are PER-JOB. The build job runs the
 # consumer's emit `eval` and holds only read scopes (`contents` and Pages configuration);
@@ -125,7 +135,7 @@ jobs:
           reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
           key_id="$(jq -r .key_id "${envelope}")"
           [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
-          public_key="$(gh api -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys" --jq ".[] | select((.id|tostring) == \"${key_id}\") | .key")"
+          public_key="$(gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end")"
           authority_dir="$(mktemp -d)"
           printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
           jq -cS .checkpoint "${envelope}" > "${authority_dir}/message"
@@ -379,6 +389,29 @@ jobs:
       actions: read
       contents: write
     steps:
+      - name: Mint verifier-only read token
+        id: verifier-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+          private-key: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.verifier-app-owner || github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          skip-token-revoke: false
+          permission-administration: read
+          permission-actions: read
+          permission-contents: read
+          permission-metadata: read
+      - name: Fail-closed verifier capability probe
+        env:
+          GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}" --jq .default_branch)"
+          gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/branches/${branch}/protection" >/dev/null
+          gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=false&per_page=100" >/dev/null
+          gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments?per_page=100" >/dev/null
       - name: Recheck authorization before branch mutation
         shell: bash
         env:
@@ -399,7 +432,7 @@ jobs:
           reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
           key_id="$(jq -r .key_id "${envelope}")"
           [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
-          public_key="$(gh api -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys" --jq ".[] | select((.id|tostring) == \"${key_id}\") | .key")"
+          public_key="$(gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end")"
           authority_dir="$(mktemp -d)"
           printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
           jq -cS .checkpoint "${envelope}" > "${authority_dir}/message"
@@ -425,6 +458,7 @@ jobs:
         shell: bash
         env:
           DOCS_BRANCH: ${{ inputs.docs-branch }}
+          VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
         run: |
           set -euo pipefail
           git bundle verify /tmp/docs.bundle
@@ -437,13 +471,23 @@ jobs:
             fi
           fi
           envelope="${RUNNER_TEMP}/push-authority/verified-checkpoint-envelope.json"
-          verifier="${RUNNER_TEMP}/authority_verifier.py"
           repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
           ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
-          payload="$(gh api -H 'Cache-Control: no-cache' "repos/${repo}/contents/aviato/authority_verifier.py?ref=${ref}")"
-          [ "$(jq -r .sha <<<"${payload}")" = "$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")" ]
-          jq -r .content <<<"${payload}" | tr -d '\n' | base64 -d > "${verifier}"
-          python3 "${verifier}" --envelope "${envelope}" --repository "${GITHUB_REPOSITORY}"
+          path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
+          blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
+          payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
+          # AVIATO_SECURE_VERIFIER_BOOTSTRAP: no executable tempfile; bind decoded bytes locally.
+          AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          import base64, hashlib, json, os, sys
+          payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
+          if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
+          body = base64.b64decode(payload["content"], validate=True)
+          if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
+          actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
+          if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
+          sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
+          exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
+          PY
           git push origin "refs/remotes/bundle/${DOCS_BRANCH}:refs/heads/${DOCS_BRANCH}"
 
   # The Pages/OIDC token is isolated from all consumer commands. It consumes only
@@ -461,6 +505,29 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Mint verifier-only read token
+        id: verifier-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+          private-key: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.verifier-app-owner || github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          skip-token-revoke: false
+          permission-administration: read
+          permission-actions: read
+          permission-contents: read
+          permission-metadata: read
+      - name: Fail-closed verifier capability probe
+        env:
+          GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}" --jq .default_branch)"
+          gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/branches/${branch}/protection" >/dev/null
+          gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=false&per_page=100" >/dev/null
+          gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments?per_page=100" >/dev/null
       - name: Recheck exact authorization before Pages OIDC
         shell: bash
         env:
@@ -468,6 +535,7 @@ jobs:
           CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
           CHECKPOINT_DIGEST: ${{ inputs.checkpoint-digest }}
           VERIFIED_ENVELOPE_DIGEST: ${{ inputs.verified-envelope-digest }}
+          VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
         run: |
           set -euo pipefail
           [[ "${CHECKPOINT_RUN_ID}" =~ ^[1-9][0-9]*$ && "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]]
@@ -481,7 +549,7 @@ jobs:
           reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
           key_id="$(jq -r .key_id "${envelope}")"
           [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
-          public_key="$(gh api -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys" --jq ".[] | select((.id|tostring) == \"${key_id}\") | .key")"
+          public_key="$(gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end")"
           authority_dir="$(mktemp -d)"
           printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
           jq -cS .checkpoint "${envelope}" > "${authority_dir}/message"
@@ -489,13 +557,23 @@ jobs:
           ssh-keygen -Y verify -f "${authority_dir}/allowed" -I "${reviewer}" -n aviato -s "${authority_dir}/signature" < "${authority_dir}/message"
           environment="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/github-pages")"
           [ "$(jq -r .can_admins_bypass <<<"${environment}")" = "false" ] || { echo "::error::github-pages permits admin bypass"; exit 1; }
-          verifier="${RUNNER_TEMP}/authority_verifier.py"
           repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
           ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
-          payload="$(gh api -H 'Cache-Control: no-cache' "repos/${repo}/contents/aviato/authority_verifier.py?ref=${ref}")"
-          [ "$(jq -r .sha <<<"${payload}")" = "$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")" ]
-          jq -r .content <<<"${payload}" | tr -d '\n' | base64 -d > "${verifier}"
-          python3 "${verifier}" --envelope "${envelope}" --repository "${GITHUB_REPOSITORY}"
+          path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
+          blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
+          payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
+          # AVIATO_SECURE_VERIFIER_BOOTSTRAP: no executable tempfile; bind decoded bytes locally.
+          AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          import base64, hashlib, json, os, sys
+          payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
+          if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
+          body = base64.b64decode(payload["content"], validate=True)
+          if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
+          actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
+          if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
+          sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
+          exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
+          PY
       - name: Deploy GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

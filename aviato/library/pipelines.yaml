@@ -106,6 +106,7 @@ release-python:
   identity: pipeline/release-python/v2
   envelope: ci
   privileges: &release-privileges ["contents: write", "pull-requests: write", "actions: write", "issues: read", "statuses: write"]
+  secrets: &verifier-secrets [AVIATO_VERIFIER_APP_ID, AVIATO_VERIFIER_APP_PRIVATE_KEY]
   triggers: &release-triggers
     workflow_dispatch:
       inputs:
@@ -127,6 +128,7 @@ release-python:
       inputs: [promotion, merged-sha, intended-tag, intended-actor, checkpoint-digest]
       needs: [ci, security, common-lint]
       permissions: ["contents: write", "pull-requests: write", "actions: write", "issues: read"]
+      secrets: *verifier-secrets
       runner: ubuntu-latest
     release-gate:
       identity: job/release-python-gate/v2
@@ -140,6 +142,7 @@ release-node:
   identity: pipeline/release-node/v2
   envelope: ci
   privileges: *release-privileges
+  secrets: *verifier-secrets
   triggers: *release-triggers
   jobs:
     status-bridge:
@@ -154,6 +157,7 @@ release-node:
       inputs: [promotion, merged-sha, intended-tag, intended-actor, checkpoint-digest]
       needs: [ci, security, common-lint]
       permissions: ["contents: write", "pull-requests: write", "actions: write", "issues: read"]
+      secrets: *verifier-secrets
       runner: ubuntu-latest
     release-gate:
       identity: job/release-node-gate/v2
@@ -167,6 +171,7 @@ release-swift:
   identity: pipeline/release-swift/v2
   envelope: ci
   privileges: *release-privileges
+  secrets: *verifier-secrets
   triggers: *release-triggers
   jobs:
     status-bridge:
@@ -181,6 +186,7 @@ release-swift:
       inputs: [promotion, merged-sha, intended-tag, intended-actor, checkpoint-digest]
       needs: [ci, security, common-lint]
       permissions: ["contents: write", "pull-requests: write", "actions: write", "issues: read"]
+      secrets: *verifier-secrets
       runner: ubuntu-latest
     release-gate:
       identity: job/release-swift-gate/v2
@@ -196,6 +202,7 @@ pypi-publish:
   required_pipelines: [release-python]
   privileges: ["actions: read", "contents: read", "id-token: write", "attestations: write"]
   environment: pypi
+  secrets: *verifier-secrets
   jobs:
     pypi:
       identity: job/pypi-build/v2
@@ -208,6 +215,7 @@ pypi-publish:
       fragment: workflow-fragments/pypi-publish.yml
       needs: [release-gate, pypi]
       permissions: ["actions: read", "contents: read", "id-token: write", "attestations: write"]
+      secrets: *verifier-secrets
       runner: ubuntu-latest
       environment: pypi
       authorization_gate: release-gate
@@ -220,6 +228,7 @@ ghcr-publish:
   envelope: ci
   privileges: ["actions: read", "contents: read", "packages: write", "security-events: write", "id-token: write", "attestations: write"]
   environment: ghcr
+  secrets: *verifier-secrets
   runner: ubuntu-latest
   jobs:
     docker:
@@ -227,6 +236,7 @@ ghcr-publish:
       fragment: workflow-fragments/ghcr-publish.yml
       needs: [release, release-gate, security]
       permissions: ["actions: read", "contents: read", "packages: write", "security-events: write", "id-token: write", "attestations: write"]
+      secrets: *verifier-secrets
       runner: ubuntu-latest
       environment: ghcr
       authorization_gate: release-gate
@@ -235,17 +245,17 @@ ghcr-publish:
 app-store-connect:
   identity: pipeline/app-store-connect/v2
   envelope: ci
-  privileges: ["actions: read", "contents: write"]
+  privileges: ["actions: read", "attestations: write", "contents: write", "id-token: write"]
   environment_input: environment-name
   secrets: &appstore-secrets
-    [APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_API_PRIVATE_KEY, APPLE_CERTIFICATE_P12_BASE64, APPLE_CERTIFICATE_PASSWORD, APPLE_PROVISIONING_PROFILE_BASE64]
+    [APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_API_PRIVATE_KEY, APPLE_CERTIFICATE_P12_BASE64, APPLE_CERTIFICATE_PASSWORD, APPLE_PROVISIONING_PROFILE_BASE64, AVIATO_VERIFIER_APP_ID, AVIATO_VERIFIER_APP_PRIVATE_KEY]
   runner: macos-latest
   jobs:
     app-store-connect:
       identity: job/app-store-connect/v2
       fragment: workflow-fragments/app-store-connect.yml
       needs: [release, release-gate, security]
-      permissions: ["actions: read", "contents: write"]
+      permissions: ["actions: read", "attestations: write", "contents: write", "id-token: write"]
       secrets: *appstore-secrets
       runner: macos-latest
       environment_input: environment-name
@@ -256,6 +266,7 @@ docs-python-library: &docs-python-library
   identity: pipeline/docs-python-library/v2
   envelope: docs
   privileges: &docs-privileges ["actions: read", "contents: write", "pull-requests: read", "security-events: write", "pages: write", "id-token: write"]
+  secrets: *verifier-secrets
   artifacts: [zensical-config, docs-intro, docs-requirements]
   triggers:
     workflow_run:
@@ -285,6 +296,7 @@ docs-python-library: &docs-python-library
       fragment: workflow-fragments/docs-python-library.yml
       needs: [docs-resolve, docs-release-gate, docs-security]
       permissions: ["actions: read", "contents: write", "pages: write", "id-token: write"]
+      secrets: *verifier-secrets
       runner: ubuntu-latest
       authorization_gate: docs-release-gate
       authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
@@ -315,6 +327,7 @@ docs-python-service:
       fragment: workflow-fragments/docs-python-service.yml
       needs: [docs-resolve, docs-release-gate, docs-security]
       permissions: ["actions: read", "contents: write", "pages: write", "id-token: write"]
+      secrets: *verifier-secrets
       runner: ubuntu-latest
       authorization_gate: docs-release-gate
       authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
@@ -345,6 +358,7 @@ docs-python-component:
       fragment: workflow-fragments/docs-python-component.yml
       needs: [docs-resolve, docs-release-gate, docs-security]
       permissions: ["actions: read", "contents: write", "pages: write", "id-token: write"]
+      secrets: *verifier-secrets
       runner: ubuntu-latest
       authorization_gate: docs-release-gate
       authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
@@ -375,6 +389,7 @@ docs-node-service:
       fragment: workflow-fragments/docs-node-service.yml
       needs: [docs-resolve, docs-release-gate, docs-security]
       permissions: ["actions: read", "contents: write", "pages: write", "id-token: write"]
+      secrets: *verifier-secrets
       runner: ubuntu-latest
       authorization_gate: docs-release-gate
       authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
@@ -405,6 +420,7 @@ docs-swift-app:
       fragment: workflow-fragments/docs-swift-app.yml
       needs: [docs-resolve, docs-release-gate, docs-security]
       permissions: ["actions: read", "contents: write", "pages: write", "id-token: write"]
+      secrets: *verifier-secrets
       runner: ubuntu-latest
       authorization_gate: docs-release-gate
       authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
@@ -413,10 +429,12 @@ docs-swift-app:
 # profile selects them; graph mutation continues to reject a selected legacy node.
 release:
   privileges: ["contents: read", "contents: write", "pull-requests: write", "actions: write", "issues: read", "statuses: write"]
+  secrets: *verifier-secrets
   runner: ubuntu-latest
 release-gate:
   privileges: ["actions: read", "contents: read", "pull-requests: read"]
   runner: ubuntu-latest
 docs-pages:
   privileges: ["actions: read", "contents: read", "contents: write", "pages: read", "pages: write", "id-token: write"]
+  secrets: *verifier-secrets
   runner: ubuntu-latest

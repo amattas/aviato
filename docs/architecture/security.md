@@ -44,6 +44,20 @@ submitter, and release actor; team-membership assertions alone are rejected.
 Each privileged job revalidates that checkpoint before environment secrets,
 OIDC, or hosted mutation.
 
+Authority revalidation uses a dedicated read-only GitHub App token, not an
+ambient token whose effective Administration visibility is repository-policy
+dependent. The required installation and two Actions secrets are documented in
+the [release verifier App prerequisite](../security/release-verifier-app.md).
+The token is repository-scoped and step-scoped; a capability probe proves the
+required read surfaces before privilege. The signed checkpoint binds the
+verifier's Git blob identity, and each hosted mutation executes locally
+hash-verified verifier bytes in memory immediately before the write.
+
+App Store Connect uses three runners: unsigned Consumer build and attestation
+without secrets, trusted archive validation/sign/upload behind the protected
+environment, and optional custom submission without secrets. No runner both
+executes Consumer-controlled source and receives Apple signing material.
+
 Composite confirmations bind the full before-state and exact ruleset payload
 fingerprints. There is no degraded tag-rule flag or implied-safe fallback: a
 platform rejection remains non-ready and requires a newly previewed supported

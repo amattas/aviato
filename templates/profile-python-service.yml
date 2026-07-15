@@ -89,6 +89,10 @@ jobs:
       verified-envelope-digest: ${{ needs.release-gate.outputs.verified-envelope-digest
         }}
       environment-name: ghcr
+    secrets:
+      AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+      AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY
+        }}
   release:
     if: ${{ github.ref_type != 'tag' && (github.event_name == 'push' || (github.event_name
       == 'workflow_dispatch' && inputs.promotion)) }}
@@ -110,6 +114,10 @@ jobs:
       intended-tag: ${{ inputs.intended-tag || '' }}
       intended-actor: ${{ inputs.intended-actor || '' }}
       checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
+    secrets:
+      AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+      AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY
+        }}
   release-gate:
     needs:
       - release

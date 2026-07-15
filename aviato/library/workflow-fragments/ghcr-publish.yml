@@ -19,3 +19,6 @@ with:
   checkpoint-run-id: ${{ needs.release-gate.outputs.checkpoint-run-id }}
   verified-envelope-digest: ${{ needs.release-gate.outputs.verified-envelope-digest }}
   environment-name: ghcr
+secrets:
+  AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+  AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}

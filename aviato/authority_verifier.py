@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import pathlib
@@ -29,6 +30,26 @@ def flatten_paginated_pages(pages: object, collection_key: str | None) -> list[A
         if isinstance(values, list):
             result.extend(values)
     return result
+
+
+def select_unique_signing_key(pages: object, key_id: str) -> dict[str, Any]:
+    """Select one exact current signing key from a fully paginated response."""
+
+    selected = [
+        item
+        for item in flatten_paginated_pages(pages, None)
+        if isinstance(item, dict) and str(item.get("id")) == str(key_id)
+    ]
+    if len(selected) != 1 or not isinstance(selected[0].get("key"), str):
+        raise ValueError("signing key id must select exactly one current key")
+    return selected[0]
+
+
+def git_blob_sha(body: bytes) -> str:
+    """Return Git's object ID for one blob, binding bytes rather than API metadata."""
+
+    framed = b"blob " + str(len(body)).encode("ascii") + b"\0" + body
+    return hashlib.sha1(framed).hexdigest()
 
 
 def project_authority_snapshot(repository: dict[str, Any], live_state: dict[str, Any]) -> dict[str, Any]:
@@ -270,14 +291,15 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("checkpoint is outside bounded freshness")
     reviewer = checkpoint["reviewer"]
     permission = _gh(f"repos/{args.repository}/collaborators/{reviewer}/permission")
-    keys = _gh(f"users/{reviewer}/ssh_signing_keys")
-    selected = [item for item in keys if str(item.get("id")) == str(envelope["key_id"])]
-    if permission.get("permission") != "admin" or len(selected) != 1:
+    selected = select_unique_signing_key(
+        _gh(f"users/{reviewer}/ssh_signing_keys?per_page=100", True), str(envelope["key_id"])
+    )
+    if permission.get("permission") != "admin":
         raise SystemExit("reviewer admin/key authority is not current")
     signature = base64.urlsafe_b64decode(envelope["signature"] + "=" * (-len(envelope["signature"]) % 4))
     with tempfile.TemporaryDirectory() as directory:
         root = pathlib.Path(directory)
-        (root / "allowed").write_text(f"{reviewer} {selected[0]['key']}\n")
+        (root / "allowed").write_text(f"{reviewer} {selected['key']}\n")
         (root / "signature").write_bytes(signature)
         result = subprocess.run(
             [

@@ -321,8 +321,7 @@ def map_branch_settings(rules: list[dict[str, Any]], protection: dict[str, Any])
     rsc = protection.get("required_status_checks") or {}
     contexts = list(rsc.get("contexts") or [])
     contexts += [c.get("context") for c in (rsc.get("checks") or []) if isinstance(c, dict) and c.get("context")]
-    rsc_rule = next((r for r in rules if r.get("type") == "required_status_checks"), None)
-    if rsc_rule is not None:
+    for rsc_rule in (r for r in rules if r.get("type") == "required_status_checks"):
         rule_checks = (rsc_rule.get("parameters") or {}).get("required_status_checks") or []
         contexts += [c.get("context") for c in rule_checks if isinstance(c, dict) and c.get("context")]
 

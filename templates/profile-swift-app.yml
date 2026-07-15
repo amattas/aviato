@@ -50,7 +50,9 @@ jobs:
     uses: amattas/aviato/.github/workflows/reusable-app-store-connect.yml@EXAMPLE_PIN
     permissions:
       actions: read
+      attestations: write
       contents: write
+      id-token: write
     with:
       release-tag: ${{ needs.release.outputs.tag }}
       gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
@@ -70,6 +72,9 @@ jobs:
       export-method: app-store
       version-command: ''
     secrets:
+      AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+      AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY
+        }}
       APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
       APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
       APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY
@@ -122,6 +127,10 @@ jobs:
       intended-actor: ${{ inputs.intended-actor || '' }}
       checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
       build-number: ''
+    secrets:
+      AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+      AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY
+        }}
   release-gate:
     needs:
       - release

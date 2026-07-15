@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=557a0db05f230844ec5005adebb6c424858ca4c75c500340300613efe9ccdc13 inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
+# aviato:managed profile=aviato-library version=0 hash=9cb975bb192ca4cc4ea6e78e6998416cd0f6180416f90bbc1e16155ff03a2cce inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
 name: Aviato Protection Checkpoint Intake
 
 on:
@@ -105,7 +105,7 @@ jobs:
           permission = gh(f"repos/{document['repository']}/collaborators/{document['reviewer']}/permission")
           if permission.get("user", {}).get("type") != "User" or permission.get("permission") != "admin":
               fail("reviewer is not a current concrete repository admin")
-          keys = gh(f"users/{document['reviewer']}/ssh_signing_keys")
+          keys = gh_paginated(f"users/{document['reviewer']}/ssh_signing_keys?per_page=100")
           selected = [item for item in keys if str(item.get("id")) == str(envelope["key_id"])]
           if len(selected) != 1 or not selected[0].get("key", "").startswith("ssh-ed25519 "):
               fail("reviewer signing key is absent, replaced, or not Ed25519")
@@ -220,7 +220,7 @@ jobs:
           receipt_permission = gh(f"repos/{document['repository']}/collaborators/{receipt_envelope['principal']}/permission")
           if receipt_permission.get("permission") != "admin" or receipt_permission.get("user", {}).get("type") != "User":
               fail("receipt signer is not a current concrete repository admin")
-          receipt_keys = gh(f"users/{receipt_envelope['principal']}/ssh_signing_keys")
+          receipt_keys = gh_paginated(f"users/{receipt_envelope['principal']}/ssh_signing_keys?per_page=100")
           receipt_key = [item for item in receipt_keys if str(item.get("id")) == str(receipt_envelope["key_id"])]
           if len(receipt_key) != 1 or not receipt_key[0].get("key", "").startswith("ssh-ed25519 "):
               fail("receipt signing key is absent, replaced, or not Ed25519")

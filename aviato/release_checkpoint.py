@@ -341,7 +341,7 @@ def verify_live_checkpoint(*, input_path: Path, output: Path | None = None) -> M
         f"repos/{repository}/contents/{quote(str(workflow_path), safe='/')}?ref={quote(str(default_branch), safe='')}"
     )
     source_run = _gh_json(f"repos/{repository}/actions/runs/{document.get('workflow_run_id')}")
-    keys = _gh_json(f"users/{reviewer}/ssh_signing_keys")
+    keys = _gh_json_paginated(f"users/{reviewer}/ssh_signing_keys?per_page=100")
     selected = [item for item in keys if str(item.get("id")) == str(parsed.get("key_id"))]
     if len(selected) != 1 or not isinstance(selected[0].get("key"), str):
         raise ValueError("checkpoint reviewer key is not one current concrete GitHub signing key")
@@ -481,7 +481,7 @@ def persist_signed_protection_receipt(
     if not isinstance(author, dict) or author.get("login") != principal or type(author.get("id")) is not int:
         raise ValueError("receipt comment author differs from preview-bound principal")
     permission = _gh_json(f"repos/{repository}/collaborators/{quote(principal, safe='')}/permission")
-    keys = _gh_json(f"users/{quote(principal, safe='')}/ssh_signing_keys")
+    keys = _gh_json_paginated(f"users/{quote(principal, safe='')}/ssh_signing_keys?per_page=100")
     selected = [item for item in keys if str(item.get("id")) == key_id] if isinstance(keys, list) else []
     if len(selected) != 1 or not isinstance(selected[0].get("key"), str):
         raise ValueError("receipt signing key is absent, replaced, or revoked")
@@ -557,7 +557,7 @@ def persist_signed_protection_receipt(
 
 def resolve_receipt_signing_identity(*, repository: str, principal: str, key_id: str) -> dict[str, str]:
     permission = _gh_json(f"repos/{repository}/collaborators/{quote(principal, safe='')}/permission")
-    keys = _gh_json(f"users/{quote(principal, safe='')}/ssh_signing_keys")
+    keys = _gh_json_paginated(f"users/{quote(principal, safe='')}/ssh_signing_keys?per_page=100")
     selected = [item for item in keys if str(item.get("id")) == key_id] if isinstance(keys, list) else []
     if (
         permission.get("permission") != "admin"

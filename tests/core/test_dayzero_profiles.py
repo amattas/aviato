@@ -93,7 +93,9 @@ def test_pypi_pipeline_declares_local_publisher_oidc_privilege(registry: Registr
     rs = resolve_profile(registry, "python-library")
     pypi = next(m for m in rs.pipeline_modules if m.name == "pypi-publish")
     assert "id-token: write" in pypi.privileges
-    assert pypi.secrets == ()  # OIDC, no stored secret (§13.1)
+    # Publication remains OIDC-only; these secrets mint a read-only authority
+    # verifier token and are never used as a PyPI credential.
+    assert set(pypi.secrets) == {"AVIATO_VERIFIER_APP_ID", "AVIATO_VERIFIER_APP_PRIVATE_KEY"}
 
 
 def test_app_store_pipeline_declares_secrets_and_macos(registry: Registry) -> None:

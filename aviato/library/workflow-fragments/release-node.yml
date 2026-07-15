@@ -15,3 +15,6 @@ with:
   intended-tag: ${{ inputs.intended-tag || '' }}
   intended-actor: ${{ inputs.intended-actor || '' }}
   checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
+secrets:
+  AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+  AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}

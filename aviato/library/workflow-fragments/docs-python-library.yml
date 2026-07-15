@@ -20,3 +20,6 @@ with:
     python3 -m pip install --quiet -e . "pydoc-markdown==4.8.2"
     mkdir -p website/docs/api
     pydoc-markdown -I . -p "{{ import-name }}" > website/docs/api/reference.md
+secrets:
+  AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+  AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}

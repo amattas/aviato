@@ -73,6 +73,16 @@ on:
         required: false
         type: string
         default: ""
+      verifier-app-owner:
+        description: GitHub owner whose Aviato verifier App installation is selected.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      AVIATO_VERIFIER_APP_ID:
+        required: true
+      AVIATO_VERIFIER_APP_PRIVATE_KEY:
+        required: true
     outputs:
       released:
         description: Set to true when this run cut a release (tagged + published).
@@ -222,6 +232,32 @@ jobs:
         if: ${{ needs.derive.outputs.phase == 'propose' }}
         run: echo "authorized=true" >> "${GITHUB_OUTPUT}"
 
+      - name: Mint verifier-only read token
+        id: verifier-token
+        if: ${{ needs.derive.outputs.phase == 'promotion' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+          private-key: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.verifier-app-owner || github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          skip-token-revoke: false
+          permission-administration: read
+          permission-actions: read
+          permission-contents: read
+          permission-metadata: read
+      - name: Fail-closed verifier capability probe
+        if: ${{ needs.derive.outputs.phase == 'promotion' }}
+        env:
+          GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}" --jq .default_branch)"
+          gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/branches/${branch}/protection" >/dev/null
+          gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=false&per_page=100" >/dev/null
+          gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments?per_page=100" >/dev/null
+
       - name: Revalidate exact signed authority and full live protection
         id: promotion
         if: ${{ needs.derive.outputs.phase == 'promotion' }}
@@ -232,6 +268,7 @@ jobs:
           MERGED_SHA: ${{ inputs.merged-sha }}
           INTENDED_ACTOR: ${{ inputs.intended-actor }}
           CHECKPOINT_DIGEST: ${{ inputs.checkpoint-digest }}
+          VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
         run: |
           set -euo pipefail
           [[ "${NEXT}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
@@ -265,13 +302,23 @@ jobs:
           [ "${#matches[@]}" -eq 1 ] || { echo "::error::promotion requires exactly one current attested checkpoint; found ${#matches[@]}"; exit 1; }
           selected_run="${matches[0]%%:*}"
           envelope="${matches[0]#*:}"
-          verifier="${RUNNER_TEMP}/authority_verifier.py"
           verifier_repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
           verifier_ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
-          verifier_json="$(gh api -H 'Cache-Control: no-cache' "repos/${verifier_repo}/contents/aviato/authority_verifier.py?ref=${verifier_ref}")"
-          [ "$(jq -r .sha <<<"${verifier_json}")" = "$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")" ]
-          jq -r .content <<<"${verifier_json}" | tr -d '\n' | base64 -d > "${verifier}"
-          python3 "${verifier}" --envelope "${envelope}" --repository "${GITHUB_REPOSITORY}"
+          verifier_path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
+          verifier_blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
+          verifier_json="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${verifier_repo}/contents/${verifier_path}" -f "ref=${verifier_ref}")"
+          # AVIATO_SECURE_VERIFIER_BOOTSTRAP: execute the locally Git-hash-bound verifier only in memory.
+          AVIATO_VERIFIER_JSON="${verifier_json}" AVIATO_VERIFIER_BLOB="${verifier_blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          import base64, hashlib, json, os, sys
+          payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
+          if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
+          body = base64.b64decode(payload["content"], validate=True)
+          if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
+          actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
+          if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
+          sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
+          exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
+          PY
           echo "checkpoint-run-id=${selected_run}" >> "${GITHUB_OUTPUT}"
           echo "authorized=true" >> "${GITHUB_OUTPUT}"
 
@@ -353,6 +400,32 @@ jobs:
             python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
           fi
 
+      - name: Mint verifier-only read token
+        id: verifier-token
+        if: ${{ inputs.promotion }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+          private-key: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.verifier-app-owner || github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          skip-token-revoke: false
+          permission-administration: read
+          permission-actions: read
+          permission-contents: read
+          permission-metadata: read
+      - name: Fail-closed verifier capability probe
+        if: ${{ inputs.promotion }}
+        env:
+          GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}" --jq .default_branch)"
+          gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/branches/${branch}/protection" >/dev/null
+          gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=false&per_page=100" >/dev/null
+          gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments?per_page=100" >/dev/null
+
       - name: Propose release PR
         if: ${{ needs.derive.outputs.phase == 'propose' }}
         shell: bash
@@ -415,6 +488,7 @@ jobs:
           INTENDED_ACTOR: ${{ inputs.intended-actor }}
           CHECKPOINT_RUN_ID: ${{ needs.authority.outputs.checkpoint-run-id }}
           CHECKPOINT_DIGEST: ${{ inputs.checkpoint-digest }}
+          VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
         run: |
           set -euo pipefail
           [[ "${NEXT}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "::error::invalid intended tag"; exit 1; }
@@ -446,7 +520,7 @@ jobs:
           reviewer="$(jq -r .checkpoint.reviewer "${checkpoint}")"
           key_id="$(jq -r .key_id "${checkpoint}")"
           [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
-          public_key="$(gh api -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys" --jq ".[] | select((.id|tostring) == \"${key_id}\") | .key")"
+          public_key="$(gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end")"
           [ -n "${public_key}" ]
           authority_dir="$(mktemp -d)"
           printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
@@ -456,12 +530,26 @@ jobs:
           while IFS= read -r environment_name; do
             [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/${environment_name}" --jq .can_admins_bypass)" = "false" ]
           done < <(jq -r '.checkpoint.authority_snapshot.environments | keys[]' "${checkpoint}")
-          verifier="${RUNNER_TEMP}/authority_verifier.py"
           verifier_repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${checkpoint}")"
           verifier_ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${checkpoint}")"
-          verifier_json="$(gh api -H 'Cache-Control: no-cache' "repos/${verifier_repo}/contents/aviato/authority_verifier.py?ref=${verifier_ref}")"
-          [ "$(jq -r .sha <<<"${verifier_json}")" = "$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${checkpoint}")" ]
-          jq -r .content <<<"${verifier_json}" | tr -d '\n' | base64 -d > "${verifier}"
+          verifier_path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${checkpoint}")"
+          verifier_blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${checkpoint}")"
+          verifier_json="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${verifier_repo}/contents/${verifier_path}" -f "ref=${verifier_ref}")"
+          aviato_verify_authority() {
+            local envelope="$1"
+            # AVIATO_SECURE_VERIFIER_BOOTSTRAP: execute the locally Git-hash-bound verifier only in memory.
+            AVIATO_VERIFIER_JSON="${verifier_json}" AVIATO_VERIFIER_BLOB="${verifier_blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          import base64, hashlib, json, os, sys
+          payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
+          if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
+          body = base64.b64decode(payload["content"], validate=True)
+          if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
+          actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
+          if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
+          sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
+          exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
+          PY
+          }
           workflow_blob="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/contents/.github/workflows/aviato-protection-checkpoint.yml?ref=${default_branch}" --jq .sha)"
           [ "${workflow_blob}" = "$(jq -r .checkpoint.workflow_blob_sha "${checkpoint}")" ] || { echo "::error::trusted default-branch checkpoint workflow blob changed"; exit 1; }
           ci_run="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/actions/workflows/aviato-ci.yml/runs?head_sha=${MERGED_SHA}&event=push&per_page=20" --jq '[.workflow_runs[] | select(.head_sha == "'"${MERGED_SHA}"'" and .status == "completed" and .conclusion == "success")] | sort_by(.run_attempt) | last // empty')"
@@ -487,7 +575,7 @@ jobs:
             exit 1
           fi
           if [ -z "${existing}" ]; then
-            python3 "${verifier}" --envelope "${checkpoint}" --repository "${GITHUB_REPOSITORY}"
+            aviato_verify_authority "${checkpoint}"
             gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${NEXT}" -f sha="${MERGED_SHA}" >/dev/null 2>&1 || true
             [ "$(peel_tag "${NEXT}" 2>/dev/null || true)" = "${MERGED_SHA}" ] || { echo "::error::tag response lost and exact peeled readback did not converge"; exit 1; }
           fi
@@ -495,9 +583,9 @@ jobs:
           highest="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/tags?per_page=100" --jq '.[].name' \
             | grep -E "^${major}\.[0-9]+\.[0-9]+$" | sort -V | tail -n1)"
           if [ "${highest}" = "${NEXT}" ]; then
-            { python3 "${verifier}" --envelope "${checkpoint}" --repository "${GITHUB_REPOSITORY}" && \
+            { aviato_verify_authority "${checkpoint}" && \
               gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${major}" -f sha="${MERGED_SHA}" -F force=true >/dev/null 2>&1 || \
-              python3 "${verifier}" --envelope "${checkpoint}" --repository "${GITHUB_REPOSITORY}" && \
+              aviato_verify_authority "${checkpoint}" && \
               gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${major}" -f sha="${MERGED_SHA}" >/dev/null 2>&1 || true; }
             [ "$(peel_tag "${major}" 2>/dev/null || true)" = "${MERGED_SHA}" ] || { echo "::error::floating tag response was ambiguous or raced"; exit 1; }
           else
@@ -506,7 +594,7 @@ jobs:
           release_body="$(printf 'Aviato-Checkpoint-Run: %s\nAviato-Checkpoint-Digest: %s\nAviato-Intended-Actor: %s\nAviato-Merged-SHA: %s' "${CHECKPOINT_RUN_ID}" "${CHECKPOINT_DIGEST}" "${INTENDED_ACTOR}" "${MERGED_SHA}")"
           existing_release="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/releases/tags/${NEXT}" 2>/dev/null || true)"
           if [ -z "${existing_release}" ]; then
-            python3 "${verifier}" --envelope "${checkpoint}" --repository "${GITHUB_REPOSITORY}"
+            aviato_verify_authority "${checkpoint}"
             gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" -f tag_name="${NEXT}" -f target_commitish="${MERGED_SHA}" -f name="${NEXT}" -f body="${release_body}" >/dev/null 2>&1 || true
             existing_release="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/releases/tags/${NEXT}" 2>/dev/null || true)"
           fi

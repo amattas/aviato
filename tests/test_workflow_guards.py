@@ -390,7 +390,10 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
         "id": "deployment",
         "uses": "actions/deploy-pages@v4",
     }
-    assert deploy["steps"][0]["name"] == "Recheck exact authorization before Pages OIDC"
+    recheck = next(
+        step for step in deploy["steps"] if step.get("name") == "Recheck exact authorization before Pages OIDC"
+    )
+    assert deploy["steps"].index(recheck) < deploy["steps"].index(deploy_step)
 
     steps = build["steps"]
     materialize = next(step for step in steps if step.get("name") == "Materialize exact docs branch tree")
@@ -721,7 +724,8 @@ def test_app_store_receipt_is_persisted_by_isolated_release_evidence_job() -> No
     assert evidence["permissions"] == {"actions": "read", "contents": "write"}
 
     encoded = json.dumps(evidence)
-    assert "secrets." not in encoded
+    assert "APP_STORE_CONNECT" not in encoded
+    assert "APPLE_" not in encoded
     assert "actions/checkout" not in encoded
     for consumer_command in ("xcodebuild", "pip install", "npm ", "eval "):
         assert consumer_command not in encoded
@@ -763,66 +767,98 @@ def test_app_store_mutations_immediately_recheck_current_checkpoint_key_and_envi
     assert "ssh_signing_keys" in signing["run"]
 
     evidence = workflow["jobs"]["release-evidence"]
-    recheck = evidence["steps"][0]
+    recheck = next(
+        step for step in evidence["steps"] if step.get("name") == "Recheck authorization before release mutation"
+    )
     assert "gh run download" in recheck["run"]
     assert "gh attestation verify" in recheck["run"]
     assert "ssh_signing_keys" in recheck["run"]
 
 
 def test_every_final_privileged_mutation_is_dominated_by_shared_executable_verifier() -> None:
-    pypi = _rendered_python_library_workflow()["jobs"]["pypi-publish"]["steps"]
-    cases = {
-        "pypi": next(
-            step["run"]
-            for step in pypi
-            if step.get("name") == "Final checkpoint recheck immediately before PyPI mutation"
-        ),
-        "ghcr": next(
-            step["run"]
-            for step in _load("reusable-docker-ghcr.yml")["jobs"]["docker"]["steps"]
-            if step.get("name") == "Push scanned digests and assemble release tag (C12-W3)"
-        ),
-        "asc": next(
-            step["run"]
-            for step in _load("reusable-app-store-connect.yml")["jobs"]["app-store-connect"]["steps"]
-            if step.get("name") == "Final shared authority verification without App Store secrets"
-        ),
-        "asc-evidence": next(
-            step["run"]
-            for step in _load("reusable-app-store-connect.yml")["jobs"]["release-evidence"]["steps"]
-            if step.get("name") == "Persist receipt asset and release-note evidence"
-        ),
-        "docs-push": next(
-            step["run"]
-            for step in _load("reusable-docs-pages.yml")["jobs"]["push"]["steps"]
-            if step.get("name") == "Verify and fast-forward push"
-        ),
-        "pages-deploy": _load("reusable-docs-pages.yml")["jobs"]["deploy"]["steps"][0]["run"],
-        "github-release": next(
-            step["run"]
-            for step in _load("reusable-release.yml")["jobs"]["release"]["steps"]
-            if step.get("name") == "Verify checkpoint and perform closed promotion"
-        ),
-    }
-    for name, script in cases.items():
-        assert "authority_verifier.py" in script, f"{name} omits the shared authority verifier"
-        assert "--envelope" in script and "--repository" in script
+    from aviato.plugins.release_mutations import HOSTED_MUTATIONS, verify_mutation_inventory
 
-    assert cases["ghcr"].count('python3 "${verifier}"') >= cases["ghcr"].count("skopeo copy") + 1
-    release_mutations = ("--method POST", "--method PATCH")
-    assert cases["github-release"].count('python3 "${verifier}"') >= sum(
-        cases["github-release"].count(token) for token in release_mutations
-    )
+    assert len(HOSTED_MUTATIONS) >= 13
+    assert verify_mutation_inventory(WORKFLOWS, _rendered_python_library_workflow()) == []
 
-    asc_steps = _load("reusable-app-store-connect.yml")["jobs"]["app-store-connect"]["steps"]
-    upload_index = next(
-        index for index, step in enumerate(asc_steps) if step.get("name") == "Upload to App Store Connect"
+
+def test_secure_verifier_bootstrap_is_in_memory_and_locally_hash_bound() -> None:
+    paths = (
+        WORKFLOWS / "reusable-release.yml",
+        WORKFLOWS / "reusable-docker-ghcr.yml",
+        WORKFLOWS / "reusable-app-store-connect.yml",
+        WORKFLOWS / "reusable-docs-pages.yml",
+        WORKFLOW_FRAGMENTS / "pypi-publish.yml",
     )
-    verifier_step = asc_steps[upload_index - 1]
-    assert "authority_verifier.py" in verifier_step.get("run", "")
-    assert not any(
-        name in verifier_step.get("env", {}) for name in ("APP_STORE_CONNECT_KEY_ID", "APP_STORE_CONNECT_ISSUER_ID")
+    for path in paths:
+        body = path.read_text(encoding="utf-8")
+        assert 'verifier="${RUNNER_TEMP}/authority_verifier.py"' not in body, path
+        assert "base64.b64decode" in body, path
+        assert "validate=True" in body, path
+        assert 'b"blob "' in body, path
+        assert "hashlib.sha1" in body, path
+        assert "exec(compile(" in body, path
+        assert "python3 -I" in body, path
+
+
+def test_privileged_verifier_jobs_mint_only_a_pinned_read_only_app_token() -> None:
+    pin = "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349"
+    for name in (
+        "reusable-release.yml",
+        "reusable-docker-ghcr.yml",
+        "reusable-app-store-connect.yml",
+        "reusable-docs-pages.yml",
+    ):
+        workflow = _load(name)
+        text = (WORKFLOWS / name).read_text(encoding="utf-8")
+        assert pin in text, name
+        call_secrets = _on(workflow)["workflow_call"]["secrets"]
+        assert call_secrets["AVIATO_VERIFIER_APP_ID"]["required"] is True
+        assert call_secrets["AVIATO_VERIFIER_APP_PRIVATE_KEY"]["required"] is True
+        assert "permission-administration: read" in text, name
+        assert "permission-actions: read" in text, name
+        assert "permission-contents: read" in text, name
+        assert "permission-metadata: read" in text, name
+
+
+def test_app_store_consumer_code_and_secrets_use_fresh_runner_boundaries() -> None:
+    workflow = _load("reusable-app-store-connect.yml")
+    build = workflow["jobs"]["build-unsigned"]
+    publish = workflow["jobs"]["app-store-connect"]
+    custom = workflow["jobs"]["custom-submit"]
+
+    assert build["permissions"] == {"actions": "read", "contents": "read", "attestations": "write", "id-token": "write"}
+    assert "environment" not in build
+    assert "secrets." not in json.dumps(build)
+    assert "actions/checkout" in json.dumps(build)
+    version = next(
+        step for step in build["steps"] if step.get("name") == "Apply version command without any release secret"
     )
+    assert 'eval "$VERSION_COMMAND"' in version["run"]
+    assert "CODE_SIGNING_ALLOWED=NO" in json.dumps(build)
+
+    assert publish["needs"] == "build-unsigned"
+    assert "actions/checkout" not in json.dumps(publish)
+    assert "eval " not in json.dumps(publish)
+    assert "xcodebuild archive" not in json.dumps(publish)
+    assert "gh attestation verify" in json.dumps(publish)
+    assert "artifact-digest" in json.dumps(publish)
+    validation = next(
+        step
+        for step in publish["steps"]
+        if step.get("name") == "Validate digest, attestation, and safe archive members"
+    )
+    assert "^[0-9a-f]{64}$" in validation["run"]
+    assert "stat.S_IFMT" in validation["run"]
+    assert "stat.S_IFREG" in validation["run"]
+    assert "stat.S_IFDIR" in validation["run"]
+
+    assert custom["needs"] == "app-store-connect"
+    assert "environment" not in custom
+    assert "secrets." not in json.dumps(custom)
+    assert "actions/checkout" not in json.dumps(custom)
+    submit = next(step for step in custom["steps"] if step.get("name") == "Submit for review (custom command)")
+    assert 'eval "$SUBMIT_FOR_REVIEW_COMMAND"' in submit["run"]
 
 
 def test_promotion_accepts_two_person_actor_submitter_and_only_rejects_reviewer_overlap() -> None:
@@ -1016,7 +1052,9 @@ def test_app_store_connect_secrets_are_step_scoped() -> None:
     # §11.2: App Store credentials must not be job-wide, and caller-controlled version
     # commands must run before signing assets are installed and without Apple secrets.
     wf = _load("reusable-app-store-connect.yml")
+    build = wf["jobs"]["build-unsigned"]
     job = wf["jobs"]["app-store-connect"]
+    custom_job = wf["jobs"]["custom-submit"]
     job_env = str(job.get("env", {}))
     for name in (
         "APP_STORE_CONNECT_ISSUER_ID",
@@ -1029,10 +1067,10 @@ def test_app_store_connect_secrets_are_step_scoped() -> None:
         assert name not in job_env, f"{name} must not be job-wide"
 
     steps = job["steps"]
-    version = next(s for s in steps if s.get("name") == "Apply version command")
+    version = next(s for s in build["steps"] if s.get("name") == "Apply version command without any release secret")
     signing = next(s for s in steps if s.get("name") == "Install signing assets")
     upload = next(s for s in steps if s.get("name") == "Upload to App Store Connect")
-    assert steps.index(version) < steps.index(signing), "version command must run before signing assets are installed"
+    assert job["needs"] == "build-unsigned"
     assert "APP_STORE_CONNECT" not in str(version.get("env", {}))
     assert "APPLE_" not in str(version.get("env", {}))
     assert "APP_STORE_CONNECT_API_PRIVATE_KEY" in signing.get("env", {})
@@ -1045,12 +1083,13 @@ def test_app_store_connect_secrets_are_step_scoped() -> None:
     # C12-W6: only the BOUNDED built-in submit may hold the ASC private key; the custom
     # eval gets identifiers only and runs AFTER the signing cleanup (no on-disk .p8).
     builtin = next(s for s in steps if s.get("name") == "Submit for review (built-in)")
-    custom = next(s for s in steps if s.get("name") == "Submit for review (custom command)")
     cleanup = next(s for s in steps if s.get("name") == "Cleanup signing assets")
     assert "APP_STORE_CONNECT_API_PRIVATE_KEY" in builtin.get("env", {})
     assert "eval" not in str(builtin.get("run", "")), "the built-in submit must not eval operator input"
+    custom = next(s for s in custom_job["steps"] if s.get("name") == "Submit for review (custom command)")
     assert "APP_STORE_CONNECT_API_PRIVATE_KEY" not in custom.get("env", {})
-    assert steps.index(cleanup) < steps.index(custom), "custom submit must run after signing cleanup"
+    assert custom_job["needs"] == "app-store-connect"
+    assert cleanup, "trusted publish job must clean signing assets before the isolated custom job starts"
 
     # §11.4: the environment reviewer probe must run before any secret materializes.
     probe = next(s for s in steps if "requires reviewers" in str(s.get("name", "")))

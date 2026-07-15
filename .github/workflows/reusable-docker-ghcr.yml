@@ -61,8 +61,18 @@ on:
         required: false
         type: string
         default: ghcr
+      verifier-app-owner:
+        description: GitHub owner whose Aviato verifier App installation is selected.
+        required: false
+        type: string
+        default: ""
       # §11.7: the published-artifact vulnerability scan is MANDATORY and always gates
       # the publish — there is intentionally no opt-out input to disable it.
+    secrets:
+      AVIATO_VERIFIER_APP_ID:
+        required: true
+      AVIATO_VERIFIER_APP_PRIVATE_KEY:
+        required: true
 
 permissions:
   actions: read
@@ -304,6 +314,29 @@ jobs:
       # Each platform lands on a stable per-arch tag (<tag>-<platform> — a registry
       # manifest PUT needs a tag); the release tag is then ASSEMBLED from those verified
       # digests with imagetools, so what ships is provably what was scanned.
+      - name: Mint verifier-only read token
+        id: verifier-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+          private-key: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.verifier-app-owner || github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          skip-token-revoke: false
+          permission-administration: read
+          permission-actions: read
+          permission-contents: read
+          permission-metadata: read
+      - name: Fail-closed verifier capability probe
+        env:
+          GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}" --jq .default_branch)"
+          gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/branches/${branch}/protection" >/dev/null
+          gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=false&per_page=100" >/dev/null
+          gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments?per_page=100" >/dev/null
       - name: Push scanned digests and assemble release tag (C12-W3)
         id: build
         if: ${{ inputs.push }}
@@ -312,6 +345,7 @@ jobs:
           IMAGE: ${{ steps.vars.outputs.image }}
           TAG: ${{ steps.vars.outputs.tag }}
           PLATFORMS: ${{ inputs.platforms }}
+          VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
           GH_TOKEN: ${{ github.token }}
           CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
           VERIFIED_ENVELOPE_DIGEST: ${{ inputs.verified-envelope-digest }}
@@ -326,21 +360,33 @@ jobs:
           reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
           key_id="$(jq -r .key_id "${envelope}")"
           [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
-          gh api -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys" --jq "any(.[]; (.id|tostring) == \"${key_id}\")" | grep -qx true
+          gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "([flatten[] | select((.id|tostring) == \"${key_id}\")] | length) == 1" | grep -qx true
           [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/${ENV_NAME}" --jq .can_admins_bypass)" = "false" ]
-          public_key="$(gh api -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys" --jq ".[] | select((.id|tostring) == \"${key_id}\") | .key")"
+          public_key="$(gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end")"
           authority_dir="$(mktemp -d)"
           printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
           jq -cS .checkpoint "${envelope}" > "${authority_dir}/message"
           jq -r .signature "${envelope}" | python3 -c 'import base64,sys; value=sys.stdin.read().strip(); sys.stdout.buffer.write(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)))' > "${authority_dir}/signature"
           ssh-keygen -Y verify -f "${authority_dir}/allowed" -I "${reviewer}" -n aviato -s "${authority_dir}/signature" < "${authority_dir}/message"
-          verifier="${RUNNER_TEMP}/authority_verifier.py"
           verifier_repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
           verifier_ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
           verifier_blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
-          verifier_json="$(gh api -H 'Cache-Control: no-cache' "repos/${verifier_repo}/contents/aviato/authority_verifier.py?ref=${verifier_ref}")"
-          [ "$(jq -r .sha <<<"${verifier_json}")" = "${verifier_blob}" ]
-          jq -r .content <<<"${verifier_json}" | tr -d '\n' | base64 -d > "${verifier}"
+          verifier_path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
+          verifier_json="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${verifier_repo}/contents/${verifier_path}" -f "ref=${verifier_ref}")"
+          aviato_verify_authority() {
+            # AVIATO_SECURE_VERIFIER_BOOTSTRAP: execute the locally Git-hash-bound verifier only in memory.
+            AVIATO_VERIFIER_JSON="${verifier_json}" AVIATO_VERIFIER_BLOB="${verifier_blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          import base64, hashlib, json, os, sys
+          payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
+          if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
+          body = base64.b64decode(payload["content"], validate=True)
+          if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
+          actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
+          if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
+          sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
+          exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
+          PY
+          }
           # skopeo ships preinstalled on GitHub's ubuntu runners; fail CLOSED if absent
           # rather than fetching one at run time (§11.3 forbids unpinned fetch-execute).
           if ! command -v skopeo >/dev/null 2>&1; then
@@ -354,7 +400,7 @@ jobs:
             [ -z "${plat}" ] && continue
             slug="${plat//\//-}"
             local_digest="$(skopeo inspect --format '{{.Digest}}' "oci-archive:oci/${slug}.tar")"
-            python3 "${verifier}" --envelope "${envelope}" --repository "${GITHUB_REPOSITORY}"
+            aviato_verify_authority
             skopeo copy --digestfile "oci/${slug}.pushed" \
               "oci-archive:oci/${slug}.tar" "docker://${IMAGE}:${TAG}-${slug}"
             pushed_digest="$(cat "oci/${slug}.pushed")"
@@ -369,7 +415,7 @@ jobs:
             echo "::error::No platforms produced a pushed digest; refusing to assemble the release tag."
             exit 1
           fi
-          python3 "${verifier}" --envelope "${envelope}" --repository "${GITHUB_REPOSITORY}"
+          aviato_verify_authority
           docker buildx imagetools create -t "${IMAGE}:${TAG}" "${digest_refs[@]}"
           # Final identity proof: the release tag must reference ONLY the scanned digests.
           manifest_raw="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --raw)"
@@ -438,9 +484,33 @@ jobs:
         env:
           IMAGE: ${{ steps.vars.outputs.image }}
           TAG: ${{ steps.vars.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_ENVELOPE_DIGEST: ${{ inputs.verified-envelope-digest }}
+          VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
         # `latest` is a mutable ALIAS: imagetools copies the manifest so it points at the
         # exact same digest as the versioned tag (which carries the provenance + SBOM
         # attestations from the build step). No fresh attestation is emitted for the
         # `latest` name itself — verifiers should attest against the immutable digest
         # (or the versioned tag), not the floating `latest` (§11.7).
-        run: docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}:${TAG}"
+        run: |
+          set -euo pipefail
+          envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
+          [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
+          repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
+          ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
+          path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
+          blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
+          payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
+          # AVIATO_SECURE_VERIFIER_BOOTSTRAP: fresh full authority immediately before latest.
+          AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          import base64, hashlib, json, os, sys
+          payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
+          if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
+          body = base64.b64decode(payload["content"], validate=True)
+          if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
+          actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
+          if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
+          sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
+          exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
+          PY
+          docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}:${TAG}"

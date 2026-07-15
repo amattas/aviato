@@ -15,3 +15,6 @@ with:
   checkpoint-run-id: ${{ needs.docs-release-gate.outputs.checkpoint-run-id }}
   verified-envelope-digest: ${{ needs.docs-release-gate.outputs.verified-envelope-digest }}
   serve-pages: "{{ serve-pages }}"
+secrets:
+  AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+  AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}

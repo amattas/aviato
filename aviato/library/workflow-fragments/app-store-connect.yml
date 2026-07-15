@@ -3,7 +3,9 @@ if: ${{ always() && needs.release-gate.result == 'success' && needs.security.res
 uses: "{{ aviato-workflow-prefix }}reusable-app-store-connect.yml{{ aviato-workflow-suffix }}"
 permissions:
   actions: read
+  attestations: write
   contents: write
+  id-token: write
 with:
   # The reusable publisher rechecks the managed checkpoint before environment secrets.
   release-tag: ${{ needs.release.outputs.tag }}
@@ -23,6 +25,8 @@ with:
   export-method: "{{ export-method }}"
   version-command: "{{ version-command }}"
 secrets:
+  AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+  AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
   APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
   APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
   APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}

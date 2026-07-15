@@ -514,7 +514,7 @@ def repository_ruleset(slug: str, ruleset_id: Any) -> dict[str, Any]:
 def repository_rulesets(slug: str) -> list[dict[str, Any]]:
     # Paginate: upsert_ruleset decides PUT-vs-POST by finding an existing ruleset by
     # name here, so a match on a later page must not be hidden (else it POSTs a duplicate).
-    response = gh_json_paginated(f"repos/{slug}/rulesets", default=[])
+    response = gh_json_paginated(f"repos/{slug}/rulesets?includes_parents=false&per_page=100", default=[])
     return response if isinstance(response, list) else []
 
 

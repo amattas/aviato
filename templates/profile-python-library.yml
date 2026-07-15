@@ -105,6 +105,7 @@ jobs:
           VERIFIED_ENVELOPE_DIGEST: ${{ needs.release-gate.outputs.verified-envelope-digest
             }}
           GH_TOKEN: ${{ github.token }}
+          VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
         run: 'set -euo pipefail
 
           [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ && "${CHECKPOINT_RUN_ID}" =~
@@ -132,8 +133,9 @@ jobs:
           [ "$(gh api -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission"
           --jq .permission)" = "admin" ]
 
-          gh api -H ''Cache-Control: no-cache'' "users/${reviewer}/ssh_signing_keys"
-          --jq "any(.[]; (.id|tostring) == \"${key_id}\")" | grep -qx true
+          gh api --paginate --slurp -H ''Cache-Control: no-cache'' "users/${reviewer}/ssh_signing_keys?per_page=100"
+          --jq "([flatten[] | select((.id|tostring) == \"${key_id}\")] | length) ==
+          1" | grep -qx true
 
           [ "$(gh api -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/environments/pypi"
           --jq .can_admins_bypass)" = "false" ]
@@ -208,6 +210,38 @@ jobs:
           \ != \"commit\" ] || [ \"${actual}\" != \"${GATED_SHA}\" ]; then\n  echo\
           \ \"::error::Fresh remote tag ${RELEASE_TAG} does not peel to gated commit\
           \ ${GATED_SHA} (type=${object_type}, sha=${actual}).\"\n  exit 1\nfi\n"
+      - name: Mint verifier-only read token
+        id: verifier-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+          private-key: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          skip-token-revoke: false
+          permission-administration: read
+          permission-actions: read
+          permission-contents: read
+          permission-metadata: read
+      - name: Fail-closed verifier capability probe
+        env:
+          GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
+        shell: bash
+        run: 'set -euo pipefail
+
+          branch="$(gh api -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}"
+          --jq .default_branch)"
+
+          gh api -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/branches/${branch}/protection"
+          >/dev/null
+
+          gh api --paginate -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=false&per_page=100"
+          >/dev/null
+
+          gh api --paginate -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/environments?per_page=100"
+          >/dev/null
+
+          '
       - name: Final checkpoint recheck immediately before PyPI mutation
         shell: bash
         env:
@@ -215,76 +249,91 @@ jobs:
           VERIFIED_ENVELOPE_DIGEST: ${{ needs.release-gate.outputs.verified-envelope-digest
             }}
           GH_TOKEN: ${{ github.token }}
-        run: 'set -euo pipefail
-
-          envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
-
-          [ "$(shasum -a 256 "${envelope}" | awk ''{print $1}'')" = "${VERIFIED_ENVELOPE_DIGEST}"
-          ]
-
-          gh attestation verify "${envelope}" --repo "${GITHUB_REPOSITORY}" >/dev/null
-
-          jq -e ''.checkpoint.authority_snapshot.schema == "aviato-protection-authority-snapshot/v1"
-          and .checkpoint.issued_at <= (now + 30) and .checkpoint.expires_at > now''
-          "${envelope}" >/dev/null
-
-          [ "$(gh api -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/actions/runs/${CHECKPOINT_RUN_ID}"
-          --jq ''.status + ":" + .conclusion'')" = "completed:success" ]
-
-          reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
-
-          key_id="$(jq -r .key_id "${envelope}")"
-
-          [ "$(gh api -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission"
-          --jq .permission)" = "admin" ]
-
-          gh api -H ''Cache-Control: no-cache'' "users/${reviewer}/ssh_signing_keys"
-          --jq "any(.[]; (.id|tostring) == \"${key_id}\")" | grep -qx true
-
-          [ "$(gh api -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/environments/pypi"
-          --jq .can_admins_bypass)" = "false" ]
-
-          public_key="$(gh api -H ''Cache-Control: no-cache'' "users/${reviewer}/ssh_signing_keys"
-          --jq ".[] | select((.id|tostring) == \"${key_id}\") | .key")"
-
-          authority_dir="$(mktemp -d)"
-
-          printf ''%s %s\n'' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
-
-          jq -cS .checkpoint "${envelope}" > "${authority_dir}/message"
-
-          jq -r .signature "${envelope}" | python3 -c ''import base64,sys; value=sys.stdin.read().strip();
-          sys.stdout.buffer.write(base64.urlsafe_b64decode(value + "=" * (-len(value)
-          % 4)))'' > "${authority_dir}/signature"
-
-          ssh-keygen -Y verify -f "${authority_dir}/allowed" -I "${reviewer}" -n aviato
-          -s "${authority_dir}/signature" < "${authority_dir}/message"
-
-          verifier="${RUNNER_TEMP}/authority_verifier.py"
-
-          verifier_repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository
-          "${envelope}")"
-
-          verifier_ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref
-          "${envelope}")"
-
-          verifier_blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha
-          "${envelope}")"
-
-          verifier_json="$(gh api -H ''Cache-Control: no-cache'' "repos/${verifier_repo}/contents/aviato/authority_verifier.py?ref=${verifier_ref}")"
-
-          [ "$(jq -r .sha <<<"${verifier_json}")" = "${verifier_blob}" ]
-
-          jq -r .content <<<"${verifier_json}" | tr -d ''\n'' | base64 -d > "${verifier}"
-
-          python3 "${verifier}" --envelope "${envelope}" --repository "${GITHUB_REPOSITORY}"
-
-          '
+          VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
+        run: "set -euo pipefail\nenvelope=\"${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json\"\
+          \n[ \"$(shasum -a 256 \"${envelope}\" | awk '{print $1}')\" = \"${VERIFIED_ENVELOPE_DIGEST}\"\
+          \ ]\ngh attestation verify \"${envelope}\" --repo \"${GITHUB_REPOSITORY}\"\
+          \ >/dev/null\njq -e '.checkpoint.authority_snapshot.schema == \"aviato-protection-authority-snapshot/v1\"\
+          \ and .checkpoint.issued_at <= (now + 30) and .checkpoint.expires_at > now'\
+          \ \"${envelope}\" >/dev/null\n[ \"$(gh api -H 'Cache-Control: no-cache'\
+          \ \"repos/${GITHUB_REPOSITORY}/actions/runs/${CHECKPOINT_RUN_ID}\" --jq\
+          \ '.status + \":\" + .conclusion')\" = \"completed:success\" ]\nreviewer=\"\
+          $(jq -r .checkpoint.reviewer \"${envelope}\")\"\nkey_id=\"$(jq -r .key_id\
+          \ \"${envelope}\")\"\n[ \"$(gh api -H 'Cache-Control: no-cache' \"repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission\"\
+          \ --jq .permission)\" = \"admin\" ]\ngh api --paginate --slurp -H 'Cache-Control:\
+          \ no-cache' \"users/${reviewer}/ssh_signing_keys?per_page=100\" --jq \"\
+          ([flatten[] | select((.id|tostring) == \\\"${key_id}\\\")] | length) ==\
+          \ 1\" | grep -qx true\n[ \"$(gh api -H 'Cache-Control: no-cache' \"repos/${GITHUB_REPOSITORY}/environments/pypi\"\
+          \ --jq .can_admins_bypass)\" = \"false\" ]\npublic_key=\"$(gh api --paginate\
+          \ --slurp -H 'Cache-Control: no-cache' \"users/${reviewer}/ssh_signing_keys?per_page=100\"\
+          \ --jq \"[flatten[] | select((.id|tostring) == \\\"${key_id}\\\")] | if\
+          \ length == 1 then .[0].key else error(\\\"signing key must be unique\\\"\
+          ) end\")\"\nauthority_dir=\"$(mktemp -d)\"\nprintf '%s %s\\n' \"${reviewer}\"\
+          \ \"${public_key}\" > \"${authority_dir}/allowed\"\njq -cS .checkpoint \"\
+          ${envelope}\" > \"${authority_dir}/message\"\njq -r .signature \"${envelope}\"\
+          \ | python3 -c 'import base64,sys; value=sys.stdin.read().strip(); sys.stdout.buffer.write(base64.urlsafe_b64decode(value\
+          \ + \"=\" * (-len(value) % 4)))' > \"${authority_dir}/signature\"\nssh-keygen\
+          \ -Y verify -f \"${authority_dir}/allowed\" -I \"${reviewer}\" -n aviato\
+          \ -s \"${authority_dir}/signature\" < \"${authority_dir}/message\"\nverifier_repo=\"\
+          $(jq -r .checkpoint.authority_snapshot.guard.verifier.repository \"${envelope}\"\
+          )\"\nverifier_ref=\"$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref\
+          \ \"${envelope}\")\"\nverifier_blob=\"$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha\
+          \ \"${envelope}\")\"\nverifier_path=\"$(jq -r .checkpoint.authority_snapshot.guard.verifier.path\
+          \ \"${envelope}\")\"\nverifier_json=\"$(GH_TOKEN=\"${VERIFIER_GH_TOKEN}\"\
+          \ gh api --method GET -H 'Cache-Control: no-cache' \"repos/${verifier_repo}/contents/${verifier_path}\"\
+          \ -f \"ref=${verifier_ref}\")\"\n# AVIATO_SECURE_VERIFIER_BOOTSTRAP: decode,\
+          \ locally Git-hash, compile, and execute only in memory.\nAVIATO_VERIFIER_JSON=\"\
+          ${verifier_json}\" AVIATO_VERIFIER_BLOB=\"${verifier_blob}\" GH_TOKEN=\"\
+          ${VERIFIER_GH_TOKEN}\" \\\n  /usr/bin/python3 -I - \"${envelope}\" \"${GITHUB_REPOSITORY}\"\
+          \ <<'PY'\nimport base64, hashlib, json, os, sys\npayload = json.loads(os.environ.pop(\"\
+          AVIATO_VERIFIER_JSON\"))\nexpected = os.environ.pop(\"AVIATO_VERIFIER_BLOB\"\
+          )\nif payload.get(\"encoding\") != \"base64\" or not isinstance(payload.get(\"\
+          content\"), str):\n    raise SystemExit(\"verifier Contents response is\
+          \ not exact base64\")\nbody = base64.b64decode(payload[\"content\"], validate=True)\n\
+          if not 1 <= len(body) <= 262_144:\n    raise SystemExit(\"verifier body\
+          \ exceeds the bounded size\")\nactual = hashlib.sha1(b\"blob \" + str(len(body)).encode(\"\
+          ascii\") + b\"\\0\" + body).hexdigest()\nif actual != expected or payload.get(\"\
+          sha\") != expected:\n    raise SystemExit(\"verifier bytes differ from signed\
+          \ Git blob\")\nsys.argv = [\"authority_verifier.py\", \"--envelope\", sys.argv[1],\
+          \ \"--repository\", sys.argv[2]]\nexec(compile(body, \"<checkpoint-bound-authority-verifier>\"\
+          , \"exec\"), {\"__name__\": \"__main__\", \"__file__\": \"<memory>\"})\n\
+          PY\n"
       - name: Publish distributions
         if: ${{ vars.PYPI_REPOSITORY_URL == '' }}
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
         with:
           packages-dir: dist
+      - name: Final checkpoint recheck immediately before alternate PyPI mutation
+        if: ${{ vars.PYPI_REPOSITORY_URL != '' }}
+        shell: bash
+        env:
+          VERIFIED_ENVELOPE_DIGEST: ${{ needs.release-gate.outputs.verified-envelope-digest
+            }}
+          VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
+        run: "set -euo pipefail\nenvelope=\"${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json\"\
+          \n[ \"$(shasum -a 256 \"${envelope}\" | awk '{print $1}')\" = \"${VERIFIED_ENVELOPE_DIGEST}\"\
+          \ ]\nrepo=\"$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository\
+          \ \"${envelope}\")\"\nref=\"$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref\
+          \ \"${envelope}\")\"\npath=\"$(jq -r .checkpoint.authority_snapshot.guard.verifier.path\
+          \ \"${envelope}\")\"\nblob=\"$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha\
+          \ \"${envelope}\")\"\npayload=\"$(GH_TOKEN=\"${VERIFIER_GH_TOKEN}\" gh api\
+          \ --method GET -H 'Cache-Control: no-cache' \"repos/${repo}/contents/${path}\"\
+          \ -f \"ref=${ref}\")\"\n# AVIATO_SECURE_VERIFIER_BOOTSTRAP: alternate endpoint\
+          \ receives its own adjacent verifier.\nAVIATO_VERIFIER_JSON=\"${payload}\"\
+          \ AVIATO_VERIFIER_BLOB=\"${blob}\" GH_TOKEN=\"${VERIFIER_GH_TOKEN}\" \\\n\
+          \  /usr/bin/python3 -I - \"${envelope}\" \"${GITHUB_REPOSITORY}\" <<'PY'\n\
+          import base64, hashlib, json, os, sys\npayload = json.loads(os.environ.pop(\"\
+          AVIATO_VERIFIER_JSON\")); expected = os.environ.pop(\"AVIATO_VERIFIER_BLOB\"\
+          )\nif payload.get(\"encoding\") != \"base64\" or not isinstance(payload.get(\"\
+          content\"), str): raise SystemExit(\"invalid verifier encoding\")\nbody\
+          \ = base64.b64decode(payload[\"content\"], validate=True)\nif not 1 <= len(body)\
+          \ <= 262_144: raise SystemExit(\"invalid verifier size\")\nactual = hashlib.sha1(b\"\
+          blob \" + str(len(body)).encode(\"ascii\") + b\"\\0\" + body).hexdigest()\n\
+          if actual != expected or payload.get(\"sha\") != expected: raise SystemExit(\"\
+          verifier blob mismatch\")\nsys.argv = [\"authority_verifier.py\", \"--envelope\"\
+          , sys.argv[1], \"--repository\", sys.argv[2]]\nexec(compile(body, \"<checkpoint-bound-authority-verifier>\"\
+          , \"exec\"), {\"__name__\": \"__main__\", \"__file__\": \"<memory>\"})\n\
+          PY\n"
       - name: Publish distributions to alternate repository
         if: ${{ vars.PYPI_REPOSITORY_URL != '' }}
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
@@ -352,6 +401,10 @@ jobs:
       intended-tag: ${{ inputs.intended-tag || '' }}
       intended-actor: ${{ inputs.intended-actor || '' }}
       checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
+    secrets:
+      AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+      AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY
+        }}
   release-gate:
     needs:
       - release

@@ -9,17 +9,20 @@ the [`security architecture`](../architecture/security.md) owns placement; the
 
 Addresses THREAT-001 and THREAT-007. Secret-bearing deploys require protected
 environments; custom consumer commands run before secrets materialize or after
-cleanup. See `reusable-asc-deploy.yml`, `reusable-pypi-publish.yml`, and the
-consumer-local PyPI publisher contract. Verification: workflow guard tests and
-operator verification of required reviewers.
+cleanup. App Store Consumer build/version code runs on an unsigned, no-secret
+runner; signing and custom submit use separate fresh-runner boundaries. The
+[release verifier App prerequisite](release-verifier-app.md) defines the only
+additional read credential. Verification: workflow guard tests and operator
+verification of required reviewers.
 
 ## SEC-002 — Separate untrusted computation from privileged mutation
 
 Addresses THREAT-001, THREAT-002, and THREAT-010. Read/build/scan jobs hand
 immutable outputs to narrowly privileged publish, Pages, or settings paths.
 Top-level workflow permissions are empty or read-only; privileged jobs declare
-only their required permissions. Verification: pipeline-privilege and workflow
-guard tests.
+only their required permissions. Hosted mutations are enumerated in a typed
+inventory and each is dominated by the same checkpoint-bound executable
+verifier. Verification: pipeline-privilege and workflow guard tests.
 
 ## SEC-003 — Bind every gate to one immutable commit
 
@@ -40,7 +43,9 @@ validation tests.
 Addresses THREAT-004, THREAT-005, and THREAT-010. Deploy paths transfer the
 exact gated artifact/archive/tree between low- and high-privilege jobs and
 verify digest/SHA identity immediately before publication. Verification:
-workflow guard tests; external registry/Pages proof remains operator-run.
+workflow guard tests; external registry/Pages proof remains operator-run. The
+App Store path additionally attests its unsigned archive and rejects unsafe or
+out-of-root archive members before signing.
 
 ## SEC-006 — Fail closed on mutation authorization
 

@@ -38,6 +38,12 @@ CALLER_ONLY_PRIVILEGES = {
     "pypi-publish": {"actions: read", "id-token: write", "attestations: write"},
 }
 
+# PyPI's reusable builder remains secret-free; the graph-local publisher is the
+# component that mints the verifier App token immediately before upload.
+CALLER_ONLY_SECRETS = {
+    "pypi-publish": {"AVIATO_VERIFIER_APP_ID", "AVIATO_VERIFIER_APP_PRIVATE_KEY"},
+}
+
 
 def test_docs_pages_privilege_union_includes_isolated_pages_deployer() -> None:
     module = Registry(MODULE_SOURCE_ROOT).pipeline_module("docs-pages")
@@ -206,7 +212,7 @@ def test_pipeline_secrets_match_workflow_call_secrets(pipeline: str, workflow: s
     call = _mapping(on_block.get("workflow_call") or {})
     call_secrets = _mapping(call.get("secrets") or {})
     module_secrets = set(module.secrets)
-    workflow_secrets = set(call_secrets)
+    workflow_secrets = set(call_secrets) | CALLER_ONLY_SECRETS.get(pipeline, set())
     message = f"{pipeline} module secrets {module_secrets} != {workflow} workflow_call.secrets {workflow_secrets}"
     assert module_secrets == workflow_secrets, message
 

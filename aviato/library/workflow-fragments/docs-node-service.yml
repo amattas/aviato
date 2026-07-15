@@ -18,3 +18,6 @@ with:
   docs-source-directory: "."
   docs-emit-command: |
     npx -y -p typedoc@0.27.9 -p typedoc-plugin-markdown@4.4.1 typedoc --plugin typedoc-plugin-markdown --out website/docs/api --entryPointStrategy expand src
+secrets:
+  AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+  AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}

@@ -1001,11 +1001,11 @@ def _extract_py_heredoc(run_text: str) -> str | None:
                 i += 1
             heredocs.append("\n".join(body))
         i += 1
-    # Prefer the guard (prints true/false); fall back to the sole heredoc if only one is present.
+    # Only the guard is relevant. Other bounded inline Python (for example the
+    # checkpoint-bound authority verifier bootstrap) must not be executed as a
+    # version comparator merely because it is the sole heredoc in its step.
     guard = [h for h in heredocs if "true" in h and "false" in h]
-    if guard:
-        return guard[0]
-    return heredocs[0] if len(heredocs) == 1 else None
+    return guard[0] if guard else None
 
 
 def _check_monotonic_alias_parity(root: Path, errors: list[str]) -> None:

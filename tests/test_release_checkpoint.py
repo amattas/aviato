@@ -79,6 +79,15 @@ def test_receipt_persistence_is_derived_from_exact_graphql_issue_comment_readbac
     monkeypatch.setattr(module, "_gh_json", gh_json)
     monkeypatch.setattr(
         module,
+        "_gh_json_paginated",
+        lambda endpoint: (
+            [{"id": "key-1", "key": "ssh-ed25519 AAAA"}]
+            if endpoint == "users/alice/ssh_signing_keys?per_page=100"
+            else (_ for _ in ()).throw(AssertionError(endpoint))
+        ),
+    )
+    monkeypatch.setattr(
+        module,
         "_gh_json_input",
         lambda *_args, **_kwargs: {"id": 44, "node_id": "IC_1"},
     )
@@ -177,6 +186,15 @@ def test_receipt_persistence_rejects_edited_minimized_replaced_or_deleted_graphq
         raise AssertionError(endpoint)
 
     monkeypatch.setattr(module, "_gh_json", gh_json)
+    monkeypatch.setattr(
+        module,
+        "_gh_json_paginated",
+        lambda endpoint: (
+            [{"id": "key-1", "key": "ssh-ed25519 AAAA"}]
+            if endpoint == "users/alice/ssh_signing_keys?per_page=100"
+            else (_ for _ in ()).throw(AssertionError(endpoint))
+        ),
+    )
     monkeypatch.setattr(module, "_gh_graphql", lambda *_args, **_kwargs: {"node": node}, raising=False)
 
     with pytest.raises(ValueError, match="GraphQL|comment"):
