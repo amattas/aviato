@@ -2395,7 +2395,6 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
                 desired_rulesets=desired_rulesets,
                 live_state=live,
                 environments=environments,
-                allow_degraded_tag_pattern=args.allow_degraded_tag_pattern,
             )
 
         plan = recompute()
@@ -2422,6 +2421,12 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
         confirmation=args.confirm,
         recompute=recompute,
         write=lambda operation: platform.apply_protection_operation(slug, operation),
+        persist_receipt=lambda canonical: platform.open_or_update_issue(
+            slug,
+            "aviato-protection-receipt",
+            "Aviato composite protection receipt",
+            "Canonical `aviato-protection-receipt/v1` evidence:\n\n```json\n" + canonical.decode("ascii") + "\n```",
+        ),
     )
     if not result.receipt.ready:
         print(f"complete-protection did not converge: {result.receipt.status}", file=sys.stderr)
@@ -2483,7 +2488,21 @@ def cmd_provision(args: argparse.Namespace) -> int:
         variables=persisted,
     )
     desired = _desired_settings(resolved)
+    desired_state = compile_desired_state(
+        registry,
+        resolved,
+        variables,
+        pin=declaration.version,
+        docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
+    )
+    desired_rulesets = render_all_rulesets(
+        root=snapshot.policy_root,
+        required_approvals=int(resolved.settings.get("default_branch", {}).get("required_reviews", 1)),
+        extra_status_checks=list(desired_state.required_status_checks),
+    )
     items = materialize_items(registry, args.profile, variables, pin=args.pin, docs=args.docs)
+    platform = GitHubPlatform()
 
     def scaffold_push() -> None:
         # Local side effects only (kept out of core): clone the just-created repo,
@@ -2528,9 +2547,63 @@ def cmd_provision(args: argparse.Namespace) -> int:
         )
         run(["git", "-C", str(clone), "push", "origin", "HEAD"])
 
+    def full_protection() -> Any:
+        reviewers = tuple(
+            EnvironmentReviewer(**platform.resolve_environment_reviewer(slug, reviewer))
+            for reviewer in (args.environment_reviewer or ())
+        )
+        environments = tuple(
+            ProtectedEnvironment(
+                name=name,
+                reviewers=reviewers,
+                minimum_approvals=1,
+                prevent_self_review=args.prevent_self_review,
+                branch_patterns=tuple(args.environment_branch or ()),
+                tag_patterns=tuple(args.environment_tag or ()),
+                wait_timer=args.environment_wait_minutes,
+                custom_rules=(),
+                forbid_admin_bypass=args.forbid_admin_bypass,
+            )
+            for name in desired_state.environments
+        )
+
+        def recompute() -> ProtectionPlan:
+            identity = platform.repository_identity(slug)
+            live = platform.read_protection_state(slug, environments=tuple(item.name for item in environments))
+            return build_protection_plan(
+                repository=identity,
+                tool_version=__version__,
+                declaration_pin=declaration.version,
+                snapshot_sha=snapshot.commit_sha,
+                desired_state=desired_state,
+                desired_rulesets=desired_rulesets,
+                live_state=live,
+                environments=environments,
+            )
+
+        plan = recompute()
+        result = execute_protection_plan(
+            plan,
+            confirmation=plan.plan_id,
+            recompute=recompute,
+            write=lambda operation: platform.apply_protection_operation(slug, operation),
+            persist_receipt=lambda canonical: platform.open_or_update_issue(
+                slug,
+                "aviato-protection-receipt",
+                "Aviato composite protection receipt",
+                "Canonical `aviato-protection-receipt/v1` evidence:\n\n```json\n" + canonical.decode("ascii") + "\n```",
+            ),
+        )
+        return result.receipt
+
     try:
         outcome = provision_repo(
-            GitHubPlatform(), repo=slug, desired=desired, private=not args.public, scaffold_push=scaffold_push
+            platform,
+            repo=slug,
+            desired=desired,
+            private=not args.public,
+            scaffold_push=scaffold_push,
+            full_protection=full_protection,
         )
     except (GitHubAPIError, CommandError) as exc:
         # Reached only if create_repo itself failed (nothing was created); post-create failures
@@ -3195,7 +3268,6 @@ def build_parser() -> argparse.ArgumentParser:
     complete.add_argument("--environment-wait-minutes", type=int, default=0, metavar="N")
     complete.add_argument("--prevent-self-review", action="store_true")
     complete.add_argument("--forbid-admin-bypass", action="store_true")
-    complete.add_argument("--allow-degraded-tag-pattern", action="store_true")
     complete.set_defaults(func=cmd_complete_protection)
 
     provision = subparsers.add_parser(
@@ -3212,6 +3284,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     provision.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     provision.add_argument("--public", action="store_true", help="Create a public repo (default: private).")
+    provision.add_argument("--environment-reviewer", action="append", metavar="user:LOGIN|team:ORG/SLUG")
+    provision.add_argument("--environment-branch", action="append", metavar="PATTERN")
+    provision.add_argument("--environment-tag", action="append", metavar="PATTERN")
+    provision.add_argument("--environment-wait-minutes", type=int, default=0, metavar="N")
+    provision.add_argument("--prevent-self-review", action="store_true")
+    provision.add_argument("--forbid-admin-bypass", action="store_true")
     provision.set_defaults(func=cmd_provision)
 
     drift = subparsers.add_parser("drift-report", help="Consumer automation: report file + settings drift (read-only).")

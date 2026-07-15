@@ -193,6 +193,7 @@ class WorkflowJobModule:
     environment: str | None = None
     environment_input: str | None = None
     status_check: str | None = None
+    authorization_gate: str | None = None
 
 
 @dataclass(frozen=True)

@@ -5,6 +5,10 @@ permissions:
 outputs:
   tag: ${{ steps.tag.outputs.tag }}
   release: ${{ steps.tag.outputs.release }}
+  checkpoint-run-id: ${{ steps.tag.outputs.checkpoint-run-id }}
+  checkpoint-digest: ${{ steps.tag.outputs.checkpoint-digest }}
+  intended-actor: ${{ steps.tag.outputs.intended-actor }}
+  merged-sha: ${{ steps.tag.outputs.merged-sha }}
 steps:
   - uses: actions/checkout@v4
     with:
@@ -14,13 +18,24 @@ steps:
       fetch-tags: true
   - id: tag
     env:
+      GH_TOKEN: ${{ github.token }}
       HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     run: |
       set -euo pipefail
       tag="$(git tag --points-at "${HEAD_SHA}" --list '[0-9]*.[0-9]*.[0-9]*' | grep -E '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$' | head -n1 || true)"
       if [ -n "${tag}" ]; then
+        release_body="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq .body)"
+        checkpoint_run_id="$(sed -n 's/^Aviato-Checkpoint-Run: //p' <<<"${release_body}")"
+        checkpoint_digest="$(sed -n 's/^Aviato-Checkpoint-Digest: //p' <<<"${release_body}")"
+        intended_actor="$(sed -n 's/^Aviato-Intended-Actor: //p' <<<"${release_body}")"
+        merged_sha="$(sed -n 's/^Aviato-Merged-SHA: //p' <<<"${release_body}")"
+        [[ "${checkpoint_run_id}" =~ ^[1-9][0-9]*$ && "${checkpoint_digest}" =~ ^[0-9a-f]{64}$ && "${merged_sha}" = "${HEAD_SHA}" && -n "${intended_actor}" ]] || { echo "::error::release lacks exact managed authorization markers"; exit 1; }
         echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
         echo "release=true" >> "${GITHUB_OUTPUT}"
+        echo "checkpoint-run-id=${checkpoint_run_id}" >> "${GITHUB_OUTPUT}"
+        echo "checkpoint-digest=${checkpoint_digest}" >> "${GITHUB_OUTPUT}"
+        echo "intended-actor=${intended_actor}" >> "${GITHUB_OUTPUT}"
+        echo "merged-sha=${merged_sha}" >> "${GITHUB_OUTPUT}"
       else
         echo "release=false" >> "${GITHUB_OUTPUT}"
       fi

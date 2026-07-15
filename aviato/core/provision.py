@@ -86,14 +86,13 @@ def provision_repo(
         # capture it so the caller reports a partial apply instead of overstating clean success.
         # (The minimal apply carries no security keys, so its skipped set is always empty.)
         if full_protection is None:
-            outcome.skipped_security = platform.apply_settings(repo, desired)
-        else:
-            outcome.protection_receipt = full_protection()
-            if not outcome.protection_receipt.ready:
-                raise RuntimeError(
-                    f"composite protection receipt is {outcome.protection_receipt.status}; "
-                    "repository is not fully protected"
-                )
+            raise RuntimeError("full protection requires the confirmed composite executor and durable receipt")
+        outcome.protection_receipt = full_protection()
+        if not outcome.protection_receipt.ready or outcome.protection_receipt.persistence_status != "attached":
+            raise RuntimeError(
+                f"composite protection receipt is {outcome.protection_receipt.status}/"
+                f"{outcome.protection_receipt.persistence_status}; repository is not fully protected"
+            )
     except Exception as exc:  # noqa: BLE001 - §8.7 boundary: a post-create failure must surface
         # the exposed/partial state + recovery op, never crash or half-apply. The outcome flags
         # record exactly how far provisioning got (minimal_applied / scaffolded).

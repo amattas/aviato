@@ -4,12 +4,12 @@ import hashlib
 import json
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
 from .model import deep_freeze, deep_thaw
 from .ports import RepositoryIdentity
-from .ruleset_plan import RulesetPlan, build_ruleset_plan
+from .ruleset_plan import RulesetIdentity, RulesetPlan, build_ruleset_plan
 
 SurfaceStatus = Literal["ready", "manual", "indeterminate"]
 OperationStatus = Literal["completed", "failed", "indeterminate", "unattempted"]
@@ -90,6 +90,7 @@ class ProtectionOperation:
     desired_fingerprint: str
     disposition: SurfaceStatus = "ready"
     detail: str = ""
+    ruleset_identity: RulesetIdentity | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "before", deep_freeze(self.before))
@@ -105,7 +106,6 @@ class ProtectionPlan:
     operations: tuple[ProtectionOperation, ...]
     ruleset_plan: RulesetPlan
     authorization_guard: Mapping[str, Any] | None
-    allow_degraded_tag_pattern: bool
     blockers: tuple[str, ...]
     canonical_json: str
     plan_id: str
@@ -133,14 +133,44 @@ class ProtectionReceipt:
     timestamp: int
     persistence_status: str = "not-requested"
     local_mutations_recorded: bool = False
+    repository: RepositoryIdentity | None = None
+    declaration_pin: str = ""
+    snapshot_sha: str = ""
+    tool_version: str = ""
+    surface_fingerprints: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "rulesets", tuple(deep_freeze(item) for item in self.rulesets))
+        object.__setattr__(self, "surface_fingerprints", deep_freeze(self.surface_fingerprints))
 
     @property
     def ready(self) -> bool:
-        return self.status == "ready" and self.persistence_status in {"not-requested", "attached"}
+        return self.status == "ready" and self.persistence_status == "attached"
 
     @property
     def auto_retirement_authorized(self) -> bool:
         return self.ready and self.persistence_status == "attached"
+
+    @property
+    def canonical_bytes(self) -> bytes:
+        return _json(
+            {
+                "schema": "aviato-protection-receipt/v1",
+                "plan_id": self.plan_id,
+                "status": self.status,
+                "operations": [_plain(item) for item in self.operations],
+                "rulesets": [_plain(item) for item in self.rulesets],
+                "final_fingerprint": self.final_fingerprint,
+                "timestamp": self.timestamp,
+                "persistence_status": self.persistence_status,
+                "local_mutations_recorded": self.local_mutations_recorded,
+                "repository": _plain(self.repository),
+                "declaration_pin": self.declaration_pin,
+                "snapshot_sha": self.snapshot_sha,
+                "tool_version": self.tool_version,
+                "surface_fingerprints": _plain(self.surface_fingerprints),
+            }
+        ).encode("ascii")
 
 
 @dataclass(frozen=True)
@@ -192,8 +222,6 @@ def build_protection_plan(
     desired_rulesets: Sequence[Mapping[str, Any]],
     live_state: Mapping[str, Any],
     environments: Sequence[ProtectedEnvironment] = (),
-    allow_degraded_tag_pattern: bool = False,
-    degraded_tag_pattern: bool = False,
 ) -> ProtectionPlan:
     live_repository = live_state.get("repository_identity")
     blockers: list[str] = []
@@ -232,6 +260,7 @@ def build_protection_plan(
                 rule.desired_fingerprint or _digest(None),
                 rule.disposition,
                 rule.reason,
+                rule.identity,
             )
         )
         if rule.disposition != "ready":
@@ -248,6 +277,12 @@ def build_protection_plan(
             disposition, detail = "manual", f"environment {environment.name} requires --forbid-admin-bypass"
         elif not isinstance(before, Mapping) or before.get("can_admins_bypass") is not False:
             disposition, detail = "manual", f"environment {environment.name} requires manual can_admins_bypass=false"
+        elif environment.custom_rules or before.get("custom_rules"):
+            disposition, detail = (
+                "manual",
+                f"environment {environment.name} custom protection rules are unsupported "
+                "and require manual convergence",
+            )
         operations.append(
             _operation(
                 "environment", environment.name, before, desired_environment, disposition=disposition, detail=detail
@@ -262,12 +297,6 @@ def build_protection_plan(
         blockers.append("privileged environments require an independent managed authorization guard")
     elif guard and _plain(live_state.get("guard")) != guard:
         blockers.append("managed authorization guard workflow/path/blob is not proven live")
-    if degraded_tag_pattern:
-        blockers.append(
-            "tag_name_pattern degraded variant requires explicit consent and remains non-ready"
-            if not allow_degraded_tag_pattern
-            else "consented tag_name_pattern degradation remains non-ready until full policy converges"
-        )
     payload = {
         "repository": _plain(repository),
         "tool_version": tool_version,
@@ -276,7 +305,6 @@ def build_protection_plan(
         "operations": [_plain(item) for item in operations],
         "ruleset_plan_id": ruleset_plan.plan_id,
         "authorization_guard": guard,
-        "allow_degraded_tag_pattern": allow_degraded_tag_pattern,
         "blockers": blockers,
     }
     canonical = _json(payload)
@@ -288,7 +316,6 @@ def build_protection_plan(
         tuple(operations),
         ruleset_plan,
         deep_freeze(guard) if guard else None,
-        allow_degraded_tag_pattern,
         tuple(blockers),
         canonical,
         hashlib.sha256(canonical.encode("ascii")).hexdigest(),
@@ -325,7 +352,9 @@ def verify_protection_recheck(original: ProtectionPlan, current: ProtectionPlan,
             if candidate.action != "noop" or candidate.desired_fingerprint != operation.desired_fingerprint:
                 raise ValueError("completed protection surface drifted after write")
         elif candidate != operation and not (
-            candidate.action == "noop" and candidate.desired_fingerprint == operation.desired_fingerprint
+            candidate.action == "noop"
+            and candidate.desired_fingerprint == operation.desired_fingerprint
+            and (operation.ruleset_identity is None or candidate.ruleset_identity == operation.ruleset_identity)
         ):
             raise ValueError("protection plan changed after confirmation")
 
@@ -338,6 +367,25 @@ def plan_with_operation_converged(plan: ProtectionPlan, identity: str) -> Protec
         for item in plan.operations
     )
     return replace(plan, operations=operations)
+
+
+def protection_state_fingerprint(plan: ProtectionPlan) -> str:
+    """Fingerprint only the final live semantic state, not the pre-write plan."""
+
+    return _digest(
+        {
+            "repository": _plain(plan.repository),
+            "surfaces": {
+                item.identity: {
+                    "kind": item.kind,
+                    "fingerprint": item.before_fingerprint,
+                    "action": item.action,
+                    "ruleset_identity": _plain(item.ruleset_identity),
+                }
+                for item in sorted(plan.operations, key=lambda operation: operation.identity)
+            },
+        }
+    )
 
 
 def receipt_for_plan(
@@ -358,15 +406,21 @@ def receipt_for_plan(
         )
         for item in plan.ruleset_plan.operations
     )
+    surface_fingerprints = {item.identity: item.before_fingerprint for item in plan.operations if item.action == "noop"}
     return ProtectionReceipt(
         plan.plan_id,
         status,
         tuple(operations),
         rulesets,
-        _digest(plan.canonical_json),
+        protection_state_fingerprint(plan),
         int(time.time()),
         persistence_status,
         bool(operations) or status == "ready",
+        plan.repository,
+        plan.declaration_pin,
+        plan.snapshot_sha,
+        plan.tool_version,
+        surface_fingerprints,
     )
 
 
@@ -376,7 +430,7 @@ def execute_protection_plan(
     confirmation: str,
     recompute: Callable[[], ProtectionPlan],
     write: Callable[[ProtectionOperation], object],
-    persist_receipt: Callable[[ProtectionReceipt], object] | None = None,
+    persist_receipt: Callable[[bytes], object] | None = None,
 ) -> ProtectionExecutionResult:
     try:
         require_protection_confirmation(plan, apply=True, confirmation=confirmation)
@@ -385,6 +439,11 @@ def execute_protection_plan(
     attempted: list[ReceiptOperation] = []
     completed: set[str] = set()
     pending = [item for item in plan.operations if item.action != "noop"]
+    try:
+        verify_protection_recheck(plan, recompute(), completed=frozenset())
+    except Exception as exc:
+        attempted.append(ReceiptOperation("preflight", "barrier", "indeterminate", str(exc)))
+        return ProtectionExecutionResult(receipt_for_plan(plan, status="indeterminate", operations=attempted))
     failure_status: Literal["failed", "indeterminate"] | None = None
     for operation in pending:
         try:
@@ -408,7 +467,7 @@ def execute_protection_plan(
             break
         lost = False
         try:
-            write(operation)
+            write(current_operation)
         except ResponseLostError:
             lost = True
         except Exception as exc:
@@ -444,14 +503,14 @@ def execute_protection_plan(
         attempted.append(ReceiptOperation("final-barrier", "barrier", "indeterminate", str(exc)))
         return ProtectionExecutionResult(receipt_for_plan(plan, status="indeterminate", operations=attempted))
     receipt = receipt_for_plan(
-        plan,
+        final,
         status="ready",
         operations=attempted,
         persistence_status="not-requested" if persist_receipt is None else "attached",
     )
     if persist_receipt is not None:
         try:
-            persist_receipt(receipt)
+            persist_receipt(receipt.canonical_bytes)
         except Exception:
             receipt = replace(receipt, persistence_status="failed")
     return ProtectionExecutionResult(receipt)

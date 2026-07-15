@@ -219,8 +219,10 @@ The Python CLI lives in `aviato/`.
 Protected environments require explicit concrete user/team reviewers and ref
 policy inputs. GitHub's read-only `can_admins_bypass` field must read back
 `false`; Aviato never guesses or sends an undocumented write for it. A ready
-run emits a redacted local receipt. Failure to publish signed retirement
-evidence preserves that local mutation truth but blocks automatic retirement.
+run derives its receipt from the final live readback and durably stores the
+exact canonical bytes in the Consumer tracking issue. Persistence failure
+preserves local mutation truth but makes the receipt non-ready and blocks
+automatic retirement.
 - `aviato repin <path> <version>` moves the Library version pin: `--write`
   mutates locally, `--open-pr` opens a reviewable re-pin proposal (§5.12).
 - `aviato offboard <path>` removes a consumer from Aviato management:

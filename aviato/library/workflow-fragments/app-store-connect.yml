@@ -8,6 +8,7 @@ with:
   # The reusable publisher rechecks the managed checkpoint before environment secrets.
   release-tag: ${{ needs.release.outputs.tag }}
   gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
+  checkpoint-digest: ${{ needs.release-gate.outputs.checkpoint-digest }}
   environment-name: "{{ environment-name }}"
   xcode-version: "{{ xcode-version }}"
   working-directory: "{{ working-directory }}"

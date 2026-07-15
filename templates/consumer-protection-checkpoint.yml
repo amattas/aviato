@@ -22,6 +22,7 @@ jobs:
       EXPECTED_ACTOR: ${{ github.actor }}
       EXPECTED_WORKFLOW_REF: ${{ github.workflow_ref }}
       EXPECTED_RUN_ID: ${{ github.run_id }}
+      GH_TOKEN: ${{ github.token }}
       MAX_CHECKPOINT_BYTES: "65536"
       VERIFIED_PATH: ${{ runner.temp }}/verified-checkpoint.json
     steps:
@@ -30,7 +31,15 @@ jobs:
         run: |
           set -euo pipefail
           python -I - <<'PY'
-          import base64, json, os, pathlib, re
+          import base64, hashlib, json, os, pathlib, re, subprocess, tempfile, time
+          def fail(message):
+              raise SystemExit(message)
+          def gh(endpoint):
+              result = subprocess.run(
+                  ["gh", "api", "-H", "Cache-Control: no-cache", endpoint],
+                  check=True, capture_output=True, text=True, env=os.environ,
+              )
+              return json.loads(result.stdout)
           encoded = os.environ["CHECKPOINT_BASE64URL"]
           maximum = int(os.environ["MAX_CHECKPOINT_BYTES"])
           if not encoded or len(encoded) > maximum * 2 or not re.fullmatch(r"[A-Za-z0-9_-]+", encoded):
@@ -38,18 +47,79 @@ jobs:
           raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
           if len(raw) > maximum:
               raise SystemExit("checkpoint exceeds MAX_CHECKPOINT_BYTES")
-          document = json.loads(raw)
-          required = {"schema", "repository", "sha", "tag", "intended_actor", "reviewer", "submitter", "workflow_path", "workflow_blob_sha", "signature"}
-          if set(document) < required:
-              raise SystemExit("checkpoint schema is incomplete")
-          if document["repository"] != os.environ["EXPECTED_REPOSITORY"]:
-              raise SystemExit("repository mismatch")
-          if document["submitter"] != os.environ["EXPECTED_ACTOR"]:
-              raise SystemExit("workflow submitter mismatch")
-          # Signature/current-key/receipt/workflow/ref/run checks are performed over the exact
-          # canonical document by the bundled verifier; no input becomes code or a path.
+          if raw != json.dumps(json.loads(raw), sort_keys=True, separators=(",", ":")).encode("ascii"):
+              fail("envelope is not exact canonical JSON")
+          envelope = json.loads(raw)
+          envelope_keys = {"schema", "key_id", "algorithm", "checkpoint", "signature"}
+          if not isinstance(envelope, dict) or set(envelope) != envelope_keys:
+              fail("checkpoint envelope keys are not exact")
+          if envelope["schema"] != "aviato-managed-release-checkpoint-envelope/v1" or envelope["algorithm"] != "ssh-ed25519":
+              fail("unsupported checkpoint envelope schema or algorithm")
+          document = envelope["checkpoint"]
+          document_keys = {
+              "schema", "repository_id", "repository", "tag", "sha", "intended_actor",
+              "collector", "reviewer", "submitter", "pin", "snapshot_sha",
+              "protection_plan_id", "protection_receipt_digest", "fingerprints",
+              "workflow_path", "workflow_blob_sha", "workflow_ref", "workflow_run_id",
+              "issued_at", "expires_at",
+          }
+          if not isinstance(document, dict) or set(document) != document_keys:
+              fail("checkpoint document keys are not exact")
+          integers = ("repository_id", "workflow_run_id", "issued_at", "expires_at")
+          if any(type(document[key]) is not int or document[key] <= 0 for key in integers):
+              fail("checkpoint integer field has wrong type or range")
+          hex40 = ("sha", "snapshot_sha", "workflow_blob_sha")
+          hex64 = ("protection_plan_id", "protection_receipt_digest")
+          if any(not re.fullmatch(r"[0-9a-f]{40}", document[key]) for key in hex40) or any(not re.fullmatch(r"[0-9a-f]{64}", document[key]) for key in hex64):
+              fail("checkpoint digest field is malformed")
+          if document["issued_at"] > time.time() or document["expires_at"] <= time.time():
+              fail("checkpoint is not fresh")
+          repo = gh(f"repos/{os.environ['EXPECTED_REPOSITORY']}")
+          default_branch = repo["default_branch"]
+          if document["repository"] != os.environ["EXPECTED_REPOSITORY"] or document["repository_id"] != repo["id"]:
+              fail("repository identity mismatch")
+          if document["submitter"] != os.environ["EXPECTED_ACTOR"] or document["reviewer"] in {document["collector"], document["submitter"], document["intended_actor"]}:
+              fail("submitter/reviewer separation mismatch")
+          permission = gh(f"repos/{document['repository']}/collaborators/{document['reviewer']}/permission")
+          if permission.get("user", {}).get("type") != "User" or permission.get("permission") != "admin":
+              fail("reviewer is not a current concrete repository admin")
+          keys = gh(f"users/{document['reviewer']}/ssh_signing_keys")
+          selected = [item for item in keys if str(item.get("id")) == str(envelope["key_id"])]
+          if len(selected) != 1 or not selected[0].get("key", "").startswith("ssh-ed25519 "):
+              fail("reviewer signing key is absent, replaced, or not Ed25519")
+          message = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("ascii")
+          try:
+              signature = base64.b64decode(envelope["signature"], altchars=b"-_", validate=True)
+          except Exception as exc:
+              raise SystemExit("signature is not strict base64url") from exc
+          with tempfile.TemporaryDirectory() as directory:
+              root = pathlib.Path(directory)
+              (root / "allowed").write_text(f"{document['reviewer']} {selected[0]['key']}\n", encoding="utf-8")
+              (root / "signature").write_bytes(signature)
+              verified = subprocess.run(
+                  ["ssh-keygen", "-Y", "verify", "-f", str(root / "allowed"), "-I", document["reviewer"], "-n", "aviato", "-s", str(root / "signature")],
+                  input=message, capture_output=True,
+              )
+              if verified.returncode != 0:
+                  fail("checkpoint signature verification failed")
+          if document["workflow_path"] != ".github/workflows/aviato-protection-checkpoint.yml" or document["workflow_ref"] != f"refs/heads/{default_branch}":
+              fail("trusted workflow path/ref mismatch")
+          workflow = gh(f"repos/{document['repository']}/contents/{document['workflow_path']}?ref={default_branch}")
+          if workflow.get("sha") != document["workflow_blob_sha"]:
+              fail("trusted default-branch workflow blob changed")
+          source_run = gh(f"repos/{document['repository']}/actions/runs/{document['workflow_run_id']}")
+          if source_run.get("head_sha") != document["sha"] or source_run.get("event") != "push" or source_run.get("conclusion") != "success" or source_run.get("head_branch") != default_branch:
+              fail("source workflow/ref/run evidence mismatch")
+          issues = gh(f"repos/{document['repository']}/issues?state=all&labels=aviato-protection-receipt&per_page=10")
+          receipts = []
+          for issue in issues:
+              match = re.search(r"```json\n(.+?)\n```", issue.get("body") or "", re.S)
+              if match and hashlib.sha256(match.group(1).encode("ascii")).hexdigest() == document["protection_receipt_digest"]:
+                  receipts.append(json.loads(match.group(1)))
+          if len(receipts) != 1 or receipts[0].get("status") != "ready" or receipts[0].get("persistence_status") != "attached" or receipts[0].get("surface_fingerprints") != document["fingerprints"]:
+              fail("current durable protection receipt/fingerprints are absent or stale")
           target = pathlib.Path(os.environ["VERIFIED_PATH"])
-          target.write_text(json.dumps(document, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+          target.write_bytes(message)
           PY
       - name: Upload fixed verified artifact
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808

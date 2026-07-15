@@ -10,6 +10,7 @@ with:
   working-directory: website
   release-tag: ${{ needs.docs-resolve.outputs.tag }}
   gated-sha: ${{ needs.docs-release-gate.outputs.gated-sha }}
+  checkpoint-digest: ${{ needs.docs-release-gate.outputs.checkpoint-digest }}
   serve-pages: "{{ serve-pages }}"
   docs-source-directory: "."
   docs-emit-command: |

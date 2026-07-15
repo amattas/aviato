@@ -10,6 +10,8 @@ logic below is unit-tested.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import sys
@@ -22,6 +24,7 @@ from urllib.parse import quote
 from . import github
 from .command import CommandError
 from .core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
+from .core.marker import strip_marker_from_text
 from .core.model import AuthorizationGuardDescriptor, deep_thaw
 from .core.pathguard import confined_target
 from .core.ports import Issue, RepositoryIdentity, RulesetApplyResult
@@ -632,7 +635,27 @@ class GitHubPlatform:
             default={},
         )
         guard = None
-        if isinstance(workflow, dict) and isinstance(workflow.get("sha"), str):
+        workflow_bytes: bytes | None = None
+        if (
+            isinstance(workflow, dict)
+            and workflow.get("encoding") == "base64"
+            and isinstance(workflow.get("content"), str)
+        ):
+            try:
+                workflow_bytes = base64.b64decode(workflow["content"], validate=True)
+            except (ValueError, binascii.Error):
+                workflow_bytes = None
+        expected_guard = (
+            Path(__file__).parent / "library" / "scaffold" / "files" / "wf-protection-checkpoint.yml"
+        ).read_text(encoding="utf-8")
+        content_valid = False
+        if workflow_bytes is not None:
+            try:
+                decoded = workflow_bytes.decode("utf-8")
+                content_valid = strip_marker_from_text(decoded) == expected_guard
+            except UnicodeDecodeError:
+                content_valid = False
+        if content_valid and isinstance(workflow, dict) and isinstance(workflow.get("sha"), str):
             guard = AuthorizationGuardDescriptor(
                 path=workflow_path,
                 blob_sha=workflow["sha"],
@@ -678,22 +701,21 @@ class GitHubPlatform:
                 self._gh_input(["--method", "PATCH", f"repos/{repo}"], {"security_and_analysis": payload})
             return
         if operation.kind == "ruleset":
-            target = operation.identity.rpartition(":")[2]
-            live_id = next(
-                (
-                    item.get("id")
-                    for item in self.read_rulesets(repo)
-                    if item.get("name") == operation.name and item.get("target") == target
-                ),
-                None,
-            )
+            identity = operation.ruleset_identity
+            if identity is None:
+                raise ValueError("ruleset operation omitted its confirmed immutable identity")
+            live_id = identity.live_id
             if operation.action == "delete":
                 if not isinstance(live_id, int):
-                    raise ValueError("ruleset delete readback omitted its immutable id")
+                    raise ValueError("ruleset delete confirmation omitted its immutable id")
                 self.delete_planned_ruleset(repo, ruleset_id=live_id)
                 return
             if not isinstance(desired, dict):
                 raise ValueError("ruleset operation requires an object payload")
+            if operation.action == "update" and not isinstance(live_id, int):
+                raise ValueError("ruleset update confirmation omitted its immutable id")
+            if operation.action == "create" and live_id is not None:
+                raise ValueError("ruleset create collided with an existing immutable identity; replan")
             self.apply_planned_ruleset(repo, desired, ruleset_id=live_id)
             return
         if operation.kind == "environment":

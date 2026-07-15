@@ -120,20 +120,19 @@ the first commit, the process reports the partial state and exposes an
 **idempotent `complete-protection` recovery operation** that re-applies full
 protection and is safe to re-run any number of times.
 `complete-protection` and the final provision stage use the same immutable
-composite `ProtectionPlan`. They remain previews until the operator supplies
-`--apply --confirm <plan-id>`. The confirmation includes the pinned desired
+composite `ProtectionPlan`. The recovery command remains a preview until the
+operator supplies `--apply --confirm <plan-id>`; the provision command's
+explicit create operation authorizes its newly computed exact plan. The
+confirmation includes the pinned desired
 state, repository identity/default branch, every live before-fingerprint,
 concrete environment reviewers and ref policy, the read-only
-`can_admins_bypass == false` assertion, the managed authorization guard, and
-any explicit degraded-tag consent. Provision is not `full_applied` unless the
-receipt passes the final all-surface convergence barrier.
-When GitHub rejects the `tag_name_pattern` metadata restriction with an explicit
-HTTP 422 unsupported-rule response, full-protection application retries exactly
-once with only that rule omitted. The CLI reports the repository and omitted rule
-as **DEGRADED**; deletion and non-fast-forward protections, conditions,
-enforcement, and the no-bypass posture remain intact. No other API, authentication,
-network, malformed-response, or validation failure is downgraded. A later failure
-does not roll back earlier successful mutations, which are reported as they occur.
+`can_admins_bypass == false` assertion, and the managed authorization guard.
+Provision is not `full_applied` unless the receipt passes the final all-surface
+convergence barrier and its canonical final-state evidence is durably persisted.
+Unsupported tag-rule capability is never silently downgraded or consented through
+a misleading fallback flag; it remains non-ready until an exact supported policy
+is previewed. A later failure does not roll back earlier successful mutations,
+which are reported as they occur.
 The correlated response may be a structured type-error object or a whole-entry
 string inside `errors`. The observed literal was
 `Invalid rule 'tag_name_pattern':`; the accepted whole-entry grammar is

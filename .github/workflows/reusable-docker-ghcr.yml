@@ -35,6 +35,10 @@ on:
           mutable tag — and re-verify the tag still points at it before publishing.
         required: true
         type: string
+      checkpoint-digest:
+        description: Exact canonical checkpoint digest emitted by the nonprivileged release gate.
+        required: true
+        type: string
       platforms:
         required: false
         type: string
@@ -93,6 +97,15 @@ jobs:
     environment:
       name: ${{ inputs.environment-name }}
     steps:
+      - name: Recheck exact authorization outputs before registry or OIDC use
+        shell: bash
+        env:
+          GATED_SHA: ${{ inputs.gated-sha }}
+          CHECKPOINT_DIGEST: ${{ inputs.checkpoint-digest }}
+        run: |
+          set -euo pipefail
+          [[ "${GATED_SHA}" =~ ^[0-9a-f]{40}$ && "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::invalid authorization outputs"; exit 1; }
+
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:

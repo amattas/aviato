@@ -59,6 +59,10 @@ on:
           the mutable tag — and re-verify the tag still points at it.
         required: true
         type: string
+      checkpoint-digest:
+        description: Exact canonical checkpoint digest emitted by the nonprivileged release gate.
+        required: true
+        type: string
       docs-retention:
         description: >-
           Optional retention cap (§13.3). 0 — the default — keeps EVERY released
@@ -87,10 +91,22 @@ jobs:
       pages: read
     outputs:
       highest: ${{ steps.guard.outputs.highest }}
+      checkpoint-digest: ${{ steps.authorization.outputs.checkpoint-digest }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
     steps:
+      - name: Validate exact authorization outputs in the nonprivileged build
+        id: authorization
+        shell: bash
+        env:
+          GATED_SHA: ${{ inputs.gated-sha }}
+          CHECKPOINT_DIGEST: ${{ inputs.checkpoint-digest }}
+        run: |
+          set -euo pipefail
+          [[ "${GATED_SHA}" =~ ^[0-9a-f]{40}$ && "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::invalid authorization outputs"; exit 1; }
+          echo "checkpoint-digest=${CHECKPOINT_DIGEST}" >> "${GITHUB_OUTPUT}"
+
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:
@@ -331,6 +347,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Recheck authorization before branch mutation
+        shell: bash
+        env:
+          CHECKPOINT_DIGEST: ${{ needs.build.outputs.checkpoint-digest }}
+        run: |
+          set -euo pipefail
+          [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::invalid authorization output"; exit 1; }
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -365,7 +389,7 @@ jobs:
   deploy:
     name: Deploy GitHub Pages
     needs: [build, push]
-    if: ${{ inputs.serve-pages && success() }}
+    if: ${{ inputs.serve-pages && success() && needs.build.outputs.checkpoint-digest == inputs.checkpoint-digest }}
     runs-on: ubuntu-latest
     permissions:
       pages: write

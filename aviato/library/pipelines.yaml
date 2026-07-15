@@ -212,6 +212,7 @@ pypi-publish:
       permissions: ["contents: read", "id-token: write", "attestations: write"]
       runner: ubuntu-latest
       environment: pypi
+      authorization_gate: release-gate
   reusable_privileges: ["contents: read"]
   local_publisher_privileges: ["contents: read", "id-token: write", "attestations: write"]
 
@@ -229,6 +230,7 @@ ghcr-publish:
       permissions: ["contents: read", "packages: write", "security-events: write", "id-token: write", "attestations: write"]
       runner: ubuntu-latest
       environment: ghcr
+      authorization_gate: release-gate
 
 app-store-connect:
   identity: pipeline/app-store-connect/v2
@@ -247,6 +249,7 @@ app-store-connect:
       secrets: *appstore-secrets
       runner: macos-latest
       environment_input: environment-name
+      authorization_gate: release-gate
 
 docs-python-library: &docs-python-library
   identity: pipeline/docs-python-library/v2
@@ -282,6 +285,7 @@ docs-python-library: &docs-python-library
       needs: [docs-resolve, docs-release-gate, docs-security]
       permissions: ["contents: write", "pages: write", "id-token: write"]
       runner: ubuntu-latest
+      authorization_gate: docs-release-gate
 
 docs-python-service:
   <<: *docs-python-library
@@ -310,6 +314,7 @@ docs-python-service:
       needs: [docs-resolve, docs-release-gate, docs-security]
       permissions: ["contents: write", "pages: write", "id-token: write"]
       runner: ubuntu-latest
+      authorization_gate: docs-release-gate
 
 docs-python-component:
   <<: *docs-python-library
@@ -338,6 +343,7 @@ docs-python-component:
       needs: [docs-resolve, docs-release-gate, docs-security]
       permissions: ["contents: write", "pages: write", "id-token: write"]
       runner: ubuntu-latest
+      authorization_gate: docs-release-gate
 
 docs-node-service:
   <<: *docs-python-library
@@ -366,6 +372,7 @@ docs-node-service:
       needs: [docs-resolve, docs-release-gate, docs-security]
       permissions: ["contents: write", "pages: write", "id-token: write"]
       runner: ubuntu-latest
+      authorization_gate: docs-release-gate
 
 docs-swift-app:
   <<: *docs-python-library
@@ -394,6 +401,7 @@ docs-swift-app:
       needs: [docs-resolve, docs-release-gate, docs-security]
       permissions: ["contents: write", "pages: write", "id-token: write"]
       runner: ubuntu-latest
+      authorization_gate: docs-release-gate
 
 # Compatibility-only aggregate descriptors used by v1 snapshot inspection. No v2
 # profile selects them; graph mutation continues to reject a selected legacy node.

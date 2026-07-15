@@ -9,3 +9,8 @@ with:
   default-branch: "{{ default-branch }}"
   require-merged-pr: true
   release-tag: ${{ needs.docs-resolve.outputs.tag }}
+  required-workflow: aviato-ci.yml
+  checkpoint-run-id: ${{ needs.docs-resolve.outputs.checkpoint-run-id }}
+  checkpoint-digest: ${{ needs.docs-resolve.outputs.checkpoint-digest }}
+  intended-actor: ${{ needs.docs-resolve.outputs.intended-actor }}
+  merged-sha: ${{ needs.docs-resolve.outputs.merged-sha }}

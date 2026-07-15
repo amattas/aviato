@@ -14,4 +14,5 @@ with:
   platforms: linux/amd64
   release-tag: ${{ needs.release.outputs.tag }}
   gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
+  checkpoint-digest: ${{ needs.release-gate.outputs.checkpoint-digest }}
   environment-name: ghcr

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from aviato.core.protection import ProtectionReceipt
 from aviato.core.provision import minimal_settings, provision_repo
 
 from .fakeplatform import FakePlatform
@@ -14,6 +15,10 @@ DESIRED = {
     "secret_push_protection": True,
     "dependency_scanning": True,
 }
+
+
+def _ready_receipt() -> ProtectionReceipt:
+    return ProtectionReceipt("a" * 64, "ready", (), (), "b" * 64, 1, "attached", True)
 
 
 def test_minimal_settings_block_destructive_but_no_pr_gate() -> None:
@@ -36,14 +41,22 @@ def test_provision_happy_path_orders_create_minimal_scaffold_full() -> None:
     def scaffold_push() -> None:
         order.append("scaffold")
 
-    outcome = provision_repo(platform, repo="o/new", desired=DESIRED, private=True, scaffold_push=scaffold_push)
+    outcome = provision_repo(
+        platform,
+        repo="o/new",
+        desired=DESIRED,
+        private=True,
+        scaffold_push=scaffold_push,
+        full_protection=_ready_receipt,
+    )
     assert outcome.ok
     names = platform.call_names()
     # create_repo, then minimal apply, then scaffold, then full apply — in that order.
     assert names[0] == "create_repo"
-    assert names.count("apply_settings") == 2
+    assert names.count("apply_settings") == 1
     assert order == ["scaffold"]
-    # the first apply is minimal (no PR gate), the second is the full desired set.
+    # The only settings-only apply is the minimal floor. Full readiness comes from
+    # the composite executor's durable receipt, never a settings fallback.
     first_apply = next(args for name, args in platform.calls if name == "apply_settings")
     payload = first_apply[1]
     assert isinstance(payload, dict)
@@ -53,8 +66,15 @@ def test_provision_happy_path_orders_create_minimal_scaffold_full() -> None:
 def test_provision_reports_partial_state_when_full_protection_fails() -> None:
     # §8.7: a full-protection failure after the first commit must surface the
     # partially-provisioned state for the complete-protection recovery, never crash.
-    platform = FakePlatform(fail_full_protection=True)
-    outcome = provision_repo(platform, repo="o/new", desired=DESIRED, private=True, scaffold_push=lambda: None)
+    platform = FakePlatform()
+    outcome = provision_repo(
+        platform,
+        repo="o/new",
+        desired=DESIRED,
+        private=True,
+        scaffold_push=lambda: None,
+        full_protection=lambda: (_ for _ in ()).throw(RuntimeError("ruleset rejected")),
+    )
     assert outcome.partial is True
     assert outcome.full_applied is False
     assert outcome.created and outcome.minimal_applied and outcome.scaffolded
@@ -90,10 +110,24 @@ def test_provision_reports_partial_when_scaffold_push_fails() -> None:
 
 
 def test_provision_captures_skipped_security_from_full_apply() -> None:
-    # R3-5-F: the engine must CAPTURE apply_settings's skipped-toggle return onto the outcome — a
-    # CLI-level test that hand-builds the outcome wouldn't catch provision.py dropping the assignment.
+    # Settings-only application can never be promoted to composite readiness.
     platform = FakePlatform()
     platform.skipped_on_apply = ["secret_scanning"]
     outcome = provision_repo(platform, repo="o/new", desired=DESIRED, private=True, scaffold_push=lambda: None)
-    assert outcome.ok
-    assert outcome.skipped_security == ["secret_scanning"]
+    assert outcome.partial and not outcome.full_applied
+    assert "composite" in outcome.reason
+    assert platform.call_names().count("apply_settings") == 1
+
+
+def test_provision_rejects_ready_but_non_durable_composite_receipt() -> None:
+    platform = FakePlatform()
+    receipt = ProtectionReceipt("a" * 64, "ready", (), (), "b" * 64, 1, "not-requested", True)
+    outcome = provision_repo(
+        platform,
+        repo="o/new",
+        desired=DESIRED,
+        private=True,
+        scaffold_push=lambda: None,
+        full_protection=lambda: receipt,
+    )
+    assert outcome.partial and not outcome.full_applied

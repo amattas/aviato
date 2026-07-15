@@ -92,6 +92,7 @@ jobs:
       platforms: linux/amd64
       release-tag: ${{ needs.release.outputs.tag }}
       gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
+      checkpoint-digest: ${{ needs.release-gate.outputs.checkpoint-digest }}
       environment-name: ghcr
   release:
     if: ${{ github.ref_type != 'tag' && (github.event_name == 'push' || (github.event_name
@@ -129,6 +130,7 @@ jobs:
       default-branch: main
       require-merged-pr: true
       release-tag: ${{ needs.release.outputs.tag }}
+      required-workflow: aviato-ci.yml
       checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
       checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
       intended-actor: ${{ inputs.intended-actor || '' }}

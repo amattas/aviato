@@ -309,6 +309,7 @@ def test_provision_clone_scaffold_uses_same_sidecar_inventory_and_preflight(
 
     def fake_provision(*_args: object, **kwargs: object) -> ProvisionOutcome:
         callback = kwargs["scaffold_push"]
+        assert callable(kwargs["full_protection"])
         assert callable(callback)
         callback()
         clone_path = clone_paths[0]

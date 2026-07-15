@@ -105,7 +105,7 @@ jobs:
           [ "${actual}" = "${CHECKPOINT_DIGEST}" ] || { echo "::error::checkpoint digest mismatch"; exit 1; }
           jq -e --arg repo "${GITHUB_REPOSITORY}" --arg actor "${INTENDED_ACTOR}" --arg sha "${MERGED_SHA}" '
             .repository == $repo and .intended_actor == $actor and .sha == $sha
-            and .reviewer != $actor and (.expires_at | fromdateiso8601) > now
+            and .reviewer != $actor and (.expires_at | type == "number") and .expires_at > now
           ' "${document}" >/dev/null || { echo "::error::checkpoint payload is missing, stale, team-only, or mismatched"; exit 1; }
           echo "checkpoint-digest=${CHECKPOINT_DIGEST}" >> "${GITHUB_OUTPUT}"
       - name: Checkout consumer repository

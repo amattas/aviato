@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import importlib
+import inspect
 from types import SimpleNamespace
 from typing import Any
 
@@ -154,8 +155,8 @@ def test_provision_is_not_full_when_rulesets_fail_after_settings_succeed() -> No
 
 
 def test_known_tag_pattern_degradation_is_visible_and_non_ready() -> None:
-    plan = _plan(degraded_tag_pattern=True, allow_degraded_tag_pattern=False)
-    assert plan.ready is False and "tag" in " ".join(plan.blockers).lower()
+    parameters = inspect.signature(_api().build_protection_plan).parameters
+    assert "degraded_tag_pattern" not in parameters and "allow_degraded_tag_pattern" not in parameters
 
 
 def test_full_noop_rerun_is_idempotent_only_after_fresh_binding() -> None:
@@ -265,9 +266,7 @@ def test_final_convergence_barrier_catches_earlier_or_post_last_write_drift() ->
 
 
 def test_degraded_tag_fallback_requires_bound_payload_and_explicit_consent() -> None:
-    denied = _plan(degraded_tag_pattern=True)
-    allowed = _plan(degraded_tag_pattern=True, allow_degraded_tag_pattern=True)
-    assert denied.plan_id != allowed.plan_id and denied.ready is False
+    assert not hasattr(_plan(), "allow_degraded_tag_pattern")
 
 
 def test_protection_receipt_is_attached_with_ruleset_ids_and_payload_fingerprints() -> None:
@@ -297,3 +296,92 @@ def test_read_only_environment_admin_bypass_requires_false_or_manual_blocker() -
 def test_admin_bypass_false_and_independent_authorization_guard_are_both_required() -> None:
     plan = _plan()
     assert plan.ready and plan.authorization_guard and '"can_admins_bypass":false' in plan.canonical_json
+
+
+def test_ruleset_operation_preserves_confirmed_immutable_identity_and_writes_fresh_recheck() -> None:
+    api = _api()
+    plan = _plan()
+    rule = next(operation for operation in plan.operations if operation.kind == "ruleset")
+    assert rule.ruleset_identity == plan.ruleset_plan.operations[0].identity
+
+    fresh_plan = _plan()
+    fresh_rule = next(operation for operation in fresh_plan.operations if operation.kind == "ruleset")
+    written: list[Any] = []
+    state = fresh_plan
+
+    def recompute() -> Any:
+        return state
+
+    def write(operation: Any) -> None:
+        nonlocal state
+        written.append(operation)
+        state = api.plan_with_operation_converged(state, operation.identity)
+
+    api.execute_protection_plan(
+        plan,
+        confirmation=plan.plan_id,
+        recompute=recompute,
+        write=write,
+        persist_receipt=lambda _receipt: None,
+    )
+    assert any(item is fresh_rule for item in written)
+
+
+def test_ruleset_replacement_between_confirmation_and_write_is_rejected() -> None:
+    plan = _plan()
+    live = _live()
+    live["rulesets"] = [_live_ruleset(_ruleset(), ruleset_id=77)]
+    replaced = _plan(live=live)
+    writes: list[Any] = []
+    result = _api().execute_protection_plan(
+        plan,
+        confirmation=plan.plan_id,
+        recompute=lambda: replaced,
+        write=writes.append,
+        persist_receipt=lambda _receipt: None,
+    )
+    assert result.receipt.status == "indeterminate" and writes == []
+
+
+def test_unsupported_custom_environment_rule_drift_blocks_before_any_write() -> None:
+    live = _live()
+    live["environments"]["production"]["custom_rules"] = [{"type": "custom", "id": 3}]
+    plan = _plan(live=live)
+    writes: list[Any] = []
+    result = _api().execute_protection_plan(
+        plan,
+        confirmation=plan.plan_id,
+        recompute=lambda: plan,
+        write=writes.append,
+        persist_receipt=lambda _receipt: None,
+    )
+    assert not plan.ready and writes == [] and result.receipt.status == "blocked"
+
+
+def test_ready_receipt_is_built_from_final_readback_and_requires_durable_persistence() -> None:
+    api = _api()
+    plan = _plan()
+    state = plan
+    persisted: list[bytes] = []
+
+    def write(operation: Any) -> None:
+        nonlocal state
+        state = api.plan_with_operation_converged(state, operation.identity)
+
+    result = api.execute_protection_plan(
+        plan,
+        confirmation=plan.plan_id,
+        recompute=lambda: state,
+        write=write,
+        persist_receipt=lambda canonical: persisted.append(canonical),
+    )
+    assert result.receipt.ready
+    assert result.receipt.final_fingerprint == api.protection_state_fingerprint(state)
+    assert result.receipt.repository == _repo()
+    assert persisted == [result.receipt.canonical_bytes]
+
+    state = plan
+    without_persistence = api.execute_protection_plan(
+        plan, confirmation=plan.plan_id, recompute=lambda: state, write=write
+    )
+    assert not without_persistence.receipt.ready

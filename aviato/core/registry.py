@@ -341,6 +341,7 @@ class Registry:
                     "environment",
                     "environment_input",
                     "status_check",
+                    "authorization_gate",
                 },
                 f"pipeline {name!r} job {job_name!r}",
             )
@@ -362,6 +363,9 @@ class Registry:
                     job_doc.get("environment_input"), f"job {job_name!r} environment_input"
                 ),
                 status_check=_optional_string(job_doc.get("status_check"), f"job {job_name!r} status_check"),
+                authorization_gate=_optional_string(
+                    job_doc.get("authorization_gate"), f"job {job_name!r} authorization_gate"
+                ),
             )
             # Missing, malformed, or unconfined fragments are module-schema
             # failures, not deferred render surprises.

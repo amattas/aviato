@@ -209,6 +209,24 @@ def _validate_job(
             f"job {job.name!r} secrets are orphaned or undeclared: {sorted(actual_secrets ^ set(job.secrets))}"
         )
 
+    if job.authorization_gate is not None:
+        authorization_needs = {need for need in job.needs if need == job.authorization_gate}
+        serialized = yaml.safe_dump(fragment, sort_keys=True)
+        if len(authorization_needs) != 1:
+            raise CompositionError(
+                f"privileged job {job.name!r} requires exactly one nonprivileged release-gate dependency"
+            )
+        gate = next(iter(authorization_needs))
+        required_outputs = {
+            f"needs.{gate}.outputs.gated-sha",
+            f"needs.{gate}.outputs.checkpoint-digest",
+        }
+        missing_outputs = sorted(value for value in required_outputs if value not in serialized)
+        if missing_outputs:
+            raise CompositionError(
+                f"privileged job {job.name!r} does not consume exact authorization outputs: {missing_outputs}"
+            )
+
     actual_environment = _job_environment(fragment)
     if job.environment and job.environment_input:
         raise CompositionError(f"job {job.name!r} environment declares both a literal and an input")

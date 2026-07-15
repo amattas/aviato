@@ -44,8 +44,8 @@ submitter, and release actor; team-membership assertions alone are rejected.
 Each privileged job revalidates that checkpoint before environment secrets,
 OIDC, or hosted mutation.
 
-Composite confirmations bind the full before-state and primary/degraded
-ruleset payload fingerprints. A correlated unsupported tag pattern may be
-previewed only with explicit consent and remains non-ready until policy
-converges. Lost responses are resolved only by semantic readback; unreadable
+Composite confirmations bind the full before-state and exact ruleset payload
+fingerprints. There is no degraded tag-rule flag or implied-safe fallback: a
+platform rejection remains non-ready and requires a newly previewed supported
+policy. Lost responses are resolved only by semantic readback; unreadable
 state is indeterminate and is never blindly retried.

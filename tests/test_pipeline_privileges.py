@@ -6,8 +6,10 @@ from typing import cast
 import pytest
 import yaml
 
-from aviato.core.compiler import compile_desired_state
+from aviato.core.compiler import _validate_job, compile_desired_state
 from aviato.core.composition import resolve_profile
+from aviato.core.errors import CompositionError
+from aviato.core.model import WorkflowJobModule
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT, REPO_ROOT
 from aviato.validation import _TEMPLATE_EXAMPLE_VARS
@@ -47,6 +49,31 @@ def test_docs_pages_privilege_union_includes_isolated_pages_deployer() -> None:
         "pages: write",
         "id-token: write",
     }
+
+
+def test_privileged_job_requires_typed_gate_dependency_and_both_exact_outputs() -> None:
+    job = WorkflowJobModule(
+        name="publish",
+        identity="job/publish/v1",
+        fragment="unused.yml",
+        needs=("release-gate",),
+        permissions=("contents: read", "id-token: write"),
+        runner="ubuntu-latest",
+        authorization_gate="release-gate",
+    )
+    fragment = {
+        "needs": ["release-gate"],
+        "permissions": {"contents": "read", "id-token": "write"},
+        "runs-on": "ubuntu-latest",
+        "steps": [
+            {
+                "run": "true",
+                "env": {"GATED_SHA": "${{ needs.release-gate.outputs.gated-sha }}"},
+            }
+        ],
+    }
+    with pytest.raises(CompositionError, match="checkpoint-digest"):
+        _validate_job(job, fragment, workflow_name="ci", variables={})
 
 
 YamlMapping = Mapping[object, object]

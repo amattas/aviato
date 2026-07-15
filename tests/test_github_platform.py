@@ -4,6 +4,7 @@ import json
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Never, Protocol
 
 import pytest
@@ -13,6 +14,7 @@ from aviato.command import CommandError
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from aviato.core.errors import PathConfinementError
 from aviato.core.ports import Platform
+from aviato.core.ruleset_plan import RulesetIdentity
 from aviato.github_platform import (
     GitHubPlatform,
     UnmodeledProtectionError,
@@ -1443,9 +1445,7 @@ def test_probe_health_reports_degraded_ruleset_as_non_clean(monkeypatch: pytest.
     from aviato.rulesets import render_all_rulesets
 
     desired = next(
-        payload
-        for payload in render_all_rulesets(root=Path("aviato/library"))
-        if payload["target"] == "tag"
+        payload for payload in render_all_rulesets(root=Path("aviato/library")) if payload["target"] == "tag"
     )
     degraded = json.loads(json.dumps(desired))
     degraded["rules"] = [rule for rule in degraded["rules"] if rule["type"] != "tag_name_pattern"]
@@ -1614,3 +1614,39 @@ def test_probe_health_drift_workflow_absent_reads_disabled(monkeypatch: pytest.M
     assert remote["codeql_merge_protection"] is False
     assert remote["drift_automation_enabled"] is False
     assert remote["drift_automation_last_run_ok"] is None
+
+
+def test_composite_ruleset_write_uses_confirmed_id_without_mutable_name_reselection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    platform = GitHubPlatform()
+    applied: list[tuple[dict[str, Any], int | None]] = []
+    monkeypatch.setattr(
+        platform,
+        "read_rulesets",
+        lambda _repo: (_ for _ in ()).throw(AssertionError("mutable name/target reselection is forbidden")),
+    )
+    monkeypatch.setattr(
+        platform,
+        "apply_planned_ruleset",
+        lambda _repo, payload, *, ruleset_id: applied.append((payload, ruleset_id)),
+    )
+    operation = SimpleNamespace(
+        kind="ruleset",
+        desired={"name": "Protect", "target": "branch"},
+        action="update",
+        ruleset_identity=RulesetIdentity("Protect", "branch", 41, "RRS_41", "Repository", "o/r"),
+    )
+    platform.apply_protection_operation("o/r", operation)
+    assert applied == [({"name": "Protect", "target": "branch"}, 41)]
+
+
+def test_composite_ruleset_create_refuses_a_preexisting_confirmed_id() -> None:
+    operation = SimpleNamespace(
+        kind="ruleset",
+        desired={"name": "Protect", "target": "branch"},
+        action="create",
+        ruleset_identity=RulesetIdentity("Protect", "branch", 41, "RRS_41", "Repository", "o/r"),
+    )
+    with pytest.raises(ValueError, match="collided"):
+        GitHubPlatform().apply_protection_operation("o/r", operation)
