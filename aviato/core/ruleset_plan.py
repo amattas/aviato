@@ -16,6 +16,10 @@ RulesetAction = Literal["noop", "create", "update", "delete"]
 OperationDisposition = Literal["ready", "manual", "indeterminate"]
 
 _SECURITY_KEYS = ("name", "target", "enforcement", "conditions", "bypass_actors", "rules")
+_RULESET_ID_KEY = "id"
+_DISPLAY_METADATA_KEYS = frozenset(
+    {"created_at", "updated_at", "html_url", "url", "_links", "display", "source", "current_user_can_bypass"}
+)
 
 
 @dataclass(frozen=True)
@@ -73,10 +77,13 @@ class RulesetOperation:
     desired_payload: Mapping[str, Any] | None
     disposition: OperationDisposition = "ready"
     reason: str = ""
+    indeterminate_evidence: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.desired_payload is not None:
             object.__setattr__(self, "desired_payload", deep_freeze(self.desired_payload))
+        if self.indeterminate_evidence is not None:
+            object.__setattr__(self, "indeterminate_evidence", deep_freeze(self.indeterminate_evidence))
 
 
 @dataclass(frozen=True)
@@ -122,6 +129,30 @@ def _canonical_value(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, bool)):
         return value
     raise ValueError(f"ruleset security value has unsupported type {type(value).__name__}")
+
+
+def _evidence_value(value: Any) -> Any:
+    """Encode invalid input losslessly enough to keep distinct failures distinct."""
+
+    if isinstance(value, Mapping):
+        return {
+            "mapping": sorted(
+                [(_evidence_value(key), _evidence_value(item)) for key, item in value.items()],
+                key=_canonical_json,
+            )
+        }
+    if isinstance(value, (list, tuple)):
+        return {"sequence": [_evidence_value(item) for item in value]}
+    if isinstance(value, bytes):
+        return {"bytes_hex": value.hex()}
+    if isinstance(value, float):
+        return {"float": repr(value)}
+    if value is None or isinstance(value, (str, int, bool)):
+        return {type(value).__name__: value}
+    raise ValueError(
+        "cannot canonically bind malformed ruleset value of type "
+        f"{type(value).__module__}.{type(value).__qualname__}"
+    )
 
 
 def _normalize_ref_values(values: object, *, target: str, default_branch: str) -> tuple[str, ...]:
@@ -201,6 +232,8 @@ def _security_payload(
             "bypass_actors": _canonical_value(bypass),
             "rules": _canonical_value(rules),
         }
+        for key in sorted(set(payload) - set(_SECURITY_KEYS) - _DISPLAY_METADATA_KEYS - {_RULESET_ID_KEY}):
+            security[key] = _canonical_value(payload[key])
     except (KeyError, TypeError, ValueError) as exc:
         return None, str(exc)
     return deep_freeze(security), ""
@@ -279,6 +312,11 @@ def _plan_payload(
                 "desired_payload": (
                     deep_thaw(operation.desired_payload) if operation.desired_payload is not None else None
                 ),
+                "indeterminate_evidence": (
+                    deep_thaw(operation.indeterminate_evidence)
+                    if operation.indeterminate_evidence is not None
+                    else None
+                ),
             }
             for operation in operations
         ],
@@ -344,6 +382,11 @@ def build_ruleset_plan(
                 desired_security,
                 "indeterminate",
                 detail,
+                {
+                    "classification": detail,
+                    "desired": _evidence_value(desired_raw),
+                    "live": _evidence_value(live_raw),
+                },
             )
         elif desired_security is None:
             operation = RulesetOperation(
@@ -462,6 +505,59 @@ def verify_recomputed_plan(expected: RulesetPlan, recomputed: RulesetPlan) -> No
         raise ValueError("ruleset plan changed after preview; inspect the new plan and confirm its ID")
 
 
+def _same_operation_binding(expected: RulesetOperation, current: RulesetOperation) -> bool:
+    return replace(expected, operation_id="") == replace(current, operation_id="")
+
+
+def _verify_evolving_plan(
+    original: RulesetPlan,
+    current: RulesetPlan,
+    *,
+    completed: frozenset[tuple[str, str]],
+    completed_live_ids: Mapping[tuple[str, str], int],
+) -> Mapping[tuple[str, str], RulesetOperation]:
+    if (
+        original.repository != current.repository
+        or original.tool_version != current.tool_version
+        or original.declaration_pin != current.declaration_pin
+        or original.snapshot_sha != current.snapshot_sha
+    ):
+        raise ValueError("ruleset plan context changed after preview")
+    original_by_key = {operation.identity.key: operation for operation in original.operations}
+    current_by_key = {operation.identity.key: operation for operation in current.operations}
+    if len(current_by_key) != len(current.operations):
+        raise ValueError("recomputed ruleset plan contains duplicate operations")
+    unexpected = set(current_by_key) - set(original_by_key)
+    if unexpected:
+        raise ValueError(f"ruleset plan gained unexpected operations: {sorted(unexpected)!r}")
+    for key, expected in original_by_key.items():
+        candidate = current_by_key.get(key)
+        if key not in completed:
+            if candidate is None or not _same_operation_binding(expected, candidate):
+                raise ValueError("ruleset plan changed after preview; inspect and confirm a new plan")
+            continue
+        if expected.action == "delete":
+            if candidate is not None:
+                raise ValueError("completed ruleset deletion did not converge")
+            continue
+        if (
+            candidate is None
+            or candidate.action != "noop"
+            or candidate.comparison.state != "equal"
+            or candidate.disposition != "ready"
+            or candidate.desired_fingerprint != expected.desired_fingerprint
+            or candidate.before_fingerprint != expected.desired_fingerprint
+            or (expected.identity.live_id is not None and candidate.identity.live_id != expected.identity.live_id)
+            or (
+                expected.identity.live_id is None
+                and key in completed_live_ids
+                and candidate.identity.live_id != completed_live_ids[key]
+            )
+        ):
+            raise ValueError("completed ruleset write did not converge to the confirmed desired state")
+    return current_by_key
+
+
 def execute_ruleset_plan(
     plan: RulesetPlan,
     *,
@@ -490,6 +586,8 @@ def execute_ruleset_plan(
         )
 
     results: list[RulesetOperationResult] = []
+    completed: set[tuple[str, str]] = set()
+    completed_live_ids: dict[tuple[str, str], int] = {}
     for operation in plan.operations:
         if operation.action == "noop":
             results.append(
@@ -503,11 +601,24 @@ def execute_ruleset_plan(
             )
             continue
         current = recompute()
-        verify_recomputed_plan(plan, current)
+        current_by_key = _verify_evolving_plan(
+            plan,
+            current,
+            completed=frozenset(completed),
+            completed_live_ids=completed_live_ids,
+        )
+        for completed_key in completed:
+            completed_operation = current_by_key.get(completed_key)
+            if completed_operation is not None and completed_operation.identity.live_id is not None:
+                completed_live_ids.setdefault(completed_key, completed_operation.identity.live_id)
+        current_operation = current_by_key.get(operation.identity.key)
+        if current_operation is None or current_operation.disposition != "ready":
+            raise ValueError("ruleset operation lost apply authorization during recheck")
         if operation.action == "delete":
-            delete(operation)
+            delete(current_operation)
         else:
-            upsert(operation)
+            upsert(current_operation)
+        completed.add(operation.identity.key)
         results.append(
             RulesetOperationResult(
                 operation.operation_id,

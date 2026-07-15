@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Never, Protocol, cast
 
 import pytest
 
@@ -504,6 +504,27 @@ def test_apply_planned_ruleset_uses_exact_selected_endpoint(monkeypatch: pytest.
     github.apply_planned_ruleset("o/r", {"name": "Create"}, ruleset_id=None)
 
     assert submitted == [("repos/o/r/rulesets/41", "PUT"), ("repos/o/r/rulesets", "POST")]
+
+
+def test_apply_planned_ruleset_never_retries_with_degraded_unconfirmed_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _tag_ruleset_payload()
+    submitted: list[dict[str, Any]] = []
+
+    def reject(_endpoint: str, _method: str, candidate: dict[str, Any]) -> Never:
+        submitted.append(candidate)
+        raise github.GitHubAPIError(
+            "repos/o/r/rulesets",
+            1,
+            "tag_name_pattern is not a supported repository rule type (HTTP 422)",
+        )
+
+    monkeypatch.setattr(github, "_submit_ruleset", reject)
+
+    with pytest.raises(github.GitHubAPIError):
+        github.apply_planned_ruleset("o/r", payload, ruleset_id=41)
+    assert submitted == [payload]
 
 
 def test_upsert_ruleset_matches_by_name_and_target_not_name_alone(monkeypatch: pytest.MonkeyPatch) -> None:

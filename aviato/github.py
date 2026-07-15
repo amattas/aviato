@@ -679,17 +679,7 @@ def apply_planned_ruleset(
         raise ValueError("planned ruleset id must be a positive integer")
     method = "PUT" if ruleset_id is not None else "POST"
     endpoint = f"repos/{slug}/rulesets/{ruleset_id}" if ruleset_id is not None else f"repos/{slug}/rulesets"
-    try:
-        _submit_ruleset(endpoint, method, payload)
-    except GitHubAPIError as exc:
-        degraded = _without_tag_name_pattern(payload)
-        if degraded is None or not _unsupported_tag_metadata_rule(exc.stderr):
-            raise
-        _submit_ruleset(endpoint, method, degraded)
-        return RulesetApplyResult(
-            f"{'Updated' if ruleset_id is not None else 'Created'} {name} on {slug}",
-            ("tag_name_pattern",),
-        )
+    _submit_ruleset(endpoint, method, payload)
     return RulesetApplyResult(f"{'Updated' if ruleset_id is not None else 'Created'} {name} on {slug}")
 
 

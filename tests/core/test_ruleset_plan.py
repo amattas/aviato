@@ -336,3 +336,106 @@ def test_indeterminate_condition_comparison_cannot_apply() -> None:
             upsert=lambda _operation: pytest.fail("indeterminate plan must not write"),
             delete=lambda _operation: pytest.fail("indeterminate plan must not delete"),
         )
+
+
+def test_two_sequential_writes_recheck_explicitly_evolving_live_state() -> None:
+    api = _api()
+    desired = [_desired(name="A"), _desired(name="B")]
+    live = [_live(ruleset_id=41, desired=_desired(name="A")), _live(ruleset_id=42, desired=_desired(name="B"))]
+    for payload in live:
+        payload["rules"][0]["parameters"]["required_approving_review_count"] = 1
+    mutable_live = copy.deepcopy(live)
+    plan = _plan(desired=desired, live=mutable_live)
+    rechecks: list[tuple[str, ...]] = []
+    writes: list[str] = []
+
+    def recompute() -> Any:
+        rechecks.append(tuple(payload["name"] for payload in mutable_live))
+        return _plan(desired=desired, live=mutable_live)
+
+    def upsert(operation: Any) -> None:
+        writes.append(operation.identity.name)
+        for index, payload in enumerate(mutable_live):
+            if payload["name"] == operation.identity.name:
+                replacement = copy.deepcopy(desired[index])
+                replacement["id"] = payload["id"]
+                replacement["conditions"] = copy.deepcopy(payload["conditions"])
+                mutable_live[index] = replacement
+                break
+
+    result = api.execute_ruleset_plan(
+        plan,
+        confirmation=plan.plan_id,
+        recompute=recompute,
+        upsert=upsert,
+        delete=lambda _operation: pytest.fail("no deletion expected"),
+    )
+
+    assert result.success is True
+    assert writes == ["A", "B"]
+    assert len(rechecks) == 2
+
+
+def test_ready_delete_rechecks_receipt_authorization_and_uses_no_stale_operation() -> None:
+    api = _api()
+    prior_payload = _desired(name="Retired")
+    fingerprint = api.ruleset_payload_fingerprint(prior_payload, target="branch", default_branch="main")
+    inventory = ManagedInventory(
+        schema_version=1,
+        profile="python-library",
+        profile_identity="aviato-profile/python-library/v1",
+        pin="1.0.0",
+        snapshot_commit=PRIOR_SNAPSHOT,
+        entries={},
+        owned_rulesets=(OwnedRulesetEntry("Retired", "branch", PRIOR_SNAPSHOT, fingerprint),),
+    )
+    authorized = True
+
+    def verify(_candidate: object, _binding: object) -> bool:
+        return authorized
+
+    kwargs = {
+        "desired": [],
+        "live": [_live(desired=prior_payload)],
+        "prior_inventory": inventory,
+        "prior_desired_payloads": [prior_payload],
+        "deletion_receipt": {"receipt": 1},
+        "receipt_verifier": verify,
+    }
+    plan = _plan(**kwargs)
+    authorized = False
+    deletes: list[str] = []
+
+    with pytest.raises(ValueError, match="authorization|applicable|changed"):
+        api.execute_ruleset_plan(
+            plan,
+            confirmation=plan.plan_id,
+            recompute=lambda: _plan(**kwargs),
+            upsert=lambda _operation: pytest.fail("no upsert expected"),
+            delete=lambda operation: deletes.append(operation.identity.name),
+        )
+    assert deletes == []
+
+
+def test_future_top_level_security_state_is_bound_or_indeterminate() -> None:
+    baseline = _plan()
+    changed = _live()
+    changed["future_security_mode"] = {"level": "strict"}
+    changed_plan = _plan(live=[changed])
+
+    assert changed_plan.plan_id != baseline.plan_id
+    assert changed_plan.operations[0].comparison.state in {"changed", "indeterminate"}
+
+
+def test_distinct_malformed_condition_state_never_collapses_to_one_plan_id() -> None:
+    unknown_token = _desired()
+    unknown_token["conditions"] = {"ref_name": {"include": ["~FUTURE"], "exclude": []}}
+    malformed_shape = _desired()
+    malformed_shape["conditions"] = {"ref_name": {"include": "~ALL", "exclude": []}}
+
+    first = _plan(desired=[unknown_token])
+    second = _plan(desired=[malformed_shape])
+
+    assert first.operations[0].comparison.state == "indeterminate"
+    assert second.operations[0].comparison.state == "indeterminate"
+    assert first.plan_id != second.plan_id
