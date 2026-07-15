@@ -1416,8 +1416,8 @@ def test_read_rulesets_fails_closed_on_per_id_get_error(monkeypatch: pytest.Monk
 def test_read_rulesets_returns_full_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "repository_rulesets", lambda repo: [{"id": 7, "name": "X"}, {"name": "no-id"}])
     monkeypatch.setattr(github, "repository_ruleset", lambda repo, rid: {"id": rid, "name": "X", "rules": []})
-    payloads = GitHubPlatform().read_rulesets("o/r")
-    assert payloads == [{"id": 7, "name": "X", "rules": []}]  # the id-less summary is skipped
+    with pytest.raises(github.SettingsReadError, match="missing a valid id"):
+        GitHubPlatform().read_rulesets("o/r")
 
 
 def test_read_rulesets_preserves_degraded_payload_for_non_clean_drift(monkeypatch: pytest.MonkeyPatch) -> None:

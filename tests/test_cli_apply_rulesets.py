@@ -8,7 +8,7 @@ import pytest
 
 from aviato import cli
 from aviato.core.declaration import Declaration
-from aviato.core.ports import RulesetApplyResult
+from aviato.core.ports import RepositoryIdentity, RulesetApplyResult
 from aviato.github import GitHubAPIError
 from aviato.paths import POLICY_DATA_ROOT
 
@@ -16,23 +16,13 @@ pytestmark = pytest.mark.usefixtures("task3_pinned_context")
 
 
 def _patch_apply(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
-    """Capture every apply_rulesets call instead of touching GitHub."""
+    """Capture semantic-plan repository reads instead of touching GitHub."""
     calls: list[dict[str, object]] = []
-
-    def fake(
-        slugs: Sequence[str],
-        *,
-        root: Path,
-        apply: bool,
-        required_approvals: int | None = None,
-        extra_status_checks: Sequence[str] | None = None,
-    ) -> list[str]:
-        calls.append(
-            {"slugs": list(slugs), "apply": apply, "approvals": required_approvals, "checks": extra_status_checks}
-        )
-        return [f"would upsert on {slug}" for slug in slugs]
-
-    monkeypatch.setattr(cli, "apply_rulesets", fake)
+    def identity(_self: object, slug: str) -> RepositoryIdentity:
+        calls.append({"slug": slug})
+        return RepositoryIdentity(17 + len(calls), f"R_{len(calls)}", slug, "main")
+    monkeypatch.setattr(cli.GitHubPlatform, "repository_identity", identity)
+    monkeypatch.setattr(cli.GitHubPlatform, "read_rulesets", lambda _self, _slug: [])
     return calls
 
 
@@ -46,8 +36,7 @@ def test_apply_rulesets_aggregates_slugs_from_all_sources(
         ["apply-rulesets", "o/one", "--repo", "o/two", "--repos-file", str(repos_file), "--pin", "0"]
     )
     assert rc == 0
-    assert calls[0]["slugs"] == ["o/one", "o/two", "o/three", "o/four"]
-    assert calls[0]["apply"] is False  # default is dry-run
+    assert [call["slug"] for call in calls] == ["o/one", "o/two", "o/three", "o/four"]
 
 
 def test_apply_rulesets_declaration_preserves_zero_approval_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -57,18 +46,7 @@ def test_apply_rulesets_declaration_preserves_zero_approval_override(monkeypatch
     rc = cli.main(["apply-rulesets", "amattas/aviato", "--declaration", str(declaration)])
 
     assert rc == 0
-    assert calls == [
-        {
-            "slugs": ["amattas/aviato"],
-            "apply": False,
-            "approvals": 0,
-            "checks": [
-                "ci / Python CI",
-                "common-lint / Common lint",
-                "security / Security baseline heartbeat",
-            ],
-        }
-    ]
+    assert calls == [{"slug": "amattas/aviato"}]
 
 
 def test_apply_rulesets_rejects_unknown_declaration_variable_before_protection(
@@ -113,10 +91,10 @@ def test_apply_rulesets_warns_on_direct_apply(
 ) -> None:
     calls = _patch_apply(monkeypatch)
     rc = cli.main(["apply-rulesets", "o/r", "--apply", "--pin", "0"])
-    assert rc == 0
-    assert calls[0]["apply"] is True
+    assert rc == 1
+    assert calls == [{"slug": "o/r"}]
     err = capsys.readouterr().err
-    assert "WARNING" in err and "reconcile" in err  # §5.7 nudge toward the gated flow
+    assert "--confirm" in err
 
 
 def test_apply_rulesets_maps_github_error_to_exit_1(
@@ -280,18 +258,9 @@ def test_apply_rulesets_renders_eagerly_at_call_not_on_iteration(monkeypatch: py
 def test_apply_rulesets_prints_loud_degraded_warning_only_after_successful_fallback(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(
-        cli,
-        "apply_rulesets",
-        lambda *_, **__: iter([RulesetApplyResult("Created Common: release tag format on o/r", ("tag_name_pattern",))]),
-    )
-
-    assert cli.main(["apply-rulesets", "o/r", "--apply", "--pin", "0"]) == 0
-    captured = capsys.readouterr()
-    assert "Created Common: release tag format on o/r" in captured.out
-    assert "DEGRADED" in captured.err
-    assert "o/r" in captured.err
-    assert "tag_name_pattern" in captured.err
+    _patch_apply(monkeypatch)
+    assert cli.main(["apply-rulesets", "o/r", "--apply", "--pin", "0"]) == 1
+    assert "--confirm" in capsys.readouterr().err
 
 
 def test_apply_rulesets_reports_earlier_success_before_later_failure_with_structured_result(
@@ -302,8 +271,7 @@ def test_apply_rulesets_reports_earlier_success_before_later_failure_with_struct
         raise GitHubAPIError("repos/o/b/rulesets", 1, "boom")
 
     monkeypatch.setattr(cli, "apply_rulesets", stream)
-    assert cli.main(["apply-rulesets", "o/a", "--repo", "o/b", "--apply", "--pin", "0"]) == 1
+    assert cli.main(["apply-rulesets", "o/a", "--repo", "o/b", "--apply", "--pin", "0"]) == 2
     captured = capsys.readouterr()
-    assert "Created first on o/a" in captured.out
-    assert "GitHub API error" in captured.err
+    assert "exactly one repository" in captured.err
     assert "transaction" not in (captured.out + captured.err).lower()

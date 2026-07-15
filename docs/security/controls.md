@@ -93,3 +93,12 @@ baseline capabilities. High/critical findings block; CodeQL is queried for the
 exact ref and reinforced by a ruleset threshold; heartbeat is independent
 freshness evidence. Verification: security-baseline tests, CodeQL canary, and
 live alert inspection.
+
+## SEC-011 — Bind ruleset writes to reviewed semantic state
+
+Ruleset preview emits a canonical digest covering immutable repository identity, Library pin and
+snapshot, normalized conditions, bypass actors, all rules and parameters, before fingerprints,
+desired payloads, actions, and selected live IDs. Apply requires that digest for one repository
+and rechecks the complete plan before every write. Partial or malformed reads are indeterminate.
+Deletion additionally requires owned prior inventory, reproducible prior desired state, an
+unchanged live fingerprint, and the Task 11 fail-closed receipt verifier.

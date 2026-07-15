@@ -16,14 +16,18 @@ Ruleset = dict[str, Any]
 def test_every_rendered_ruleset_explicitly_clears_bypass_actors() -> None:
     # A GitHub ruleset PUT preserves omitted bypass_actors. The desired payload must
     # therefore send an explicit empty list or an interim live bypass survives apply.
-    payloads = render_all_rulesets(root=POLICY_DATA_ROOT, )
+    payloads = render_all_rulesets(
+        root=POLICY_DATA_ROOT,
+    )
     assert payloads
     assert all(payload.get("bypass_actors") == [] for payload in payloads)
 
 
 def test_rendered_tag_ruleset_uses_policy_pattern() -> None:
     policy = load_policy()
-    payloads = render_all_rulesets(root=POLICY_DATA_ROOT, )
+    payloads = render_all_rulesets(
+        root=POLICY_DATA_ROOT,
+    )
     tag_rulesets = [payload for payload in payloads if payload["target"] == "tag"]
 
     assert tag_rulesets
@@ -35,7 +39,9 @@ def test_tag_ruleset_excludes_bare_floating_major_aliases() -> None:
     # mutable pointer. The tag ruleset must EXCLUDE such aliases from the exact-X.Y.Z
     # name pattern, or the `git push -f origin 1` is rejected and floating-major
     # advancement breaks. The legacy v-prefixed excludes no longer match a bare alias.
-    payloads = render_all_rulesets(root=POLICY_DATA_ROOT, )
+    payloads = render_all_rulesets(
+        root=POLICY_DATA_ROOT,
+    )
     tag = next(p for p in payloads if p["target"] == "tag")
     exclude = tag["conditions"]["ref_name"]["exclude"]
     assert "refs/tags/[0-9]" in exclude
@@ -48,7 +54,9 @@ def test_tag_ruleset_excludes_floating_major_aliases_for_realistic_widths() -> N
     # "digits-only of any length" (``*`` also matches the dots in 1.2.3), so the
     # exclude list enumerates a generous range of fixed widths. A previously-finite
     # 1–4 digit list would reject a 10000.0.0 release's floating tag.
-    payloads = render_all_rulesets(root=POLICY_DATA_ROOT, )
+    payloads = render_all_rulesets(
+        root=POLICY_DATA_ROOT,
+    )
     tag = next(p for p in payloads if p["target"] == "tag")
     exclude = tag["conditions"]["ref_name"]["exclude"]
     for width in range(1, 10):
@@ -67,7 +75,11 @@ def _status_contexts(payloads: list[Ruleset]) -> set[str]:
 
 
 def test_ruleset_without_profile_has_only_common_checks() -> None:
-    contexts = _status_contexts(render_all_rulesets(root=POLICY_DATA_ROOT, ))
+    contexts = _status_contexts(
+        render_all_rulesets(
+            root=POLICY_DATA_ROOT,
+        )
+    )
     assert "ci / Python CI" not in contexts
     assert "common-lint / Common lint" in contexts
 
@@ -89,7 +101,9 @@ def test_every_rendered_branch_ruleset_has_exact_codeql_merge_gate() -> None:
     pipeline = yaml.safe_load((POLICY_DATA_ROOT / "pipelines.yaml").read_text(encoding="utf-8"))["security-baseline"]
     expected_tool = pipeline["code_scanning_tool"]
     assert expected_tool == github.EXPECTED_CODEQL_RULE
-    payloads = render_all_rulesets(root=POLICY_DATA_ROOT, )
+    payloads = render_all_rulesets(
+        root=POLICY_DATA_ROOT,
+    )
     branches = [payload for payload in payloads if payload["target"] == "branch"]
     assert branches
     for branch in branches:
@@ -99,7 +113,13 @@ def test_every_rendered_branch_ruleset_has_exact_codeql_merge_gate() -> None:
 
 
 def test_codeql_ruleset_threshold_removal_or_weakening_is_drift() -> None:
-    branch = next(payload for payload in render_all_rulesets(root=POLICY_DATA_ROOT, ) if payload["target"] == "branch")
+    branch = next(
+        payload
+        for payload in render_all_rulesets(
+            root=POLICY_DATA_ROOT,
+        )
+        if payload["target"] == "branch"
+    )
     assert ruleset_content_drift(branch, copy.deepcopy(branch)) is False
 
     missing = copy.deepcopy(branch)
@@ -134,7 +154,11 @@ def test_required_approvals_default_uses_policy() -> None:
     from aviato.policy import default_required_approvals, load_policy
 
     expected = default_required_approvals(load_policy())
-    counts = _approval_counts(render_all_rulesets(root=POLICY_DATA_ROOT, ))
+    counts = _approval_counts(
+        render_all_rulesets(
+            root=POLICY_DATA_ROOT,
+        )
+    )
     assert counts
     assert all(c == expected for c in counts)
 
@@ -173,7 +197,7 @@ def test_ruleset_content_drift_ignores_github_added_metadata() -> None:
     for rule in live["rules"]:
         rule.setdefault("parameters", {})["github_added_default"] = "x"
     live["rules"].append({"type": "creation"})  # a benign EXTRA live rule
-    assert ruleset_content_drift(branch, live) is False
+    assert ruleset_content_drift(branch, live) is True  # all rule parameters are security-relevant
 
 
 def test_ruleset_content_drift_detects_disabled_enforcement() -> None:
@@ -271,17 +295,30 @@ def test_policy_ruleset_data_ships_in_the_package() -> None:
     assert (POLICY_DATA_ROOT / "rulesets.yml").is_file()
     assert list((POLICY_DATA_ROOT / "rulesets").glob("*.json"))
     # And rendering resolves entirely from the packaged location (no repo-root dependency).
-    assert len(render_all_rulesets(root=POLICY_DATA_ROOT, )) == 2
+    assert (
+        len(
+            render_all_rulesets(
+                root=POLICY_DATA_ROOT,
+            )
+        )
+        == 2
+    )
 
 
 def test_drift_distinguishes_target() -> None:
     # R3-10: a live ruleset sharing a name but a different target must NOT satisfy the desired one.
     from aviato.rulesets import drifted_ruleset_names
 
-    desired = [{"name": "X", "target": "branch", "enforcement": "active", "rules": []}]
-    live_wrong_target = [{"name": "X", "target": "tag", "enforcement": "active", "rules": []}]
+    common = {
+        "enforcement": "active",
+        "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}},
+        "bypass_actors": [],
+        "rules": [],
+    }
+    desired = [{"name": "X", "target": "branch", **common}]
+    live_wrong_target = [{"name": "X", "target": "tag", **common}]
     assert drifted_ruleset_names(desired, live_wrong_target) == ["X"]  # missing the branch one
-    live_right = [{"name": "X", "target": "branch", "enforcement": "active", "rules": []}]
+    live_right = [{"name": "X", "target": "branch", **common}]
     assert drifted_ruleset_names(desired, live_right) == []
 
 
@@ -301,7 +338,13 @@ def test_render_rejects_unknown_patch_key() -> None:
 def test_missing_tag_metadata_rule_is_non_clean_drift() -> None:
     from aviato.rulesets import drifted_ruleset_names
 
-    desired = next(payload for payload in render_all_rulesets(root=POLICY_DATA_ROOT, ) if payload["target"] == "tag")
+    desired = next(
+        payload
+        for payload in render_all_rulesets(
+            root=POLICY_DATA_ROOT,
+        )
+        if payload["target"] == "tag"
+    )
     degraded = copy.deepcopy(desired)
     degraded["rules"] = [rule for rule in degraded["rules"] if rule["type"] != "tag_name_pattern"]
 

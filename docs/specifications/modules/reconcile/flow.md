@@ -58,3 +58,12 @@ flowchart TD
     K --> L["Apply"]
     L --> Mc["Comment result on issue (leave open for audit)"]
 ```
+
+### Ruleset reconciliation binding
+
+The canonical ruleset plan binds immutable repository ID/node ID, canonical slug, default branch,
+tool version, declaration pin, snapshot SHA, full live fingerprints, desired security payloads,
+actions, and selected ruleset IDs. Apply reconstructs the whole plan immediately before each
+sequential write. Any binding change or indeterminate comparison requires a new preview.
+Retirement stays manual unless prior inventory, prior rendering, unchanged live state, and a Task
+11 signature-verified trusted-admin receipt all bind exactly.

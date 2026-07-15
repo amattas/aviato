@@ -492,6 +492,20 @@ def test_upsert_ruleset_puts_to_existing_id_when_present(monkeypatch: pytest.Mon
     assert "repos/o/r/rulesets/4242" in calls[0]
 
 
+def test_apply_planned_ruleset_uses_exact_selected_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    submitted: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        github,
+        "_submit_ruleset",
+        lambda endpoint, method, payload: submitted.append((endpoint, method)),
+    )
+
+    github.apply_planned_ruleset("o/r", {"name": "Protect"}, ruleset_id=41)
+    github.apply_planned_ruleset("o/r", {"name": "Create"}, ruleset_id=None)
+
+    assert submitted == [("repos/o/r/rulesets/41", "PUT"), ("repos/o/r/rulesets", "POST")]
+
+
 def test_upsert_ruleset_matches_by_name_and_target_not_name_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     # N1 (cycle 11): a live ruleset that shares a NAME but targets a different ref kind must NOT be
     # updated — that would overwrite the wrong protected resource. The desired payload creates its own.

@@ -64,3 +64,11 @@ sequenceDiagram
         Note over Auto: NO settings mutation performed
     end
 ```
+
+### Semantic ruleset plans
+
+Every paginated ruleset summary is resolved to full detail. Security fields are compared
+semantically; ref-name include/exclude sets are sorted and deduplicated, and only documented
+`~DEFAULT_BRANCH` and target-appropriate `~ALL` tokens are resolved. Unknown tokens, keys, or
+malformed shapes are indeterminate and never clean. Preview prints a per-repository plan ID;
+apply accepts one repository and requires `--confirm <plan-id>`.

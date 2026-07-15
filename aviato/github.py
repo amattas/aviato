@@ -665,3 +665,40 @@ def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> Rulese
         return RulesetApplyResult(f"{verb} {name} on {slug}", ("tag_name_pattern",))
     verb = "Updated" if existing_id else "Created"
     return RulesetApplyResult(f"{verb} {name} on {slug}")
+
+
+def apply_planned_ruleset(
+    slug: str, payload: dict[str, Any], *, ruleset_id: int | None
+) -> RulesetApplyResult:
+    """Write to the exact endpoint selected by a confirmed semantic plan."""
+
+    name = payload.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("ruleset payload must include a non-empty name")
+    if ruleset_id is not None and (isinstance(ruleset_id, bool) or ruleset_id <= 0):
+        raise ValueError("planned ruleset id must be a positive integer")
+    method = "PUT" if ruleset_id is not None else "POST"
+    endpoint = f"repos/{slug}/rulesets/{ruleset_id}" if ruleset_id is not None else f"repos/{slug}/rulesets"
+    try:
+        _submit_ruleset(endpoint, method, payload)
+    except GitHubAPIError as exc:
+        degraded = _without_tag_name_pattern(payload)
+        if degraded is None or not _unsupported_tag_metadata_rule(exc.stderr):
+            raise
+        _submit_ruleset(endpoint, method, degraded)
+        return RulesetApplyResult(
+            f"{'Updated' if ruleset_id is not None else 'Created'} {name} on {slug}",
+            ("tag_name_pattern",),
+        )
+    return RulesetApplyResult(f"{'Updated' if ruleset_id is not None else 'Created'} {name} on {slug}")
+
+
+def delete_planned_ruleset(slug: str, *, ruleset_id: int) -> None:
+    """Delete the exact ruleset authorized by a verified retirement receipt."""
+
+    if isinstance(ruleset_id, bool) or not isinstance(ruleset_id, int) or ruleset_id <= 0:
+        raise ValueError("planned ruleset id must be a positive integer")
+    endpoint = f"repos/{slug}/rulesets/{ruleset_id}"
+    result = run(["gh", "api", "--method", "DELETE", endpoint], check=False)
+    if result.returncode != 0:
+        raise GitHubAPIError(endpoint, result.returncode, result.stderr)

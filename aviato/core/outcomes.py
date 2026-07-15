@@ -35,3 +35,22 @@ class TransitionResult:
         return self.convergence_accepted and all(
             operation.status is OperationStatus.COMPLETED for operation in self.operations
         )
+
+
+@dataclass(frozen=True)
+class RulesetOperationResult:
+    operation_id: str
+    action: str
+    identity: str
+    status: OperationStatus
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class RulesetExecutionResult:
+    plan_id: str
+    operations: tuple[RulesetOperationResult, ...]
+
+    @property
+    def success(self) -> bool:
+        return all(operation.status is OperationStatus.COMPLETED for operation in self.operations)

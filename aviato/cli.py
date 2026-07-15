@@ -29,7 +29,7 @@ from .core.file_drift_flow import _PROPOSABLE, FileDriftOutcome, run_file_drift
 from .core.fleet import RepoScan, scan_fleet
 from .core.inventory import ManagedInventory, load_managed_inventory
 from .core.marker import parse_marker_from_text
-from .core.model import ResolvedSet, Unknown, VariableSpec
+from .core.model import ResolvedSet, Unknown, VariableSpec, deep_thaw
 from .core.offboarding import plan_offboarding_transition
 from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, resolved_artifacts
 from .core.operation_context import (
@@ -44,6 +44,7 @@ from .core.provision import provision_repo
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.repin import plan_repin
+from .core.ruleset_plan import RulesetPlan, build_ruleset_plan, execute_ruleset_plan, require_apply_confirmation
 from .core.scaffold import (
     ScaffoldItem,
     inventory_entry_for_item,
@@ -73,7 +74,8 @@ from .paths import REPO_ROOT
 from .plugins.version_formats import bump_files
 from .policy import library_repository, load_policy
 from .repos import is_owner_repo_slug, normalize_slug, remote_url, working_tree_clean
-from .rulesets import apply_rulesets, render_all_rulesets
+from .rulesets import apply_rulesets as apply_rulesets
+from .rulesets import render_all_rulesets
 from .validation import validate
 
 # The Library's scheduled drift/report automation workflow identifier (§5.5/§5.6). This is a
@@ -273,26 +275,24 @@ def _profile_status_checks(
     return list(resolved.settings.get("default_branch", {}).get("required_status_checks", []))
 
 
+def _derive_ruleset_declaration_slug(root: Path, remote: str, supplied: Sequence[str]) -> str:
+    """Bind declaration mode to the checkout's GitHub repository identity."""
+
+    derived = normalize_slug(remote)
+    if not derived:
+        raise ValueError(f"declaration repository {root} has no canonical GitHub remote")
+    if any(candidate.casefold() != derived.casefold() for candidate in supplied):
+        raise ValueError(
+            f"supplied repository does not match declaration checkout GitHub repository {derived}"
+        )
+    return derived
+
+
 def cmd_apply_rulesets(args: argparse.Namespace) -> int:
     slugs = list(args.repo_pos)
     slugs.extend(args.repo or [])
     if args.repos_file:
         slugs.extend(_read_repos_file(Path(args.repos_file)))
-
-    if not slugs:
-        print("at least one repository slug is required", file=sys.stderr)
-        return 2
-
-    # R3-5: validate each slug is a clean OWNER/REPO locally (like cmd_provision / the proposals),
-    # so a malformed token fails loud here instead of as a confusing 404 after an API round-trip.
-    bad = [slug for slug in slugs if not is_owner_repo_slug(slug)]
-    if bad:
-        print(f"invalid repository slug(s) {bad}; expected OWNER/REPO", file=sys.stderr)
-        return 2
-
-    # C12-3: if a consumer declaration is given, resolve the profile WITH its overrides so the applied
-    # rulesets carry the SAME status checks + approvals drift detection used — never re-adding a check
-    # the consumer removed. Otherwise fall back to the base profile (operator-direct provisioning).
     required_approvals = args.required_approvals
     try:
         if getattr(args, "declaration", None):
@@ -305,55 +305,104 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
             root = canonical_repository_root(supplied_declaration.parent.parent)
             declaration = _load_consumer_declaration(root)
             context = _open_consumer_context(root, declaration)
+            slugs = [_derive_ruleset_declaration_slug(root, remote_url(root), slugs)]
             resolved = resolve_profile(context.registry, declaration.profile, overrides=declaration.overrides)
             resolve_declared_variables(resolved.variables, declaration.variables)
             extra_checks = _profile_status_checks(context.registry, declaration.profile, declaration.overrides)
             if required_approvals is None:
                 _db = resolved.settings.get("default_branch", {})
                 required_approvals = _db.get("required_reviews")
+            policy_root = context.policy_root
+            declaration_pin = declaration.version
+            snapshot_sha = context.snapshot.commit_sha
         else:
+            if not slugs:
+                raise DeclarationError("at least one repository slug is required")
+            bad = [slug for slug in slugs if not is_owner_repo_slug(slug)]
+            if bad:
+                raise DeclarationError(f"invalid repository slug(s) {bad}; expected OWNER/REPO")
             if not getattr(args, "pin", None):
                 raise DeclarationError("apply-rulesets without a declaration requires an explicit --pin")
-            snapshot = _open_published_snapshot(normalize_pin(args.pin))
+            declaration_pin = normalize_pin(args.pin)
+            snapshot = _open_published_snapshot(declaration_pin)
             context = None
             extra_checks = _profile_status_checks(snapshot.registry, getattr(args, "profile", None))
-    except AviatoError as exc:
+            policy_root = snapshot.policy_root
+            snapshot_sha = snapshot.commit_sha
+        bad = [slug for slug in slugs if not is_owner_repo_slug(slug)]
+        if bad:
+            raise DeclarationError(f"invalid repository slug(s) {bad}; expected OWNER/REPO")
+        if args.apply and len(slugs) != 1:
+            raise DeclarationError("ruleset apply requires exactly one repository")
+        desired_payloads = render_all_rulesets(
+            root=policy_root,
+            required_approvals=required_approvals,
+            extra_status_checks=extra_checks,
+        )
+    except (AviatoError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
-    if args.apply:
-        # apply-rulesets is operator-DIRECT provisioning (§2.3: human-initiated with
-        # own credentials). It is not the §5.7 drift/consent flow — ongoing settings
-        # reconciliation should go through `aviato reconcile`, which adds the tracking
-        # issue, consent record, and apply-time recompute.
-        print(
-            "WARNING: applying rulesets directly (operator provisioning). For ongoing "
-            "settings drift, use the gated `aviato reconcile` flow (§5.7).",
-            file=sys.stderr,
-        )
-
     try:
-        for message in apply_rulesets(
-            slugs,
-            root=context.policy_root if context is not None else snapshot.policy_root,
-            apply=args.apply,
-            required_approvals=required_approvals,
-            extra_status_checks=extra_checks,
-        ):
-            # Structured results keep a capability fallback visible to operators. Preserve string
-            # adapters used by integrations while they migrate to RulesetApplyResult.
-            if hasattr(message, "message") and hasattr(message, "degraded_rules"):
-                print(message.message)
-                if message.degraded_rules:
-                    print(
-                        f"DEGRADED: {message.message}; missing unsupported rule(s) "
-                        f"{list(message.degraded_rules)}; settings drift remains non-clean.",
-                        file=sys.stderr,
-                    )
-            else:
-                print(message)
+        platform = GitHubPlatform()
+
+        def plan_for(slug: str) -> RulesetPlan:
+            return build_ruleset_plan(
+                repository=platform.repository_identity(slug),
+                tool_version=__version__,
+                declaration_pin=declaration_pin,
+                snapshot_sha=snapshot_sha,
+                desired_payloads=desired_payloads,
+                live_payloads=platform.read_rulesets(slug),
+            )
+
+        plans = [plan_for(slug) for slug in slugs]
+        for slug, plan in zip(slugs, plans, strict=True):
+            print(f"Ruleset plan for {slug}: {plan.plan_id}")
+            for operation in plan.operations:
+                print(
+                    f"  {operation.action.upper()} {operation.identity.name} [{operation.identity.target}] "
+                    f"({operation.comparison.state})"
+                )
+                for change in operation.comparison.changes:
+                    print(f"    {change.field}: {change.before!r} -> {change.after!r}")
+                if operation.disposition != "ready":
+                    print(f"    {operation.disposition.upper()}: {operation.reason}")
+        selected = require_apply_confirmation(plans, apply=args.apply, confirmation=args.confirm)
+        if selected is None:
+            return 0
+        slug = slugs[0]
+
+        def upsert(operation: Any) -> object:
+            if operation.desired_payload is None:
+                raise ValueError("planned upsert is missing desired payload")
+            return platform.apply_planned_ruleset(
+                slug,
+                deep_thaw(operation.desired_payload),
+                ruleset_id=operation.identity.live_id,
+            )
+
+        def delete(operation: Any) -> None:
+            if operation.identity.live_id is None:
+                raise ValueError("planned deletion is missing its selected live id")
+            platform.delete_planned_ruleset(slug, ruleset_id=operation.identity.live_id)
+
+        result = execute_ruleset_plan(
+            selected,
+            confirmation=args.confirm,
+            recompute=lambda: plan_for(slug),
+            upsert=upsert,
+            delete=delete,
+        )
+        for result_operation in result.operations:
+            print(
+                f"{result_operation.status.value}: {result_operation.action} "
+                f"{result_operation.identity}: {result_operation.detail}"
+            )
+        if not result.success:
+            return 1
         return 0
-    except (GitHubAPIError, CommandError) as exc:
+    except (GitHubAPIError, SettingsReadError, CommandError) as exc:
         # R3-2: the apply WRITE (upsert_ruleset PUT/POST) raises CommandError, not GitHubAPIError;
         # map both to the documented exit 1 instead of letting CommandError fall to main()'s exit 2.
         print(f"GitHub API error: {exc}", file=sys.stderr)
@@ -362,7 +411,7 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
         # R2-4-5: a malformed ruleset manifest/template (missing rule, unknown patch key, empty name)
         # raises ValueError from render — a library-data error `aviato validate` is meant to catch.
         # Surface it cleanly here rather than leaking a raw traceback past main() (§2.4).
-        print(f"ruleset render error (run `aviato validate`): {exc}", file=sys.stderr)
+        print(f"ruleset plan refused: {exc}", file=sys.stderr)
         return 1
 
 
@@ -2903,6 +2952,7 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--repos-file", help="Optional newline-delimited list of repository slugs.")
     apply.add_argument("--pin", help="Explicit Library pin when no declaration is available.")
     apply.add_argument("--apply", action="store_true", help="Apply changes instead of dry-running.")
+    apply.add_argument("--confirm", help="Exact per-repository plan ID printed by preview.")
     apply.add_argument(
         "--required-approvals", type=_non_negative_int, help="Override required PR approval count (>= 0)."
     )

@@ -22,7 +22,7 @@ from . import github
 from .command import CommandError
 from .core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from .core.pathguard import confined_target
-from .core.ports import Issue
+from .core.ports import Issue, RepositoryIdentity, RulesetApplyResult
 from .core.scaffold import atomic_write
 from .core.settingsdrift import CONSENT_ID_HEX_LEN
 
@@ -474,6 +474,9 @@ class GitHubPlatform:
     def __init__(self, workdir: Path | str = ".") -> None:
         self.workdir = Path(workdir)
 
+    def repository_identity(self, repo: str) -> RepositoryIdentity:
+        return github.repository_identity(repo)
+
     def read_settings(self, repo: str) -> dict[str, Any]:
         # Returns the flat default-branch settings map, matching the desired map
         # the CLI passes (resolved.settings["default_branch"]) so the diff compares
@@ -521,12 +524,27 @@ class GitHubPlatform:
                 payloads: list[dict[str, Any]] = []
                 for summary in summaries:
                     ruleset_id = summary.get("id") if isinstance(summary, dict) else None
-                    if ruleset_id is None:
-                        continue
-                    payloads.append(github.repository_ruleset(repo, ruleset_id))
+                    if isinstance(ruleset_id, bool) or not isinstance(ruleset_id, int) or ruleset_id <= 0:
+                        raise github.SettingsReadError(
+                            f"repos/{repo}/rulesets", 0, "ruleset summary is missing a valid id"
+                        )
+                    detail = github.repository_ruleset(repo, ruleset_id)
+                    if detail.get("id") != ruleset_id:
+                        raise github.SettingsReadError(
+                            f"repos/{repo}/rulesets/{ruleset_id}", 0, "ruleset detail id does not match summary"
+                        )
+                    payloads.append(detail)
         except github.GitHubAPIError as exc:
             raise github.SettingsReadError(exc.endpoint, exc.returncode, exc.stderr) from exc
         return payloads
+
+    def apply_planned_ruleset(
+        self, repo: str, payload: dict[str, Any], *, ruleset_id: int | None
+    ) -> RulesetApplyResult:
+        return github.apply_planned_ruleset(repo, payload, ruleset_id=ruleset_id)
+
+    def delete_planned_ruleset(self, repo: str, *, ruleset_id: int) -> None:
+        github.delete_planned_ruleset(repo, ruleset_id=ruleset_id)
 
     def get_issue(self, repo: str, key: str) -> Issue | None:
         # Fail-closed read (§2.7): the issues-list endpoint returns ``200 []`` when no

@@ -182,6 +182,14 @@ class ManagedInventory:
             raise ValueError("owned_rulesets contains duplicate stable identities")
 
 
+def owned_rulesets_by_identity(inventory: ManagedInventory | None) -> Mapping[tuple[str, str], OwnedRulesetEntry]:
+    """Return the fail-closed ownership index used by ruleset retirement plans."""
+
+    if inventory is None:
+        return MappingProxyType({})
+    return MappingProxyType({(entry.name, entry.target): entry for entry in inventory.owned_rulesets})
+
+
 InventoryReadStatus = Literal["valid", "missing", "invalid"]
 MarkerArtifactStatus = Literal["valid", "malformed", "unreadable", "symlink", "nonfile"]
 

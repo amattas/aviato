@@ -20,6 +20,7 @@ from typing import Any, cast
 # single source of truth in the operator-direct path).
 from . import github
 from .core.ports import RulesetApplyResult
+from .core.ruleset_plan import security_payload
 from .policy import default_required_approvals, get_path, load_policy, load_ruleset_manifest
 
 # R3-9: the patch keys a manifest entry may declare. An unknown key (typo) would be silently
@@ -124,37 +125,24 @@ def _subset_match(desired: Any, live: Any) -> bool:
     return bool(desired == live)
 
 
-def ruleset_content_drift(desired: dict[str, Any], live: dict[str, Any]) -> bool:
+def ruleset_content_drift(
+    desired: dict[str, Any], live: dict[str, Any], *, default_branch: str = "main"
+) -> bool:
     """True if a live ruleset has drifted from the rendered desired payload (§5.6).
 
     Catches the security-relevant divergences: a DISABLED/evaluate ruleset (``enforcement`` no
     longer ``active``), an added ``bypass_actors`` entry (an actor that can skip ALL rules — incl.
     admin enforcement, so this also backs the §2.13 enforce_admins posture), a MISSING required
     rule type, and a WEAKENED rule parameter (e.g. a permissive ``tag_name_pattern`` or a lowered
-    ``required_approving_review_count``). Conditions (the ref-name scope) are deliberately NOT
-    compared: GitHub may normalize the ``~DEFAULT_BRANCH`` token, which would risk false drift;
-    scope changes are a documented day-zero detection gap. Robust against GitHub metadata via
-    :func:`_subset_match`.
+    ``required_approving_review_count``). Conditions are compared after normalizing GitHub's
+    documented ref tokens; unknown tokens and malformed security state fail closed as drift.
     """
-    if desired.get("enforcement") != live.get("enforcement"):
+    try:
+        return security_payload(desired, default_branch=default_branch) != security_payload(
+            live, default_branch=default_branch
+        )
+    except ValueError:
         return True
-    # bypass_actors: any actor that can skip the rules. Aviato's rulesets grant NONE, so any live
-    # bypass not explicitly desired weakens the ruleset (§5.6). Subset-match keeps it robust to
-    # GitHub-added actor fields when a future desired ruleset DOES grant a bypass.
-    desired_bypass = desired.get("bypass_actors") or []
-    if any(not any(_subset_match(d, actor) for d in desired_bypass) for actor in (live.get("bypass_actors") or [])):
-        return True
-    live_rule_by_type: dict[Any, dict[str, Any]] = {}
-    for rule in live.get("rules", []):
-        if isinstance(rule, dict):
-            live_rule_by_type.setdefault(rule.get("type"), rule)
-    for desired_rule in desired.get("rules", []):
-        live_rule = live_rule_by_type.get(desired_rule.get("type"))
-        if live_rule is None:
-            return True  # a desired rule type is absent on the live ruleset
-        if not _subset_match(desired_rule.get("parameters", {}), live_rule.get("parameters", {})):
-            return True  # a desired rule parameter was weakened/removed
-    return False
 
 
 def drifted_ruleset_names(desired_payloads: list[dict[str, Any]], live_payloads: list[dict[str, Any]]) -> list[str]:
@@ -163,9 +151,14 @@ def drifted_ruleset_names(desired_payloads: list[dict[str, Any]], live_payloads:
     R3-10: matched by ``(name, target)`` — a live ruleset that shares a name but targets a different
     ref kind (e.g. a tag ruleset named like the branch one) is NOT the desired branch ruleset, so it
     must not satisfy presence/content while real branch protection is absent."""
-    live_by_key = {
-        (p["name"], p.get("target")): p for p in live_payloads if isinstance(p, dict) and isinstance(p.get("name"), str)
-    }
+    live_by_key: dict[tuple[object, object], dict[str, Any]] = {}
+    for payload in live_payloads:
+        if not isinstance(payload, dict) or not isinstance(payload.get("name"), str) or not payload["name"]:
+            raise ValueError("live ruleset payload is missing a non-empty string 'name'")
+        key = (payload["name"], payload.get("target"))
+        if key in live_by_key:
+            raise ValueError(f"duplicate live ruleset identity {key!r}")
+        live_by_key[key] = payload
     drifted: list[str] = []
     for desired in desired_payloads:
         name = desired.get("name")

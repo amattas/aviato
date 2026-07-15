@@ -180,6 +180,21 @@ class RulesetApplyResult:
 
 
 @runtime_checkable
+class RulesetPlanningPlatform(Protocol):
+    """Hosting operations needed by a confirmation-bound ruleset plan."""
+
+    def repository_identity(self, repo: str) -> RepositoryIdentity: ...
+
+    def read_rulesets(self, repo: str) -> list[dict[str, Any]]: ...
+
+    def apply_planned_ruleset(
+        self, repo: str, payload: dict[str, Any], *, ruleset_id: int | None
+    ) -> RulesetApplyResult: ...
+
+    def delete_planned_ruleset(self, repo: str, *, ruleset_id: int) -> None: ...
+
+
+@runtime_checkable
 class Platform(Protocol):
     """The §2.14 hosting-platform binding interface.
 
