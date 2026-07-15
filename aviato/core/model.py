@@ -194,6 +194,7 @@ class WorkflowJobModule:
     environment_input: str | None = None
     status_check: str | None = None
     authorization_gate: str | None = None
+    authorization_outputs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

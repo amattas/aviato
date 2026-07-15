@@ -1,7 +1,8 @@
 needs: [docs-resolve, docs-release-gate, docs-security]
-if: ${{ needs.docs-resolve.outputs.release == 'true' }}
+if: ${{ needs.docs-resolve.outputs.release == 'true' && needs.docs-release-gate.outputs.gated-sha != '' && needs.docs-release-gate.outputs.checkpoint-digest != '' && needs.docs-release-gate.outputs.verified-envelope-digest != '' }}
 uses: "{{ aviato-workflow-prefix }}reusable-docs-pages.yml{{ aviato-workflow-suffix }}"
 permissions:
+  actions: read
   contents: write
   pages: write
   id-token: write
@@ -11,6 +12,8 @@ with:
   release-tag: ${{ needs.docs-resolve.outputs.tag }}
   gated-sha: ${{ needs.docs-release-gate.outputs.gated-sha }}
   checkpoint-digest: ${{ needs.docs-release-gate.outputs.checkpoint-digest }}
+  checkpoint-run-id: ${{ needs.docs-release-gate.outputs.checkpoint-run-id }}
+  verified-envelope-digest: ${{ needs.docs-release-gate.outputs.verified-envelope-digest }}
   serve-pages: "{{ serve-pages }}"
   docs-source-directory: "."
   docs-emit-command: |

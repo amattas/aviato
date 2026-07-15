@@ -1,5 +1,5 @@
 needs: [release, release-gate, security]
-if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
+if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result == 'success' && needs.release-gate.outputs.gated-sha != '' && needs.release-gate.outputs.checkpoint-digest != '' && needs.release-gate.outputs.verified-envelope-digest != '' && (github.ref_type == 'tag' || needs.release.outputs.released == 'true') }}
 uses: "{{ aviato-workflow-prefix }}reusable-app-store-connect.yml{{ aviato-workflow-suffix }}"
 permissions:
   actions: read
@@ -9,6 +9,8 @@ with:
   release-tag: ${{ needs.release.outputs.tag }}
   gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
   checkpoint-digest: ${{ needs.release-gate.outputs.checkpoint-digest }}
+  checkpoint-run-id: ${{ needs.release-gate.outputs.checkpoint-run-id }}
+  verified-envelope-digest: ${{ needs.release-gate.outputs.verified-envelope-digest }}
   environment-name: "{{ environment-name }}"
   xcode-version: "{{ xcode-version }}"
   working-directory: "{{ working-directory }}"

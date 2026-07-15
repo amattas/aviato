@@ -15,6 +15,8 @@ from aviato.validation import RELEASE_WORKFLOWS, validate
 # recurse into prior runs' nested repo copies — see also the basetemp guard in conftest.py.
 _IGNORE = shutil.ignore_patterns(
     ".git",
+    ".venv",
+    ".mypy_cache",
     "_wheelout",
     "__pycache__",
     "*.egg-info",
@@ -49,7 +51,7 @@ def test_pypi_privilege_split_drift_is_detected(repo_copy: Path) -> None:
     pipelines = repo_copy / "aviato" / "library" / "pipelines.yaml"
     text = pipelines.read_text(encoding="utf-8")
     drifted = text.replace(
-        'local_publisher_privileges: ["contents: read", "id-token: write", "attestations: write"]',
+        'local_publisher_privileges: ["actions: read", "contents: read", "id-token: write", "attestations: write"]',
         'local_publisher_privileges: ["contents: read"]',
     )
     assert drifted != text, "fixture did not contain the PyPI local publisher privilege split"

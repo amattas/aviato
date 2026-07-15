@@ -63,6 +63,12 @@ on:
         description: Exact canonical checkpoint digest emitted by the nonprivileged release gate.
         required: true
         type: string
+      checkpoint-run-id:
+        required: true
+        type: string
+      verified-envelope-digest:
+        required: true
+        type: string
       docs-retention:
         description: >-
           Optional retention cap (§13.3). 0 — the default — keeps EVERY released
@@ -87,6 +93,7 @@ jobs:
     name: Build versioned docs
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       pages: read
     outputs:
@@ -102,9 +109,20 @@ jobs:
         env:
           GATED_SHA: ${{ inputs.gated-sha }}
           CHECKPOINT_DIGEST: ${{ inputs.checkpoint-digest }}
+          CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
+          VERIFIED_ENVELOPE_DIGEST: ${{ inputs.verified-envelope-digest }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          [[ "${GATED_SHA}" =~ ^[0-9a-f]{40}$ && "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::invalid authorization outputs"; exit 1; }
+          [[ "${GATED_SHA}" =~ ^[0-9a-f]{40}$ && "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ && "${CHECKPOINT_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "::error::invalid authorization outputs"; exit 1; }
+          [ "${VERIFIED_ENVELOPE_DIGEST}" = "${CHECKPOINT_DIGEST}" ]
+          rm -rf "${RUNNER_TEMP}/fresh-authority" && mkdir -p "${RUNNER_TEMP}/fresh-authority"
+          gh run download "${CHECKPOINT_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name verified-checkpoint --dir "${RUNNER_TEMP}/fresh-authority"
+          envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
+          [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
+          gh attestation verify "${envelope}" --repo "${GITHUB_REPOSITORY}" >/dev/null
+          reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
           echo "checkpoint-digest=${CHECKPOINT_DIGEST}" >> "${GITHUB_OUTPUT}"
 
       - name: Checkout consumer repository
@@ -345,15 +363,25 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
     steps:
       - name: Recheck authorization before branch mutation
         shell: bash
         env:
           CHECKPOINT_DIGEST: ${{ needs.build.outputs.checkpoint-digest }}
+          CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
+          VERIFIED_ENVELOPE_DIGEST: ${{ inputs.verified-envelope-digest }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::invalid authorization output"; exit 1; }
+          [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ && "${CHECKPOINT_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "::error::invalid authorization output"; exit 1; }
+          [ "${VERIFIED_ENVELOPE_DIGEST}" = "${CHECKPOINT_DIGEST}" ]
+          rm -rf "${RUNNER_TEMP}/push-authority" && mkdir -p "${RUNNER_TEMP}/push-authority"
+          gh run download "${CHECKPOINT_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name verified-checkpoint --dir "${RUNNER_TEMP}/push-authority"
+          envelope="${RUNNER_TEMP}/push-authority/verified-checkpoint-envelope.json"
+          [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
+          gh attestation verify "${envelope}" --repo "${GITHUB_REPOSITORY}" >/dev/null
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -392,12 +420,31 @@ jobs:
     if: ${{ inputs.serve-pages && success() && needs.build.outputs.checkpoint-digest == inputs.checkpoint-digest }}
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       pages: write
       id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Recheck exact authorization before Pages OIDC
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
+          CHECKPOINT_DIGEST: ${{ inputs.checkpoint-digest }}
+          VERIFIED_ENVELOPE_DIGEST: ${{ inputs.verified-envelope-digest }}
+        run: |
+          set -euo pipefail
+          [[ "${CHECKPOINT_RUN_ID}" =~ ^[1-9][0-9]*$ && "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]]
+          [ "${VERIFIED_ENVELOPE_DIGEST}" = "${CHECKPOINT_DIGEST}" ]
+          rm -rf "${RUNNER_TEMP}/deploy-authority" && mkdir -p "${RUNNER_TEMP}/deploy-authority"
+          gh run download "${CHECKPOINT_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name verified-checkpoint --dir "${RUNNER_TEMP}/deploy-authority"
+          envelope="${RUNNER_TEMP}/deploy-authority/verified-checkpoint-envelope.json"
+          [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
+          gh attestation verify "${envelope}" --repo "${GITHUB_REPOSITORY}" >/dev/null
+          environment="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/github-pages")"
+          [ "$(jq -r .can_admins_bypass <<<"${environment}")" = "false" ] || { echo "::error::github-pages permits admin bypass"; exit 1; }
       - name: Deploy GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

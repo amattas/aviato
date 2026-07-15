@@ -15,16 +15,6 @@ name: Aviato Python Component
         description: Canonical checkpoint digest
         required: false
         type: string
-      checkpoint-run-id:
-        default: ''
-        description: Verified checkpoint intake run
-        required: false
-        type: string
-      checkpoint-workflow:
-        default: aviato-protection-checkpoint.yml
-        description: Generator-owned intake workflow
-        required: true
-        type: string
       intended-actor:
         default: ''
         description: Exact signed release actor
@@ -82,15 +72,14 @@ jobs:
       contents: write
       pull-requests: write
       actions: write
+      issues: read
     with:
       aviato-ref: EXAMPLE_PIN
       local-install: false
-      checkpoint-workflow: ${{ inputs.checkpoint-workflow }}
       promotion: ${{ inputs.promotion || false }}
       merged-sha: ${{ inputs.merged-sha || '' }}
       intended-tag: ${{ inputs.intended-tag || '' }}
       intended-actor: ${{ inputs.intended-actor || '' }}
-      checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
       checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
   release-gate:
     needs:
@@ -107,7 +96,6 @@ jobs:
       require-merged-pr: true
       release-tag: ${{ needs.release.outputs.tag }}
       required-workflow: aviato-ci.yml
-      checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
       checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
       intended-actor: ${{ inputs.intended-actor || '' }}
       merged-sha: ${{ inputs.merged-sha || '' }}

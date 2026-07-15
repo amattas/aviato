@@ -15,16 +15,6 @@ name: Aviato Python Library
         description: Canonical checkpoint digest
         required: false
         type: string
-      checkpoint-run-id:
-        default: ''
-        description: Verified checkpoint intake run
-        required: false
-        type: string
-      checkpoint-workflow:
-        default: aviato-protection-checkpoint.yml
-        description: Generator-owned intake workflow
-        required: true
-        type: string
       intended-actor:
         default: ''
         description: Exact signed release actor
@@ -94,13 +84,15 @@ jobs:
       - release-gate
       - pypi
     if: ${{ always() && needs.release-gate.result == 'success' && needs.pypi.result
-      == 'success' }}
+      == 'success' && needs.release-gate.outputs.gated-sha != '' && needs.release-gate.outputs.checkpoint-digest
+      != '' && needs.release-gate.outputs.verified-envelope-digest != '' }}
     runs-on: ubuntu-latest
     environment: pypi
     concurrency:
       group: aviato-pypi-${{ github.repository }}
       cancel-in-progress: false
     permissions:
+      actions: read
       contents: read
       id-token: write
       attestations: write
@@ -109,10 +101,42 @@ jobs:
         shell: bash
         env:
           CHECKPOINT_DIGEST: ${{ needs.release-gate.outputs.checkpoint-digest }}
+          CHECKPOINT_RUN_ID: ${{ needs.release-gate.outputs.checkpoint-run-id }}
+          VERIFIED_ENVELOPE_DIGEST: ${{ needs.release-gate.outputs.verified-envelope-digest
+            }}
+          GH_TOKEN: ${{ github.token }}
         run: 'set -euo pipefail
 
-          [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::managed
-          checkpoint is absent"; exit 1; }
+          [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ && "${CHECKPOINT_RUN_ID}" =~
+          ^[1-9][0-9]*$ ]] || { echo "::error::managed checkpoint is absent"; exit
+          1; }
+
+          [ "${VERIFIED_ENVELOPE_DIGEST}" = "${CHECKPOINT_DIGEST}" ]
+
+          rm -rf "${RUNNER_TEMP}/fresh-authority" && mkdir -p "${RUNNER_TEMP}/fresh-authority"
+
+          gh run download "${CHECKPOINT_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name
+          verified-checkpoint --dir "${RUNNER_TEMP}/fresh-authority"
+
+          envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
+
+          [ "$(shasum -a 256 "${envelope}" | awk ''{print $1}'')" = "${VERIFIED_ENVELOPE_DIGEST}"
+          ]
+
+          gh attestation verify "${envelope}" --repo "${GITHUB_REPOSITORY}" >/dev/null
+
+          reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
+
+          key_id="$(jq -r .key_id "${envelope}")"
+
+          [ "$(gh api -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission"
+          --jq .permission)" = "admin" ]
+
+          gh api -H ''Cache-Control: no-cache'' "users/${reviewer}/ssh_signing_keys"
+          --jq "any(.[]; (.id|tostring) == \"${key_id}\")" | grep -qx true
+
+          [ "$(gh api -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/environments/pypi"
+          --jq .can_admins_bypass)" = "false" ]
 
           '
       - name: Download vetted build artifacts
@@ -184,6 +208,37 @@ jobs:
           \ != \"commit\" ] || [ \"${actual}\" != \"${GATED_SHA}\" ]; then\n  echo\
           \ \"::error::Fresh remote tag ${RELEASE_TAG} does not peel to gated commit\
           \ ${GATED_SHA} (type=${object_type}, sha=${actual}).\"\n  exit 1\nfi\n"
+      - name: Final checkpoint recheck immediately before PyPI mutation
+        shell: bash
+        env:
+          CHECKPOINT_RUN_ID: ${{ needs.release-gate.outputs.checkpoint-run-id }}
+          VERIFIED_ENVELOPE_DIGEST: ${{ needs.release-gate.outputs.verified-envelope-digest
+            }}
+          GH_TOKEN: ${{ github.token }}
+        run: 'set -euo pipefail
+
+          envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
+
+          [ "$(shasum -a 256 "${envelope}" | awk ''{print $1}'')" = "${VERIFIED_ENVELOPE_DIGEST}"
+          ]
+
+          [ "$(gh api -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/actions/runs/${CHECKPOINT_RUN_ID}"
+          --jq ''.status + ":" + .conclusion'')" = "completed:success" ]
+
+          reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
+
+          key_id="$(jq -r .key_id "${envelope}")"
+
+          [ "$(gh api -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission"
+          --jq .permission)" = "admin" ]
+
+          gh api -H ''Cache-Control: no-cache'' "users/${reviewer}/ssh_signing_keys"
+          --jq "any(.[]; (.id|tostring) == \"${key_id}\")" | grep -qx true
+
+          [ "$(gh api -H ''Cache-Control: no-cache'' "repos/${GITHUB_REPOSITORY}/environments/pypi"
+          --jq .can_admins_bypass)" = "false" ]
+
+          '
       - name: Publish distributions
         if: ${{ vars.PYPI_REPOSITORY_URL == '' }}
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
@@ -247,15 +302,14 @@ jobs:
       contents: write
       pull-requests: write
       actions: write
+      issues: read
     with:
       aviato-ref: EXAMPLE_PIN
       local-install: false
-      checkpoint-workflow: ${{ inputs.checkpoint-workflow }}
       promotion: ${{ inputs.promotion || false }}
       merged-sha: ${{ inputs.merged-sha || '' }}
       intended-tag: ${{ inputs.intended-tag || '' }}
       intended-actor: ${{ inputs.intended-actor || '' }}
-      checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
       checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
   release-gate:
     needs:
@@ -272,7 +326,6 @@ jobs:
       require-merged-pr: true
       release-tag: ${{ needs.release.outputs.tag }}
       required-workflow: aviato-ci.yml
-      checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
       checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
       intended-actor: ${{ inputs.intended-actor || '' }}
       merged-sha: ${{ inputs.merged-sha || '' }}

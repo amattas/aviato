@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import time
@@ -91,10 +93,15 @@ class ProtectionOperation:
     disposition: SurfaceStatus = "ready"
     detail: str = ""
     ruleset_identity: RulesetIdentity | None = None
+    degraded_desired: Any = None
+    degraded_fingerprint: str | None = None
+    degraded_reason: str | None = None
+    degraded_consent: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "before", deep_freeze(self.before))
         object.__setattr__(self, "desired", deep_freeze(self.desired))
+        object.__setattr__(self, "degraded_desired", deep_freeze(self.degraded_desired))
 
 
 @dataclass(frozen=True)
@@ -109,6 +116,8 @@ class ProtectionPlan:
     blockers: tuple[str, ...]
     canonical_json: str
     plan_id: str
+    allow_degraded_tag_pattern: bool = False
+    receipt_signing_identity: Mapping[str, str] | None = None
 
     @property
     def ready(self) -> bool:
@@ -138,6 +147,8 @@ class ProtectionReceipt:
     snapshot_sha: str = ""
     tool_version: str = ""
     surface_fingerprints: Mapping[str, str] = field(default_factory=dict)
+    confirmed_plan_id: str = ""
+    final_plan_id: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "rulesets", tuple(deep_freeze(item) for item in self.rulesets))
@@ -169,8 +180,115 @@ class ProtectionReceipt:
                 "snapshot_sha": self.snapshot_sha,
                 "tool_version": self.tool_version,
                 "surface_fingerprints": _plain(self.surface_fingerprints),
+                "confirmed_plan_id": self.confirmed_plan_id,
+                "final_plan_id": self.final_plan_id,
             }
         ).encode("ascii")
+
+
+@dataclass(frozen=True)
+class ReceiptPersistenceEvidence:
+    envelope: bytes
+    issue_node_id: str
+    comment_node_id: str
+    event_node_id: str
+    comment_database_id: int
+    author: str
+    author_database_id: int
+    author_is_admin: bool
+    key_id: str
+    key_current: bool
+    created_at: str
+    last_edited_at: str | None
+    deleted: bool
+
+
+def receipt_persistence_ready(evidence: ReceiptPersistenceEvidence) -> bool:
+    return bool(
+        evidence.envelope
+        and evidence.issue_node_id
+        and evidence.comment_node_id
+        and evidence.event_node_id
+        and evidence.comment_database_id > 0
+        and evidence.author
+        and evidence.author_database_id > 0
+        and evidence.author_is_admin
+        and evidence.key_id
+        and evidence.key_current
+        and evidence.created_at
+        and evidence.last_edited_at is None
+        and not evidence.deleted
+    )
+
+
+def sign_protection_receipt(
+    canonical_receipt: bytes,
+    *,
+    principal: str,
+    key_id: str,
+    signer: Callable[[bytes], bytes],
+) -> bytes:
+    if not canonical_receipt or not principal or not key_id:
+        raise ValueError("receipt signature requires canonical bytes, a principal, and a key id")
+    try:
+        receipt = json.loads(canonical_receipt)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("receipt bytes are not canonical JSON") from exc
+    if canonical_receipt != _json(receipt).encode("ascii"):
+        raise ValueError("receipt bytes are not exact canonical JSON")
+    signature = signer(canonical_receipt)
+    if not signature:
+        raise ValueError("receipt signer returned an empty signature")
+    return _json(
+        {
+            "schema": "aviato-protection-receipt-envelope/v1",
+            "principal": principal,
+            "key_id": key_id,
+            "algorithm": "ssh-ed25519",
+            "receipt_base64url": base64.urlsafe_b64encode(canonical_receipt).decode("ascii").rstrip("="),
+            "signature": base64.urlsafe_b64encode(signature).decode("ascii").rstrip("="),
+        }
+    ).encode("ascii")
+
+
+def verify_protection_receipt_envelope(
+    envelope: bytes,
+    *,
+    expected_receipt: bytes,
+    expected_principal: str,
+    expected_key_id: str,
+    verify_signature: Callable[[bytes, bytes], bool],
+) -> bytes:
+    try:
+        document = json.loads(envelope)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("receipt envelope is not JSON") from exc
+    fields = {"schema", "principal", "key_id", "algorithm", "receipt_base64url", "signature"}
+    if not isinstance(document, dict) or set(document) != fields or envelope != _json(document).encode("ascii"):
+        raise ValueError("receipt envelope is not exact canonical JSON")
+    if (
+        document["schema"] != "aviato-protection-receipt-envelope/v1"
+        or document["algorithm"] != "ssh-ed25519"
+        or document["principal"] != expected_principal
+        or document["key_id"] != expected_key_id
+    ):
+        raise ValueError("receipt signature identity differs from the preview-bound authority")
+    try:
+        receipt = base64.b64decode(
+            str(document["receipt_base64url"]) + "=" * (-len(str(document["receipt_base64url"])) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+        signature = base64.b64decode(
+            str(document["signature"]) + "=" * (-len(str(document["signature"])) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("receipt envelope contains malformed base64url") from exc
+    if receipt != expected_receipt or not signature or verify_signature(receipt, signature) is not True:
+        raise ValueError("receipt bytes or SSH signature failed exact verification")
+    return receipt
 
 
 @dataclass(frozen=True)
@@ -222,6 +340,8 @@ def build_protection_plan(
     desired_rulesets: Sequence[Mapping[str, Any]],
     live_state: Mapping[str, Any],
     environments: Sequence[ProtectedEnvironment] = (),
+    allow_degraded_tag_pattern: bool = False,
+    receipt_signing_identity: Mapping[str, str] | None = None,
 ) -> ProtectionPlan:
     live_repository = live_state.get("repository_identity")
     blockers: list[str] = []
@@ -248,6 +368,20 @@ def build_protection_plan(
         live_payloads=live_state.get("rulesets", ()),
     )
     for rule in ruleset_plan.operations:
+        desired_payload = deep_thaw(rule.desired_payload) if rule.desired_payload else None
+        degraded_payload = None
+        degraded_fingerprint = None
+        degraded_reason = None
+        if isinstance(desired_payload, dict) and desired_payload.get("target") == "tag":
+            rules = desired_payload.get("rules")
+            if isinstance(rules, list):
+                retained = [
+                    item for item in rules if not (isinstance(item, Mapping) and item.get("type") == "tag_name_pattern")
+                ]
+                if len(retained) != len(rules):
+                    degraded_payload = {**desired_payload, "rules": retained}
+                    degraded_fingerprint = _digest(degraded_payload)
+                    degraded_reason = "github-unsupported-tag_name_pattern-422"
         operations.append(
             ProtectionOperation(
                 f"ruleset:{rule.identity.name}:{rule.identity.target}",
@@ -255,12 +389,16 @@ def build_protection_plan(
                 rule.identity.name,
                 rule.action,
                 rule.before_fingerprint,
-                deep_thaw(rule.desired_payload) if rule.desired_payload else None,
+                desired_payload,
                 rule.before_fingerprint or _digest(None),
                 rule.desired_fingerprint or _digest(None),
                 rule.disposition,
                 rule.reason,
                 rule.identity,
+                degraded_payload,
+                degraded_fingerprint,
+                degraded_reason,
+                bool(allow_degraded_tag_pattern and degraded_payload is not None),
             )
         )
         if rule.disposition != "ready":
@@ -305,6 +443,8 @@ def build_protection_plan(
         "operations": [_plain(item) for item in operations],
         "ruleset_plan_id": ruleset_plan.plan_id,
         "authorization_guard": guard,
+        "allow_degraded_tag_pattern": allow_degraded_tag_pattern,
+        "receipt_signing_identity": _plain(receipt_signing_identity),
         "blockers": blockers,
     }
     canonical = _json(payload)
@@ -319,6 +459,8 @@ def build_protection_plan(
         tuple(blockers),
         canonical,
         hashlib.sha256(canonical.encode("ascii")).hexdigest(),
+        allow_degraded_tag_pattern,
+        deep_freeze(receipt_signing_identity) if receipt_signing_identity else None,
     )
 
 
@@ -334,7 +476,13 @@ def require_protection_confirmation(
     return plan
 
 
-def verify_protection_recheck(original: ProtectionPlan, current: ProtectionPlan, *, completed: frozenset[str]) -> None:
+def verify_protection_recheck(
+    original: ProtectionPlan,
+    current: ProtectionPlan,
+    *,
+    completed: frozenset[str],
+    bound_ruleset_identities: Mapping[str, RulesetIdentity] | None = None,
+) -> None:
     if (
         original.repository != current.repository
         or original.declaration_pin != current.declaration_pin
@@ -349,7 +497,12 @@ def verify_protection_recheck(original: ProtectionPlan, current: ProtectionPlan,
     for identity, operation in original_ops.items():
         candidate = current_ops[identity]
         if identity in completed:
-            if candidate.action != "noop" or candidate.desired_fingerprint != operation.desired_fingerprint:
+            expected_ruleset_identity = (bound_ruleset_identities or {}).get(identity, operation.ruleset_identity)
+            if (
+                candidate.action != "noop"
+                or candidate.desired_fingerprint != operation.desired_fingerprint
+                or candidate.ruleset_identity != expected_ruleset_identity
+            ):
                 raise ValueError("completed protection surface drifted after write")
         elif candidate != operation and not (
             candidate.action == "noop"
@@ -391,10 +544,12 @@ def protection_state_fingerprint(plan: ProtectionPlan) -> str:
 def receipt_for_plan(
     plan: ProtectionPlan,
     *,
+    confirmed_plan: ProtectionPlan | None = None,
     status: Literal["ready", "failed", "indeterminate", "blocked"],
     operations: Sequence[ReceiptOperation] = (),
     persistence_status: str = "not-requested",
 ) -> ProtectionReceipt:
+    confirmed = confirmed_plan or plan
     rulesets = tuple(
         deep_freeze(
             {
@@ -408,7 +563,7 @@ def receipt_for_plan(
     )
     surface_fingerprints = {item.identity: item.before_fingerprint for item in plan.operations if item.action == "noop"}
     return ProtectionReceipt(
-        plan.plan_id,
+        confirmed.plan_id,
         status,
         tuple(operations),
         rulesets,
@@ -421,6 +576,8 @@ def receipt_for_plan(
         plan.snapshot_sha,
         plan.tool_version,
         surface_fingerprints,
+        confirmed.plan_id,
+        plan.plan_id,
     )
 
 
@@ -430,7 +587,7 @@ def execute_protection_plan(
     confirmation: str,
     recompute: Callable[[], ProtectionPlan],
     write: Callable[[ProtectionOperation], object],
-    persist_receipt: Callable[[bytes], object] | None = None,
+    persist_receipt: Callable[[bytes], ReceiptPersistenceEvidence] | None = None,
 ) -> ProtectionExecutionResult:
     try:
         require_protection_confirmation(plan, apply=True, confirmation=confirmation)
@@ -438,6 +595,7 @@ def execute_protection_plan(
         return ProtectionExecutionResult(receipt_for_plan(plan, status="blocked"))
     attempted: list[ReceiptOperation] = []
     completed: set[str] = set()
+    bound_ruleset_identities: dict[str, RulesetIdentity] = {}
     pending = [item for item in plan.operations if item.action != "noop"]
     try:
         verify_protection_recheck(plan, recompute(), completed=frozenset())
@@ -448,7 +606,12 @@ def execute_protection_plan(
     for operation in pending:
         try:
             before = recompute()
-            verify_protection_recheck(plan, before, completed=frozenset(completed))
+            verify_protection_recheck(
+                plan,
+                before,
+                completed=frozenset(completed),
+                bound_ruleset_identities=bound_ruleset_identities,
+            )
             current_operation = next(item for item in before.operations if item.identity == operation.identity)
             if current_operation.action == "noop":
                 completed.add(operation.identity)
@@ -466,12 +629,24 @@ def execute_protection_plan(
             failure_status = "indeterminate"
             break
         lost = False
+        write_result: object | None = None
         try:
-            write(current_operation)
+            write_result = write(current_operation)
         except ResponseLostError:
             lost = True
         except Exception as exc:
             attempted.append(ReceiptOperation(operation.identity, operation.kind, "failed", str(exc)))
+            failure_status = "failed"
+            break
+        if getattr(write_result, "degraded_rules", ()):
+            attempted.append(
+                ReceiptOperation(
+                    operation.identity,
+                    operation.kind,
+                    "failed",
+                    "explicitly consented degraded tag-pattern variant applied; protection remains non-ready",
+                )
+            )
             failure_status = "failed"
             break
         try:
@@ -486,6 +661,41 @@ def execute_protection_plan(
             attempted.append(ReceiptOperation(operation.identity, operation.kind, "indeterminate", detail))
             failure_status = "indeterminate"
             break
+        if operation.ruleset_identity is not None:
+            confirmed_identity = operation.ruleset_identity
+            actual_identity = candidate.ruleset_identity
+            if actual_identity is None:
+                attempted.append(
+                    ReceiptOperation(operation.identity, operation.kind, "indeterminate", "ruleset identity missing")
+                )
+                failure_status = "indeterminate"
+                break
+            if confirmed_identity.live_id is None:
+                if actual_identity.live_id is None or actual_identity.key != confirmed_identity.key:
+                    attempted.append(
+                        ReceiptOperation(
+                            operation.identity,
+                            operation.kind,
+                            "indeterminate",
+                            "created ruleset did not bind one exact returned live identity",
+                        )
+                    )
+                    failure_status = "indeterminate"
+                    break
+                bound_ruleset_identities[operation.identity] = actual_identity
+            elif actual_identity != confirmed_identity:
+                attempted.append(
+                    ReceiptOperation(
+                        operation.identity,
+                        operation.kind,
+                        "indeterminate",
+                        "confirmed ruleset identity was replaced after write",
+                    )
+                )
+                failure_status = "indeterminate"
+                break
+            else:
+                bound_ruleset_identities[operation.identity] = confirmed_identity
         completed.add(operation.identity)
         attempted.append(ReceiptOperation(operation.identity, operation.kind, "completed", "readback converged"))
     if failure_status:
@@ -496,7 +706,12 @@ def execute_protection_plan(
         return ProtectionExecutionResult(receipt_for_plan(plan, status=failure_status, operations=attempted))
     try:
         final = recompute()
-        verify_protection_recheck(plan, final, completed=frozenset(item.identity for item in pending))
+        verify_protection_recheck(
+            plan,
+            final,
+            completed=frozenset(item.identity for item in pending),
+            bound_ruleset_identities=bound_ruleset_identities,
+        )
         if any(item.action != "noop" for item in final.operations):
             raise ValueError("final convergence barrier is not clean")
     except Exception as exc:
@@ -504,13 +719,16 @@ def execute_protection_plan(
         return ProtectionExecutionResult(receipt_for_plan(plan, status="indeterminate", operations=attempted))
     receipt = receipt_for_plan(
         final,
+        confirmed_plan=plan,
         status="ready",
         operations=attempted,
         persistence_status="not-requested" if persist_receipt is None else "attached",
     )
     if persist_receipt is not None:
         try:
-            persist_receipt(receipt.canonical_bytes)
+            evidence = persist_receipt(receipt.canonical_bytes)
+            if not isinstance(evidence, ReceiptPersistenceEvidence) or not receipt_persistence_ready(evidence):
+                raise ValueError("receipt persistence did not return immutable current-authority evidence")
         except Exception:
             receipt = replace(receipt, persistence_status="failed")
     return ProtectionExecutionResult(receipt)

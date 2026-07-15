@@ -31,11 +31,6 @@ on:
         required: false
         type: string
         default: ""
-      checkpoint-run-id:
-        description: Exact successful managed checkpoint intake run.
-        required: false
-        type: string
-        default: ""
       checkpoint-digest:
         description: SHA-256 of the canonical verified checkpoint.
         required: false
@@ -63,6 +58,12 @@ on:
       checkpoint-digest:
         description: Revalidated canonical checkpoint digest for downstream manifests.
         value: ${{ jobs.gate.outputs.checkpoint-digest }}
+      verified-envelope-digest:
+        description: Digest of the exact signed and attested checkpoint envelope.
+        value: ${{ jobs.gate.outputs.verified-envelope-digest }}
+      checkpoint-run-id:
+        description: Independently selected unique trusted intake run.
+        value: ${{ jobs.gate.outputs.checkpoint-run-id }}
 
 permissions:
   actions: read
@@ -76,38 +77,98 @@ jobs:
     outputs:
       gated-sha: ${{ steps.resolve-gated-sha.outputs.gated-sha }}
       checkpoint-digest: ${{ steps.checkpoint.outputs.checkpoint-digest }}
+      verified-envelope-digest: ${{ steps.checkpoint.outputs.verified-envelope-digest }}
+      checkpoint-run-id: ${{ steps.checkpoint.outputs.checkpoint-run-id }}
     steps:
       - name: Verify one exact fresh managed checkpoint before privilege
         id: checkpoint
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
           CHECKPOINT_DIGEST: ${{ inputs.checkpoint-digest }}
           INTENDED_ACTOR: ${{ inputs.intended-actor }}
           MERGED_SHA: ${{ inputs.merged-sha }}
           DEFAULT_BRANCH: ${{ inputs.default-branch }}
         run: |
           set -euo pipefail
-          [[ "${CHECKPOINT_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "::error::missing checkpoint run"; exit 1; }
           [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::invalid checkpoint digest"; exit 1; }
           [ "${GITHUB_ACTOR}" = "${INTENDED_ACTOR}" ] || { echo "::error::actual release actor differs from signed intended actor"; exit 1; }
-          run="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/actions/runs/${CHECKPOINT_RUN_ID}")"
-          jq -e --arg branch "${DEFAULT_BRANCH}" --arg actor "${INTENDED_ACTOR}" --arg sha "${MERGED_SHA}" '
-            .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success"
-            and .head_branch == $branch and .head_sha == $sha and .actor.login != $actor
-          ' <<<"${run}" >/dev/null || { echo "::error::checkpoint run binding mismatch"; exit 1; }
-          mkdir -p "${RUNNER_TEMP}/checkpoint"
-          gh run download "${CHECKPOINT_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name verified-checkpoint --dir "${RUNNER_TEMP}/checkpoint"
-          document="${RUNNER_TEMP}/checkpoint/verified-checkpoint.json"
-          [ -f "${document}" ] || { echo "::error::verified checkpoint artifact missing"; exit 1; }
+          repository="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}")"
+          [ "$(jq -r .default_branch <<<"${repository}")" = "${DEFAULT_BRANCH}" ] || { echo "::error::default branch changed"; exit 1; }
+          intake_path=".github/workflows/aviato-protection-checkpoint.yml"
+          intake_blob="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/contents/${intake_path}?ref=${DEFAULT_BRANCH}" --jq .sha)"
+          runs="$(gh api --paginate --slurp -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/actions/workflows/aviato-protection-checkpoint.yml/runs?event=workflow_dispatch&branch=${DEFAULT_BRANCH}&status=success&per_page=100")"
+          mapfile -t run_ids < <(jq -r --arg branch "${DEFAULT_BRANCH}" --arg sha "${MERGED_SHA}" '
+            .[]?.workflow_runs[]? | select(
+              .path == ".github/workflows/aviato-protection-checkpoint.yml"
+              and .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success"
+              and .head_branch == $branch and .head_sha == $sha
+            ) | .id
+          ' <<<"${runs}")
+          matches=()
+          rm -rf "${RUNNER_TEMP}/checkpoint-candidates"
+          mkdir -p "${RUNNER_TEMP}/checkpoint-candidates"
+          for run_id in "${run_ids[@]}"; do
+            candidate_dir="${RUNNER_TEMP}/checkpoint-candidates/${run_id}"
+            mkdir -p "${candidate_dir}"
+            if ! gh run download "${run_id}" --repo "${GITHUB_REPOSITORY}" --name verified-checkpoint --dir "${candidate_dir}" >/dev/null 2>&1; then
+              continue
+            fi
+            candidate="${candidate_dir}/verified-checkpoint-envelope.json"
+            [ -f "${candidate}" ] || continue
+            actual="$(shasum -a 256 "${candidate}" | awk '{print $1}')"
+            [ "${actual}" = "${CHECKPOINT_DIGEST}" ] || continue
+            gh attestation verify "${candidate}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || continue
+            jq -e --arg repo "${GITHUB_REPOSITORY}" --arg actor "${INTENDED_ACTOR}" --arg sha "${MERGED_SHA}" --arg ref "refs/heads/${DEFAULT_BRANCH}" --arg path "${intake_path}" --arg blob "${intake_blob}" '
+              .checkpoint.repository == $repo and .checkpoint.intended_actor == $actor
+              and .checkpoint.sha == $sha and .checkpoint.reviewer != $actor
+              and .checkpoint.workflow_path == $path and .checkpoint.workflow_blob_sha == $blob
+              and .checkpoint.workflow_ref == $ref and (.checkpoint.expires_at | type == "number")
+              and (.checkpoint.issued_at | type == "number")
+              and (.checkpoint.expires_at - .checkpoint.issued_at) <= 900
+              and .checkpoint.issued_at <= (now + 30) and .checkpoint.expires_at > now
+            ' "${candidate}" >/dev/null || continue
+            matches+=("${run_id}:${candidate}")
+          done
+          [ "${#matches[@]}" -eq 1 ] || { echo "::error::expected exactly one matching attested checkpoint intake run; found ${#matches[@]}"; exit 1; }
+          CHECKPOINT_RUN_ID="${matches[0]%%:*}"
+          document="${matches[0]#*:}"
+          # Intake already verified this envelope. Re-prove the current concrete admin,
+          # current GitHub signing key, exact canonical bytes, and reviewer signature
+          # independently before exporting authorization to privileged jobs.
+          ENVELOPE_PATH="${document}" python -I - <<'PY'
+          import base64, json, os, pathlib, subprocess, tempfile, time
+          def gh(endpoint):
+              result = subprocess.run(["gh", "api", "-H", "Cache-Control: no-cache", endpoint], check=True, capture_output=True, text=True)
+              return json.loads(result.stdout)
+          raw = pathlib.Path(os.environ["ENVELOPE_PATH"]).read_bytes()
+          envelope = json.loads(raw)
+          if raw != json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("ascii"):
+              raise SystemExit("checkpoint envelope is not canonical")
+          if set(envelope) != {"schema", "key_id", "algorithm", "checkpoint", "signature"}:
+              raise SystemExit("checkpoint envelope fields are not exact")
+          document = envelope["checkpoint"]
+          permission = gh(f"repos/{document['repository']}/collaborators/{document['reviewer']}/permission")
+          if permission.get("permission") != "admin" or permission.get("user", {}).get("type") != "User":
+              raise SystemExit("reviewer is not a current concrete repository admin")
+          keys = gh(f"users/{document['reviewer']}/ssh_signing_keys")
+          selected = [item for item in keys if str(item.get("id")) == str(envelope["key_id"])]
+          if len(selected) != 1 or not selected[0].get("key", "").startswith("ssh-ed25519 "):
+              raise SystemExit("reviewer signing key is absent, replaced, or revoked")
+          signature = base64.b64decode(envelope["signature"] + "=" * (-len(envelope["signature"]) % 4), altchars=b"-_", validate=True)
+          message = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("ascii")
+          with tempfile.TemporaryDirectory() as directory:
+              root = pathlib.Path(directory)
+              (root / "allowed").write_text(f"{document['reviewer']} {selected[0]['key']}\n", encoding="utf-8")
+              (root / "signature").write_bytes(signature)
+              verified = subprocess.run(["ssh-keygen", "-Y", "verify", "-f", str(root / "allowed"), "-I", document["reviewer"], "-n", "aviato", "-s", str(root / "signature")], input=message, capture_output=True)
+              if verified.returncode != 0:
+                  raise SystemExit("checkpoint reviewer signature verification failed")
+          PY
           actual="$(shasum -a 256 "${document}" | awk '{print $1}')"
-          [ "${actual}" = "${CHECKPOINT_DIGEST}" ] || { echo "::error::checkpoint digest mismatch"; exit 1; }
-          jq -e --arg repo "${GITHUB_REPOSITORY}" --arg actor "${INTENDED_ACTOR}" --arg sha "${MERGED_SHA}" '
-            .repository == $repo and .intended_actor == $actor and .sha == $sha
-            and .reviewer != $actor and (.expires_at | type == "number") and .expires_at > now
-          ' "${document}" >/dev/null || { echo "::error::checkpoint payload is missing, stale, team-only, or mismatched"; exit 1; }
+          echo "checkpoint-run-id=${CHECKPOINT_RUN_ID}" >> "${GITHUB_OUTPUT}"
           echo "checkpoint-digest=${CHECKPOINT_DIGEST}" >> "${GITHUB_OUTPUT}"
+          echo "verified-envelope-digest=${actual}" >> "${GITHUB_OUTPUT}"
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:

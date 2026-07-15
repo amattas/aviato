@@ -694,7 +694,14 @@ def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> Rulese
     return RulesetApplyResult(f"{verb} {name} on {slug}")
 
 
-def apply_planned_ruleset(slug: str, payload: dict[str, Any], *, ruleset_id: int | None) -> RulesetApplyResult:
+def apply_planned_ruleset(
+    slug: str,
+    payload: dict[str, Any],
+    *,
+    ruleset_id: int | None,
+    degraded_payload: dict[str, Any] | None = None,
+    allow_degraded_tag_pattern: bool = False,
+) -> RulesetApplyResult:
     """Write to the exact endpoint selected by a confirmed semantic plan."""
 
     name = payload.get("name")
@@ -704,7 +711,22 @@ def apply_planned_ruleset(slug: str, payload: dict[str, Any], *, ruleset_id: int
         raise ValueError("planned ruleset id must be a positive integer")
     method = "PUT" if ruleset_id is not None else "POST"
     endpoint = f"repos/{slug}/rulesets/{ruleset_id}" if ruleset_id is not None else f"repos/{slug}/rulesets"
-    _submit_ruleset(endpoint, method, payload)
+    try:
+        _submit_ruleset(endpoint, method, payload)
+    except GitHubAPIError as exc:
+        exact_degraded = _without_tag_name_pattern(payload)
+        if (
+            not allow_degraded_tag_pattern
+            or degraded_payload is None
+            or exact_degraded != degraded_payload
+            or not _unsupported_tag_metadata_rule(exc.stderr)
+        ):
+            raise
+        _submit_ruleset(endpoint, method, degraded_payload)
+        return RulesetApplyResult(
+            f"{'Updated' if ruleset_id is not None else 'Created'} {name} on {slug}",
+            ("tag_name_pattern",),
+        )
     return RulesetApplyResult(f"{'Updated' if ruleset_id is not None else 'Created'} {name} on {slug}")
 
 

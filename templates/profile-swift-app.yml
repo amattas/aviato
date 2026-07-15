@@ -15,16 +15,6 @@ name: Aviato Swift App
         description: Canonical checkpoint digest
         required: false
         type: string
-      checkpoint-run-id:
-        default: ''
-        description: Verified checkpoint intake run
-        required: false
-        type: string
-      checkpoint-workflow:
-        default: aviato-protection-checkpoint.yml
-        description: Generator-owned intake workflow
-        required: true
-        type: string
       intended-actor:
         default: ''
         description: Exact signed release actor
@@ -54,8 +44,9 @@ jobs:
       - release-gate
       - security
     if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result
-      == 'success' && (github.ref_type == 'tag' || needs.release.outputs.released
-      == 'true') }}
+      == 'success' && needs.release-gate.outputs.gated-sha != '' && needs.release-gate.outputs.checkpoint-digest
+      != '' && needs.release-gate.outputs.verified-envelope-digest != '' && (github.ref_type
+      == 'tag' || needs.release.outputs.released == 'true') }}
     uses: amattas/aviato/.github/workflows/reusable-app-store-connect.yml@EXAMPLE_PIN
     permissions:
       actions: read
@@ -64,6 +55,9 @@ jobs:
       release-tag: ${{ needs.release.outputs.tag }}
       gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
       checkpoint-digest: ${{ needs.release-gate.outputs.checkpoint-digest }}
+      checkpoint-run-id: ${{ needs.release-gate.outputs.checkpoint-run-id }}
+      verified-envelope-digest: ${{ needs.release-gate.outputs.verified-envelope-digest
+        }}
       environment-name: app-store-connect
       xcode-version: ''
       working-directory: .
@@ -118,15 +112,14 @@ jobs:
       contents: write
       pull-requests: write
       actions: write
+      issues: read
     with:
       aviato-ref: EXAMPLE_PIN
       local-install: false
-      checkpoint-workflow: ${{ inputs.checkpoint-workflow }}
       promotion: ${{ inputs.promotion || false }}
       merged-sha: ${{ inputs.merged-sha || '' }}
       intended-tag: ${{ inputs.intended-tag || '' }}
       intended-actor: ${{ inputs.intended-actor || '' }}
-      checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
       checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
       build-number: ''
   release-gate:
@@ -144,7 +137,6 @@ jobs:
       require-merged-pr: true
       release-tag: ${{ needs.release.outputs.tag }}
       required-workflow: aviato-ci.yml
-      checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
       checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
       intended-actor: ${{ inputs.intended-actor || '' }}
       merged-sha: ${{ inputs.merged-sha || '' }}

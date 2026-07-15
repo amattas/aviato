@@ -373,10 +373,10 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
     build = wf["jobs"]["build"]
     push = wf["jobs"]["push"]
     deploy = wf["jobs"]["deploy"]
-    assert build["permissions"] == {"contents": "read", "pages": "read"}
-    assert push["permissions"] == {"contents": "write"}
+    assert build["permissions"] == {"actions": "read", "contents": "read", "pages": "read"}
+    assert push["permissions"] == {"actions": "read", "contents": "write"}
     assert "if" not in push, "serve-pages=false must still push the canonical docs branch"
-    assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
+    assert deploy["permissions"] == {"actions": "read", "pages": "write", "id-token": "write"}
     assert set(deploy["needs"]) == {"build", "push"}
     assert "inputs.serve-pages" in str(deploy["if"])
     assert "success()" in str(deploy["if"])
@@ -384,13 +384,13 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
         "name": "github-pages",
         "url": "${{ steps.deployment.outputs.page_url }}",
     }
-    assert deploy["steps"] == [
-        {
-            "name": "Deploy GitHub Pages",
-            "id": "deployment",
-            "uses": "actions/deploy-pages@v4",
-        }
-    ], "the privileged deploy job must execute no consumer commands"
+    deploy_step = deploy["steps"][-1]
+    assert deploy_step == {
+        "name": "Deploy GitHub Pages",
+        "id": "deployment",
+        "uses": "actions/deploy-pages@v4",
+    }
+    assert deploy["steps"][0]["name"] == "Recheck exact authorization before Pages OIDC"
 
     steps = build["steps"]
     materialize = next(step for step in steps if step.get("name") == "Materialize exact docs branch tree")
@@ -412,6 +412,7 @@ def test_rendered_consumer_docs_caller_defaults_pages_off_and_grants_only_call_u
     docs = caller["jobs"]["docs"]
     assert docs["with"]["serve-pages"] is False
     assert docs["permissions"] == {
+        "actions": "read",
         "contents": "write",
         "pages": "write",
         "id-token": "write",
@@ -607,10 +608,11 @@ def test_pypi_publisher_rechecks_fresh_remote_tag_after_download_and_before_publ
     first = names.index("Verify fresh remote tag after artifact download")
     attest = names.index("Attest build provenance")
     final = names.index("Final fresh remote tag verification")
+    authority = names.index("Final checkpoint recheck immediately before PyPI mutation")
     publish = names.index("Publish distributions")
     alternate = names.index("Publish distributions to alternate repository")
-    assert download < first < attest < final < publish < alternate
-    assert final + 1 == publish
+    assert download < first < attest < final < authority < publish < alternate
+    assert authority + 1 == publish
     for index in (first, final):
         step = steps[index]
         assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
@@ -716,7 +718,7 @@ def test_app_store_receipt_is_persisted_by_isolated_release_evidence_job() -> No
 
     assert deploy.get("permissions", {}).get("contents") != "write"
     assert evidence["needs"] == "app-store-connect"
-    assert evidence["permissions"] == {"contents": "write"}
+    assert evidence["permissions"] == {"actions": "read", "contents": "write"}
 
     encoded = json.dumps(evidence)
     assert "secrets." not in encoded
@@ -746,6 +748,27 @@ def test_app_store_release_evidence_sets_explicit_repository_context() -> None:
     assert persist["env"]["GH_REPO"] == "${{ github.repository }}"
 
 
+def test_app_store_mutations_immediately_recheck_current_checkpoint_key_and_environment() -> None:
+    workflow = _load("reusable-app-store-connect.yml")
+    deploy = workflow["jobs"]["app-store-connect"]
+    steps = deploy["steps"]
+    signing = next(step for step in steps if step.get("name") == "Install signing assets")
+    upload = next(step for step in steps if step.get("name") == "Upload to App Store Connect")
+    for step in (signing, upload):
+        run = step["run"]
+        assert "actions/runs/${CHECKPOINT_RUN_ID}" in run
+        assert "Cache-Control: no-cache" in run
+        assert "can_admins_bypass" in run
+        assert "collaborators/${reviewer}/permission" in run
+    assert "ssh_signing_keys" in signing["run"]
+
+    evidence = workflow["jobs"]["release-evidence"]
+    recheck = evidence["steps"][0]
+    assert "gh run download" in recheck["run"]
+    assert "gh attestation verify" in recheck["run"]
+    assert "ssh_signing_keys" in recheck["run"]
+
+
 def test_app_store_receipt_asset_and_url_share_exact_basename() -> None:
     workflow = _load("reusable-app-store-connect.yml")
     evidence = workflow["jobs"]["release-evidence"]
@@ -760,9 +783,9 @@ def test_app_store_receipt_asset_and_url_share_exact_basename() -> None:
     assert "#app-store-connect-upload.log" not in run
 
 
-def test_docs_deploy_callers_do_not_grant_inert_actions_read() -> None:
+def test_docs_deploy_callers_grant_actions_read_for_fresh_checkpoint_revalidation() -> None:
     for profile, workflow in _rendered_docs_workflows().items():
-        assert "actions" not in workflow["jobs"]["docs"]["permissions"], profile
+        assert workflow["jobs"]["docs"]["permissions"]["actions"] == "read", profile
 
 
 def test_release_workflow_splits_derive_from_write_job() -> None:
@@ -778,8 +801,15 @@ def test_release_workflow_splits_derive_from_write_job() -> None:
     checkout = next(s for s in derive["steps"] if str(s.get("uses", "")).startswith("actions/checkout"))
     assert checkout["with"].get("persist-credentials") is False
     release = wf["jobs"]["release"]
-    assert release["permissions"] == {"contents": "write", "pull-requests": "write", "actions": "write"}
-    assert release["needs"] == "derive"
+    assert release["permissions"] == {
+        "contents": "write",
+        "pull-requests": "write",
+        "actions": "write",
+    }
+    assert set(release["needs"]) == {"derive", "authority"}
+    authority = wf["jobs"]["authority"]
+    assert all(level == "read" for level in authority["permissions"].values())
+    assert "needs.authority.outputs.authorized == 'true'" in release["if"]
     assert "release == 'true'" in str(release.get("if", ""))
 
 
@@ -848,10 +878,10 @@ def test_docs_publish_installs_pinned_toolchain_fail_closed() -> None:
 
     # C12-W4: consumer code runs under read-only scopes. configure-pages requires
     # pages:read; contents:write appears ONLY in the separate push job.
-    assert build["permissions"] == {"contents": "read", "pages": "read"}
+    assert build["permissions"] == {"actions": "read", "contents": "read", "pages": "read"}
     emit = next(s for s in steps if s.get("name") == "Emit language API docs")
     assert steps.index(install) < steps.index(emit)
-    assert wf["jobs"]["push"]["permissions"] == {"contents": "write"}
+    assert wf["jobs"]["push"]["permissions"] == {"actions": "read", "contents": "write"}
 
 
 def test_docs_publish_fetches_existing_branch_authenticated_fail_closed() -> None:

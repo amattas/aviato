@@ -136,6 +136,18 @@ def test_provision_rejects_bad_slug() -> None:
     assert main(["provision", "no-slash", "--profile", "python-library"]) == 2
 
 
+def test_release_checkpoint_parser_exposes_real_lifecycle_commands() -> None:
+    parser = cli.build_parser()
+    for phase in ("collect", "review-sign", "verify", "persist"):
+        args = parser.parse_args(["release-checkpoint", phase])
+        assert args.func is not None
+
+
+def test_provision_parser_requires_explicit_apply_confirmation_and_degraded_consent() -> None:
+    args = cli.build_parser().parse_args(["provision", "o/r", "--pin", "1"])
+    assert args.apply is False and args.confirm is None and args.allow_degraded_tag_pattern is False
+
+
 @pytest.mark.parametrize(
     "slug",
     ["a/b/c", "a/b?x", "a/b#x", " a/b", "a/b ", "-a/b", "a/-b", "a\\b", "a/b\n", "a/", "/b"],

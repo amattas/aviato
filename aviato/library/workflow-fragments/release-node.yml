@@ -6,13 +6,12 @@ permissions:
   contents: write
   pull-requests: write
   actions: write
+  issues: read
 with:
   aviato-ref: "{{ aviato-ref }}"
   local-install: "{{ aviato-local-install }}"
-  checkpoint-workflow: ${{ inputs.checkpoint-workflow }}
   promotion: ${{ inputs.promotion || false }}
   merged-sha: ${{ inputs.merged-sha || '' }}
   intended-tag: ${{ inputs.intended-tag || '' }}
   intended-actor: ${{ inputs.intended-actor || '' }}
-  checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
   checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}

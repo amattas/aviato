@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib
 import inspect
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -113,6 +114,27 @@ def _plan(*, live: dict[str, Any] | None = None, **kwargs: Any) -> Any:
     )
 
 
+def _persistence_evidence(**changes: Any) -> Any:
+    api = _api()
+    values = {
+        "envelope": b"signed-envelope",
+        "issue_node_id": "I_1",
+        "comment_node_id": "IC_1",
+        "event_node_id": "IC_1",
+        "comment_database_id": 44,
+        "author": "alice",
+        "author_database_id": 11,
+        "author_is_admin": True,
+        "key_id": "key-1",
+        "key_current": True,
+        "created_at": "2026-07-14T00:00:00Z",
+        "last_edited_at": None,
+        "deleted": False,
+    }
+    values.update(changes)
+    return api.ReceiptPersistenceEvidence(**values)
+
+
 def test_protection_plan_contains_classic_security_merge_ruleset_environment_and_checks() -> None:
     kinds = {operation.kind for operation in _plan().operations}
     assert {"classic", "repository", "security", "merge", "ruleset", "environment", "checks"} <= kinds
@@ -156,7 +178,12 @@ def test_provision_is_not_full_when_rulesets_fail_after_settings_succeed() -> No
 
 def test_known_tag_pattern_degradation_is_visible_and_non_ready() -> None:
     parameters = inspect.signature(_api().build_protection_plan).parameters
-    assert "degraded_tag_pattern" not in parameters and "allow_degraded_tag_pattern" not in parameters
+    assert "allow_degraded_tag_pattern" in parameters
+    plan = _plan(allow_degraded_tag_pattern=True)
+    tag_operation = next(
+        operation for operation in plan.operations if operation.kind == "ruleset" and operation.name == "Protect"
+    )
+    assert tag_operation.degraded_desired is None
 
 
 def test_full_noop_rerun_is_idempotent_only_after_fresh_binding() -> None:
@@ -266,7 +293,24 @@ def test_final_convergence_barrier_catches_earlier_or_post_last_write_drift() ->
 
 
 def test_degraded_tag_fallback_requires_bound_payload_and_explicit_consent() -> None:
-    assert not hasattr(_plan(), "allow_degraded_tag_pattern")
+    tag_rule = _ruleset(name="Release tags", target="tag")
+    tag_rule["rules"].append({"type": "tag_name_pattern", "parameters": {"pattern": "1.*"}})
+    plan = _api().build_protection_plan(
+        repository=_repo(),
+        tool_version="1.0.0",
+        declaration_pin="1.0.0",
+        snapshot_sha=SHA,
+        desired_state=_desired(),
+        desired_rulesets=[tag_rule],
+        live_state={**_live(), "rulesets": []},
+        environments=(_environment(),),
+        allow_degraded_tag_pattern=True,
+    )
+    operation = next(item for item in plan.operations if item.kind == "ruleset")
+    assert operation.degraded_desired is not None
+    assert operation.degraded_fingerprint
+    assert json.loads(plan.canonical_json)["allow_degraded_tag_pattern"] is True
+    assert operation.degraded_reason == "github-unsupported-tag_name_pattern-422"
 
 
 def test_protection_receipt_is_attached_with_ruleset_ids_and_payload_fingerprints() -> None:
@@ -322,7 +366,7 @@ def test_ruleset_operation_preserves_confirmed_immutable_identity_and_writes_fre
         confirmation=plan.plan_id,
         recompute=recompute,
         write=write,
-        persist_receipt=lambda _receipt: None,
+        persist_receipt=lambda _receipt: _persistence_evidence(),
     )
     assert any(item is fresh_rule for item in written)
 
@@ -338,7 +382,7 @@ def test_ruleset_replacement_between_confirmation_and_write_is_rejected() -> Non
         confirmation=plan.plan_id,
         recompute=lambda: replaced,
         write=writes.append,
-        persist_receipt=lambda _receipt: None,
+        persist_receipt=lambda _receipt: _persistence_evidence(),
     )
     assert result.receipt.status == "indeterminate" and writes == []
 
@@ -353,7 +397,7 @@ def test_unsupported_custom_environment_rule_drift_blocks_before_any_write() -> 
         confirmation=plan.plan_id,
         recompute=lambda: plan,
         write=writes.append,
-        persist_receipt=lambda _receipt: None,
+        persist_receipt=lambda _receipt: _persistence_evidence(),
     )
     assert not plan.ready and writes == [] and result.receipt.status == "blocked"
 
@@ -373,7 +417,7 @@ def test_ready_receipt_is_built_from_final_readback_and_requires_durable_persist
         confirmation=plan.plan_id,
         recompute=lambda: state,
         write=write,
-        persist_receipt=lambda canonical: persisted.append(canonical),
+        persist_receipt=lambda canonical: (persisted.append(canonical), _persistence_evidence())[1],
     )
     assert result.receipt.ready
     assert result.receipt.final_fingerprint == api.protection_state_fingerprint(state)
@@ -385,3 +429,84 @@ def test_ready_receipt_is_built_from_final_readback_and_requires_durable_persist
         plan, confirmation=plan.plan_id, recompute=lambda: state, write=write
     )
     assert not without_persistence.receipt.ready
+
+
+def test_receipt_preserves_confirmed_plan_id_separately_from_final_live_plan_id() -> None:
+    api = _api()
+    confirmed = _plan()
+    final_live = _live()
+    final_live["classic"] = {"requires_pull_request": True, "required_reviews": 1}
+    final = _plan(live=final_live)
+    receipt = api.receipt_for_plan(final, confirmed_plan=confirmed, status="ready", persistence_status="attached")
+    assert receipt.confirmed_plan_id == confirmed.plan_id
+    assert receipt.final_plan_id == final.plan_id
+    assert receipt.confirmed_plan_id != receipt.final_plan_id
+
+
+def test_signed_receipt_evidence_requires_immutable_unedited_current_admin_metadata() -> None:
+    api = _api()
+    evidence = _persistence_evidence()
+    assert api.receipt_persistence_ready(evidence)
+    assert not api.receipt_persistence_ready(api.replace(evidence, last_edited_at="2026-07-14T00:01:00Z"))
+    assert not api.receipt_persistence_ready(api.replace(evidence, key_current=False))
+
+
+def test_receipt_envelope_ssh_signs_and_verifies_exact_canonical_receipt_bytes() -> None:
+    api = _api()
+    receipt = api.receipt_for_plan(_plan(), status="ready", persistence_status="attached")
+    seen: list[bytes] = []
+    envelope = api.sign_protection_receipt(
+        receipt.canonical_bytes,
+        principal="alice",
+        key_id="key-1",
+        signer=lambda message: (seen.append(message), b"signature")[1],
+    )
+    verified = api.verify_protection_receipt_envelope(
+        envelope,
+        expected_receipt=receipt.canonical_bytes,
+        expected_principal="alice",
+        expected_key_id="key-1",
+        verify_signature=lambda message, signature: message == receipt.canonical_bytes and signature == b"signature",
+    )
+    assert verified == receipt.canonical_bytes and seen == [receipt.canonical_bytes]
+    with pytest.raises(ValueError):
+        api.verify_protection_receipt_envelope(
+            envelope,
+            expected_receipt=receipt.canonical_bytes + b" ",
+            expected_principal="alice",
+            expected_key_id="key-1",
+            verify_signature=lambda *_args: True,
+        )
+
+
+def test_ruleset_replacement_after_write_is_rejected_before_subsequent_write() -> None:
+    api = _api()
+    plan = _plan()
+    state = plan
+    writes: list[Any] = []
+
+    def write(operation: Any) -> None:
+        nonlocal state
+        writes.append(operation)
+        if operation.kind == "ruleset":
+            live = _live()
+            live["rulesets"] = [_live_ruleset(_ruleset(), ruleset_id=77)]
+            # Keep all earlier completed non-ruleset surfaces converged while replacing
+            # the exact ruleset identity after its write.
+            state = _plan(live=live)
+            for prior in plan.operations:
+                if prior.kind != "ruleset" and prior.identity in {item.identity for item in writes}:
+                    state = api.plan_with_operation_converged(state, prior.identity)
+        else:
+            state = api.plan_with_operation_converged(state, operation.identity)
+
+    result = api.execute_protection_plan(
+        plan,
+        confirmation=plan.plan_id,
+        recompute=lambda: state,
+        write=write,
+        persist_receipt=lambda _canonical: _persistence_evidence(),
+    )
+    assert result.receipt.status == "indeterminate"
+    ruleset_index = next(index for index, item in enumerate(writes) if item.kind == "ruleset")
+    assert len(writes) == ruleset_index + 1

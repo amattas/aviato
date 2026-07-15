@@ -47,6 +47,7 @@ from .core.protection import (
     ProtectionPlan,
     build_protection_plan,
     execute_protection_plan,
+    receipt_for_plan,
     require_protection_confirmation,
 )
 from .core.provision import provision_repo
@@ -82,6 +83,14 @@ from .library_source import configured_library_repository, fetch_library_snapsho
 from .paths import REPO_ROOT
 from .plugins.version_formats import bump_files
 from .policy import library_repository, load_policy
+from .release_checkpoint import (
+    collect_live_checkpoint,
+    persist_signed_protection_receipt,
+    persist_verified_checkpoint,
+    resolve_receipt_signing_identity,
+    review_sign_file,
+    verify_live_checkpoint,
+)
 from .repos import is_owner_repo_slug, normalize_slug, remote_url, working_tree_clean
 from .rulesets import apply_rulesets as apply_rulesets
 from .rulesets import render_all_rulesets
@@ -2364,6 +2373,15 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
     )
     platform = GitHubPlatform()
     try:
+        receipt_signing_identity = (
+            resolve_receipt_signing_identity(
+                repository=slug,
+                principal=args.receipt_principal,
+                key_id=args.receipt_key_id,
+            )
+            if args.receipt_principal and args.receipt_key_id
+            else None
+        )
         reviewers = tuple(
             EnvironmentReviewer(**platform.resolve_environment_reviewer(slug, reviewer))
             for reviewer in (args.environment_reviewer or ())
@@ -2395,6 +2413,8 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
                 desired_rulesets=desired_rulesets,
                 live_state=live,
                 environments=environments,
+                allow_degraded_tag_pattern=args.allow_degraded_tag_pattern,
+                receipt_signing_identity=receipt_signing_identity,
             )
 
         plan = recompute()
@@ -2416,16 +2436,24 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
     if selected is None:
         print(f"dry-run only; apply with --apply --confirm {plan.plan_id}")
         return 0 if plan.ready else 1
+    if not args.receipt_principal or not args.receipt_key_id or not args.receipt_signing_key:
+        print(
+            "--apply requires --receipt-principal, --receipt-key-id, and --receipt-signing-key "
+            "for immutable durable evidence",
+            file=sys.stderr,
+        )
+        return 2
     result = execute_protection_plan(
         selected,
         confirmation=args.confirm,
         recompute=recompute,
         write=lambda operation: platform.apply_protection_operation(slug, operation),
-        persist_receipt=lambda canonical: platform.open_or_update_issue(
-            slug,
-            "aviato-protection-receipt",
-            "Aviato composite protection receipt",
-            "Canonical `aviato-protection-receipt/v1` evidence:\n\n```json\n" + canonical.decode("ascii") + "\n```",
+        persist_receipt=lambda canonical: persist_signed_protection_receipt(
+            repository=slug,
+            canonical_receipt=canonical,
+            principal=args.receipt_principal,
+            key_id=args.receipt_key_id,
+            signing_key=Path(args.receipt_signing_key),
         ),
     )
     if not result.receipt.ready:
@@ -2433,6 +2461,65 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
         return 1
     print(f"applied composite protection to {slug}; receipt={result.receipt.plan_id}")
     return 0
+
+
+def _checkpoint_arg(args: argparse.Namespace, name: str) -> Any:
+    value = getattr(args, name, None)
+    if value in (None, "", []):
+        raise AviatoError(f"release-checkpoint {args.checkpoint_phase} requires --{name.replace('_', '-')}")
+    return value
+
+
+def cmd_release_checkpoint(args: argparse.Namespace) -> int:
+    """Offline-separated collection/signing plus fresh live verification/intake."""
+
+    phase = args.checkpoint_phase
+    if phase == "collect":
+        checkpoint = collect_live_checkpoint(
+            repository=_checkpoint_arg(args, "repository"),
+            tag=_checkpoint_arg(args, "tag"),
+            sha=_checkpoint_arg(args, "sha"),
+            intended_actor=_checkpoint_arg(args, "intended_actor"),
+            reviewer=_checkpoint_arg(args, "reviewer"),
+            submitter=_checkpoint_arg(args, "submitter"),
+            pin=_checkpoint_arg(args, "pin"),
+            snapshot_sha=_checkpoint_arg(args, "snapshot_sha"),
+            protection_plan_id=_checkpoint_arg(args, "protection_plan_id"),
+            protection_receipt_digest=_checkpoint_arg(args, "protection_receipt_digest"),
+            fingerprints=_checkpoint_arg(args, "fingerprint"),
+            workflow_path=args.workflow_path,
+            source_run_id=int(_checkpoint_arg(args, "source_run_id")),
+            ttl_seconds=args.ttl_seconds,
+            output=Path(_checkpoint_arg(args, "output")),
+        )
+        print(f"collected canonical checkpoint {checkpoint.digest} at {args.output}")
+        return 0
+    if phase == "review-sign":
+        envelope = review_sign_file(
+            input_path=Path(_checkpoint_arg(args, "input")),
+            output=Path(_checkpoint_arg(args, "output")),
+            reviewer=_checkpoint_arg(args, "reviewer"),
+            collector=_checkpoint_arg(args, "collector"),
+            key_id=_checkpoint_arg(args, "key_id"),
+            signing_key=Path(_checkpoint_arg(args, "signing_key")),
+        )
+        print(f"signed exact canonical checkpoint envelope ({len(envelope)} bytes) at {args.output}")
+        return 0
+    if phase == "verify":
+        checkpoint = verify_live_checkpoint(
+            input_path=Path(_checkpoint_arg(args, "input")),
+            output=Path(args.output) if args.output else None,
+        )
+        print(f"verified checkpoint {checkpoint.digest} against current GitHub authority")
+        return 0
+    if phase == "persist":
+        digest = persist_verified_checkpoint(
+            input_path=Path(_checkpoint_arg(args, "input")),
+            repository=_checkpoint_arg(args, "repository"),
+        )
+        print(f"dispatched exact verified envelope {digest} to trusted default-branch intake")
+        return 0
+    raise AviatoError(f"unknown release-checkpoint phase {phase!r}")
 
 
 def cmd_provision(args: argparse.Namespace) -> int:
@@ -2548,6 +2635,15 @@ def cmd_provision(args: argparse.Namespace) -> int:
         run(["git", "-C", str(clone), "push", "origin", "HEAD"])
 
     def full_protection() -> Any:
+        receipt_signing_identity = (
+            resolve_receipt_signing_identity(
+                repository=slug,
+                principal=args.receipt_principal,
+                key_id=args.receipt_key_id,
+            )
+            if args.receipt_principal and args.receipt_key_id
+            else None
+        )
         reviewers = tuple(
             EnvironmentReviewer(**platform.resolve_environment_reviewer(slug, reviewer))
             for reviewer in (args.environment_reviewer or ())
@@ -2579,19 +2675,31 @@ def cmd_provision(args: argparse.Namespace) -> int:
                 desired_rulesets=desired_rulesets,
                 live_state=live,
                 environments=environments,
+                allow_degraded_tag_pattern=args.allow_degraded_tag_pattern,
+                receipt_signing_identity=receipt_signing_identity,
             )
 
         plan = recompute()
+        print(json.dumps({"plan_id": plan.plan_id, "ready": plan.ready, "blockers": plan.blockers}, indent=2))
+        if not args.apply:
+            print(
+                f"staged provision stopped before full-protection mutation; recover with "
+                f"`aviato complete-protection <local-clone-of-{slug}> --apply --confirm {plan.plan_id}`"
+            )
+            return receipt_for_plan(plan, status="blocked")
+        if not args.confirm or not args.receipt_principal or not args.receipt_key_id or not args.receipt_signing_key:
+            return receipt_for_plan(plan, status="blocked")
         result = execute_protection_plan(
             plan,
-            confirmation=plan.plan_id,
+            confirmation=args.confirm or "",
             recompute=recompute,
             write=lambda operation: platform.apply_protection_operation(slug, operation),
-            persist_receipt=lambda canonical: platform.open_or_update_issue(
-                slug,
-                "aviato-protection-receipt",
-                "Aviato composite protection receipt",
-                "Canonical `aviato-protection-receipt/v1` evidence:\n\n```json\n" + canonical.decode("ascii") + "\n```",
+            persist_receipt=lambda canonical: persist_signed_protection_receipt(
+                repository=slug,
+                canonical_receipt=canonical,
+                principal=args.receipt_principal,
+                key_id=args.receipt_key_id,
+                signing_key=Path(args.receipt_signing_key),
             ),
         )
         return result.receipt
@@ -3268,7 +3376,60 @@ def build_parser() -> argparse.ArgumentParser:
     complete.add_argument("--environment-wait-minutes", type=int, default=0, metavar="N")
     complete.add_argument("--prevent-self-review", action="store_true")
     complete.add_argument("--forbid-admin-bypass", action="store_true")
+    complete.add_argument("--receipt-principal")
+    complete.add_argument("--receipt-key-id")
+    complete.add_argument("--receipt-signing-key")
+    complete.add_argument(
+        "--allow-degraded-tag-pattern",
+        action="store_true",
+        help="Bind consent for the exact GitHub 422 tag-pattern fallback; the result remains non-ready.",
+    )
     complete.set_defaults(func=cmd_complete_protection)
+
+    checkpoint = subparsers.add_parser(
+        "release-checkpoint",
+        help="Collect, independently SSH-sign, freshly verify, and persist managed release authority.",
+    )
+    checkpoint_phases = checkpoint.add_subparsers(dest="checkpoint_phase", required=True)
+    collect = checkpoint_phases.add_parser("collect", help="Collect current live redacted protection evidence.")
+    for option in (
+        "repository",
+        "tag",
+        "sha",
+        "intended-actor",
+        "reviewer",
+        "submitter",
+        "pin",
+        "snapshot-sha",
+        "protection-plan-id",
+        "protection-receipt-digest",
+        "source-run-id",
+        "output",
+    ):
+        collect.add_argument(f"--{option}")
+    collect.add_argument("--fingerprint", action="append")
+    collect.add_argument(
+        "--workflow-path",
+        default=".github/workflows/aviato-protection-checkpoint.yml",
+    )
+    collect.add_argument("--ttl-seconds", type=int, default=900)
+    collect.set_defaults(func=cmd_release_checkpoint)
+    review_sign_cmd = checkpoint_phases.add_parser(
+        "review-sign", help="SSH-sign exact canonical bytes without the collector's gh credential."
+    )
+    for option in ("input", "output", "reviewer", "collector", "key-id", "signing-key"):
+        review_sign_cmd.add_argument(f"--{option}")
+    review_sign_cmd.set_defaults(func=cmd_release_checkpoint)
+    verify_cmd = checkpoint_phases.add_parser("verify", help="Verify current admin/key/workflow/source authority.")
+    verify_cmd.add_argument("--input")
+    verify_cmd.add_argument("--output")
+    verify_cmd.set_defaults(func=cmd_release_checkpoint)
+    persist_cmd = checkpoint_phases.add_parser(
+        "persist", help="Verify then dispatch the exact signed envelope to trusted intake."
+    )
+    persist_cmd.add_argument("--input")
+    persist_cmd.add_argument("--repository")
+    persist_cmd.set_defaults(func=cmd_release_checkpoint)
 
     provision = subparsers.add_parser(
         "provision", help="Provision a NEW repository with staged minimal->full protection (§5.2)."
@@ -3290,6 +3451,12 @@ def build_parser() -> argparse.ArgumentParser:
     provision.add_argument("--environment-wait-minutes", type=int, default=0, metavar="N")
     provision.add_argument("--prevent-self-review", action="store_true")
     provision.add_argument("--forbid-admin-bypass", action="store_true")
+    provision.add_argument("--receipt-principal")
+    provision.add_argument("--receipt-key-id")
+    provision.add_argument("--receipt-signing-key")
+    provision.add_argument("--apply", action="store_true", help="Apply the separately previewed composite plan.")
+    provision.add_argument("--confirm", metavar="PLAN_ID", help="Exact composite plan id required with --apply.")
+    provision.add_argument("--allow-degraded-tag-pattern", action="store_true")
     provision.set_defaults(func=cmd_provision)
 
     drift = subparsers.add_parser("drift-report", help="Consumer automation: report file + settings drift (read-only).")

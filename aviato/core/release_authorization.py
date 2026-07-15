@@ -10,6 +10,9 @@ from typing import Any
 
 from .model import deep_freeze, deep_thaw
 
+MAX_CHECKPOINT_TTL_SECONDS = 15 * 60
+MAX_CHECKPOINT_CLOCK_SKEW_SECONDS = 30
+
 
 @dataclass(frozen=True)
 class ManagedReleaseCheckpoint:
@@ -62,6 +65,8 @@ class ManagedReleaseCheckpoint:
             or self.expires_at <= self.issued_at
         ):
             raise ValueError("checkpoint expiry must be after issue time")
+        if self.expires_at - self.issued_at > MAX_CHECKPOINT_TTL_SECONDS:
+            raise ValueError(f"checkpoint TTL exceeds {MAX_CHECKPOINT_TTL_SECONDS} seconds")
         if not self.fingerprints or any(
             not isinstance(key, str) or not key or not _hex(value, 64) for key, value in self.fingerprints.items()
         ):
@@ -126,6 +131,63 @@ class CheckpointVerificationContext:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fingerprints", deep_freeze(self.fingerprints))
+
+
+@dataclass(frozen=True)
+class CheckpointIntakeRun:
+    run_id: int
+    workflow_path: str
+    workflow_blob_sha: str
+    workflow_ref: str
+    head_sha: str
+    tag: str
+    envelope_digest: str
+    expires_at: int
+    conclusion: str
+    attestation_verified: bool
+
+    def __post_init__(self) -> None:
+        if isinstance(self.run_id, bool) or self.run_id <= 0:
+            raise ValueError("checkpoint intake run requires a positive run id")
+        if not self.workflow_path.startswith(".github/workflows/"):
+            raise ValueError("checkpoint intake run requires a trusted workflow path")
+        if not self.workflow_ref.startswith("refs/heads/"):
+            raise ValueError("checkpoint intake run requires a concrete branch ref")
+        if not _hex(self.workflow_blob_sha, 40) or not _hex(self.head_sha, 40):
+            raise ValueError("checkpoint intake run requires immutable workflow/source SHAs")
+        if not _hex(self.envelope_digest, 64):
+            raise ValueError("checkpoint intake run requires an envelope digest")
+
+
+def select_checkpoint_intake_run(
+    runs: list[CheckpointIntakeRun] | tuple[CheckpointIntakeRun, ...],
+    *,
+    workflow_path: str,
+    workflow_blob_sha: str,
+    workflow_ref: str,
+    head_sha: str,
+    tag: str,
+    envelope_digest: str,
+    now: int,
+) -> CheckpointIntakeRun:
+    """Select one independently attested intake run; caller-provided IDs are not authority."""
+
+    matching = [
+        run
+        for run in runs
+        if run.workflow_path == workflow_path
+        and run.workflow_blob_sha == workflow_blob_sha
+        and run.workflow_ref == workflow_ref
+        and run.head_sha == head_sha
+        and run.tag == tag
+        and run.envelope_digest == envelope_digest
+        and run.conclusion == "success"
+        and run.attestation_verified
+        and now < run.expires_at
+    ]
+    if len(matching) != 1:
+        raise ValueError("release authorization requires exactly one trusted, attested, unexpired checkpoint run")
+    return matching[0]
 
 
 _CHECKPOINT_FIELDS = frozenset(field for field in ManagedReleaseCheckpoint.__dataclass_fields__)
@@ -199,7 +261,11 @@ def verify_checkpoint_envelope(
     signature = _decode_signature(envelope["signature"])
     if verify_signature(key.public_key, checkpoint.canonical_bytes, signature) is not True:
         raise ValueError("checkpoint signature verification failed")
-    if isinstance(now, bool) or not isinstance(now, int) or not checkpoint.issued_at <= now < checkpoint.expires_at:
+    if isinstance(now, bool) or not isinstance(now, int):
+        raise ValueError("checkpoint verification time must be an integer epoch")
+    if checkpoint.issued_at > now + MAX_CHECKPOINT_CLOCK_SKEW_SECONDS:
+        raise ValueError("checkpoint issue time exceeds bounded clock skew")
+    if now >= checkpoint.expires_at:
         raise ValueError("checkpoint is not currently fresh")
     expected = {
         "repository_id": context.repository_id,
@@ -326,4 +392,26 @@ def reviewer_ready(*, kind: str, concrete_user_id: int | None, membership_verifi
 def guard_descriptor_ready(descriptor: object | None) -> bool:
     if not isinstance(descriptor, Mapping):
         return False
-    return all(descriptor.get(key) for key in ("path", "blob_sha", "schema"))
+    required = {
+        "path",
+        "blob_sha",
+        "schema",
+        "allowed_events",
+        "allowed_refs",
+        "receipt_schema_digest",
+        "trust_policy_digest",
+    }
+    if set(descriptor) != required:
+        return False
+    return bool(
+        isinstance(descriptor["path"], str)
+        and descriptor["path"].startswith(".github/workflows/")
+        and _hex(descriptor["blob_sha"], 40)
+        and descriptor["schema"] == "aviato-managed-release-checkpoint/v1"
+        and isinstance(descriptor["allowed_events"], (tuple, list))
+        and tuple(descriptor["allowed_events"]) == ("workflow_dispatch",)
+        and isinstance(descriptor["allowed_refs"], (tuple, list))
+        and tuple(descriptor["allowed_refs"]) == ("default-branch",)
+        and _hex(descriptor["receipt_schema_digest"], 64)
+        and _hex(descriptor["trust_policy_digest"], 64)
+    )

@@ -342,6 +342,7 @@ class Registry:
                     "environment_input",
                     "status_check",
                     "authorization_gate",
+                    "authorization_outputs",
                 },
                 f"pipeline {name!r} job {job_name!r}",
             )
@@ -365,6 +366,9 @@ class Registry:
                 status_check=_optional_string(job_doc.get("status_check"), f"job {job_name!r} status_check"),
                 authorization_gate=_optional_string(
                     job_doc.get("authorization_gate"), f"job {job_name!r} authorization_gate"
+                ),
+                authorization_outputs=_string_list(
+                    job_doc.get("authorization_outputs"), f"job {job_name!r} authorization_outputs"
                 ),
             )
             # Missing, malformed, or unconfined fragments are module-schema

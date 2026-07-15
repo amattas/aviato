@@ -39,6 +39,12 @@ on:
         description: Exact canonical checkpoint digest emitted by the nonprivileged release gate.
         required: true
         type: string
+      checkpoint-run-id:
+        required: true
+        type: string
+      verified-envelope-digest:
+        required: true
+        type: string
       scheme:
         required: true
         type: string
@@ -141,6 +147,8 @@ jobs:
     outputs:
       release-tag: ${{ steps.release.outputs.tag }}
       checkpoint-digest: ${{ steps.authorization.outputs.checkpoint-digest }}
+      checkpoint-run-id: ${{ inputs.checkpoint-run-id }}
+      verified-envelope-digest: ${{ inputs.verified-envelope-digest }}
     environment:
       name: ${{ inputs.environment-name }}
     defaults:
@@ -174,9 +182,20 @@ jobs:
         env:
           GATED_SHA: ${{ inputs.gated-sha }}
           CHECKPOINT_DIGEST: ${{ inputs.checkpoint-digest }}
+          CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
+          VERIFIED_ENVELOPE_DIGEST: ${{ inputs.verified-envelope-digest }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          [[ "${GATED_SHA}" =~ ^[0-9a-f]{40}$ && "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::invalid authorization outputs"; exit 1; }
+          [[ "${GATED_SHA}" =~ ^[0-9a-f]{40}$ && "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ && "${CHECKPOINT_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "::error::invalid authorization outputs"; exit 1; }
+          [ "${VERIFIED_ENVELOPE_DIGEST}" = "${CHECKPOINT_DIGEST}" ]
+          rm -rf "${RUNNER_TEMP}/fresh-authority" && mkdir -p "${RUNNER_TEMP}/fresh-authority"
+          gh run download "${CHECKPOINT_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name verified-checkpoint --dir "${RUNNER_TEMP}/fresh-authority"
+          envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
+          [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
+          gh attestation verify "${envelope}" --repo "${GITHUB_REPOSITORY}" >/dev/null
+          reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
           echo "checkpoint-digest=${CHECKPOINT_DIGEST}" >> "${GITHUB_OUTPUT}"
 
       # §11.4: the six Apple secrets may only materialize behind a reviewer-protected
@@ -199,6 +218,7 @@ jobs:
             echo "::error::Environment '${ENV_NAME}' has no required reviewers; configure them (Settings → Environments) before App Store deploys (§11.4)."
             exit 1
           fi
+          [ "$(jq -r .can_admins_bypass <<<"${response}")" = "false" ] || { echo "::error::Environment '${ENV_NAME}' permits admin bypass"; exit 1; }
           echo "Environment '${ENV_NAME}' requires reviewers."
 
       - name: Checkout consumer repository
@@ -279,8 +299,21 @@ jobs:
           APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
           APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          GH_TOKEN: ${{ github.token }}
+          CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
+          VERIFIED_ENVELOPE_DIGEST: ${{ inputs.verified-envelope-digest }}
+          ENV_NAME: ${{ inputs.environment-name }}
         run: |
           set -euo pipefail
+
+          envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
+          [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/actions/runs/${CHECKPOINT_RUN_ID}" --jq '.status + ":" + .conclusion')" = "completed:success" ]
+          reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
+          key_id="$(jq -r .key_id "${envelope}")"
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
+          gh api -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys" --jq "any(.[]; (.id|tostring) == \"${key_id}\")" | grep -qx true
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/${ENV_NAME}" --jq .can_admins_bypass)" = "false" ]
 
           decode_base64() {
             local value="$1" output="$2"
@@ -387,8 +420,18 @@ jobs:
           # without these in scope.
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          GH_TOKEN: ${{ github.token }}
+          CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
+          VERIFIED_ENVELOPE_DIGEST: ${{ inputs.verified-envelope-digest }}
+          ENV_NAME: ${{ inputs.environment-name }}
         run: |
           set -euo pipefail
+          envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
+          [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/actions/runs/${CHECKPOINT_RUN_ID}" --jq '.status + ":" + .conclusion')" = "completed:success" ]
+          reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/${ENV_NAME}" --jq .can_admins_bypass)" = "false" ]
           ipa_path="$(find "${EXPORT_PATH}" -maxdepth 1 -name '*.ipa' -print | head -n1)"
           if [ -z "${ipa_path}" ]; then
             echo "::error::No .ipa found in ${EXPORT_PATH}."
@@ -500,15 +543,29 @@ jobs:
     needs: app-store-connect
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
     steps:
       - name: Recheck authorization before release mutation
         shell: bash
         env:
           CHECKPOINT_DIGEST: ${{ needs.app-store-connect.outputs.checkpoint-digest }}
+          CHECKPOINT_RUN_ID: ${{ needs.app-store-connect.outputs.checkpoint-run-id }}
+          VERIFIED_ENVELOPE_DIGEST: ${{ needs.app-store-connect.outputs.verified-envelope-digest }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::invalid authorization output"; exit 1; }
+          [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ && "${CHECKPOINT_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "::error::invalid authorization output"; exit 1; }
+          [ "${VERIFIED_ENVELOPE_DIGEST}" = "${CHECKPOINT_DIGEST}" ]
+          rm -rf "${RUNNER_TEMP}/fresh-authority" && mkdir -p "${RUNNER_TEMP}/fresh-authority"
+          gh run download "${CHECKPOINT_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name verified-checkpoint --dir "${RUNNER_TEMP}/fresh-authority"
+          envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
+          [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
+          gh attestation verify "${envelope}" --repo "${GITHUB_REPOSITORY}" >/dev/null
+          reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
+          key_id="$(jq -r .key_id "${envelope}")"
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
+          gh api -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys" --jq "any(.[]; (.id|tostring) == \"${key_id}\")" | grep -qx true
 
       - name: Download App Store Connect receipt
         uses: actions/download-artifact@v8

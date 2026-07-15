@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import json
 from pathlib import Path
@@ -84,7 +85,7 @@ def test_managed_checkpoint_intake_is_default_branch_no_secret_and_injection_saf
     assert set(trigger) == {"workflow_dispatch"}
     assert document["permissions"] == {}
     verify = document["jobs"]["verify"]
-    assert verify["permissions"] == {"contents": "read"}
+    assert verify["permissions"] == {"actions": "read", "contents": "read", "issues": "read"}
     assert all("actions/checkout" not in str(step.get("uses", "")) for step in verify["steps"])
 
 
@@ -104,9 +105,24 @@ def test_managed_checkpoint_template_is_generator_owned_and_byte_stable() -> Non
 
 
 def test_checkpoint_workflow_is_generated_for_all_six_profiles_and_self_bootstrap() -> None:
+    from aviato.core.onboarding import resolved_artifacts
+    from aviato.core.registry import Registry
+    from aviato.validation import _TEMPLATE_EXAMPLE_VARS
+
     assert (ROOT / ".github/workflows/aviato-protection-checkpoint.yml").is_file()
     for name in ("node-service", "python-component", "python-library", "python-service", "swift-app"):
-        assert "protection-checkpoint" in (ROOT / f"templates/profile-{name}.yml").read_text()
+        artifacts = resolved_artifacts(
+            Registry(ROOT / "aviato/library"),
+            name,
+            _TEMPLATE_EXAMPLE_VARS[name],
+            pin="1",
+        )
+        checkpoint = next(
+            artifact
+            for artifact in artifacts
+            if artifact.output == ".github/workflows/aviato-protection-checkpoint.yml"
+        )
+        assert checkpoint.body == (ROOT / "templates/consumer-protection-checkpoint.yml").read_text()
 
 
 def test_self_bootstrap_caller_has_generator_owned_closed_promotion_mode() -> None:
@@ -308,3 +324,101 @@ def test_checkpoint_envelope_rejects_revoked_expired_or_stale_live_evidence(
 def test_managed_checkpoint_intake_verified_artifact_has_bounded_base64url_input() -> None:
     body = (ROOT / "templates/consumer-protection-checkpoint.yml").read_text()
     assert "base64url" in body.lower() and "MAX_" in body
+
+
+def test_checkpoint_rejects_ten_year_ttl_and_excessive_future_skew() -> None:
+    api = _api()
+    with pytest.raises(ValueError, match="TTL"):
+        _checkpoint(expires_at=1_700_000_000 + 315_360_000)
+
+    checkpoint = _checkpoint(issued_at=1_700_000_120, expires_at=1_700_000_240)
+    with pytest.raises(ValueError, match="clock skew"):
+        api.verify_checkpoint_envelope(
+            _envelope_bytes(document=json.loads(checkpoint.canonical_json)),
+            context=_verification_context(),
+            resolve_key=lambda _key_id: _key(),
+            verify_signature=lambda *_args: True,
+            now=1_700_000_000,
+        )
+
+
+def test_checkpoint_intake_preserves_and_attests_exact_signed_envelope_with_minimum_reads() -> None:
+    workflow = yaml.safe_load((ROOT / "templates/consumer-protection-checkpoint.yml").read_text())
+    verify = workflow["jobs"]["verify"]
+    assert verify["permissions"] == {"actions": "read", "contents": "read", "issues": "read"}
+    upload = next(step for step in verify["steps"] if str(step.get("name", "")).startswith("Upload"))
+    assert upload["with"]["path"].endswith("verified-checkpoint-envelope.json")
+    attest = workflow["jobs"]["attest"]
+    subject = next(step for step in attest["steps"] if str(step.get("name", "")).startswith("Attest"))
+    assert subject["with"]["subject-path"].endswith("verified-checkpoint-envelope.json")
+
+
+def test_checkpoint_intake_authorizes_only_an_immutable_current_admin_signed_receipt_comment() -> None:
+    body = (ROOT / "templates/consumer-protection-checkpoint.yml").read_text()
+    assert "issues/{issue['number']}/comments?per_page=100" in body
+    assert "aviato-protection-receipt-envelope/v1" in body
+    assert 'receipt_comment.get("created_at") != receipt_comment.get("updated_at")' in body
+    assert 'receipt_author.get("login") != receipt_envelope["principal"]' in body
+    assert "receipt signer is not a current concrete repository admin" in body
+    assert "receipt SSH signature verification failed" in body
+    assert 'issue.get("body")' not in body
+
+
+def test_release_gate_selects_exactly_one_trusted_attested_unexpired_intake_run() -> None:
+    api = _api()
+    trusted = api.CheckpointIntakeRun(
+        run_id=91,
+        workflow_path=".github/workflows/aviato-protection-checkpoint.yml",
+        workflow_blob_sha="1" * 40,
+        workflow_ref="refs/heads/main",
+        head_sha="a" * 40,
+        tag="1.2.3",
+        envelope_digest="2" * 64,
+        expires_at=1_700_000_300,
+        conclusion="success",
+        attestation_verified=True,
+    )
+    assert (
+        api.select_checkpoint_intake_run(
+            [trusted],
+            workflow_path=trusted.workflow_path,
+            workflow_blob_sha=trusted.workflow_blob_sha,
+            workflow_ref=trusted.workflow_ref,
+            head_sha=trusted.head_sha,
+            tag=trusted.tag,
+            envelope_digest=trusted.envelope_digest,
+            now=1_700_000_100,
+        )
+        == trusted
+    )
+    with pytest.raises(ValueError, match="exactly one"):
+        api.select_checkpoint_intake_run(
+            [trusted, trusted],
+            workflow_path=trusted.workflow_path,
+            workflow_blob_sha=trusted.workflow_blob_sha,
+            workflow_ref=trusted.workflow_ref,
+            head_sha=trusted.head_sha,
+            tag=trusted.tag,
+            envelope_digest=trusted.envelope_digest,
+            now=1_700_000_100,
+        )
+    with pytest.raises(ValueError, match="exactly one"):
+        api.select_checkpoint_intake_run(
+            [dataclasses.replace(trusted, attestation_verified=False)],
+            workflow_path=trusted.workflow_path,
+            workflow_blob_sha=trusted.workflow_blob_sha,
+            workflow_ref=trusted.workflow_ref,
+            head_sha=trusted.head_sha,
+            tag=trusted.tag,
+            envelope_digest=trusted.envelope_digest,
+            now=1_700_000_100,
+        )
+
+
+def test_guard_descriptor_requires_full_typed_trust_contract() -> None:
+    descriptor = {
+        "path": ".github/workflows/aviato-protection-checkpoint.yml",
+        "blob_sha": "1" * 40,
+        "schema": "aviato-managed-release-checkpoint/v1",
+    }
+    assert not _api().guard_descriptor_ready(descriptor)

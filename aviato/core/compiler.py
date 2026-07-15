@@ -211,20 +211,26 @@ def _validate_job(
 
     if job.authorization_gate is not None:
         authorization_needs = {need for need in job.needs if need == job.authorization_gate}
-        serialized = yaml.safe_dump(fragment, sort_keys=True)
         if len(authorization_needs) != 1:
             raise CompositionError(
                 f"privileged job {job.name!r} requires exactly one nonprivileged release-gate dependency"
             )
         gate = next(iter(authorization_needs))
-        required_outputs = {
-            f"needs.{gate}.outputs.gated-sha",
-            f"needs.{gate}.outputs.checkpoint-digest",
-        }
-        missing_outputs = sorted(value for value in required_outputs if value not in serialized)
+        required_output_names = {"gated-sha", "checkpoint-digest", "verified-envelope-digest"}
+        if set(job.authorization_outputs) != required_output_names:
+            raise CompositionError(
+                f"privileged job {job.name!r} typed authorization outputs differ from the required contract"
+            )
+        condition = fragment.get("if")
+        condition_refs = (
+            set(re.findall(rf"needs\.{re.escape(gate)}\.outputs\.([A-Za-z0-9_-]+)", condition))
+            if isinstance(condition, str)
+            else set()
+        )
+        missing_outputs = sorted(required_output_names - condition_refs)
         if missing_outputs:
             raise CompositionError(
-                f"privileged job {job.name!r} does not consume exact authorization outputs: {missing_outputs}"
+                f"privileged job {job.name!r} lacks a typed authorization condition for outputs: {missing_outputs}"
             )
 
     actual_environment = _job_environment(fragment)
@@ -253,6 +259,45 @@ def _validate_job(
             f"job {job.name!r} status check {job.status_check!r} is not produced by the rendered workflow "
             f"(expected {produced_check!r})"
         )
+
+
+def _validate_authorization_graph(
+    jobs: Mapping[str, WorkflowJobModule],
+    fragments: Mapping[str, Mapping[str, Any]],
+    *,
+    envelope: str,
+) -> None:
+    """Prove typed, nonprivileged gate dominance without serialized-string heuristics."""
+
+    for job in jobs.values():
+        gate_name = job.authorization_gate
+        if gate_name is None:
+            continue
+        gate = jobs.get(gate_name)
+        gate_fragment = fragments.get(gate_name)
+        if gate is None or gate_fragment is None:
+            raise CompositionError(
+                f"workflow {envelope!r} privileged job {job.name!r} references a missing authorization gate"
+            )
+        gate_permissions = _permission_map(gate.permissions, context=f"authorization gate {gate_name!r}")
+        if (
+            gate.authorization_gate is not None
+            or gate.environment is not None
+            or gate.environment_input is not None
+            or any(level == "write" for level in gate_permissions.values())
+        ):
+            raise CompositionError(f"workflow {envelope!r} authorization gate {gate_name!r} must be nonprivileged")
+        reusable = gate_fragment.get("uses")
+        if not isinstance(reusable, str) or not (
+            "reusable-release-gate.yml@" in reusable or reusable == "./.github/workflows/reusable-release-gate.yml"
+        ):
+            raise CompositionError(
+                f"workflow {envelope!r} authorization gate {gate_name!r} does not invoke the verified gate contract"
+            )
+        if gate_name not in job.needs:
+            raise CompositionError(
+                f"workflow {envelope!r} authorization gate {gate_name!r} does not dominate job {job.name!r}"
+            )
 
 
 def _list_delta(value: Mapping[str, Any], *, context: str) -> list[Any]:
@@ -636,6 +681,7 @@ def _compile_workflows(
                     if value is not Unknown and value is not None and str(value).strip():
                         environments.add(str(value))
         _validate_dag(jobs, envelope=envelope_name)
+        _validate_authorization_graph(jobs, fragments, envelope=envelope_name)
         if not triggers:
             raise CompositionError(f"workflow envelope {envelope_name!r} has jobs but no trigger contribution")
         for scope, level in envelope.permissions:

@@ -677,7 +677,7 @@ class GitHubPlatform:
             "guard": guard,
         }
 
-    def apply_protection_operation(self, repo: str, operation: Any) -> None:
+    def apply_protection_operation(self, repo: str, operation: Any) -> object | None:
         """Apply one already-confirmed operation; callers perform semantic readback."""
 
         desired = deep_thaw(operation.desired)
@@ -685,21 +685,21 @@ class GitHubPlatform:
             if not isinstance(desired, dict):
                 raise ValueError("settings operation requires an object payload")
             self.apply_settings(repo, desired)
-            return
+            return None
         if operation.kind in {"repository", "merge"}:
             if not isinstance(desired, dict):
                 raise ValueError("repository operation requires an object payload")
             payload = to_repository_payload(desired)
             if payload:
                 self._gh_input(["--method", "PATCH", f"repos/{repo}"], payload)
-            return
+            return None
         if operation.kind == "security":
             if not isinstance(desired, dict):
                 raise ValueError("security operation requires an object payload")
             payload = to_security_payload(desired)
             if payload:
                 self._gh_input(["--method", "PATCH", f"repos/{repo}"], {"security_and_analysis": payload})
-            return
+            return None
         if operation.kind == "ruleset":
             identity = operation.ruleset_identity
             if identity is None:
@@ -709,15 +709,26 @@ class GitHubPlatform:
                 if not isinstance(live_id, int):
                     raise ValueError("ruleset delete confirmation omitted its immutable id")
                 self.delete_planned_ruleset(repo, ruleset_id=live_id)
-                return
+                return None
             if not isinstance(desired, dict):
                 raise ValueError("ruleset operation requires an object payload")
             if operation.action == "update" and not isinstance(live_id, int):
                 raise ValueError("ruleset update confirmation omitted its immutable id")
             if operation.action == "create" and live_id is not None:
                 raise ValueError("ruleset create collided with an existing immutable identity; replan")
-            self.apply_planned_ruleset(repo, desired, ruleset_id=live_id)
-            return
+            degraded = deep_thaw(getattr(operation, "degraded_desired", None))
+            if degraded is not None and not isinstance(degraded, dict):
+                raise ValueError("bound degraded ruleset payload must be an object")
+            degraded_consent = bool(getattr(operation, "degraded_consent", False))
+            if degraded is None and not degraded_consent:
+                return self.apply_planned_ruleset(repo, desired, ruleset_id=live_id)
+            return github.apply_planned_ruleset(
+                repo,
+                desired,
+                ruleset_id=live_id,
+                degraded_payload=degraded,
+                allow_degraded_tag_pattern=degraded_consent,
+            )
         if operation.kind == "environment":
             if not isinstance(desired, dict):
                 raise ValueError("environment operation requires an object payload")
@@ -758,7 +769,7 @@ class GitHubPlatform:
                     ["--method", "POST", endpoint],
                     {"name": pattern, "type": policy_type},
                 )
-            return
+            return None
         if operation.kind == "checks":
             raise ValueError("expected checks are verified state, not a writable surface")
         raise ValueError(f"unsupported protection operation {operation.kind!r}")

@@ -105,7 +105,7 @@ swift-verify:
 release-python:
   identity: pipeline/release-python/v2
   envelope: ci
-  privileges: &release-privileges ["contents: write", "pull-requests: write", "actions: write", "statuses: write"]
+  privileges: &release-privileges ["contents: write", "pull-requests: write", "actions: write", "issues: read", "statuses: write"]
   triggers: &release-triggers
     workflow_dispatch:
       inputs:
@@ -113,9 +113,7 @@ release-python:
         merged-sha: {description: "Exact merged default-branch SHA", required: false, type: string, default: ""}
         intended-tag: {description: "Exact SemVer tag", required: false, type: string, default: ""}
         intended-actor: {description: "Exact signed release actor", required: false, type: string, default: ""}
-        checkpoint-run-id: {description: "Verified checkpoint intake run", required: false, type: string, default: ""}
         checkpoint-digest: {description: "Canonical checkpoint digest", required: false, type: string, default: ""}
-        checkpoint-workflow: {description: "Generator-owned intake workflow", required: true, type: string, default: "aviato-protection-checkpoint.yml"}
   jobs: &release-python-jobs
     status-bridge:
       identity: job/release-python-status-bridge/v2
@@ -126,14 +124,14 @@ release-python:
     release:
       identity: job/release-python/v2
       fragment: workflow-fragments/release-python.yml
-      inputs: [checkpoint-workflow, promotion, merged-sha, intended-tag, intended-actor, checkpoint-run-id, checkpoint-digest]
+      inputs: [promotion, merged-sha, intended-tag, intended-actor, checkpoint-digest]
       needs: [ci, security, common-lint]
-      permissions: ["contents: write", "pull-requests: write", "actions: write"]
+      permissions: ["contents: write", "pull-requests: write", "actions: write", "issues: read"]
       runner: ubuntu-latest
     release-gate:
       identity: job/release-python-gate/v2
       fragment: workflow-fragments/release-gate.yml
-      inputs: [checkpoint-run-id, checkpoint-digest, intended-actor, merged-sha]
+      inputs: [checkpoint-digest, intended-actor, merged-sha]
       needs: [release]
       permissions: ["actions: read", "contents: read", "pull-requests: read"]
       runner: ubuntu-latest
@@ -153,14 +151,14 @@ release-node:
     release:
       identity: job/release-node/v2
       fragment: workflow-fragments/release-node.yml
-      inputs: [checkpoint-workflow, promotion, merged-sha, intended-tag, intended-actor, checkpoint-run-id, checkpoint-digest]
+      inputs: [promotion, merged-sha, intended-tag, intended-actor, checkpoint-digest]
       needs: [ci, security, common-lint]
-      permissions: ["contents: write", "pull-requests: write", "actions: write"]
+      permissions: ["contents: write", "pull-requests: write", "actions: write", "issues: read"]
       runner: ubuntu-latest
     release-gate:
       identity: job/release-node-gate/v2
       fragment: workflow-fragments/release-gate.yml
-      inputs: [checkpoint-run-id, checkpoint-digest, intended-actor, merged-sha]
+      inputs: [checkpoint-digest, intended-actor, merged-sha]
       needs: [release]
       permissions: ["actions: read", "contents: read", "pull-requests: read"]
       runner: ubuntu-latest
@@ -180,14 +178,14 @@ release-swift:
     release:
       identity: job/release-swift/v2
       fragment: workflow-fragments/release-swift.yml
-      inputs: [checkpoint-workflow, promotion, merged-sha, intended-tag, intended-actor, checkpoint-run-id, checkpoint-digest]
+      inputs: [promotion, merged-sha, intended-tag, intended-actor, checkpoint-digest]
       needs: [ci, security, common-lint]
-      permissions: ["contents: write", "pull-requests: write", "actions: write"]
+      permissions: ["contents: write", "pull-requests: write", "actions: write", "issues: read"]
       runner: ubuntu-latest
     release-gate:
       identity: job/release-swift-gate/v2
       fragment: workflow-fragments/release-gate.yml
-      inputs: [checkpoint-run-id, checkpoint-digest, intended-actor, merged-sha]
+      inputs: [checkpoint-digest, intended-actor, merged-sha]
       needs: [release]
       permissions: ["actions: read", "contents: read", "pull-requests: read"]
       runner: ubuntu-latest
@@ -196,7 +194,7 @@ pypi-publish:
   identity: pipeline/pypi-publish/v2
   envelope: ci
   required_pipelines: [release-python]
-  privileges: ["contents: read", "id-token: write", "attestations: write"]
+  privileges: ["actions: read", "contents: read", "id-token: write", "attestations: write"]
   environment: pypi
   jobs:
     pypi:
@@ -209,17 +207,18 @@ pypi-publish:
       identity: job/pypi-publish/v2
       fragment: workflow-fragments/pypi-publish.yml
       needs: [release-gate, pypi]
-      permissions: ["contents: read", "id-token: write", "attestations: write"]
+      permissions: ["actions: read", "contents: read", "id-token: write", "attestations: write"]
       runner: ubuntu-latest
       environment: pypi
       authorization_gate: release-gate
+      authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
   reusable_privileges: ["contents: read"]
-  local_publisher_privileges: ["contents: read", "id-token: write", "attestations: write"]
+  local_publisher_privileges: ["actions: read", "contents: read", "id-token: write", "attestations: write"]
 
 ghcr-publish:
   identity: pipeline/ghcr-publish/v2
   envelope: ci
-  privileges: ["contents: read", "packages: write", "security-events: write", "id-token: write", "attestations: write"]
+  privileges: ["actions: read", "contents: read", "packages: write", "security-events: write", "id-token: write", "attestations: write"]
   environment: ghcr
   runner: ubuntu-latest
   jobs:
@@ -227,10 +226,11 @@ ghcr-publish:
       identity: job/ghcr-publish/v2
       fragment: workflow-fragments/ghcr-publish.yml
       needs: [release, release-gate, security]
-      permissions: ["contents: read", "packages: write", "security-events: write", "id-token: write", "attestations: write"]
+      permissions: ["actions: read", "contents: read", "packages: write", "security-events: write", "id-token: write", "attestations: write"]
       runner: ubuntu-latest
       environment: ghcr
       authorization_gate: release-gate
+      authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
 
 app-store-connect:
   identity: pipeline/app-store-connect/v2
@@ -250,6 +250,7 @@ app-store-connect:
       runner: macos-latest
       environment_input: environment-name
       authorization_gate: release-gate
+      authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
 
 docs-python-library: &docs-python-library
   identity: pipeline/docs-python-library/v2
@@ -283,9 +284,10 @@ docs-python-library: &docs-python-library
       identity: job/docs-python-library-deploy/v2
       fragment: workflow-fragments/docs-python-library.yml
       needs: [docs-resolve, docs-release-gate, docs-security]
-      permissions: ["contents: write", "pages: write", "id-token: write"]
+      permissions: ["actions: read", "contents: write", "pages: write", "id-token: write"]
       runner: ubuntu-latest
       authorization_gate: docs-release-gate
+      authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
 
 docs-python-service:
   <<: *docs-python-library
@@ -312,9 +314,10 @@ docs-python-service:
       identity: job/docs-python-service-deploy/v2
       fragment: workflow-fragments/docs-python-service.yml
       needs: [docs-resolve, docs-release-gate, docs-security]
-      permissions: ["contents: write", "pages: write", "id-token: write"]
+      permissions: ["actions: read", "contents: write", "pages: write", "id-token: write"]
       runner: ubuntu-latest
       authorization_gate: docs-release-gate
+      authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
 
 docs-python-component:
   <<: *docs-python-library
@@ -341,9 +344,10 @@ docs-python-component:
       identity: job/docs-python-component-deploy/v2
       fragment: workflow-fragments/docs-python-component.yml
       needs: [docs-resolve, docs-release-gate, docs-security]
-      permissions: ["contents: write", "pages: write", "id-token: write"]
+      permissions: ["actions: read", "contents: write", "pages: write", "id-token: write"]
       runner: ubuntu-latest
       authorization_gate: docs-release-gate
+      authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
 
 docs-node-service:
   <<: *docs-python-library
@@ -370,9 +374,10 @@ docs-node-service:
       identity: job/docs-node-service-deploy/v2
       fragment: workflow-fragments/docs-node-service.yml
       needs: [docs-resolve, docs-release-gate, docs-security]
-      permissions: ["contents: write", "pages: write", "id-token: write"]
+      permissions: ["actions: read", "contents: write", "pages: write", "id-token: write"]
       runner: ubuntu-latest
       authorization_gate: docs-release-gate
+      authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
 
 docs-swift-app:
   <<: *docs-python-library
@@ -399,18 +404,19 @@ docs-swift-app:
       identity: job/docs-swift-app-deploy/v2
       fragment: workflow-fragments/docs-swift-app.yml
       needs: [docs-resolve, docs-release-gate, docs-security]
-      permissions: ["contents: write", "pages: write", "id-token: write"]
+      permissions: ["actions: read", "contents: write", "pages: write", "id-token: write"]
       runner: ubuntu-latest
       authorization_gate: docs-release-gate
+      authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
 
 # Compatibility-only aggregate descriptors used by v1 snapshot inspection. No v2
 # profile selects them; graph mutation continues to reject a selected legacy node.
 release:
-  privileges: ["contents: read", "contents: write", "pull-requests: write", "actions: write", "statuses: write"]
+  privileges: ["contents: read", "contents: write", "pull-requests: write", "actions: write", "issues: read", "statuses: write"]
   runner: ubuntu-latest
 release-gate:
   privileges: ["actions: read", "contents: read", "pull-requests: read"]
   runner: ubuntu-latest
 docs-pages:
-  privileges: ["contents: read", "contents: write", "pages: read", "pages: write", "id-token: write"]
+  privileges: ["actions: read", "contents: read", "contents: write", "pages: read", "pages: write", "id-token: write"]
   runner: ubuntu-latest

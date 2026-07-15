@@ -10,7 +10,6 @@ with:
   require-merged-pr: true
   release-tag: ${{ needs.release.outputs.tag }}
   required-workflow: aviato-ci.yml
-  checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
   checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
   intended-actor: ${{ inputs.intended-actor || '' }}
   merged-sha: ${{ inputs.merged-sha || '' }}

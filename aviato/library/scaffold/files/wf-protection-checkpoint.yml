@@ -15,7 +15,9 @@ jobs:
     name: Verify managed checkpoint
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
+      issues: read
     env:
       CHECKPOINT_BASE64URL: ${{ inputs.checkpoint-base64url }}
       EXPECTED_REPOSITORY: ${{ github.repository }}
@@ -24,7 +26,7 @@ jobs:
       EXPECTED_RUN_ID: ${{ github.run_id }}
       GH_TOKEN: ${{ github.token }}
       MAX_CHECKPOINT_BYTES: "65536"
-      VERIFIED_PATH: ${{ runner.temp }}/verified-checkpoint.json
+      VERIFIED_PATH: ${{ runner.temp }}/verified-checkpoint-envelope.json
     steps:
       - name: Verify fixed checkpoint bytes
         shell: bash
@@ -72,7 +74,10 @@ jobs:
           hex64 = ("protection_plan_id", "protection_receipt_digest")
           if any(not re.fullmatch(r"[0-9a-f]{40}", document[key]) for key in hex40) or any(not re.fullmatch(r"[0-9a-f]{64}", document[key]) for key in hex64):
               fail("checkpoint digest field is malformed")
-          if document["issued_at"] > time.time() or document["expires_at"] <= time.time():
+          now = int(time.time())
+          if document["expires_at"] - document["issued_at"] > 900:
+              fail("checkpoint TTL exceeds 900 seconds")
+          if document["issued_at"] > now + 30 or document["expires_at"] <= now:
               fail("checkpoint is not fresh")
           repo = gh(f"repos/{os.environ['EXPECTED_REPOSITORY']}")
           default_branch = repo["default_branch"]
@@ -111,21 +116,104 @@ jobs:
           if source_run.get("head_sha") != document["sha"] or source_run.get("event") != "push" or source_run.get("conclusion") != "success" or source_run.get("head_branch") != default_branch:
               fail("source workflow/ref/run evidence mismatch")
           issues = gh(f"repos/{document['repository']}/issues?state=all&labels=aviato-protection-receipt&per_page=10")
-          receipts = []
-          for issue in issues:
-              match = re.search(r"```json\n(.+?)\n```", issue.get("body") or "", re.S)
-              if match and hashlib.sha256(match.group(1).encode("ascii")).hexdigest() == document["protection_receipt_digest"]:
-                  receipts.append(json.loads(match.group(1)))
-          if len(receipts) != 1 or receipts[0].get("status") != "ready" or receipts[0].get("persistence_status") != "attached" or receipts[0].get("surface_fingerprints") != document["fingerprints"]:
+          if not isinstance(issues, list) or len(issues) != 1 or type(issues[0].get("number")) is not int:
+              fail("receipt tracking issue is absent or ambiguous")
+          issue = issues[0]
+          comments = gh(f"repos/{document['repository']}/issues/{issue['number']}/comments?per_page=100")
+          candidates = []
+          marker = "Canonical `aviato-protection-receipt-envelope/v1` evidence:\n\n```json\n"
+          for receipt_comment in comments if isinstance(comments, list) else []:
+              body = receipt_comment.get("body") or ""
+              if not body.startswith(marker) or not body.endswith("\n```"):
+                  continue
+              encoded_envelope = body[len(marker):-4]
+              try:
+                  receipt_envelope = json.loads(encoded_envelope)
+              except json.JSONDecodeError:
+                  continue
+              receipt_fields = {"schema", "principal", "key_id", "algorithm", "receipt_base64url", "signature"}
+              if (
+                  not isinstance(receipt_envelope, dict)
+                  or set(receipt_envelope) != receipt_fields
+                  or encoded_envelope.encode("ascii") != json.dumps(receipt_envelope, sort_keys=True, separators=(",", ":")).encode("ascii")
+                  or receipt_envelope["schema"] != "aviato-protection-receipt-envelope/v1"
+                  or receipt_envelope["algorithm"] != "ssh-ed25519"
+              ):
+                  continue
+              try:
+                  receipt_bytes = base64.b64decode(
+                      str(receipt_envelope["receipt_base64url"]) + "=" * (-len(str(receipt_envelope["receipt_base64url"])) % 4),
+                      altchars=b"-_", validate=True,
+                  )
+                  receipt_signature = base64.b64decode(
+                      str(receipt_envelope["signature"]) + "=" * (-len(str(receipt_envelope["signature"])) % 4),
+                      altchars=b"-_", validate=True,
+                  )
+                  receipt = json.loads(receipt_bytes)
+              except Exception:
+                  continue
+              if (
+                  hashlib.sha256(receipt_bytes).hexdigest() == document["protection_receipt_digest"]
+                  and receipt_bytes == json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("ascii")
+                  and receipt_signature
+              ):
+                  candidates.append((receipt_comment, receipt_envelope, receipt, receipt_bytes, receipt_signature))
+          if len(candidates) != 1:
+              fail("exactly one signed receipt comment must match the checkpoint digest")
+          receipt_comment, receipt_envelope, receipt, receipt_bytes, receipt_signature = candidates[0]
+          receipt_author = receipt_comment.get("user") or {}
+          if (
+              receipt_comment.get("created_at") != receipt_comment.get("updated_at")
+              or type(receipt_comment.get("id")) is not int
+              or not receipt_comment.get("node_id")
+              or receipt_author.get("login") != receipt_envelope["principal"]
+              or receipt_author.get("type") != "User"
+              or type(receipt_author.get("id")) is not int
+          ):
+              fail("receipt comment is edited or lacks immutable concrete author identity")
+          receipt_permission = gh(f"repos/{document['repository']}/collaborators/{receipt_envelope['principal']}/permission")
+          if receipt_permission.get("permission") != "admin" or receipt_permission.get("user", {}).get("type") != "User":
+              fail("receipt signer is not a current concrete repository admin")
+          receipt_keys = gh(f"users/{receipt_envelope['principal']}/ssh_signing_keys")
+          receipt_key = [item for item in receipt_keys if str(item.get("id")) == str(receipt_envelope["key_id"])]
+          if len(receipt_key) != 1 or not receipt_key[0].get("key", "").startswith("ssh-ed25519 "):
+              fail("receipt signing key is absent, replaced, or not Ed25519")
+          with tempfile.TemporaryDirectory() as directory:
+              root = pathlib.Path(directory)
+              (root / "allowed").write_text(f"{receipt_envelope['principal']} {receipt_key[0]['key']}\n", encoding="utf-8")
+              (root / "signature").write_bytes(receipt_signature)
+              verified = subprocess.run(
+                  ["ssh-keygen", "-Y", "verify", "-f", str(root / "allowed"), "-I", receipt_envelope["principal"], "-n", "aviato", "-s", str(root / "signature")],
+                  input=receipt_bytes, capture_output=True,
+              )
+              if verified.returncode != 0:
+                  fail("receipt SSH signature verification failed")
+          expected_receipt_keys = {
+              "schema", "plan_id", "status", "operations", "rulesets", "final_fingerprint", "timestamp",
+              "persistence_status", "local_mutations_recorded", "repository", "declaration_pin", "snapshot_sha",
+              "tool_version", "surface_fingerprints", "confirmed_plan_id", "final_plan_id",
+          }
+          receipt_repository = receipt.get("repository") or {}
+          if (
+              not isinstance(receipt, dict)
+              or set(receipt) != expected_receipt_keys
+              or receipt.get("schema") != "aviato-protection-receipt/v1"
+              or receipt.get("status") != "ready"
+              or receipt.get("persistence_status") != "attached"
+              or receipt.get("confirmed_plan_id") != document["protection_plan_id"]
+              or receipt.get("surface_fingerprints") != document["fingerprints"]
+              or receipt_repository.get("database_id") != document["repository_id"]
+              or receipt_repository.get("full_name") != document["repository"]
+          ):
               fail("current durable protection receipt/fingerprints are absent or stale")
           target = pathlib.Path(os.environ["VERIFIED_PATH"])
-          target.write_bytes(message)
+          target.write_bytes(raw)
           PY
       - name: Upload fixed verified artifact
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
         with:
           name: verified-checkpoint
-          path: ${{ runner.temp }}/verified-checkpoint.json
+          path: ${{ runner.temp }}/verified-checkpoint-envelope.json
           if-no-files-found: error
           retention-days: 1
 
@@ -146,4 +234,4 @@ jobs:
       - name: Attest fixed verified artifact
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
         with:
-          subject-path: ${{ runner.temp }}/verified/verified-checkpoint.json
+          subject-path: ${{ runner.temp }}/verified/verified-checkpoint-envelope.json

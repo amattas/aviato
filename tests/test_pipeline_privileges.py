@@ -6,7 +6,7 @@ from typing import cast
 import pytest
 import yaml
 
-from aviato.core.compiler import _validate_job, compile_desired_state
+from aviato.core.compiler import _validate_authorization_graph, _validate_job, compile_desired_state
 from aviato.core.composition import resolve_profile
 from aviato.core.errors import CompositionError
 from aviato.core.model import WorkflowJobModule
@@ -35,7 +35,7 @@ PIPELINE_WORKFLOWS = {
 # isolated to that no-code job, so this privilege does not belong on reusable-release.
 CALLER_ONLY_PRIVILEGES = {
     "release": {"statuses: write"},
-    "pypi-publish": {"id-token: write", "attestations: write"},
+    "pypi-publish": {"actions: read", "id-token: write", "attestations: write"},
 }
 
 
@@ -43,6 +43,7 @@ def test_docs_pages_privilege_union_includes_isolated_pages_deployer() -> None:
     module = Registry(MODULE_SOURCE_ROOT).pipeline_module("docs-pages")
     assert module is not None
     assert set(module.privileges) == {
+        "actions: read",
         "contents: read",
         "contents: write",
         "pages: read",
@@ -60,6 +61,7 @@ def test_privileged_job_requires_typed_gate_dependency_and_both_exact_outputs() 
         permissions=("contents: read", "id-token: write"),
         runner="ubuntu-latest",
         authorization_gate="release-gate",
+        authorization_outputs=("gated-sha", "checkpoint-digest", "verified-envelope-digest"),
     )
     fragment = {
         "needs": ["release-gate"],
@@ -74,6 +76,70 @@ def test_privileged_job_requires_typed_gate_dependency_and_both_exact_outputs() 
     }
     with pytest.raises(CompositionError, match="checkpoint-digest"):
         _validate_job(job, fragment, workflow_name="ci", variables={})
+
+
+def test_comments_and_unused_environment_strings_do_not_satisfy_typed_authorization_edge() -> None:
+    job = WorkflowJobModule(
+        name="publish",
+        identity="job/publish/v1",
+        fragment="unused.yml",
+        needs=("release-gate",),
+        permissions=("contents: read", "id-token: write"),
+        runner="ubuntu-latest",
+        environment="pypi",
+        authorization_gate="release-gate",
+        authorization_outputs=("gated-sha", "checkpoint-digest", "verified-envelope-digest"),
+    )
+    fragment = {
+        "needs": ["release-gate"],
+        "permissions": {"contents": "read", "id-token": "write"},
+        "runs-on": "ubuntu-latest",
+        "environment": "pypi",
+        "env": {
+            "UNUSED": (
+                "${{ needs.release-gate.outputs.gated-sha }} "
+                "${{ needs.release-gate.outputs.checkpoint-digest }} "
+                "${{ needs.release-gate.outputs.verified-envelope-digest }}"
+            )
+        },
+        "steps": [{"run": "# needs.release-gate.outputs.gated-sha\ntrue"}],
+    }
+    with pytest.raises(CompositionError, match="typed authorization"):
+        _validate_job(job, fragment, workflow_name="ci", variables={})
+
+
+def test_authorization_gate_must_be_nonprivileged_and_dominate_protected_job() -> None:
+    gate = WorkflowJobModule(
+        name="gate",
+        identity="job/gate/v1",
+        fragment="gate.yml",
+        permissions=("contents: write",),
+        runner="ubuntu-latest",
+    )
+    publish = WorkflowJobModule(
+        name="publish",
+        identity="job/publish/v1",
+        fragment="publish.yml",
+        needs=("gate",),
+        permissions=("id-token: write",),
+        environment="pypi",
+        runner="ubuntu-latest",
+        authorization_gate="gate",
+        authorization_outputs=("gated-sha", "checkpoint-digest", "verified-envelope-digest"),
+    )
+    with pytest.raises(CompositionError, match="nonprivileged"):
+        _validate_authorization_graph(
+            {"gate": gate, "publish": publish},
+            {
+                "gate": {"runs-on": "ubuntu-latest", "permissions": {"contents": "write"}, "steps": [{"run": "true"}]},
+                "publish": {
+                    "runs-on": "ubuntu-latest",
+                    "permissions": {"id-token": "write"},
+                    "steps": [{"run": "true"}],
+                },
+            },
+            envelope="ci",
+        )
 
 
 YamlMapping = Mapping[object, object]
