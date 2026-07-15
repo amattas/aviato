@@ -1,0 +1,15 @@
+{
+  "approvals": [],
+  "author_database_id": null,
+  "candidate_manifest_sha256": "95d8ebd59b3301e9f272205e90129e74c9fb95c7ce279f6041bdc22509509f9f",
+  "codeowners_sha256": "44934339ce00e36bb939666d9ff1814acf050bb3064d74c344f406e15717fa4e",
+  "manual_prerequisites": [
+    "Configure real reviewer_database_ids and/or team_database_ids without guessing GitHub identities.",
+    "Add the corresponding independent eligible code owner or team to every privileged CODEOWNERS route.",
+    "Apply the confirmation-bound default-branch ruleset with two approvals, code-owner review, stale-review dismissal, and last-push approval.",
+    "Obtain and record at least two distinct non-author approvals for the exact protected candidate."
+  ],
+  "policy_sha256": "3ac0c5f92da8da77458bfca46c7d646150833cfecefa3d55d295237ac7a92538",
+  "schema_version": 1,
+  "status": "pending"
+}

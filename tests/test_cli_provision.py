@@ -397,3 +397,28 @@ def test_provision_reports_skipped_security_toggle(
     assert rc == 0
     err = capsys.readouterr().err
     assert "SKIPPED" in err and "secret_scanning" in err
+
+
+def test_packaged_pending_review_attestation_blocks_privileged_mutation() -> None:
+    from aviato.paths import MODULE_SOURCE_ROOT
+    from aviato.plugins.release_mutations import verify_packaged_privileged_review_readiness
+
+    errors = verify_packaged_privileged_review_readiness(MODULE_SOURCE_ROOT)
+    assert any("protected review is pending" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    (
+        ["apply-rulesets", "o/r", "--pin", "1", "--apply"],
+        ["provision", "o/r", "--pin", "1"],
+    ),
+)
+def test_privileged_entrypoints_refuse_before_remote_work(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "_require_privileged_mutation_readiness", lambda *_args: False, raising=False)
+    monkeypatch.setattr(
+        cli,
+        "GitHubPlatform",
+        lambda: (_ for _ in ()).throw(AssertionError("blocked privileged command must not construct a platform")),
+    )
+    assert cli.main(argv) == 1

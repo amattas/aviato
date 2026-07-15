@@ -146,7 +146,7 @@ def test_baseline_required_reviews_drift_is_detected(repo_copy: Path) -> None:
     # baseline must not silently drift from it.
     baseline = repo_copy / "aviato" / "library" / "bundles" / "settings" / "baseline.yaml"
     text = baseline.read_text(encoding="utf-8")
-    drifted = text.replace("required_reviews: 1", "required_reviews: 5")
+    drifted = text.replace("required_reviews: 2", "required_reviews: 5")
     assert drifted != text, "fixture did not contain the expected required_reviews literal"
     baseline.write_text(drifted, encoding="utf-8")
     errors = validate(repo_copy)

@@ -11,6 +11,15 @@ import pytest
 from aviato.paths import REPO_ROOT
 
 
+@pytest.fixture(autouse=True)
+def approved_privileged_review_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unrelated command tests focused; trust-gate tests override this explicitly."""
+
+    from aviato import cli
+
+    monkeypatch.setattr(cli, "_require_privileged_mutation_readiness", lambda *_args: True)
+
+
 @pytest.fixture
 def task3_pinned_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Explicit reusable fetched-snapshot double for pre-context CLI behavior tests."""

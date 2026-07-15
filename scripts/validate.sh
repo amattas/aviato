@@ -12,7 +12,9 @@ python3 -m compileall aviato >/dev/null
 python3 -m aviato.cli validate
 python3 scripts/sync-docs-toolchain-pins.py --check
 python3 scripts/regen-templates.py --check
-python3 scripts/regen-privileged-execution-manifest.py --check
+python3 scripts/regen-privileged-execution-manifest.py \
+  --check \
+  --review-record .github/aviato-privileged-review.json
 
 if command -v ruff >/dev/null 2>&1; then
   ruff check .
@@ -66,6 +68,8 @@ if not wheel_version:
 required = [
     "aviato/library/policy.yml",
     "aviato/library/privileged-execution-manifest.json",
+    "aviato/library/privileged-review-attestation.json",
+    "aviato/library/privileged-review-policy.json",
     "aviato/plugins/denylist.txt",
 ]
 missing = [r for r in required if r not in names]

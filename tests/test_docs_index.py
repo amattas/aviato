@@ -217,45 +217,35 @@ def test_active_hardening_plan_matches_current_rollout_state() -> None:
     assert "After PR #60 merges" not in normalized_plan
 
 
-def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
+def test_sec007_privileged_review_prerequisite_is_declared_and_documented() -> None:
     declaration = yaml.safe_load((ROOT / ".github/aviato.yaml").read_text(encoding="utf-8"))
-    assert declaration["overrides"]["settings"]["default_branch"] == {"required_reviews": 0}
+    assert declaration["overrides"]["settings"]["default_branch"] == {"required_reviews": 2}
 
     backlog = (ROOT / "docs/requirements/modules/security/backlog.md").read_text(encoding="utf-8")
     open_work = backlog.split("## Open", 1)[1].split("## Settled", 1)[0]
-    assert "SEC-007" not in open_work
+    assert "SEC-007" in open_work
+    assert "reviewer/team database IDs" in open_work
+    assert "two distinct non-author approvals" in open_work
     settled = backlog.split("## Settled — do not reopen", 1)[1]
     assert "`required_reviews: 0`" in settled
-    assert "standing bypass actors" in settled
-    assert "recurring admin merges" in settled
+    assert "historical" in settled
+    assert "superseded" in settled
 
     sec007 = _matrix_rows()["SEC-007"]
-    assert sec007[2] == "verified"
+    assert sec007[2] == "implemented"
     assert ".github/aviato.yaml" in sec007[4]
-    assert "rules/17482301" in sec007[5]
-    assert "rules/17483804" in sec007[5]
-    assert "pull/62" in sec007[5]
-    assert "required review count of zero" in sec007[6]
-    assert "no independent eligible reviewer" in sec007[6]
+    assert "privileged-review-policy.json" in sec007[4]
+    assert "tests/test_workflow_guards.py" in sec007[5]
+    assert "privileged writes fail closed" in sec007[6]
+    assert "remain in the security backlog" in sec007[6]
 
     controls = (ROOT / "docs/security/controls.md").read_text(encoding="utf-8")
     control = controls.split("## SEC-007", 1)[1].split("\n## ", 1)[0]
     normalized_control = " ".join(control.split())
-    assert (
-        "Live readback on 2026-07-13 after applying the declaration verified a required review count of zero"
-        in normalized_control
-    )
-    assert "zero bypass actors" in normalized_control
-    assert "exact CodeQL and required-check thresholds" in normalized_control
-    assert "not bypass permission" in normalized_control
-    assert "exactly one eligible reviewer" in normalized_control
-    assert "required review count of zero" in normalized_control
-    assert "restore the default of one required approval" in normalized_control
-
-    assert (
-        "Live readback on 2026-07-13 proved the repository-specific required review count of zero is active"
-        in sec007[6]
-    )
+    assert "requires two reviews" in normalized_control
+    assert "historical evidence" in normalized_control
+    assert "fail-closed" in normalized_control
+    assert "two distinct non-author approvals" in normalized_control
 
     threat_model = (ROOT / "docs/security/threat-model.md").read_text(encoding="utf-8")
     threat006 = threat_model.split("## THREAT-006", 1)[1].split("\n## ", 1)[0]
@@ -289,6 +279,10 @@ def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
     infrastructure = (ROOT / "docs/architecture/infrastructure.md").read_text(encoding="utf-8")
     normalized_infrastructure = " ".join(infrastructure.split())
     assert "mandatory once `.github/aviato.yaml` exists" in normalized_infrastructure
+
+    architecture = (ROOT / "docs/architecture/security.md").read_text(encoding="utf-8")
+    assert "Privileged manifest review trust root" in architecture
+    assert "`aviato validate` accepts a well-formed `pending` record" in architecture
 
 
 def test_onboarding_documents_complete_tag_rejection_string_entry_contract() -> None:

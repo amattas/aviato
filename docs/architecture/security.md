@@ -63,3 +63,31 @@ fingerprints. There is no degraded tag-rule flag or implied-safe fallback: a
 platform rejection remains non-ready and requires a newly previewed supported
 policy. Lost responses are resolved only by semantic readback; unreadable
 state is indeterminate and is never blindly retried.
+
+## Privileged manifest review trust root
+
+The privileged execution manifest covers every job that can write, receives a
+secret or protected environment, performs a hosted mutation or attestation, or
+produces an authority value consumed by one of those jobs. Producer enrollment
+is recursive. Each contract binds workflow and job defaults, environment,
+permissions, dependencies, outputs, container, services, and every step.
+Runtime/startup injection variables are forbidden at workflow, job, and step
+scope.
+
+Mechanical regeneration requires the protected review record and copies that
+record into the packaged Library attestation; regeneration never changes its
+pending/approved state. The protected policy requires two distinct non-author
+approvals, code-owner review, stale-review dismissal, and last-push approval.
+`aviato validate` accepts a well-formed `pending` record because absent GitHub
+identities are a declared manual prerequisite, not a source-schema defect.
+Repository creation and every confirmation-bound protection write fail closed
+while the packaged attestation remains pending.
+
+Before onboarding repositories, an operator must populate real reviewer or
+team database IDs in `privileged-review-policy.json`, add the corresponding
+independent eligible code owner or team to every privileged CODEOWNERS route,
+apply the default-branch ruleset with the declared two-approval policy, obtain
+two distinct non-author approvals for the exact manifest/policy/CODEOWNERS
+hashes, and replace the pending record with the immutable approval evidence.
+Reviewer identities must come from GitHub; they must never be guessed or
+synthesized.

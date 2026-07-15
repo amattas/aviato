@@ -5,7 +5,7 @@ name: baseline
 settings:
   default_branch:
     requires_pull_request: true
-    required_reviews: 1
+    required_reviews: 2
     dismiss_stale_reviews: true
     require_thread_resolution: true
     block_force_push: true

@@ -309,21 +309,21 @@ def test_drift_report_rejects_file_only_with_require_settings(tmp_path: Path) ->
 def test_drifted_rulesets_honors_required_reviews_override() -> None:
     # CX#1: the ruleset render used for drift must honor the consumer's required_reviews override,
     # so the ruleset surface agrees with the classic-protection reconcile (no phantom drift / no
-    # apply that resets approvals). Live rulesets carry approvals=2 (the overridden value).
+    # apply that resets approvals). Live rulesets carry approvals=3 (the overridden value).
     from aviato.cli import _drifted_rulesets, _profile_status_checks
     from aviato.rulesets import render_all_rulesets
 
     checks = _profile_status_checks(Registry(MODULE_SOURCE_ROOT), "python-library")
-    live = render_all_rulesets(root=POLICY_DATA_ROOT, required_approvals=2, extra_status_checks=checks)
+    live = render_all_rulesets(root=POLICY_DATA_ROOT, required_approvals=3, extra_status_checks=checks)
     platform = FakePlatform(rulesets=live)
     # With the override threaded through, desired==live → NO drift.
     assert (
         _drifted_rulesets(
-            "o/r", platform, policy_root=POLICY_DATA_ROOT, required_approvals=2, extra_status_checks=checks
+            "o/r", platform, policy_root=POLICY_DATA_ROOT, required_approvals=3, extra_status_checks=checks
         )
         == ()
     )
-    # Without it (policy default 1), desired (1) != live (2) → the branch ruleset reports drift.
+    # Without it (policy default 2), desired (2) != live (3) → the branch ruleset reports drift.
     assert _drifted_rulesets("o/r", platform, policy_root=POLICY_DATA_ROOT, extra_status_checks=checks) != ()
 
 

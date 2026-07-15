@@ -957,6 +957,151 @@ def test_exact_privileged_manifest_matches_normal_validation_render() -> None:
     assert verify_privileged_execution_manifest(WORKFLOWS, rendered) == []
 
 
+def test_manifest_enrolls_external_mutators_secret_jobs_and_recursive_authority_producers() -> None:
+    from aviato.plugins.release_mutations import _privileged_jobs
+
+    contracts = _privileged_jobs(_privileged_documents())
+    required = {
+        ("reusable-app-store-connect.yml", "app-store-connect"),
+        ("reusable-app-store-connect.yml", "build-unsigned"),
+        ("reusable-release.yml", "authority"),
+        ("reusable-release.yml", "derive"),
+    }
+    assert not required - contracts.keys()
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        {"name": "implicit post", "run": "gh api repos/o/r/releases -f tag_name=v1"},
+        {"name": "unknown action", "uses": "attacker/write-action@" + "a" * 40},
+        {"name": "loader context", "env": {"LD_AUDIT": "/tmp/evil.so"}, "run": "true"},
+    ),
+)
+def test_real_apple_secret_job_rejects_prior_executable_and_context_bypasses(attack: JsonDict) -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_documents
+
+    documents = _privileged_documents()
+    documents["reusable-app-store-connect.yml"]["jobs"]["app-store-connect"]["steps"].append(attack)
+    errors = verify_privileged_execution_documents(documents)
+    assert any("manifest mismatch" in error or "dangerous privileged context" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("scope", "key"),
+    (
+        ("job", "LD_AUDIT"),
+        ("job", "SHELLOPTS"),
+        ("job", "BASHOPTS"),
+        ("step", "NODE_OPTIONS"),
+        ("step", "RUBYOPT"),
+        ("step", "PERL5OPT"),
+        ("step", "NO_PROXY"),
+    ),
+)
+def test_real_apple_secret_job_rejects_inherited_runtime_context(scope: str, key: str) -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_documents
+
+    documents = _privileged_documents()
+    job = documents["reusable-app-store-connect.yml"]["jobs"]["app-store-connect"]
+    if scope == "job":
+        job.setdefault("env", {})[key] = "attacker"
+    else:
+        job["steps"][0].setdefault("env", {})[key] = "attacker"
+    errors = verify_privileged_execution_documents(documents)
+    assert any("dangerous privileged context" in error for error in errors)
+
+
+def test_contract_explicitly_binds_workflow_defaults_and_all_job_execution_contexts() -> None:
+    from aviato.plugins.release_mutations import _privileged_jobs, verify_privileged_execution_documents
+
+    documents = _privileged_documents()
+    contracts = _privileged_jobs(documents)
+    contract = contracts[("reusable-app-store-connect.yml", "app-store-connect")]
+    for field in (
+        "workflow_env_sha256",
+        "workflow_defaults_sha256",
+        "job_defaults_sha256",
+        "container_sha256",
+        "services_sha256",
+    ):
+        assert hasattr(contract, field)
+
+    documents["reusable-app-store-connect.yml"]["defaults"] = {"run": {"shell": "bash -c 'source /tmp/attacker; bash'"}}
+    errors = verify_privileged_execution_documents(documents)
+    assert any("manifest mismatch" in error for error in errors)
+
+
+@pytest.mark.parametrize(("job_name", "output_name"), (("authority", "authorized"), ("derive", "phase")))
+def test_authority_producer_output_drift_invalidates_privileged_manifest(job_name: str, output_name: str) -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_documents
+
+    documents = _privileged_documents()
+    documents["reusable-release.yml"]["jobs"][job_name]["outputs"][output_name] = "true"
+    errors = verify_privileged_execution_documents(documents)
+    assert any(f"reusable-release.yml:{job_name}" in error and "manifest mismatch" in error for error in errors)
+
+
+def test_privileged_review_trust_root_protects_every_manifest_authority_path() -> None:
+    codeowners = (REPO_ROOT / ".github/CODEOWNERS").read_text(encoding="utf-8")
+    for path in (
+        "/.github/workflows/",
+        "/.github/CODEOWNERS",
+        "/.github/aviato-privileged-review.json",
+        "/aviato/library/privileged-execution-manifest.json",
+        "/aviato/library/privileged-review-policy.json",
+        "/aviato/plugins/release_mutations.py",
+        "/scripts/regen-privileged-execution-manifest.py",
+    ):
+        assert f"{path} @amattas" in codeowners
+
+    policy = json.loads((REPO_ROOT / "aviato/library/privileged-review-policy.json").read_text(encoding="utf-8"))
+    assert policy["minimum_approvals"] >= 2
+    assert policy["require_non_author"] is True
+    assert policy["require_code_owner_review"] is True
+    assert policy["require_last_push_approval"] is True
+    assert policy["reviewer_database_ids"] == []
+    assert policy["team_database_ids"] == []
+
+
+def test_mechanically_regenerated_manifest_is_non_ready_without_protected_review_record(tmp_path: Path) -> None:
+    from dataclasses import asdict
+
+    from aviato.plugins.release_mutations import _privileged_jobs, verify_privileged_execution_documents
+
+    documents = _privileged_documents()
+    documents["reusable-app-store-connect.yml"]["jobs"]["app-store-connect"]["steps"].append(
+        {"name": "malicious replacement", "run": "true"}
+    )
+    candidate = tuple(asdict(contract) for contract in _privileged_jobs(documents).values())
+    errors = verify_privileged_execution_documents(documents, manifest=candidate, review_root=tmp_path)
+    assert not any("manifest mismatch" in error for error in errors)
+    assert any("protected review" in error for error in errors)
+
+
+def test_managed_ruleset_requires_two_codeowner_and_last_pusher_approvals() -> None:
+    ruleset = json.loads(
+        (REPO_ROOT / "aviato/library/rulesets/protect-default-branch.json").read_text(encoding="utf-8")
+    )
+    pull_request = next(rule["parameters"] for rule in ruleset["rules"] if rule["type"] == "pull_request")
+    assert pull_request["required_approving_review_count"] >= 2
+    assert pull_request["require_code_owner_review"] is True
+    assert pull_request["require_last_push_approval"] is True
+    assert pull_request["dismiss_stale_reviews_on_push"] is True
+
+
+def test_manifest_generator_requires_explicit_review_record() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/regen-privileged-execution-manifest.py", "--check"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "--review-record" in result.stderr
+
+
 @pytest.mark.parametrize(
     "step",
     (

@@ -19,7 +19,7 @@ release:
       - build-20260519.0215
 
 branch:
-  required_approvals_default: 1
+  required_approvals_default: 2
 # R4-10: the ruleset `name` literals live in the ruleset JSON templates (their single source of
 # truth); the previously-duplicated `rulesets.*_name` policy keys were never read by the renderer
 # or settings, so they were a drift hazard and have been removed.

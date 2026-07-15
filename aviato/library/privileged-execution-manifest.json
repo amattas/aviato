@@ -1,6 +1,92 @@
 [
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "ci",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "28dc53b817143715118e6c5d433db7286194da6aad4a5137b53275125144c821",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "contents",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "aviato-ci.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "common-lint",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "29736997647b57e7864bcba28c3e7f15c70c4e92428d92ad5191e22682349e27",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "contents",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "aviato-ci.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "pypi",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "d9663e8d6b36c613c2b63c389137aecf5ac118983db7cba8032a239d4a5750e2",
+    "needs_sha256": "9ac8466c6237ee10fe9d7daafc8ca895ab909688a2e054849c1e1651ac7e231e",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "contents",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "aviato-ci.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "pypi-publish",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "f567caa3201112be6c2a6b52dfe39c54abe7ee8c77629c983a9608831c4b822a",
@@ -24,6 +110,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [
         "CHECKPOINT_DIGEST",
@@ -230,10 +317,15 @@
       ""
     ],
     "trust_edge": "adjacent-live-verifier",
-    "workflow": "aviato-ci.yml"
+    "workflow": "aviato-ci.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "release",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "1d29d016e5c0d612eecb149e84d7b837964e4474d10dcbbc8a941ad93f0a74dc",
@@ -257,6 +349,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [],
     "step_env_sha256": [],
     "step_order": [],
@@ -264,10 +357,51 @@
     "step_shells": [],
     "step_uses": [],
     "trust_edge": "delegated-reusable-workflow",
-    "workflow": "aviato-ci.yml"
+    "workflow": "aviato-ci.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "release-gate",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "f6ff79fbd89c8c9ab5fd50ae1e73bcca1a3f995d969b3fa025f1f68e93139985",
+    "needs_sha256": "07b635e8e917ed16db3d119fd54e62e7a1fd31157a458f7ee9e7c80647fb2d07",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "aviato-ci.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "security",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "65acbb523c941b4af216031cd427b858853fe5c0af39cf66d4bee3f2c14a6d90",
@@ -291,6 +425,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [],
     "step_env_sha256": [],
     "step_order": [],
@@ -298,10 +433,15 @@
     "step_shells": [],
     "step_uses": [],
     "trust_edge": "delegated-reusable-workflow",
-    "workflow": "aviato-ci.yml"
+    "workflow": "aviato-ci.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "status-bridge",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [
       "GH_TOKEN"
     ],
@@ -315,6 +455,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [
         "STATUS_CONTEXT",
@@ -364,10 +505,15 @@
       ""
     ],
     "trust_edge": "generated-status-bridge",
-    "workflow": "aviato-ci.yml"
+    "workflow": "aviato-ci.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "drift",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "1a8e4f1001fe5112b832bc23339d98cb4426003792138cb59c50255c9ca2196b",
@@ -387,6 +533,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [],
     "step_env_sha256": [],
     "step_order": [],
@@ -394,10 +541,15 @@
     "step_shells": [],
     "step_uses": [],
     "trust_edge": "delegated-reusable-workflow",
-    "workflow": "aviato-drift.yml"
+    "workflow": "aviato-drift.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "attest",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "0b837f6dbe5c0fee83d52b9511818796e423886ad28ed8072dc64d08536dfc78",
@@ -417,6 +569,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       []
@@ -448,10 +601,169 @@
       "actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be"
     ],
     "trust_edge": "fixed-verified-artifact",
-    "workflow": "aviato-protection-checkpoint.yml"
+    "workflow": "aviato-protection-checkpoint.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "verify",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [
+      "CHECKPOINT_BASE64URL",
+      "EXPECTED_ACTOR",
+      "EXPECTED_REPOSITORY",
+      "EXPECTED_RUN_ID",
+      "EXPECTED_WORKFLOW_REF",
+      "GH_TOKEN",
+      "MAX_CHECKPOINT_BYTES"
+    ],
+    "job_env_sha256": "15f472e1d1a510458485f79e71453a47c0e68a7b8448ec582a8bde646995cc45",
+    "job_sha256": "0a0be40137ac0b726834caa5ea9afff60ec082fe349c8bdede3947e3c0fec5e0",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "issues",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [
+      [
+        "VERIFIED_PATH"
+      ],
+      []
+    ],
+    "step_env_sha256": [
+      "db1f088d31c6126ef25c6a76283df4a4640c70b0db988c1cf98d12bf3bda7067",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Verify fixed checkpoint bytes"
+      ],
+      [
+        "",
+        "Upload fixed verified artifact"
+      ]
+    ],
+    "step_run_sha256": [
+      "5064b9ea2dd89cb3d7e602cb14de3954d4ca8e6e12dae15383d4011260bf0786",
+      ""
+    ],
+    "step_shells": [
+      "bash",
+      ""
+    ],
+    "step_uses": [
+      "",
+      "actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808"
+    ],
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "aviato-protection-checkpoint.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "ci",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "5a8c5379e657bbad256b0cd55f2aa2ed924d2e654adda58dc94142a646499836",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "contents",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "rendered-python",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "common-lint",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "c75a32cf7df7e9dbeb0f4a63b6baa9a6523a684a8359dc61563b5b31af08c214",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "contents",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "rendered-python",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "pypi",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "3479f2e1b8e13d7d3dc487954f86db5446adbf85d098b666716bf7575d0c0820",
+    "needs_sha256": "9ac8466c6237ee10fe9d7daafc8ca895ab909688a2e054849c1e1651ac7e231e",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "contents",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "rendered-python",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "pypi-publish",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "f567caa3201112be6c2a6b52dfe39c54abe7ee8c77629c983a9608831c4b822a",
@@ -475,6 +787,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [
         "CHECKPOINT_DIGEST",
@@ -681,10 +994,15 @@
       ""
     ],
     "trust_edge": "adjacent-live-verifier",
-    "workflow": "rendered-python"
+    "workflow": "rendered-python",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "release",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "7188d5b8accd86f1d13a845e72b3dc405feebba4e19204cb9ffa1a0c8a37b4c2",
@@ -708,6 +1026,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [],
     "step_env_sha256": [],
     "step_order": [],
@@ -715,10 +1034,51 @@
     "step_shells": [],
     "step_uses": [],
     "trust_edge": "delegated-reusable-workflow",
-    "workflow": "rendered-python"
+    "workflow": "rendered-python",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "release-gate",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "183c777cfd3c1fcac6e9462f51b0ff1e5e0390b91926a16e995cef0d8982a14e",
+    "needs_sha256": "07b635e8e917ed16db3d119fd54e62e7a1fd31157a458f7ee9e7c80647fb2d07",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [],
+    "step_env_sha256": [],
+    "step_order": [],
+    "step_run_sha256": [],
+    "step_shells": [],
+    "step_uses": [],
+    "trust_edge": "delegated-reusable-workflow",
+    "workflow": "rendered-python",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "security",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "4a46c0e163241bdd69ffcfc59fb7d8f7069677ef6068bae69d4c0c02a9a52669",
@@ -742,6 +1102,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [],
     "step_env_sha256": [],
     "step_order": [],
@@ -749,10 +1110,15 @@
     "step_shells": [],
     "step_uses": [],
     "trust_edge": "delegated-reusable-workflow",
-    "workflow": "rendered-python"
+    "workflow": "rendered-python",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "status-bridge",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [
       "GH_TOKEN"
     ],
@@ -766,6 +1132,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [
         "STATUS_CONTEXT",
@@ -815,10 +1182,270 @@
       ""
     ],
     "trust_edge": "generated-status-bridge",
-    "workflow": "rendered-python"
+    "workflow": "rendered-python",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "app-store-connect",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [
+      "BUNDLE_IDENTIFIER",
+      "EXPORT_METHOD",
+      "TEAM_ID"
+    ],
+    "job_env_sha256": "b49297139fdb460154c9df48eba0655912bfb539f9fb2e0d30543ca9d88aed05",
+    "job_sha256": "d89915d5dc161fa2ccaad58ffabb5db7c682de3d1b2dd6c94014b2fd2d0dc3f6",
+    "needs_sha256": "0f04d690e48d9e6752529446ad2a6891185cf4dd9722754b897d808ed134b53a",
+    "outputs_sha256": "0fda6c3f79b8cd3ad6d2054e3bb9647c317f4b6851a56d4c2ac17a6eaeee6a8f",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "attestations",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [
+      [],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [
+        "CHECKPOINT_DIGEST",
+        "CHECKPOINT_RUN_ID",
+        "GATED_SHA",
+        "GH_TOKEN",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [
+        "ENV_NAME",
+        "GH_TOKEN"
+      ],
+      [],
+      [],
+      [
+        "EXPECTED_ARTIFACT_DIGEST",
+        "EXPECTED_SHA256",
+        "GH_TOKEN"
+      ],
+      [],
+      [
+        "TEAM_ID_INPUT"
+      ],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [
+        "APPLE_CERTIFICATE_P12_BASE64",
+        "APPLE_CERTIFICATE_PASSWORD",
+        "APPLE_PROVISIONING_PROFILE_BASE64",
+        "APP_STORE_CONNECT_API_PRIVATE_KEY",
+        "APP_STORE_CONNECT_KEY_ID",
+        "CHECKPOINT_RUN_ID",
+        "ENV_NAME",
+        "GH_TOKEN",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [],
+      [
+        "EXPORT_PATH"
+      ],
+      [
+        "APP_STORE_CONNECT_ISSUER_ID",
+        "APP_STORE_CONNECT_KEY_ID",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN",
+        "CHECKPOINT_RUN_ID",
+        "ENV_NAME",
+        "EXPORT_PATH",
+        "GH_TOKEN",
+        "RECEIPT_PATH",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [
+        "APP_STORE_CONNECT_API_PRIVATE_KEY",
+        "APP_STORE_CONNECT_ISSUER_ID",
+        "APP_STORE_CONNECT_KEY_ID",
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN",
+        "GH_TOKEN",
+        "RELEASE_TAG",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [
+        "APP_STORE_CONNECT_KEY_ID"
+      ],
+      []
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "c9813ec7f1daf7aa5dd6019586cfbacc8f0fb9f046195bf00902e9acb746b8ef",
+      "dc6e3672314b2c19bfc0dad5054a494d4731196b95b4d0fab40fd7ccdcc22d7e",
+      "080b4992dd237b11267081344665c1ee0905bd92f80db9ab4eb0d6682b22a365",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "227c757da2eb111b224b53cc25fc17a5e6a0033504b82b8f0d9170892387b5f3",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "a6f5529a78cfe4387e71e7002a76192cd0c7681f6cbfefc12db7a9cb47dbd95d",
+      "5f2add3b99bcd6311e8911f9ea8d113b5a5ccfdfe953fc2849cb5776d6d75158",
+      "d6c4b7ff38a6563a825aa14c3dec0cfefa6461ac91072da4cd95c7bb5deba558",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "dec34cfdacc73d6e0ac4c77d3ea058bbd613e650f0584807b142b5575e6b7a41",
+      "03ed7ea6e2922565868ad3d8095abf36005b0c216e71a42955fa9d0d01627b81",
+      "cbfad5ce48113985743143933873ca409739d3650684085afb6c4eca0d7b764c",
+      "2a212a66a9f1b4ba439870f0eb0596c088a62056754448e7124f961a879b0e46",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "verifier-token",
+        "Mint verifier-only read token"
+      ],
+      [
+        "",
+        "Fail-closed verifier capability probe"
+      ],
+      [
+        "authorization",
+        "Recheck exact authorization outputs before environment secrets"
+      ],
+      [
+        "",
+        "Verify deployment environment requires reviewers (\u00a711.4)"
+      ],
+      [
+        "",
+        "Select Xcode"
+      ],
+      [
+        "",
+        "Download attested unsigned archive"
+      ],
+      [
+        "",
+        "Validate digest, attestation, and safe archive members"
+      ],
+      [
+        "",
+        "Extract trusted unsigned archive"
+      ],
+      [
+        "",
+        "Validate declarative signing inputs"
+      ],
+      [
+        "",
+        "Verify full authority before importing signing secrets"
+      ],
+      [
+        "",
+        "Install signing assets"
+      ],
+      [
+        "",
+        "Resolve export options"
+      ],
+      [
+        "",
+        "Export signed app"
+      ],
+      [
+        "",
+        "Upload to App Store Connect"
+      ],
+      [
+        "",
+        "Submit for review (built-in)"
+      ],
+      [
+        "",
+        "Cleanup signing assets"
+      ],
+      [
+        "",
+        "Upload App Store Connect receipt"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      "7060c39f6ec37c4ac1b80f4d00a832db77c11c1184493bab6c3ceb09842da6f5",
+      "ba4ea836082a1663fb92a249d336a3e0b7b565dc67b696fbd1137a65eb1beb6e",
+      "fe8a46b79e9c223b4605746456d78a3d12f0864efce63077a239f0624d0133a9",
+      "",
+      "",
+      "ff100fe72e04f0828a7f3b541f211e407e4a48508ad93686d684b145cbaab070",
+      "c1ce5bc0436f44a6d0c9506996894c8bf37fc5d6d199be03dfcad03f2ca480c2",
+      "3457ffb2c2bc6c62e5d1556dc391423780a74ab6042631dd084d76c2889e2b32",
+      "0bbae0e214dbd80fc99a6a9e88ea5e3a418dd9be28d38408f8479bd7d0aeed96",
+      "fae7ecaaad3cffc46c82666517d8f17d1d7cf0312db320887b68780f577b3710",
+      "83d4e3d9965b0cae55753c517057e5ea501db53cbe313335ad77b48cf13c5844",
+      "64c691cb3939dd0b66cdffb5bfe55836d73be4d068a5436899c38f5ec81fc592",
+      "4f5eb65015ae90c572ecc65ddf687efa6411fd6f45280b2adea340b61d416a76",
+      "bad3480d18f093087f74df3277702bfa098eb753bb32740fe40201cff1ed866f",
+      "ae040d856b02763b8ff13b82e0116ab51d2e9a1921ba7b02d0b56ca69104ee42",
+      ""
+    ],
+    "step_shells": [
+      "",
+      "bash",
+      "bash",
+      "bash",
+      "",
+      "",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      ""
+    ],
+    "step_uses": [
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      "",
+      "",
+      "maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90",
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    ],
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-app-store-connect.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "attest-unsigned",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "699587a5d25f34b535575942da147fde8c0d980f7750ec78416253b85421bc94",
@@ -838,6 +1465,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       [
@@ -917,10 +1545,197 @@
       "actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e"
     ],
     "trust_edge": "adjacent-live-verifier",
-    "workflow": "reusable-app-store-connect.yml"
+    "workflow": "reusable-app-store-connect.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "build-unsigned",
+    "job_defaults_sha256": "0e9febd0f9c4571ff69563187725ca67a9d410dc17e00cc4eafaff46ed0ff493",
+    "job_env_keys": [
+      "ARCHIVE_PATH",
+      "CONFIGURATION",
+      "PROJECT",
+      "SCHEME",
+      "SDK",
+      "WORKSPACE"
+    ],
+    "job_env_sha256": "aedc99da6f916a331266c8b4430329ee875a576922db0617e7eb1f09ec61d400",
+    "job_sha256": "b671ae8683acbe3c6bcc8b3b498bbe3a63858021875286ddcaaab4b1987d3657",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "5b9ae7551602ea2a12faeed3addedf34bdd0c9e70d8058e3ac68aa4dad1e8a45",
+    "permissions": [
+      [
+        "contents",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [
+      [
+        "ARCHIVE_PATH_INPUT",
+        "WORKING_DIRECTORY_INPUT"
+      ],
+      [],
+      [
+        "ARCHIVE_PATH_INPUT",
+        "WORKING_DIRECTORY_INPUT"
+      ],
+      [],
+      [
+        "GATED_SHA",
+        "RELEASE_TAG_INPUT",
+        "TAG_FORMAT_DESCRIPTION",
+        "TAG_PATTERN"
+      ],
+      [
+        "BUILD_NUMBER",
+        "MARKETING_VERSION",
+        "RELEASE_TAG",
+        "VERSION_COMMAND"
+      ],
+      [],
+      [
+        "SOURCE"
+      ],
+      []
+    ],
+    "step_env_sha256": [
+      "3264fc58032c18a29ba449fa4c030dd5c369bb2a8fd92bcdb14bba6805226956",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "3264fc58032c18a29ba449fa4c030dd5c369bb2a8fd92bcdb14bba6805226956",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "8af3c569b780e40477daa5c4b8a06d9f3b1daa620847ca69bd3d3a726cba6a59",
+      "1cbb2b0887f85b57677ec36a48b029de384bf4e66c1614fac920f0010108faca",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "fa0b9ea36dd70bfbe2e4877f6f1d80bd6dedf1d2a6bbe2b8eef2f15fa233a868",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Validate untrusted build paths"
+      ],
+      [
+        "",
+        "Checkout immutable consumer source without credentials"
+      ],
+      [
+        "",
+        "Verify build path containment after checkout"
+      ],
+      [
+        "",
+        "Select Xcode"
+      ],
+      [
+        "release",
+        "Validate release tag against gated commit"
+      ],
+      [
+        "",
+        "Apply version command without any release secret"
+      ],
+      [
+        "",
+        "Build unsigned archive without keychain or provisioning material"
+      ],
+      [
+        "package",
+        "Package content-addressed unsigned archive"
+      ],
+      [
+        "upload",
+        "Upload unsigned archive"
+      ]
+    ],
+    "step_run_sha256": [
+      "b515903a5b178954fb36ba970512a918a3abb74228f2a4fa680a4643c86bb163",
+      "",
+      "675e37eb1f7193b18f016311246d0d5daea13fe1a91a5c6130a5e2d80ff7e6fe",
+      "",
+      "59bc36037224c9f59e78508a1952906562b7ac9a26ace4c2dcab35e00c67d783",
+      "90bdb7eaf45c7ee732df74c58459e43c2c94c57b0e419476cb7aaee39121edce",
+      "f2ed97692d0496c60dd1fe088752499be7bf1f24e23baef0cbdc246abef8b03d",
+      "70252dc88b232039ba95facebcd1bccdeb62b20e8f154c29707fd56a854285f2",
+      ""
+    ],
+    "step_shells": [
+      "bash",
+      "",
+      "bash",
+      "",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      ""
+    ],
+    "step_uses": [
+      "",
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "",
+      "maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90",
+      "",
+      "",
+      "",
+      "",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    ],
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-app-store-connect.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "custom-submit",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "5e91e3922c19600b9489773fff6a79aceb02015a95d4d75d6548406acf4f5cef",
+    "needs_sha256": "286c3623cd81dbad7ee0770c3bed0a4a2c78c6f4df2c46b3c995ad3f108f9ba6",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [
+      [
+        "BUILD_NUMBER",
+        "RELEASE_TAG",
+        "SUBMIT_FOR_REVIEW_COMMAND"
+      ]
+    ],
+    "step_env_sha256": [
+      "102daaa17c01c458c813aa013c0a366383eb5403cb93e4a2cd0ba6b895fa8bbf"
+    ],
+    "step_order": [
+      [
+        "",
+        "Submit for review (custom command)"
+      ]
+    ],
+    "step_run_sha256": [
+      "16fbc845a6a3f64920179231fa7b74a3d13d00d78d99d2648e2790a7d57bb8a3"
+    ],
+    "step_shells": [
+      "bash"
+    ],
+    "step_uses": [
+      ""
+    ],
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-app-store-connect.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "release-evidence",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "195bbd29d02d4c785f187afc9f8a83939703359f48a70f7a216b1b3187a57d29",
@@ -936,6 +1751,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       [
@@ -1009,11 +1825,16 @@
       "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
       ""
     ],
-    "trust_edge": "exact-privileged-job",
-    "workflow": "reusable-app-store-connect.yml"
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-app-store-connect.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "drift-report",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [
       "AVIATO_LOCAL_INSTALL",
       "AVIATO_REF"
@@ -1036,6 +1857,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       [],
@@ -1116,11 +1938,16 @@
       "",
       ""
     ],
-    "trust_edge": "exact-privileged-job",
-    "workflow": "reusable-consumer-automation.yml"
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-consumer-automation.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "attest-image",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "afda8ec6e0bfd1cef930eb9438abd1e16022a7e352a99ff57cb0e5db751de4e7",
@@ -1148,6 +1975,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       [
@@ -1207,10 +2035,15 @@
       "actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e"
     ],
     "trust_edge": "adjacent-live-verifier",
-    "workflow": "reusable-docker-ghcr.yml"
+    "workflow": "reusable-docker-ghcr.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "docker",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "1141c30742f974c98fbd2d9a672d6f5661ca411b0f13a20446716a5985aae85f",
@@ -1234,6 +2067,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [
         "CHECKPOINT_DIGEST",
@@ -1453,11 +2287,238 @@
       "",
       ""
     ],
-    "trust_edge": "exact-privileged-job",
-    "workflow": "reusable-docker-ghcr.yml"
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-docker-ghcr.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "build",
+    "job_defaults_sha256": "0e9febd0f9c4571ff69563187725ca67a9d410dc17e00cc4eafaff46ed0ff493",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "8132fdfab7e84e153ced3b37795820f613a5ca08f33cabfb987e9b3bdd11c387",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "f6fcd10d435358bc5ac5e535fa0570db5576a01953befed4fd16264f0b8588f1",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pages",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [
+      [
+        "CHECKPOINT_DIGEST",
+        "CHECKPOINT_RUN_ID",
+        "GATED_SHA",
+        "GH_TOKEN",
+        "VERIFIED_ENVELOPE_DIGEST"
+      ],
+      [],
+      [
+        "RELEASE_TAG_INPUT",
+        "TAG_FORMAT_DESCRIPTION",
+        "TAG_PATTERN"
+      ],
+      [
+        "GATED_SHA",
+        "RELEASE_TAG"
+      ],
+      [],
+      [
+        "DOCS_REQUIREMENTS"
+      ],
+      [
+        "DOCS_BRANCH",
+        "GH_TOKEN"
+      ],
+      [
+        "DOCS_EMIT_COMMAND"
+      ],
+      [
+        "GH_TOKEN",
+        "RELEASE_TAG"
+      ],
+      [
+        "DEFAULT_BRANCH",
+        "DOCS_BRANCH"
+      ],
+      [
+        "DOCS_BRANCH",
+        "HIGHEST",
+        "RELEASE_TAG",
+        "RETENTION"
+      ],
+      [
+        "DOCS_BRANCH"
+      ],
+      [],
+      [
+        "DOCS_BRANCH",
+        "PAGES_ROOT"
+      ],
+      [],
+      []
+    ],
+    "step_env_sha256": [
+      "dc6e3672314b2c19bfc0dad5054a494d4731196b95b4d0fab40fd7ccdcc22d7e",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "80c727bd17bf541f37f471ff21d15c8b8256b7b52f9797ea8c26e914c90a2dfc",
+      "82f63b5da6e53bcf8f14cf301e9d957b58ce82b69c96d48e32fc26e29b948c75",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "335b5d5fb2b7bd1b9b6f4629d436f39fb6a980bb1545381ae59f8807ff16032a",
+      "ebc358607c3043f8e99cbfebb984efd4b35fa581b19b44abe436b786cdefb37b",
+      "c9c25e44b85c4c5c8f553a26b91ceacf3faf7dbd0f2ab7973a09fc1109d3f627",
+      "06019f72bb5ffaad37cf7341e3eee3950ac1381cee560e274234275cb42444c6",
+      "f5d00b433d58a43d95f086009a17fbe8aeb1e25d8f49a73c129ee6e67a329f4c",
+      "f58a24c30421515f27ee08939b8d5c0347b7493a99f017512f7fc3a81c8e54c7",
+      "b7186c55a44bdb11f06b2d98cba29afe1eef3ec0a7d6f5154e895a7efe1fa342",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "02a86ee31369154585ca18eb40445bf4d332d506048e191128a0b2b45f1b0e40",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "authorization",
+        "Validate exact authorization outputs in the nonprivileged build"
+      ],
+      [
+        "",
+        "Checkout consumer repository"
+      ],
+      [
+        "release",
+        "Validate release tag"
+      ],
+      [
+        "",
+        "Verify tag still points at the gated commit (C12-W2)"
+      ],
+      [
+        "",
+        "Set up Python"
+      ],
+      [
+        "",
+        "Install docs toolchain (exact pins, \u00a711.3)"
+      ],
+      [
+        "",
+        "Fetch existing docs branch"
+      ],
+      [
+        "",
+        "Emit language API docs"
+      ],
+      [
+        "guard",
+        "Monotonic guard"
+      ],
+      [
+        "",
+        "Refuse to target the default branch"
+      ],
+      [
+        "",
+        "Deploy version onto the local docs branch (mike)"
+      ],
+      [
+        "",
+        "Bundle the docs branch for the push job"
+      ],
+      [
+        "",
+        "Hand off docs branch bundle"
+      ],
+      [
+        "",
+        "Materialize exact docs branch tree"
+      ],
+      [
+        "",
+        "Configure GitHub Pages"
+      ],
+      [
+        "",
+        "Upload GitHub Pages artifact"
+      ]
+    ],
+    "step_run_sha256": [
+      "4182f9b9b83a6769e2cdd5fce2d178f80956417b45591ff70aec6438637e458a",
+      "",
+      "177ca317820639a9350954c204004b2c2dfd0e9301af5b517ccc883abc4a3426",
+      "285345a0c15936ceef719b1b31155f344045b23d53cb3dfa9d431f825100e939",
+      "",
+      "25d6d6f7050f9d1e89325572840d4b553f15e7f4aa06356573c47ee3d71fc4f8",
+      "68c70ccd34d78e9305eebc7b6789aa6601f27046ce1b70d634dc4b4f17c5cb24",
+      "bb02396885f519476b36b61e99aafa5983a71150cca535cdd836205f052aa774",
+      "28a8a18459c11f017183bc567eedd350edf4ea115c00b0d743e2e558f563b684",
+      "95b92fb85e32662898c3e225895486408d61fa97f1f927088721e43726a0b361",
+      "26a02039e5b9c7955098ebf951ab89c2edad6a3b2716d2a74a356e4bea78238f",
+      "0c4936cb85c2e57afcfafab90aad6e83f279655ecb5e8b63b4037be9611aa054",
+      "",
+      "f7fed03eb930751faff43cb3482e8a8aa85312d0b6f64a4109db9d108ecbae04",
+      "",
+      ""
+    ],
+    "step_shells": [
+      "bash",
+      "",
+      "bash",
+      "bash",
+      "",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "",
+      "bash",
+      "",
+      ""
+    ],
+    "step_uses": [
+      "",
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "",
+      "",
+      "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      "",
+      "actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b",
+      "actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa"
+    ],
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-docs-pages.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "deploy",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "5c6827eefdbaaec61c1db80bb01aa583630d00300e0fe6e35ae7ec2692aebd8d",
@@ -1477,6 +2538,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       [
@@ -1549,10 +2611,15 @@
       "actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e"
     ],
     "trust_edge": "adjacent-live-verifier",
-    "workflow": "reusable-docs-pages.yml"
+    "workflow": "reusable-docs-pages.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "push",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "18c825c3b1c408f4d0b8bed33a08946f9f69111a9690d80529095b7da3836406",
@@ -1568,6 +2635,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       [
@@ -1660,11 +2728,524 @@
       "",
       ""
     ],
-    "trust_edge": "exact-privileged-job",
-    "workflow": "reusable-docs-pages.yml"
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-docs-pages.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "build",
+    "job_defaults_sha256": "0e9febd0f9c4571ff69563187725ca67a9d410dc17e00cc4eafaff46ed0ff493",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "74c8b19a35dd3e2e322ec5e3ab6f6140aa7fc7f66ea0fc46c15e1fec4397b6d3",
+    "needs_sha256": "45cfc2f8786913927ba765b2b00bb08bddd11b29802e64c70c0e474936d02a35",
+    "outputs_sha256": "0f62e935e139cfba356fa56cddf1661b8c9af0a72e945cdfd11ecd53f5406ce1",
+    "permissions": [
+      [
+        "contents",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [
+      [],
+      [
+        "RELEASE_TAG_INPUT",
+        "TAG_FORMAT_DESCRIPTION",
+        "TAG_PATTERN"
+      ],
+      [
+        "GATED_SHA",
+        "RELEASE_TAG"
+      ],
+      [],
+      [
+        "INSTALL_COMMAND"
+      ],
+      [
+        "BUILD_COMMAND"
+      ],
+      [
+        "PACKAGES_DIR",
+        "RELEASE_TAG"
+      ],
+      [
+        "PACKAGES_DIR",
+        "TWINE_VERSION"
+      ],
+      [
+        "PACKAGES_DIR",
+        "PIP_AUDIT_VERSION"
+      ],
+      [],
+      []
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "80c727bd17bf541f37f471ff21d15c8b8256b7b52f9797ea8c26e914c90a2dfc",
+      "85d3b849eec479f2a2b06c2cd8d29b7e606c4c2b6f7cdd67322e6fa03d4b94a4",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "ec0ad21b4a33ebc631758242b13a10199ac8dd142858adc50d06d6c6a17dddc4",
+      "437a8b92f79b7b7832cf09e5c336973b6706377f83b05450624f2ce10babe05b",
+      "7beaa10c10e8d743a21f03fc63ae66670b098728e868b4aba08b8579daa7d705",
+      "b2fe2212df01be1559dda6651c0e9801b7161b9eb31002713cc1479cd18d3d92",
+      "e3db509ed6eadc853bb94ad6035af5385387160c52705ffbd74ecc130a794253",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Checkout consumer repository"
+      ],
+      [
+        "tag",
+        "Validate release tag"
+      ],
+      [
+        "",
+        "Verify tag still points at the gated commit (C12-W2)"
+      ],
+      [
+        "",
+        "Set up Python"
+      ],
+      [
+        "",
+        "Install build tools"
+      ],
+      [
+        "",
+        "Build distributions"
+      ],
+      [
+        "metadata",
+        "Verify archive name and version contract"
+      ],
+      [
+        "",
+        "Verify distribution metadata"
+      ],
+      [
+        "",
+        "Dependency vulnerability scan (gate)"
+      ],
+      [
+        "",
+        "Generate SBOM"
+      ],
+      [
+        "",
+        "Upload build artifacts"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      "294ac0c4d9e5e6e94fce7bb2d433e57c190965a5781fb07827cd354baf5eb1c8",
+      "751ac03de9bf8214a66132cd6d2b846b7cc29f9e2fcb414bc868d427d16b6622",
+      "",
+      "0f79aac49a3e07be9f363b4b641da45fc85a06859830767a54a6ed724b35f0f3",
+      "8535087da1dbe129bc52b8598da68888d3dab5f992ced2fa2a4e14dd6656c374",
+      "d91604ea13fb9ffa7917de3ff6490d9ecae603e29542af262ed336bfb8185a02",
+      "7434ca211164e5cfd224c1e85083850466335093a822bfea5dc673998e4a3a2d",
+      "ce4214e93f5da23531639b38aa7ac3637606fa54d231a7f0c7b8d5ce9872e77a",
+      "",
+      ""
+    ],
+    "step_shells": [
+      "",
+      "bash",
+      "bash",
+      "",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "",
+      ""
+    ],
+    "step_uses": [
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "",
+      "",
+      "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    ],
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-pypi-publish.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "require-consumer-publisher",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "6a7dbb9be0ecf55c136751ddeb3be8195cb99ae4ff10dbf379afa158482d11e6",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "permissions": [],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [
+      []
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    ],
+    "step_order": [
+      [
+        "",
+        "Reject stale caller without trusted publisher"
+      ]
+    ],
+    "step_run_sha256": [
+      "5693f8280b94fc87bbb290ff786549763eac68e0829f31d3463b899549a23de1"
+    ],
+    "step_shells": [
+      ""
+    ],
+    "step_uses": [
+      ""
+    ],
+    "trust_edge": "transitive-authority-producer",
+    "workflow": "reusable-pypi-publish.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "gate",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "69ea63a1bf27e75f355c330ff464519d7d1fd894bfa18a87fa679f2f9b99c59d",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "b6f69bd0a9a38bc7c16f732ca65c994504ffd27314785217f8a1ea1e37c2fca3",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [
+      [
+        "CHECKPOINT_DIGEST",
+        "DEFAULT_BRANCH",
+        "GH_TOKEN",
+        "INTENDED_ACTOR",
+        "MERGED_SHA"
+      ],
+      [],
+      [
+        "RELEASE_TAG_INPUT",
+        "TAG_FORMAT_DESCRIPTION",
+        "TAG_PATTERN"
+      ],
+      [
+        "RELEASE_TAG_INPUT"
+      ],
+      [
+        "DEFAULT_BRANCH",
+        "GATED_SHA",
+        "GH_TOKEN"
+      ],
+      [
+        "DEFAULT_BRANCH",
+        "GATED_SHA",
+        "GH_TOKEN"
+      ],
+      [
+        "DEFAULT_BRANCH",
+        "GATED_SHA",
+        "GH_TOKEN",
+        "REQUIRED_WORKFLOW"
+      ]
+    ],
+    "step_env_sha256": [
+      "10f105e1dd28877be191fa05ce6f0125fb8274cbded74a264395f76b213ff29a",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "80c727bd17bf541f37f471ff21d15c8b8256b7b52f9797ea8c26e914c90a2dfc",
+      "67e2412c5b3b5e6834a05cd93a00bd261c302e6d89cf5e772d28566ec8157571",
+      "74518841c08b39a15dcc2370e0892d04712d6550cba69c186accd9634994ae62",
+      "74518841c08b39a15dcc2370e0892d04712d6550cba69c186accd9634994ae62",
+      "7e83edfeaccf780621c2d5c91e97a813c4d1639b6d90222882ada15d7aa83d27"
+    ],
+    "step_order": [
+      [
+        "checkpoint",
+        "Verify one exact fresh managed checkpoint before privilege"
+      ],
+      [
+        "",
+        "Checkout consumer repository"
+      ],
+      [
+        "",
+        "Validate release tag"
+      ],
+      [
+        "resolve-gated-sha",
+        "Resolve gated commit"
+      ],
+      [
+        "",
+        "Verify tag points at default branch"
+      ],
+      [
+        "",
+        "Require merged pull request"
+      ],
+      [
+        "",
+        "Require successful workflow"
+      ]
+    ],
+    "step_run_sha256": [
+      "2aeb00679d02209ac846e33d27a8c6f65585efdeaa596bf4bde5078e9b4a02a6",
+      "",
+      "015fd0e7aef67743b96e85c786cc6e56844ce41b479ae7056e0fab67fe273a74",
+      "cda629189cb64467b6f67c931689ebdcf17d20e2dc09861b0f0c59c439fff369",
+      "d505a22766c3d34b06af08d076fff60532f3397f7d0155abff88fabab1e319f2",
+      "e71b06b71997836d8127ecde9af0909e6edf6d1a31982960c314d3ace8a193ca",
+      "4e46f113cc4db9a7d7c538d20c5a27e9b71156ab16100a21b54312148786f541"
+    ],
+    "step_shells": [
+      "bash",
+      "",
+      "bash",
+      "bash",
+      "bash",
+      "bash",
+      "bash"
+    ],
+    "step_uses": [
+      "",
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-release-gate.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "authority",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [],
+    "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_sha256": "339ce35d3fe5c88695a166e1f89c67b3deedb82f27b7d830199f816d4296b64c",
+    "needs_sha256": "9da348c3e7914ee0b80d4c108e8d75f3f363fc353a0636c4f49deea8bc622e19",
+    "outputs_sha256": "306026705aefa6288938537fc5c47a20461c509a5b00ee84e4a07420fd3dd64b",
+    "permissions": [
+      [
+        "actions",
+        "read"
+      ],
+      [
+        "contents",
+        "read"
+      ],
+      [
+        "issues",
+        "read"
+      ],
+      [
+        "pull-requests",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [
+      [],
+      [],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN"
+      ],
+      [
+        "AVIATO_REPOSITORY",
+        "AVIATO_VERIFIER_TOKEN",
+        "CHECKPOINT_DIGEST",
+        "GH_TOKEN",
+        "INTENDED_ACTOR",
+        "MERGED_SHA",
+        "NEXT"
+      ]
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "c9813ec7f1daf7aa5dd6019586cfbacc8f0fb9f046195bf00902e9acb746b8ef",
+      "ae1ee8e570d2e1dcf59635f97ff2a58eacc1f568f0810a7e482f73c482acd8a0"
+    ],
+    "step_order": [
+      [
+        "proposal",
+        "Admit nonprivileged proposal phase"
+      ],
+      [
+        "verifier-token",
+        "Mint verifier-only read token"
+      ],
+      [
+        "",
+        "Fail-closed verifier capability probe"
+      ],
+      [
+        "promotion",
+        "Revalidate exact signed authority and full live protection"
+      ]
+    ],
+    "step_run_sha256": [
+      "534498de98762f402ee00369fd02dbe712134d774c2173df5446712d79321ad7",
+      "",
+      "7060c39f6ec37c4ac1b80f4d00a832db77c11c1184493bab6c3ceb09842da6f5",
+      "89d17ea50967bf8d39ea57d84a754c5426acb8091b138c66d220928b42fde9c5"
+    ],
+    "step_shells": [
+      "",
+      "",
+      "bash",
+      "bash"
+    ],
+    "step_uses": [
+      "",
+      "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+      "",
+      ""
+    ],
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-release.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job": "derive",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "job_env_keys": [
+      "AVIATO_LOCAL_INSTALL",
+      "AVIATO_REF"
+    ],
+    "job_env_sha256": "ccdc83f75a70d361c2319b59676faa23b8de2a06c5d84e6c2ac3e58c2837b388",
+    "job_sha256": "2197f323fd2c3ab310cf17af26a7397faca91d4ee94338adbf8eaffaed3dd200",
+    "needs_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "outputs_sha256": "8d9c5e4b63ef1b9048c28cf45cded030eebfd86937313a23fa1268281ea466e2",
+    "permissions": [
+      [
+        "contents",
+        "read"
+      ]
+    ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "step_env_keys": [
+      [],
+      [],
+      [],
+      [],
+      [],
+      [
+        "NEXT",
+        "PROMOTION"
+      ]
+    ],
+    "step_env_sha256": [
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "58169b0ffbab95b79ecb0420131530d6777d7f2afee6937e59bf0220b8f6cf11"
+    ],
+    "step_order": [
+      [
+        "",
+        "Checkout proposal source (full history)"
+      ],
+      [
+        "",
+        "Set up Python"
+      ],
+      [
+        "",
+        "Verify Aviato ref is pinned (\u00a711.3 fail-closed)"
+      ],
+      [
+        "",
+        "Install Aviato (pinned)"
+      ],
+      [
+        "derive",
+        "Derive next version"
+      ],
+      [
+        "phase",
+        "Choose closed proposal or promotion phase"
+      ]
+    ],
+    "step_run_sha256": [
+      "",
+      "",
+      "8a8818b9d79c68ca172aa85787e75f3e74bae53be2f086f075634fc61b36eac0",
+      "2fe15133ca153f7503be7f193cf2bf290053cd1e9cd537f8b3fd4bf8ca8ce3ef",
+      "1c7f9d4a1003a2e7ddab5700c284f3b907156e9adcfcc9a2d568c1dac80848f0",
+      "1951e4c35fbbced84e452cd6c26069161f53210b04646f0d852dcba48f08a731"
+    ],
+    "step_shells": [
+      "",
+      "",
+      "bash",
+      "bash",
+      "bash",
+      "bash"
+    ],
+    "step_uses": [
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "trust_edge": "transitive-authority-producer",
+    "workflow": "reusable-release.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "release",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [
       "AVIATO_LOCAL_INSTALL",
       "AVIATO_REF",
@@ -1689,6 +3270,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       [],
@@ -1787,11 +3369,16 @@
       "",
       ""
     ],
-    "trust_edge": "exact-privileged-job",
-    "workflow": "reusable-release.yml"
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-release.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "codeql",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "c5093c771d6442e227aa504cbfb52aa62121d6b2b8b4c65965a40dc045403869",
@@ -1815,6 +3402,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       [],
@@ -1875,11 +3463,16 @@
       "github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9",
       ""
     ],
-    "trust_edge": "exact-privileged-job",
-    "workflow": "reusable-security-baseline.yml"
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-security-baseline.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "dependency-review",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "fb5247db5dcabe33caf0907fd58c43a2c2ad97b194ab167647e1a7753fdf955a",
@@ -1903,6 +3496,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       []
@@ -1933,11 +3527,16 @@
       "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
       "actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294"
     ],
-    "trust_edge": "exact-privileged-job",
-    "workflow": "reusable-security-baseline.yml"
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-security-baseline.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "dependency-scan",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "c7bfb07cec1fe9642e84845b7961221b061dc0e20eada025dcd927e70dcc723f",
@@ -1961,6 +3560,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       [],
@@ -2009,11 +3609,16 @@
       "github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9",
       "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25"
     ],
-    "trust_edge": "exact-privileged-job",
-    "workflow": "reusable-security-baseline.yml"
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-security-baseline.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "heartbeat",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [
       "ANALYZED_REF",
       "ANALYZED_SHA",
@@ -2046,6 +3651,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       [],
@@ -2085,11 +3691,16 @@
       "",
       "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
     ],
-    "trust_edge": "exact-privileged-job",
-    "workflow": "reusable-security-baseline.yml"
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-security-baseline.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "privilege-probe",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "8fb7f3912e53ac2ebe849e6595d40d6be724c3e82c0981e3efa91f2c47de9bbf",
@@ -2113,6 +3724,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       [
@@ -2146,11 +3758,16 @@
       "",
       ""
     ],
-    "trust_edge": "exact-privileged-job",
-    "workflow": "reusable-security-baseline.yml"
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-security-baseline.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "resolve-target",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "cd61384e4615d610b005bcefc909dca17ae1c81a9909ffb7eff2179e9ace8ef1",
@@ -2174,6 +3791,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [
         "EVENT_REF",
@@ -2221,11 +3839,16 @@
       "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
       ""
     ],
-    "trust_edge": "exact-privileged-job",
-    "workflow": "reusable-security-baseline.yml"
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-security-baseline.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   },
   {
+    "container_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job": "secret-scan",
+    "job_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_env_keys": [],
     "job_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "job_sha256": "bebc8d2be070b944444869873bf5f616a9f05eabdb3704d032127c6cf6d80a59",
@@ -2249,6 +3872,7 @@
         "write"
       ]
     ],
+    "services_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
     "step_env_keys": [
       [],
       [],
@@ -2288,7 +3912,10 @@
       "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25",
       "github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9"
     ],
-    "trust_edge": "exact-privileged-job",
-    "workflow": "reusable-security-baseline.yml"
+    "trust_edge": "trust-sensitive-job",
+    "workflow": "reusable-security-baseline.yml",
+    "workflow_defaults_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "workflow_env_keys": [],
+    "workflow_env_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
   }
 ]

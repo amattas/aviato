@@ -12,7 +12,7 @@ import yaml
 
 from .core.selfcheck import core_import_violations, denylist_violations, load_denylist
 from .paths import DENYLIST_FILE, REPO_ROOT
-from .plugins.release_mutations import verify_mutation_inventory
+from .plugins.release_mutations import verify_mutation_inventory, verify_privileged_review_declaration
 from .policy import (
     default_required_approvals,
     get_path,
@@ -25,6 +25,9 @@ from .policy import (
 
 REQUIRED_FILES = [
     "aviato/library/policy.yml",
+    "aviato/library/privileged-execution-manifest.json",
+    "aviato/library/privileged-review-attestation.json",
+    "aviato/library/privileged-review-policy.json",
     "aviato/library/rulesets.yml",
     # R3-8: load-bearing data files. Without pipelines.yaml, composition silently goes lenient
     # (drops typed privileges/status-checks, disables the undeclared-pipeline check) and without
@@ -38,6 +41,8 @@ REQUIRED_FILES = [
     "aviato/library/scaffold/docs-requirements.yaml",
     "aviato/plugins/denylist.txt",
     ".github/dependabot.yml",
+    ".github/CODEOWNERS",
+    ".github/aviato-privileged-review.json",
     ".github/workflows/ci.yml",
     ".github/workflows/reusable-python-ci.yml",
     ".github/workflows/reusable-node-ci.yml",
@@ -1118,6 +1123,7 @@ def _check_hosted_mutation_inventory(root: Path, errors: list[str]) -> None:
         errors.append(f"hosted mutation inventory could not be validated: {exc}")
         return
     errors.extend(f"hosted mutation inventory: {error}" for error in inventory_errors)
+    errors.extend(f"privileged review declaration: {error}" for error in verify_privileged_review_declaration(root))
 
 
 def validate(root: Path = REPO_ROOT) -> list[str]:

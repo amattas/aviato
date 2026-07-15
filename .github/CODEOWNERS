@@ -1,0 +1,14 @@
+# Privileged execution trust root. @amattas is the only known owner at bootstrap;
+# the independent reviewer/team database IDs are deliberately configured separately
+# in privileged-review-policy.json and must be populated before activation.
+/.github/workflows/ @amattas
+/.github/CODEOWNERS @amattas
+/.github/aviato-privileged-review.json @amattas
+/.github/aviato.yaml @amattas
+/aviato/library/privileged-execution-manifest.json @amattas
+/aviato/library/privileged-review-attestation.json @amattas
+/aviato/library/privileged-review-policy.json @amattas
+/aviato/library/policy.yml @amattas
+/aviato/library/rulesets/protect-default-branch.json @amattas
+/aviato/plugins/release_mutations.py @amattas
+/scripts/regen-privileged-execution-manifest.py @amattas

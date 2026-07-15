@@ -1,0 +1,22 @@
+{
+  "minimum_approvals": 2,
+  "protected_paths": [
+    "/.github/workflows/",
+    "/.github/CODEOWNERS",
+    "/.github/aviato-privileged-review.json",
+    "/.github/aviato.yaml",
+    "/aviato/library/privileged-execution-manifest.json",
+    "/aviato/library/privileged-review-attestation.json",
+    "/aviato/library/privileged-review-policy.json",
+    "/aviato/library/policy.yml",
+    "/aviato/library/rulesets/protect-default-branch.json",
+    "/aviato/plugins/release_mutations.py",
+    "/scripts/regen-privileged-execution-manifest.py"
+  ],
+  "require_code_owner_review": true,
+  "require_last_push_approval": true,
+  "require_non_author": true,
+  "reviewer_database_ids": [],
+  "schema_version": 1,
+  "team_database_ids": []
+}

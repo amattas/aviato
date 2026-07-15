@@ -81,6 +81,7 @@ from .github import GitHubAPIError, SettingsReadError, gh_json_paginated_optiona
 from .github_platform import GitHubPlatform, UnmodeledProtectionError
 from .library_source import configured_library_repository, fetch_library_snapshot, fetch_library_snapshot_at_commit
 from .paths import REPO_ROOT
+from .plugins.release_mutations import verify_packaged_privileged_review_readiness
 from .plugins.version_formats import bump_files
 from .policy import library_repository, load_policy
 from .release_checkpoint import (
@@ -106,6 +107,15 @@ DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
 DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
 DECLARATION_RELATIVE_PATH = ".github/aviato.yaml"
 _COMMAND_STACK: ContextVar[ExitStack | None] = ContextVar("aviato_command_stack", default=None)
+
+
+def _require_privileged_mutation_readiness(policy_root: Path) -> bool:
+    """Fail closed before any repository-creation or protection write path."""
+
+    errors = verify_packaged_privileged_review_readiness(policy_root)
+    for error in errors:
+        print(f"privileged activation blocked: {error}", file=sys.stderr)
+    return not errors
 
 
 def _cleanup_transition_workdir(workdir: Path, repository: Path) -> None:
@@ -358,6 +368,9 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
     except (AviatoError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
+
+    if args.apply and not _require_privileged_mutation_readiness(policy_root):
+        return 1
 
     try:
         platform = GitHubPlatform()
@@ -2328,6 +2341,7 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+
     declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
     if not declaration_path.is_file():
         print(f"no declaration at {declaration_path}", file=sys.stderr)
@@ -2349,6 +2363,9 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+
+    if args.apply and not _require_privileged_mutation_readiness(context.policy_root):
+        return 1
 
     # R3-7/§2.6: complete-protection applies the resolved profile's protected settings to a PINNED
     # consumer, so an incompatible local tool must not silently mutate them — gate on version-pin
@@ -2569,6 +2586,9 @@ def cmd_provision(args: argparse.Namespace) -> int:
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+
+    if not _require_privileged_mutation_readiness(snapshot.policy_root):
+        return 1
 
     declaration = Declaration(
         profile=args.profile,
@@ -3113,7 +3133,8 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 
     try:
         declaration = _load_consumer_declaration(root)
-        registry = _open_consumer_context(root, declaration).registry
+        context = _open_consumer_context(root, declaration)
+        registry = context.registry
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
@@ -3121,6 +3142,9 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+
+    if args.confirm and not _require_privileged_mutation_readiness(context.policy_root):
+        return 1
 
     # The §2.6 lower bound comes from the consumer's own managed markers, not the
     # installed tool version (an explicit --recorded-version still overrides). Use the

@@ -11,6 +11,6 @@ variables:
 overrides:
   settings:
     default_branch:
-      # Solo-maintainer liveness exception: remove this override before or in the
-      # same settings change that makes another independent reviewer eligible.
-      required_reviews: 0
+      # Privileged trust-root changes require two independent protected approvals.
+      # Provision/apply remains fail-closed until real reviewer identities exist.
+      required_reviews: 2
