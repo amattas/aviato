@@ -1641,6 +1641,29 @@ def test_composite_ruleset_write_uses_confirmed_id_without_mutable_name_reselect
     assert applied == [({"name": "Protect", "target": "branch"}, 41)]
 
 
+@pytest.mark.parametrize("detail", ("timed out after 600s", "connection reset by peer", "unexpected EOF"))
+def test_every_generic_protection_mutation_maps_transport_ambiguity_to_response_lost(
+    monkeypatch: pytest.MonkeyPatch, detail: str
+) -> None:
+    from aviato.core.protection import ResponseLostError
+
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(CommandError(["gh", "api"], 124, detail)),
+    )
+    with pytest.raises(ResponseLostError):
+        GitHubPlatform._gh_input(["--method", "PATCH", "repos/o/r"], {"allow_squash_merge": True})
+
+
+def test_generic_protection_mutation_preserves_definitive_http_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
+    error = CommandError(["gh", "api"], 1, "validation failed (HTTP 422)")
+    monkeypatch.setattr(github, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    with pytest.raises(CommandError) as raised:
+        GitHubPlatform._gh_input(["--method", "PATCH", "repos/o/r"], {"allow_squash_merge": True})
+    assert raised.value is error
+
+
 def test_composite_ruleset_create_refuses_a_preexisting_confirmed_id() -> None:
     operation = SimpleNamespace(
         kind="ruleset",

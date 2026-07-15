@@ -4,6 +4,7 @@ import dataclasses
 import importlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -30,7 +31,7 @@ def _checkpoint(**changes: Any) -> Any:
         snapshot_sha="b" * 40,
         protection_plan_id="c" * 64,
         protection_receipt_digest="d" * 64,
-        fingerprints={"rulesets": "e" * 64, "environment": "f" * 64},
+        authority_snapshot={"schema": "aviato-protection-authority-snapshot/v1", "repository": {"id": 7}},
         workflow_path=".github/workflows/aviato-protection-checkpoint.yml",
         workflow_blob_sha="1" * 40,
         workflow_ref="refs/heads/main",
@@ -240,7 +241,7 @@ def _verification_context() -> Any:
         source_sha="a" * 40,
         protection_plan_id="c" * 64,
         protection_receipt_digest="d" * 64,
-        fingerprints={"rulesets": "e" * 64, "environment": "f" * 64},
+        authority_snapshot={"schema": "aviato-protection-authority-snapshot/v1", "repository": {"id": 7}},
     )
 
 
@@ -362,6 +363,9 @@ def test_checkpoint_intake_authorizes_only_an_immutable_current_admin_signed_rec
     assert "receipt signer is not a current concrete repository admin" in body
     assert "receipt SSH signature verification failed" in body
     assert 'issue.get("body")' not in body
+    assert "lastEditedAt" in body and "isMinimized" in body and "databaseId" in body
+    assert "authority_snapshot" in body
+    assert 'receipt.get("surface_fingerprints")' not in body
 
 
 def test_release_gate_selects_exactly_one_trusted_attested_unexpired_intake_run() -> None:
@@ -422,3 +426,69 @@ def test_guard_descriptor_requires_full_typed_trust_contract() -> None:
         "schema": "aviato-managed-release-checkpoint/v1",
     }
     assert not _api().guard_descriptor_ready(descriptor)
+
+
+def test_checkpoint_accepts_two_person_submitter_actor_and_rejects_reviewer_overlap() -> None:
+    checkpoint = _checkpoint(submitter="release-actor", intended_actor="release-actor")
+    assert checkpoint.submitter == checkpoint.intended_actor
+    with pytest.raises(ValueError, match="reviewer"):
+        _checkpoint(reviewer="release-actor", submitter="release-actor", intended_actor="release-actor")
+
+
+def test_checkpoint_schema_carries_canonical_authority_snapshot_not_arbitrary_fingerprints() -> None:
+    fields = set(_api().ManagedReleaseCheckpoint.__dataclass_fields__)
+    assert "authority_snapshot" in fields
+    assert "fingerprints" not in fields
+
+
+@pytest.mark.parametrize(
+    "change",
+    (
+        {"now": 1_700_000_301},
+        {"current_snapshot": {"schema": "aviato-protection-authority-snapshot/v1", "drift": True}},
+        {"reviewer_is_admin": False},
+        {"key_current": False},
+        {"signature_verified": False},
+        {"attestation_verified": False},
+    ),
+)
+def test_final_mutation_authority_rejects_expiry_snapshot_drift_revocation_and_invalid_proofs(
+    change: dict[str, Any],
+) -> None:
+    api = _api()
+    snapshot = {"schema": "aviato-protection-authority-snapshot/v1", "repository": {"id": 7}}
+    values: dict[str, Any] = {
+        "checkpoint": SimpleNamespace(
+            issued_at=1_700_000_000,
+            expires_at=1_700_000_300,
+            authority_snapshot=snapshot,
+        ),
+        "current_snapshot": snapshot,
+        "now": 1_700_000_100,
+        "reviewer_is_admin": True,
+        "key_current": True,
+        "signature_verified": True,
+        "attestation_verified": True,
+    }
+    values.update(change)
+    with pytest.raises(ValueError):
+        api.require_final_mutation_authority(**values)
+
+
+def test_final_mutation_authority_accepts_exact_fresh_current_proofs() -> None:
+    api = _api()
+    snapshot = {"schema": "aviato-protection-authority-snapshot/v1", "repository": {"id": 7}}
+    checkpoint = SimpleNamespace(
+        issued_at=1_700_000_000,
+        expires_at=1_700_000_300,
+        authority_snapshot=snapshot,
+    )
+    api.require_final_mutation_authority(
+        checkpoint=checkpoint,
+        current_snapshot=snapshot,
+        now=1_700_000_100,
+        reviewer_is_admin=True,
+        key_current=True,
+        signature_verified=True,
+        attestation_verified=True,
+    )

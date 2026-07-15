@@ -24,6 +24,7 @@ from .core.ports import (
     RulesetApplyResult,
     validate_git_ref_name,
 )
+from .core.protection import ResponseLostError
 from .repos import is_owner_repo_slug
 
 # GitHubPlatform and tests access this helper through the real `aviato.github.run`
@@ -43,6 +44,16 @@ _HTTP_STATUS_PREFIX_RE = re.compile(
     r"^[ \t]*(?:gh:[ \t]*)?HTTP[ \t]+([1-5][0-9]{2}):",
     re.IGNORECASE | re.MULTILINE,
 )
+
+
+def _ambiguous_write_failure(returncode: int, detail: str) -> bool:
+    lowered = detail.lower()
+    if "http 4" in lowered or "(http 4" in lowered:
+        return False
+    return returncode == 124 or any(
+        marker in lowered
+        for marker in ("timed out", "timeout", "connection reset", "broken pipe", "unexpected eof", "connection closed")
+    )
 
 
 def _run_gh_read(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -643,6 +654,8 @@ def _submit_ruleset(endpoint: str, method: str, payload: dict[str, Any]) -> None
             payload_path.unlink(missing_ok=True)
     if result.returncode != 0:
         error = "\n".join(part for part in (result.stderr.strip(), result.stdout.strip()) if part)
+        if _ambiguous_write_failure(result.returncode, error):
+            raise ResponseLostError(error or f"GitHub ruleset response lost for {endpoint}")
         raise GitHubAPIError(endpoint, result.returncode, error)
 
 

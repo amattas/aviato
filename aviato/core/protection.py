@@ -113,6 +113,7 @@ class ProtectionPlan:
     operations: tuple[ProtectionOperation, ...]
     ruleset_plan: RulesetPlan
     authorization_guard: Mapping[str, Any] | None
+    authority_snapshot: Mapping[str, Any]
     blockers: tuple[str, ...]
     canonical_json: str
     plan_id: str
@@ -146,13 +147,13 @@ class ProtectionReceipt:
     declaration_pin: str = ""
     snapshot_sha: str = ""
     tool_version: str = ""
-    surface_fingerprints: Mapping[str, str] = field(default_factory=dict)
+    authority_snapshot: Mapping[str, Any] = field(default_factory=dict)
     confirmed_plan_id: str = ""
     final_plan_id: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "rulesets", tuple(deep_freeze(item) for item in self.rulesets))
-        object.__setattr__(self, "surface_fingerprints", deep_freeze(self.surface_fingerprints))
+        object.__setattr__(self, "authority_snapshot", deep_freeze(self.authority_snapshot))
 
     @property
     def ready(self) -> bool:
@@ -179,7 +180,7 @@ class ProtectionReceipt:
                 "declaration_pin": self.declaration_pin,
                 "snapshot_sha": self.snapshot_sha,
                 "tool_version": self.tool_version,
-                "surface_fingerprints": _plain(self.surface_fingerprints),
+                "authority_snapshot": _plain(self.authority_snapshot),
                 "confirmed_plan_id": self.confirmed_plan_id,
                 "final_plan_id": self.final_plan_id,
             }
@@ -191,7 +192,7 @@ class ReceiptPersistenceEvidence:
     envelope: bytes
     issue_node_id: str
     comment_node_id: str
-    event_node_id: str
+    source_comment_node_id: str
     comment_database_id: int
     author: str
     author_database_id: int
@@ -200,7 +201,7 @@ class ReceiptPersistenceEvidence:
     key_current: bool
     created_at: str
     last_edited_at: str | None
-    deleted: bool
+    is_minimized: bool
 
 
 def receipt_persistence_ready(evidence: ReceiptPersistenceEvidence) -> bool:
@@ -208,7 +209,7 @@ def receipt_persistence_ready(evidence: ReceiptPersistenceEvidence) -> bool:
         evidence.envelope
         and evidence.issue_node_id
         and evidence.comment_node_id
-        and evidence.event_node_id
+        and evidence.source_comment_node_id == evidence.comment_node_id
         and evidence.comment_database_id > 0
         and evidence.author
         and evidence.author_database_id > 0
@@ -217,7 +218,7 @@ def receipt_persistence_ready(evidence: ReceiptPersistenceEvidence) -> bool:
         and evidence.key_current
         and evidence.created_at
         and evidence.last_edited_at is None
-        and not evidence.deleted
+        and not evidence.is_minimized
     )
 
 
@@ -310,6 +311,62 @@ def _plain(value: object) -> Any:
     if hasattr(value, "__dict__"):
         return {key: _plain(item) for key, item in vars(value).items()}
     return value
+
+
+AUTHORITY_SNAPSHOT_SCHEMA = "aviato-protection-authority-snapshot/v1"
+
+
+def canonical_authority_snapshot(*, repository: RepositoryIdentity, live_state: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Project every release-authority surface into one stable, versioned document."""
+
+    rulesets = [_plain(item) for item in live_state.get("rulesets", ()) if isinstance(item, Mapping)]
+    rulesets.sort(key=lambda item: (item.get("id") is None, item.get("id"), _json(item)))
+    environments = live_state.get("environments", {})
+    normalized_environments = {
+        str(name): _plain(value)
+        for name, value in sorted(
+            environments.items() if isinstance(environments, Mapping) else (),
+            key=lambda item: str(item[0]),
+        )
+    }
+    required_checks = live_state.get("required_checks")
+    if not isinstance(required_checks, (list, tuple)):
+        checks = live_state.get("checks", {})
+        required_checks = [
+            {"context": str(name), "app_id": None, "integration_id": None, "source": "normalized"}
+            for name in sorted(checks if isinstance(checks, Mapping) else ())
+        ]
+    normalized_checks = [_plain(item) for item in required_checks if isinstance(item, Mapping)]
+    normalized_checks.sort(
+        key=lambda item: (
+            str(item.get("context", "")),
+            str(item.get("app_id", "")),
+            str(item.get("integration_id", "")),
+            str(item.get("source", "")),
+        )
+    )
+    snapshot = {
+        "schema": AUTHORITY_SNAPSHOT_SCHEMA,
+        "repository": _plain(repository),
+        "classic": _plain(live_state.get("classic", {})),
+        "repository_settings": _plain(live_state.get("repository", {})),
+        "security": _plain(live_state.get("security", {})),
+        "merge": _plain(live_state.get("merge", {})),
+        "rulesets": rulesets,
+        "environments": normalized_environments,
+        "required_checks": normalized_checks,
+        "guard": {
+            "intake": _plain(live_state.get("guard")),
+            "release": _plain(live_state.get("release_guard")),
+        },
+    }
+    return cast(Mapping[str, Any], deep_freeze(snapshot))
+
+
+def authority_snapshot_digest(snapshot: Mapping[str, Any]) -> str:
+    if snapshot.get("schema") != AUTHORITY_SNAPSHOT_SCHEMA:
+        raise ValueError("authority snapshot schema is absent or unsupported")
+    return _digest(_plain(snapshot))
 
 
 def _operation(
@@ -435,6 +492,17 @@ def build_protection_plan(
         blockers.append("privileged environments require an independent managed authorization guard")
     elif guard and _plain(live_state.get("guard")) != guard:
         blockers.append("managed authorization guard workflow/path/blob is not proven live")
+    release_guard = live_state.get("release_guard")
+    if environments and (
+        not isinstance(release_guard, Mapping)
+        or release_guard.get("path") != ".github/workflows/reusable-release.yml"
+        or not isinstance(release_guard.get("repository"), str)
+        or not isinstance(release_guard.get("ref"), str)
+        or not isinstance(release_guard.get("blob_sha"), str)
+        or len(release_guard["blob_sha"]) != 40
+    ):
+        blockers.append("reusable release repository/ref/blob is not proven live")
+    authority_snapshot = canonical_authority_snapshot(repository=repository, live_state=live_state)
     payload = {
         "repository": _plain(repository),
         "tool_version": tool_version,
@@ -443,24 +511,26 @@ def build_protection_plan(
         "operations": [_plain(item) for item in operations],
         "ruleset_plan_id": ruleset_plan.plan_id,
         "authorization_guard": guard,
+        "authority_snapshot": _plain(authority_snapshot),
         "allow_degraded_tag_pattern": allow_degraded_tag_pattern,
         "receipt_signing_identity": _plain(receipt_signing_identity),
         "blockers": blockers,
     }
     canonical = _json(payload)
     return ProtectionPlan(
-        repository,
-        tool_version,
-        declaration_pin,
-        snapshot_sha,
-        tuple(operations),
-        ruleset_plan,
-        deep_freeze(guard) if guard else None,
-        tuple(blockers),
-        canonical,
-        hashlib.sha256(canonical.encode("ascii")).hexdigest(),
-        allow_degraded_tag_pattern,
-        deep_freeze(receipt_signing_identity) if receipt_signing_identity else None,
+        repository=repository,
+        tool_version=tool_version,
+        declaration_pin=declaration_pin,
+        snapshot_sha=snapshot_sha,
+        operations=tuple(operations),
+        ruleset_plan=ruleset_plan,
+        authorization_guard=deep_freeze(guard) if guard else None,
+        authority_snapshot=authority_snapshot,
+        blockers=tuple(blockers),
+        canonical_json=canonical,
+        plan_id=hashlib.sha256(canonical.encode("ascii")).hexdigest(),
+        allow_degraded_tag_pattern=allow_degraded_tag_pattern,
+        receipt_signing_identity=deep_freeze(receipt_signing_identity) if receipt_signing_identity else None,
     )
 
 
@@ -524,21 +594,7 @@ def plan_with_operation_converged(plan: ProtectionPlan, identity: str) -> Protec
 
 def protection_state_fingerprint(plan: ProtectionPlan) -> str:
     """Fingerprint only the final live semantic state, not the pre-write plan."""
-
-    return _digest(
-        {
-            "repository": _plain(plan.repository),
-            "surfaces": {
-                item.identity: {
-                    "kind": item.kind,
-                    "fingerprint": item.before_fingerprint,
-                    "action": item.action,
-                    "ruleset_identity": _plain(item.ruleset_identity),
-                }
-                for item in sorted(plan.operations, key=lambda operation: operation.identity)
-            },
-        }
-    )
+    return authority_snapshot_digest(plan.authority_snapshot)
 
 
 def receipt_for_plan(
@@ -561,7 +617,6 @@ def receipt_for_plan(
         )
         for item in plan.ruleset_plan.operations
     )
-    surface_fingerprints = {item.identity: item.before_fingerprint for item in plan.operations if item.action == "noop"}
     return ProtectionReceipt(
         confirmed.plan_id,
         status,
@@ -575,7 +630,7 @@ def receipt_for_plan(
         plan.declaration_pin,
         plan.snapshot_sha,
         plan.tool_version,
-        surface_fingerprints,
+        plan.authority_snapshot,
         confirmed.plan_id,
         plan.plan_id,
     )

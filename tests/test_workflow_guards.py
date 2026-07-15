@@ -769,6 +769,59 @@ def test_app_store_mutations_immediately_recheck_current_checkpoint_key_and_envi
     assert "ssh_signing_keys" in recheck["run"]
 
 
+def test_every_final_privileged_mutation_uses_the_same_full_fresh_authority_contract() -> None:
+    pypi = _rendered_python_library_workflow()["jobs"]["pypi-publish"]["steps"]
+    cases = {
+        "pypi": next(
+            step["run"]
+            for step in pypi
+            if step.get("name") == "Final checkpoint recheck immediately before PyPI mutation"
+        ),
+        "ghcr": next(
+            step["run"]
+            for step in _load("reusable-docker-ghcr.yml")["jobs"]["docker"]["steps"]
+            if step.get("name") == "Push scanned digests and assemble release tag (C12-W3)"
+        ),
+        "asc": next(
+            step["run"]
+            for step in _load("reusable-app-store-connect.yml")["jobs"]["app-store-connect"]["steps"]
+            if step.get("name") == "Upload to App Store Connect"
+        ),
+        "asc-evidence": _load("reusable-app-store-connect.yml")["jobs"]["release-evidence"]["steps"][0]["run"],
+        "docs-push": _load("reusable-docs-pages.yml")["jobs"]["push"]["steps"][0]["run"],
+        "pages-deploy": _load("reusable-docs-pages.yml")["jobs"]["deploy"]["steps"][0]["run"],
+        "github-release": next(
+            step["run"]
+            for step in _load("reusable-release.yml")["jobs"]["release"]["steps"]
+            if step.get("name") == "Verify checkpoint and perform closed promotion"
+        ),
+    }
+    required = (
+        "aviato-protection-authority-snapshot/v1",
+        "authority_snapshot",
+        "expires_at",
+        "issued_at",
+        "ssh-keygen",
+        "ssh_signing_keys",
+        "can_admins_bypass",
+        "gh attestation verify",
+    )
+    for name, script in cases.items():
+        for token in required:
+            assert token in script, f"{name} omits final live authority proof {token}"
+
+
+def test_promotion_accepts_two_person_actor_submitter_and_only_rejects_reviewer_overlap() -> None:
+    script = next(
+        step["run"]
+        for step in _load("reusable-release.yml")["jobs"]["release"]["steps"]
+        if step.get("name") == "Verify checkpoint and perform closed promotion"
+    )
+    assert ".checkpoint.submitter == $actor" in script
+    assert ".checkpoint.reviewer != $actor" in script
+    assert ".actor.login != $actor" not in script
+
+
 def test_app_store_receipt_asset_and_url_share_exact_basename() -> None:
     workflow = _load("reusable-app-store-connect.yml")
     evidence = workflow["jobs"]["release-evidence"]

@@ -42,6 +42,15 @@ jobs:
                   check=True, capture_output=True, text=True, env=os.environ,
               )
               return json.loads(result.stdout)
+          def graphql(query, **variables):
+              command = ["gh", "api", "graphql", "-H", "Cache-Control: no-cache", "-f", f"query={query}"]
+              for name, value in variables.items():
+                  command.extend(["-F", f"{name}={value}"])
+              result = subprocess.run(command, check=True, capture_output=True, text=True, env=os.environ)
+              payload = json.loads(result.stdout)
+              if payload.get("errors"):
+                  fail("GraphQL IssueComment readback failed")
+              return payload["data"]
           encoded = os.environ["CHECKPOINT_BASE64URL"]
           maximum = int(os.environ["MAX_CHECKPOINT_BYTES"])
           if not encoded or len(encoded) > maximum * 2 or not re.fullmatch(r"[A-Za-z0-9_-]+", encoded):
@@ -61,7 +70,7 @@ jobs:
           document_keys = {
               "schema", "repository_id", "repository", "tag", "sha", "intended_actor",
               "collector", "reviewer", "submitter", "pin", "snapshot_sha",
-              "protection_plan_id", "protection_receipt_digest", "fingerprints",
+              "protection_plan_id", "protection_receipt_digest", "authority_snapshot",
               "workflow_path", "workflow_blob_sha", "workflow_ref", "workflow_run_id",
               "issued_at", "expires_at",
           }
@@ -171,6 +180,35 @@ jobs:
               or type(receipt_author.get("id")) is not int
           ):
               fail("receipt comment is edited or lacks immutable concrete author identity")
+          comment_node = graphql("""query($id: ID!) {
+            node(id: $id) {
+              __typename
+              ... on IssueComment {
+                id databaseId body createdAt lastEditedAt isMinimized
+                author { __typename login ... on User { databaseId } }
+                issue { id }
+              }
+            }
+          }""", id=receipt_comment["node_id"]).get("node")
+          graphql_author = comment_node.get("author") if isinstance(comment_node, dict) else None
+          graphql_issue = comment_node.get("issue") if isinstance(comment_node, dict) else None
+          if (
+              not isinstance(comment_node, dict)
+              or comment_node.get("__typename") != "IssueComment"
+              or comment_node.get("id") != receipt_comment["node_id"]
+              or comment_node.get("databaseId") != receipt_comment["id"]
+              or comment_node.get("body") != receipt_comment.get("body")
+              or not comment_node.get("createdAt")
+              or comment_node.get("lastEditedAt") is not None
+              or comment_node.get("isMinimized") is not False
+              or not isinstance(graphql_author, dict)
+              or graphql_author.get("__typename") != "User"
+              or graphql_author.get("login") != receipt_envelope["principal"]
+              or graphql_author.get("databaseId") != receipt_author.get("id")
+              or not isinstance(graphql_issue, dict)
+              or graphql_issue.get("id") != issue.get("node_id")
+          ):
+              fail("GraphQL IssueComment identity is edited, minimized, deleted, or replaced")
           receipt_permission = gh(f"repos/{document['repository']}/collaborators/{receipt_envelope['principal']}/permission")
           if receipt_permission.get("permission") != "admin" or receipt_permission.get("user", {}).get("type") != "User":
               fail("receipt signer is not a current concrete repository admin")
@@ -191,7 +229,7 @@ jobs:
           expected_receipt_keys = {
               "schema", "plan_id", "status", "operations", "rulesets", "final_fingerprint", "timestamp",
               "persistence_status", "local_mutations_recorded", "repository", "declaration_pin", "snapshot_sha",
-              "tool_version", "surface_fingerprints", "confirmed_plan_id", "final_plan_id",
+              "tool_version", "authority_snapshot", "confirmed_plan_id", "final_plan_id",
           }
           receipt_repository = receipt.get("repository") or {}
           if (
@@ -201,11 +239,12 @@ jobs:
               or receipt.get("status") != "ready"
               or receipt.get("persistence_status") != "attached"
               or receipt.get("confirmed_plan_id") != document["protection_plan_id"]
-              or receipt.get("surface_fingerprints") != document["fingerprints"]
+              or receipt.get("authority_snapshot") != document["authority_snapshot"]
+              or receipt.get("authority_snapshot", {}).get("schema") != "aviato-protection-authority-snapshot/v1"
               or receipt_repository.get("database_id") != document["repository_id"]
               or receipt_repository.get("full_name") != document["repository"]
           ):
-              fail("current durable protection receipt/fingerprints are absent or stale")
+              fail("current durable protection receipt/authority snapshot is absent or stale")
           target = pathlib.Path(os.environ["VERIFIED_PATH"])
           target.write_bytes(raw)
           PY

@@ -36,7 +36,9 @@ class _FakePlatform:
     def repository_identity(self, repo: str) -> RepositoryIdentity:
         return RepositoryIdentity(7, "R_7", repo, "main")
 
-    def read_protection_state(self, repo: str, *, environments: tuple[str, ...] = ()) -> dict[str, Any]:
+    def read_protection_state(
+        self, repo: str, *, environments: tuple[str, ...] = (), aviato_pin: str = ""
+    ) -> dict[str, Any]:
         return {"repository_identity": self.repository_identity(repo)}
 
     def get_issue(self, repo: str, key: str) -> Issue | None:
@@ -141,6 +143,16 @@ def test_release_checkpoint_parser_exposes_real_lifecycle_commands() -> None:
     for phase in ("collect", "review-sign", "verify", "persist"):
         args = parser.parse_args(["release-checkpoint", phase])
         assert args.func is not None
+
+
+@pytest.mark.parametrize("phase", ("collect", "review-sign", "verify", "persist"))
+def test_release_checkpoint_invalid_phase_input_is_clean_exit_two_without_traceback(
+    phase: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["release-checkpoint", phase]) == 2
+    captured = capsys.readouterr()
+    assert "requires --" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_provision_parser_requires_explicit_apply_confirmation_and_degraded_consent() -> None:

@@ -2403,7 +2403,11 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
 
         def recompute() -> ProtectionPlan:
             identity = platform.repository_identity(slug)
-            live = platform.read_protection_state(slug, environments=tuple(item.name for item in environments))
+            live = platform.read_protection_state(
+                slug,
+                environments=tuple(item.name for item in environments),
+                aviato_pin=declaration.version,
+            )
             return build_protection_plan(
                 repository=identity,
                 tool_version=__version__,
@@ -2486,7 +2490,6 @@ def cmd_release_checkpoint(args: argparse.Namespace) -> int:
             snapshot_sha=_checkpoint_arg(args, "snapshot_sha"),
             protection_plan_id=_checkpoint_arg(args, "protection_plan_id"),
             protection_receipt_digest=_checkpoint_arg(args, "protection_receipt_digest"),
-            fingerprints=_checkpoint_arg(args, "fingerprint"),
             workflow_path=args.workflow_path,
             source_run_id=int(_checkpoint_arg(args, "source_run_id")),
             ttl_seconds=args.ttl_seconds,
@@ -2665,7 +2668,11 @@ def cmd_provision(args: argparse.Namespace) -> int:
 
         def recompute() -> ProtectionPlan:
             identity = platform.repository_identity(slug)
-            live = platform.read_protection_state(slug, environments=tuple(item.name for item in environments))
+            live = platform.read_protection_state(
+                slug,
+                environments=tuple(item.name for item in environments),
+                aviato_pin=declaration.version,
+            )
             return build_protection_plan(
                 repository=identity,
                 tool_version=__version__,
@@ -3407,7 +3414,6 @@ def build_parser() -> argparse.ArgumentParser:
         "output",
     ):
         collect.add_argument(f"--{option}")
-    collect.add_argument("--fingerprint", action="append")
     collect.add_argument(
         "--workflow-path",
         default=".github/workflows/aviato-protection-checkpoint.yml",
@@ -3543,7 +3549,7 @@ def main(argv: list[str] | None = None) -> int:
         token = _COMMAND_STACK.set(stack)
         try:
             return int(args.func(args))
-        except (AviatoError, GitHubAPIError, CommandError) as exc:
+        except (AviatoError, GitHubAPIError, CommandError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             return 2
         finally:

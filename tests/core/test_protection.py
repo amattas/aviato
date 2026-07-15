@@ -97,6 +97,12 @@ def _live(*, approvals: int = 0, admin_bypass: bool | None = False) -> dict[str,
         },
         "checks": {"ci / Verify": "success"},
         "guard": {"path": ".github/workflows/aviato-ci.yml", "blob_sha": "b" * 40, "schema": "v1"},
+        "release_guard": {
+            "repository": "amattas/aviato",
+            "ref": "1.0.0",
+            "path": ".github/workflows/reusable-release.yml",
+            "blob_sha": "c" * 40,
+        },
     }
 
 
@@ -120,7 +126,7 @@ def _persistence_evidence(**changes: Any) -> Any:
         "envelope": b"signed-envelope",
         "issue_node_id": "I_1",
         "comment_node_id": "IC_1",
-        "event_node_id": "IC_1",
+        "source_comment_node_id": "IC_1",
         "comment_database_id": 44,
         "author": "alice",
         "author_database_id": 11,
@@ -129,7 +135,7 @@ def _persistence_evidence(**changes: Any) -> Any:
         "key_current": True,
         "created_at": "2026-07-14T00:00:00Z",
         "last_edited_at": None,
-        "deleted": False,
+        "is_minimized": False,
     }
     values.update(changes)
     return api.ReceiptPersistenceEvidence(**values)
@@ -441,6 +447,62 @@ def test_receipt_preserves_confirmed_plan_id_separately_from_final_live_plan_id(
     assert receipt.confirmed_plan_id == confirmed.plan_id
     assert receipt.final_plan_id == final.plan_id
     assert receipt.confirmed_plan_id != receipt.final_plan_id
+
+
+def test_final_receipt_carries_one_versioned_canonical_live_authority_snapshot() -> None:
+    api = _api()
+    live = _live(approvals=1)
+    live.update(
+        classic={"requires_pull_request": True, "required_reviews": 1},
+        repository={},
+        security={"secret_scanning": True},
+        merge={"allow_squash_merge": True},
+        required_checks=[{"context": "ci / Verify", "app_id": 7, "integration_id": None, "source": "classic"}],
+        release_guard={
+            "repository": "amattas/aviato",
+            "ref": "1.0.0",
+            "path": ".github/workflows/reusable-release.yml",
+            "blob_sha": "c" * 40,
+        },
+    )
+    receipt = api.receipt_for_plan(_plan(live=live), status="ready", persistence_status="attached")
+
+    snapshot = receipt.authority_snapshot
+    assert snapshot["schema"] == "aviato-protection-authority-snapshot/v1"
+    assert snapshot["repository"] == {
+        "database_id": 7,
+        "node_id": "R_7",
+        "full_name": "o/r",
+        "default_branch": "main",
+    }
+    assert snapshot["rulesets"][0]["id"] == 9
+    assert snapshot["required_checks"] == live["required_checks"]
+    assert snapshot["guard"]["intake"]["blob_sha"] == "b" * 40
+    assert snapshot["guard"]["release"]["blob_sha"] == "c" * 40
+    assert receipt.final_fingerprint == api.authority_snapshot_digest(snapshot)
+
+
+def test_release_guard_blob_drift_changes_final_live_authority_fingerprint() -> None:
+    api = _api()
+    first_live = _live(approvals=1)
+    first_live.update(
+        classic={"requires_pull_request": True, "required_reviews": 1},
+        repository={},
+        security={"secret_scanning": True},
+        merge={"allow_squash_merge": True},
+        release_guard={
+            "repository": "amattas/aviato",
+            "ref": "1.0.0",
+            "path": ".github/workflows/reusable-release.yml",
+            "blob_sha": "c" * 40,
+        },
+    )
+    second_live = copy.deepcopy(first_live)
+    second_live["release_guard"]["blob_sha"] = "d" * 40
+
+    assert api.protection_state_fingerprint(_plan(live=first_live)) != api.protection_state_fingerprint(
+        _plan(live=second_live)
+    )
 
 
 def test_signed_receipt_evidence_requires_immutable_unedited_current_admin_metadata() -> None:

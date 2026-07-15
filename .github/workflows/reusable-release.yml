@@ -319,26 +319,36 @@ jobs:
           release_blob_sha = release_workflow.get("sha")
           if not isinstance(release_blob_sha, str):
               raise SystemExit("current reusable release workflow blob is unreadable")
-          live = {
-              "live:classic": digest(classic),
-              "live:repository": digest(repository_surface),
-              "live:security": digest(repository.get("security_and_analysis")),
-              "live:merge": digest(merge_surface),
-              "live:rulesets": digest(sorted(rulesets, key=lambda item: item["id"])),
-              "live:guard": digest({
-                  "intake_path": ".github/workflows/aviato-protection-checkpoint.yml",
-                  "intake_blob_sha": document["workflow_blob_sha"],
-                  "release_repository": release_repository,
-                  "release_path": ".github/workflows/reusable-release.yml",
-                  "release_ref": release_ref,
-                  "release_blob_sha": release_blob_sha,
-              }),
-              "live:checks": digest(classic.get("required_status_checks")),
-              "live:environments": digest(environments),
+          snapshot = document.get("authority_snapshot")
+          if not isinstance(snapshot, dict) or snapshot.get("schema") != "aviato-protection-authority-snapshot/v1":
+              raise SystemExit("canonical authority snapshot is absent or unsupported")
+          expected_repository = snapshot.get("repository") or {}
+          current_repository = {
+              "database_id": repository.get("id"),
+              "node_id": repository.get("node_id"),
+              "full_name": repository.get("full_name"),
+              "default_branch": repository.get("default_branch"),
           }
-          live.update({f"live:environment:{name}": digest(value) for name, value in environments.items()})
-          if any(document["fingerprints"].get(key) != value for key, value in live.items()):
-              raise SystemExit("fresh full composite protection fingerprint mismatch")
+          if expected_repository != current_repository:
+              raise SystemExit("fresh repository identity/default branch differs from authority snapshot")
+          if snapshot.get("rulesets") != sorted(rulesets, key=lambda item: item["id"]):
+              raise SystemExit("fresh full paginated ruleset inventory differs from authority snapshot")
+          expected_guard = snapshot.get("guard") or {}
+          intake_guard = expected_guard.get("intake") or {}
+          release_guard = expected_guard.get("release") or {}
+          if (
+              intake_guard.get("path") != ".github/workflows/aviato-protection-checkpoint.yml"
+              or intake_guard.get("blob_sha") != document["workflow_blob_sha"]
+              or release_guard != {
+                  "repository": release_repository,
+                  "ref": release_ref,
+                  "path": ".github/workflows/reusable-release.yml",
+                  "blob_sha": release_blob_sha,
+              }
+          ):
+              raise SystemExit("fresh intake/reusable release workflow authority differs from snapshot")
+          if set((snapshot.get("environments") or {}).keys()) != set(environment_names):
+              raise SystemExit("fresh full paginated environment inventory differs from authority snapshot")
           required = set((classic.get("required_status_checks") or {}).get("contexts") or [])
           for ruleset in rulesets:
               for rule in ruleset.get("rules") or []:
@@ -509,17 +519,33 @@ jobs:
           jq -e --arg branch "${default_branch}" --arg actor "${INTENDED_ACTOR}" --arg sha "${MERGED_SHA}" '
             .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success"
             and .path == ".github/workflows/aviato-protection-checkpoint.yml"
-            and .head_branch == $branch and .head_sha == $sha and .actor.login != $actor
+            and .head_branch == $branch and .head_sha == $sha
           ' <<<"${run}" >/dev/null || { echo "::error::checkpoint run mismatch"; exit 1; }
           mkdir -p "${RUNNER_TEMP}/checkpoint"
           gh run download "${CHECKPOINT_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name verified-checkpoint --dir "${RUNNER_TEMP}/checkpoint"
           checkpoint="${RUNNER_TEMP}/checkpoint/verified-checkpoint-envelope.json"
           [ "$(shasum -a 256 "${checkpoint}" | awk '{print $1}')" = "${CHECKPOINT_DIGEST}" ] || { echo "::error::checkpoint digest mismatch"; exit 1; }
+          gh attestation verify "${checkpoint}" --repo "${GITHUB_REPOSITORY}" >/dev/null
           jq -e --arg repo "${GITHUB_REPOSITORY}" --arg tag "${NEXT}" --arg sha "${MERGED_SHA}" --arg actor "${INTENDED_ACTOR}" '
             .checkpoint.repository == $repo and .checkpoint.tag == $tag and .checkpoint.sha == $sha
-            and .checkpoint.intended_actor == $actor and .checkpoint.reviewer != $actor
+            and .checkpoint.intended_actor == $actor and .checkpoint.submitter == $actor and .checkpoint.reviewer != $actor
+            and .checkpoint.authority_snapshot.schema == "aviato-protection-authority-snapshot/v1"
+            and (.checkpoint.issued_at | type == "number") and .checkpoint.issued_at <= (now + 30)
             and (.checkpoint.expires_at | type == "number") and .checkpoint.expires_at > now
           ' "${checkpoint}" >/dev/null || { echo "::error::missing, stale, or mismatched checkpoint"; exit 1; }
+          reviewer="$(jq -r .checkpoint.reviewer "${checkpoint}")"
+          key_id="$(jq -r .key_id "${checkpoint}")"
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
+          public_key="$(gh api -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys" --jq ".[] | select((.id|tostring) == \"${key_id}\") | .key")"
+          [ -n "${public_key}" ]
+          authority_dir="$(mktemp -d)"
+          printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
+          jq -cS .checkpoint "${checkpoint}" > "${authority_dir}/message"
+          jq -r .signature "${checkpoint}" | python3 -c 'import base64,sys; value=sys.stdin.read().strip(); sys.stdout.buffer.write(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)))' > "${authority_dir}/signature"
+          ssh-keygen -Y verify -f "${authority_dir}/allowed" -I "${reviewer}" -n aviato -s "${authority_dir}/signature" < "${authority_dir}/message"
+          while IFS= read -r environment_name; do
+            [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/${environment_name}" --jq .can_admins_bypass)" = "false" ]
+          done < <(jq -r '.checkpoint.authority_snapshot.environments | keys[]' "${checkpoint}")
           workflow_blob="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/contents/.github/workflows/aviato-protection-checkpoint.yml?ref=${default_branch}" --jq .sha)"
           [ "${workflow_blob}" = "$(jq -r .checkpoint.workflow_blob_sha "${checkpoint}")" ] || { echo "::error::trusted default-branch checkpoint workflow blob changed"; exit 1; }
           ci_run="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/actions/workflows/aviato-ci.yml/runs?head_sha=${MERGED_SHA}&event=push&per_page=20" --jq '[.workflow_runs[] | select(.head_sha == "'"${MERGED_SHA}"'" and .status == "completed" and .conclusion == "success")] | sort_by(.run_attempt) | last // empty')"

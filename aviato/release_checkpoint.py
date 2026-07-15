@@ -11,8 +11,10 @@ from typing import Any
 from urllib.parse import quote
 
 from .command import DEFAULT_TIMEOUT_SECONDS, CommandError, run
+from .core.ports import RepositoryIdentity
 from .core.protection import (
     ReceiptPersistenceEvidence,
+    canonical_authority_snapshot,
     sign_protection_receipt,
     verify_protection_receipt_envelope,
 )
@@ -25,6 +27,7 @@ from .core.release_authorization import (
     review_sign_envelope,
     verify_checkpoint_envelope,
 )
+from .github_platform import GitHubPlatform
 
 
 def _gh_json(endpoint: str) -> Any:
@@ -49,6 +52,20 @@ def _gh_json_input(method: str, endpoint: str, payload: dict[str, Any]) -> Any:
         raise ValueError(f"GitHub write response is not JSON for {endpoint}") from exc
 
 
+def _gh_graphql(query: str, variables: dict[str, Any]) -> Any:
+    command = ["gh", "api", "graphql", "-H", "Cache-Control: no-cache", "-f", f"query={query}"]
+    for name, value in variables.items():
+        command.extend(["-F", f"{name}={value}"])
+    result = run(command)
+    try:
+        document = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("GitHub GraphQL response is not JSON") from exc
+    if not isinstance(document, dict) or document.get("errors"):
+        raise ValueError("GitHub GraphQL query failed")
+    return document.get("data", document)
+
+
 def _write_exclusive(path: Path, body: bytes) -> None:
     try:
         with path.open("xb") as handle:
@@ -64,70 +81,28 @@ def _read_bounded(path: Path, *, maximum: int = 65_536) -> bytes:
     return body
 
 
-def _fingerprints(values: list[str]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for value in values:
-        if "=" not in value:
-            raise ValueError("--fingerprint requires NAME=SHA256")
-        name, digest = value.split("=", 1)
-        if not name or len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-            raise ValueError("--fingerprint requires NAME=SHA256")
-        if name in result:
-            raise ValueError(f"duplicate checkpoint fingerprint {name!r}")
-        result[name] = digest
-    if not result:
-        raise ValueError("at least one current protection fingerprint is required")
-    return result
-
-
 def _digest_json(value: object) -> str:
     body = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
     return hashlib.sha256(body).hexdigest()
 
 
-def _collect_live_authority_fingerprints(
+def _collect_live_authority_snapshot(
     repository: str,
     repository_doc: dict[str, Any],
     *,
     default_branch: str,
     workflow_blob_sha: str,
     aviato_pin: str,
-) -> dict[str, str]:
-    classic = _gh_json(f"repos/{repository}/branches/{quote(default_branch, safe='')}/protection")
-    listed_rulesets = _gh_json(f"repos/{repository}/rulesets?includes_parents=false&per_page=100")
-    if not isinstance(listed_rulesets, list):
-        raise ValueError("current ruleset inventory is unreadable")
-    rulesets = [
-        _gh_json(f"repos/{repository}/rulesets/{item['id']}")
-        for item in listed_rulesets
-        if isinstance(item, dict) and isinstance(item.get("id"), int)
-    ]
-    if len(rulesets) != len(listed_rulesets):
-        raise ValueError("current ruleset inventory omitted immutable IDs")
+) -> dict[str, Any]:
     environments_doc = _gh_json(f"repos/{repository}/environments?per_page=100")
     environment_names = sorted(
         item["name"]
         for item in environments_doc.get("environments", [])
         if isinstance(item, dict) and isinstance(item.get("name"), str)
     )
-    environments = {
-        name: _gh_json(f"repos/{repository}/environments/{quote(name, safe='')}") for name in environment_names
-    }
-    repository_surface = {
-        key: repository_doc.get(key)
-        for key in (
-            "id",
-            "node_id",
-            "full_name",
-            "default_branch",
-            "allow_merge_commit",
-            "allow_squash_merge",
-            "allow_rebase_merge",
-            "delete_branch_on_merge",
-        )
-    }
-    security_surface = repository_doc.get("security_and_analysis")
-    merge_surface = {key: value for key, value in repository_surface.items() if key.startswith("allow_")}
+    live_state = GitHubPlatform().read_protection_state(
+        repository, environments=tuple(environment_names), aviato_pin=aviato_pin
+    )
     if repository == "amattas/aviato":
         release_ref = default_branch
         release_repository = repository
@@ -140,28 +115,63 @@ def _collect_live_authority_fingerprints(
     release_blob_sha = release_workflow.get("sha")
     if not isinstance(release_blob_sha, str):
         raise ValueError("current reusable release workflow blob is unreadable")
-    fingerprints = {
-        "live:classic": _digest_json(classic),
-        "live:repository": _digest_json(repository_surface),
-        "live:security": _digest_json(security_surface),
-        "live:merge": _digest_json(merge_surface),
-        "live:rulesets": _digest_json(sorted(rulesets, key=lambda item: item["id"])),
-        "live:guard": _digest_json(
-            {
-                "intake_path": ".github/workflows/aviato-protection-checkpoint.yml",
-                "intake_blob_sha": workflow_blob_sha,
-                "release_repository": release_repository,
-                "release_path": ".github/workflows/reusable-release.yml",
-                "release_ref": release_ref,
-                "release_blob_sha": release_blob_sha,
-            }
-        ),
-        "live:checks": _digest_json(classic.get("required_status_checks") if isinstance(classic, dict) else None),
-        "live:environments": _digest_json(environments),
+    live_state["release_guard"] = {
+        "repository": release_repository,
+        "ref": release_ref,
+        "path": ".github/workflows/reusable-release.yml",
+        "blob_sha": release_blob_sha,
     }
-    for name, environment in environments.items():
-        fingerprints[f"live:environment:{name}"] = _digest_json(environment)
-    return fingerprints
+    guard = live_state.get("guard")
+    if guard is None or getattr(guard, "blob_sha", None) != workflow_blob_sha:
+        raise ValueError("current intake guard blob differs from the source workflow")
+    identity = RepositoryIdentity(
+        database_id=repository_doc["id"],
+        node_id=str(repository_doc.get("node_id") or ""),
+        full_name=str(repository_doc.get("full_name") or ""),
+        default_branch=default_branch,
+    )
+    return dict(canonical_authority_snapshot(repository=identity, live_state=live_state))
+
+
+def _durable_receipt_authority_snapshot(repository: str, receipt_digest: str) -> dict[str, Any]:
+    issues = _gh_json(f"repos/{repository}/issues?state=all&labels=aviato-protection-receipt&per_page=10")
+    if not isinstance(issues, list) or len(issues) != 1 or type(issues[0].get("number")) is not int:
+        raise ValueError("exactly one durable protection receipt issue is required")
+    comments = _gh_json(f"repos/{repository}/issues/{issues[0]['number']}/comments?per_page=100")
+    marker = "Canonical `aviato-protection-receipt-envelope/v1` evidence:\n\n```json\n"
+    matches: list[dict[str, Any]] = []
+    for comment in comments if isinstance(comments, list) else ():
+        body = comment.get("body") if isinstance(comment, dict) else None
+        if not isinstance(body, str) or not body.startswith(marker) or not body.endswith("\n```"):
+            continue
+        try:
+            envelope_bytes = body[len(marker) : -4].encode("ascii")
+            envelope = json.loads(envelope_bytes)
+            receipt_bytes = base64.urlsafe_b64decode(
+                str(envelope["receipt_base64url"]) + "=" * (-len(str(envelope["receipt_base64url"])) % 4)
+            )
+            receipt = json.loads(receipt_bytes)
+        except (KeyError, UnicodeEncodeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("durable protection receipt comment is malformed") from exc
+        if hashlib.sha256(receipt_bytes).hexdigest() == receipt_digest:
+            canonical_receipt = json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+                "ascii"
+            )
+            if receipt_bytes != canonical_receipt:
+                raise ValueError("durable protection receipt bytes are not canonical")
+            matches.append(receipt)
+    if len(matches) != 1:
+        raise ValueError("protection receipt digest did not select exactly one durable receipt")
+    receipt = matches[0]
+    snapshot = receipt.get("authority_snapshot")
+    if (
+        receipt.get("schema") != "aviato-protection-receipt/v1"
+        or receipt.get("status") != "ready"
+        or receipt.get("persistence_status") != "attached"
+        or not isinstance(snapshot, dict)
+    ):
+        raise ValueError("durable protection receipt is not ready canonical authority")
+    return snapshot
 
 
 def collect_live_checkpoint(
@@ -176,7 +186,6 @@ def collect_live_checkpoint(
     snapshot_sha: str,
     protection_plan_id: str,
     protection_receipt_digest: str,
-    fingerprints: list[str],
     workflow_path: str,
     source_run_id: int,
     ttl_seconds: int,
@@ -203,14 +212,16 @@ def collect_live_checkpoint(
     ):
         raise ValueError("current repository/workflow/source-run evidence is incomplete or mismatched")
     issued_at = int(time.time())
-    supplied_fingerprints = _fingerprints(fingerprints)
-    live_fingerprints = _collect_live_authority_fingerprints(
+    authority_snapshot = _collect_live_authority_snapshot(
         repository,
         repository_doc,
         default_branch=default_branch,
         workflow_blob_sha=workflow["sha"],
         aviato_pin=pin,
     )
+    receipt_snapshot = _durable_receipt_authority_snapshot(repository, protection_receipt_digest)
+    if authority_snapshot != receipt_snapshot:
+        raise ValueError("current canonical authority snapshot differs from the durable protection receipt")
     checkpoint = ManagedReleaseCheckpoint(
         repository_id=repository_doc["id"],
         repository=repository,
@@ -224,7 +235,7 @@ def collect_live_checkpoint(
         snapshot_sha=snapshot_sha,
         protection_plan_id=protection_plan_id,
         protection_receipt_digest=protection_receipt_digest,
-        fingerprints={**supplied_fingerprints, **live_fingerprints},
+        authority_snapshot=authority_snapshot,
         workflow_path=workflow_path,
         workflow_blob_sha=workflow["sha"],
         workflow_ref=f"refs/heads/{default_branch}",
@@ -328,17 +339,23 @@ def verify_live_checkpoint(*, input_path: Path, output: Path | None = None) -> M
     workflow_run_id = document.get("workflow_run_id")
     protection_plan_id = document.get("protection_plan_id")
     protection_receipt_digest = document.get("protection_receipt_digest")
-    fingerprints = document.get("fingerprints")
+    authority_snapshot = document.get("authority_snapshot")
     if (
         not isinstance(intended_actor, str)
         or not isinstance(submitter, str)
         or type(workflow_run_id) is not int
         or not isinstance(protection_plan_id, str)
         or not isinstance(protection_receipt_digest, str)
-        or not isinstance(fingerprints, dict)
-        or not all(isinstance(key, str) and isinstance(value, str) for key, value in fingerprints.items())
+        or not isinstance(authority_snapshot, dict)
     ):
         raise ValueError("checkpoint envelope contains malformed live-verification fields")
+    current_snapshot = _collect_live_authority_snapshot(
+        repository,
+        repository_doc,
+        default_branch=str(default_branch),
+        workflow_blob_sha=str(workflow.get("sha") or ""),
+        aviato_pin=str(document.get("pin") or ""),
+    )
     context = CheckpointVerificationContext(
         repository_id=repository_doc.get("id"),
         repository=repository,
@@ -355,7 +372,7 @@ def verify_live_checkpoint(*, input_path: Path, output: Path | None = None) -> M
         source_sha=source_run.get("head_sha"),
         protection_plan_id=protection_plan_id,
         protection_receipt_digest=protection_receipt_digest,
-        fingerprints=fingerprints,
+        authority_snapshot=current_snapshot,
     )
     key = RegisteredReviewerKey(
         key_id=str(parsed["key_id"]),
@@ -477,20 +494,53 @@ def persist_signed_protection_receipt(
         or readback.get("created_at") != readback.get("updated_at")
     ):
         raise ValueError("receipt comment was edited, replaced, or did not read back exactly")
+    graph = _gh_graphql(
+        """query($id: ID!) {
+          node(id: $id) {
+            __typename
+            ... on IssueComment {
+              id databaseId body createdAt lastEditedAt isMinimized
+              author { __typename login ... on User { databaseId } }
+              issue { id }
+            }
+          }
+        }""",
+        {"id": str(comment["node_id"])},
+    )
+    node = graph.get("node") if isinstance(graph, dict) else None
+    graph_author = node.get("author") if isinstance(node, dict) else None
+    graph_issue = node.get("issue") if isinstance(node, dict) else None
+    if (
+        not isinstance(node, dict)
+        or node.get("__typename") != "IssueComment"
+        or node.get("id") != comment["node_id"]
+        or node.get("databaseId") != comment["id"]
+        or node.get("body") != expected_body
+        or not node.get("createdAt")
+        or node.get("lastEditedAt") is not None
+        or node.get("isMinimized") is not False
+        or not isinstance(graph_author, dict)
+        or graph_author.get("__typename") != "User"
+        or graph_author.get("login") != principal
+        or graph_author.get("databaseId") != author["id"]
+        or not isinstance(graph_issue, dict)
+        or graph_issue.get("id") != issue["node_id"]
+    ):
+        raise ValueError("GraphQL IssueComment readback was edited, minimized, deleted, or replaced")
     return ReceiptPersistenceEvidence(
         envelope=envelope,
-        issue_node_id=str(issue["node_id"]),
-        comment_node_id=str(comment["node_id"]),
-        event_node_id=str(comment["node_id"]),
-        comment_database_id=comment["id"],
+        issue_node_id=str(graph_issue["id"]),
+        comment_node_id=str(node["id"]),
+        source_comment_node_id=str(node["id"]),
+        comment_database_id=node["databaseId"],
         author=principal,
-        author_database_id=author["id"],
+        author_database_id=graph_author["databaseId"],
         author_is_admin=True,
         key_id=key_id,
         key_current=True,
-        created_at=str(readback.get("created_at") or ""),
-        last_edited_at=None,
-        deleted=False,
+        created_at=str(node["createdAt"]),
+        last_edited_at=node["lastEditedAt"],
+        is_minimized=node["isMinimized"],
     )
 
 

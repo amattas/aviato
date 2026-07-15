@@ -195,7 +195,9 @@ class RulesetPlanningPlatform(Protocol):
 class ProtectionPlanningPlatform(RulesetPlanningPlatform, Protocol):
     """Composite protection reads/writes used by one confirmation-bound plan."""
 
-    def read_protection_state(self, repo: str, *, environments: tuple[str, ...] = ()) -> dict[str, Any]: ...
+    def read_protection_state(
+        self, repo: str, *, environments: tuple[str, ...] = (), aviato_pin: str = ""
+    ) -> dict[str, Any]: ...
 
     def apply_protection_operation(self, repo: str, operation: ProtectionOperation) -> object | None: ...
 

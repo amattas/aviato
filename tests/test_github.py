@@ -12,6 +12,7 @@ import pytest
 from aviato import github
 from aviato.command import CommandError
 from aviato.core.ports import RepositoryIdentity
+from aviato.core.protection import ResponseLostError
 from aviato.rulesets import render_all_rulesets
 
 JsonValue = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
@@ -36,11 +37,7 @@ def _record_named_files[**P, TNamedFile: _NamedFile](
 def _tag_ruleset_payload() -> JsonObject:
     return cast(
         JsonObject,
-        next(
-            payload
-            for payload in render_all_rulesets(root=Path("aviato/library"))
-            if payload["target"] == "tag"
-        ),
+        next(payload for payload in render_all_rulesets(root=Path("aviato/library")) if payload["target"] == "tag"),
     )
 
 
@@ -56,6 +53,32 @@ def test_gh_json_raises_on_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(github.GitHubAPIError):
         github.gh_json("repos/amattas/aviato")
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stderr"),
+    ((124, "timed out after request send"), (1, "connection reset by peer"), (1, "unexpected EOF")),
+)
+def test_ruleset_mutation_transport_ambiguity_raises_response_lost(
+    monkeypatch: pytest.MonkeyPatch, returncode: int, stderr: str
+) -> None:
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(["gh"], returncode, "", stderr),
+    )
+    with pytest.raises(ResponseLostError):
+        github._submit_ruleset("repos/o/r/rulesets/9", "PUT", {"name": "Protect"})
+
+
+def test_ruleset_mutation_definitive_http_rejection_is_not_response_lost(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(["gh"], 1, "", "validation failed (HTTP 422)"),
+    )
+    with pytest.raises(github.GitHubAPIError):
+        github._submit_ruleset("repos/o/r/rulesets/9", "PUT", {"name": "Protect"})
 
 
 def test_gh_json_can_allow_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -668,9 +691,11 @@ def test_upsert_ruleset_does_not_retry_other_failures(monkeypatch: pytest.Monkey
         return subprocess.CompletedProcess(cmd, 1, "", stderr)
 
     monkeypatch.setattr(github, "run", fake_run)
-    with pytest.raises(github.GitHubAPIError) as exc:
+    expected = ResponseLostError if stderr == "connection reset by peer" else github.GitHubAPIError
+    with pytest.raises(expected) as exc:
         github.upsert_ruleset("o/r", _tag_ruleset_payload(), apply=True)
-    assert exc.value.stderr == stderr
+    if isinstance(exc.value, github.GitHubAPIError):
+        assert exc.value.stderr == stderr
     assert len(calls) == 1
 
 

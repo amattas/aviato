@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .model import deep_freeze, deep_thaw
+from .protection import AUTHORITY_SNAPSHOT_SCHEMA, authority_snapshot_digest
 
 MAX_CHECKPOINT_TTL_SECONDS = 15 * 60
 MAX_CHECKPOINT_CLOCK_SKEW_SECONDS = 30
@@ -28,7 +29,7 @@ class ManagedReleaseCheckpoint:
     snapshot_sha: str
     protection_plan_id: str
     protection_receipt_digest: str
-    fingerprints: Mapping[str, str]
+    authority_snapshot: Mapping[str, Any]
     workflow_path: str
     workflow_blob_sha: str
     workflow_ref: str
@@ -67,11 +68,10 @@ class ManagedReleaseCheckpoint:
             raise ValueError("checkpoint expiry must be after issue time")
         if self.expires_at - self.issued_at > MAX_CHECKPOINT_TTL_SECONDS:
             raise ValueError(f"checkpoint TTL exceeds {MAX_CHECKPOINT_TTL_SECONDS} seconds")
-        if not self.fingerprints or any(
-            not isinstance(key, str) or not key or not _hex(value, 64) for key, value in self.fingerprints.items()
-        ):
-            raise ValueError("checkpoint fingerprints require named SHA-256 evidence")
-        object.__setattr__(self, "fingerprints", deep_freeze(self.fingerprints))
+        if self.authority_snapshot.get("schema") != AUTHORITY_SNAPSHOT_SCHEMA:
+            raise ValueError("checkpoint requires one canonical authority snapshot")
+        authority_snapshot_digest(self.authority_snapshot)
+        object.__setattr__(self, "authority_snapshot", deep_freeze(self.authority_snapshot))
 
     @property
     def canonical_json(self) -> str:
@@ -127,10 +127,12 @@ class CheckpointVerificationContext:
     source_sha: str
     protection_plan_id: str
     protection_receipt_digest: str
-    fingerprints: Mapping[str, str]
+    authority_snapshot: Mapping[str, Any]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "fingerprints", deep_freeze(self.fingerprints))
+        if self.authority_snapshot.get("schema") != AUTHORITY_SNAPSHOT_SCHEMA:
+            raise ValueError("verification context requires one canonical authority snapshot")
+        object.__setattr__(self, "authority_snapshot", deep_freeze(self.authority_snapshot))
 
 
 @dataclass(frozen=True)
@@ -218,11 +220,9 @@ def _decode_signature(value: object) -> bytes:
 
 def _checkpoint_from_document(value: object) -> ManagedReleaseCheckpoint:
     document = _exact_object(value, _CHECKPOINT_FIELDS, name="checkpoint")
-    fingerprints = document.get("fingerprints")
-    if not isinstance(fingerprints, dict) or any(
-        not isinstance(key, str) or not isinstance(item, str) for key, item in fingerprints.items()
-    ):
-        raise ValueError("checkpoint fingerprints must be a string mapping")
+    authority_snapshot = document.get("authority_snapshot")
+    if not isinstance(authority_snapshot, dict):
+        raise ValueError("checkpoint authority_snapshot must be an object")
     # Dataclass validation rejects bool-as-int and all malformed identity/digest values.
     try:
         return ManagedReleaseCheckpoint(**document)
@@ -280,7 +280,7 @@ def verify_checkpoint_envelope(
         "sha": context.source_sha,
         "protection_plan_id": context.protection_plan_id,
         "protection_receipt_digest": context.protection_receipt_digest,
-        "fingerprints": context.fingerprints,
+        "authority_snapshot": context.authority_snapshot,
     }
     mismatched = [name for name, value in expected.items() if getattr(checkpoint, name) != value]
     if mismatched:
@@ -383,6 +383,36 @@ def promotion_ready(
         and checkpoint.digest == digest
         and checkpoint.issued_at <= now < checkpoint.expires_at
     )
+
+
+def require_final_mutation_authority(
+    *,
+    checkpoint: object,
+    current_snapshot: Mapping[str, Any],
+    now: int,
+    reviewer_is_admin: bool,
+    key_current: bool,
+    signature_verified: bool,
+    attestation_verified: bool,
+) -> None:
+    """Fail closed immediately before any privileged release mutation."""
+
+    issued_at = getattr(checkpoint, "issued_at", None)
+    expires_at = getattr(checkpoint, "expires_at", None)
+    expected_snapshot = getattr(checkpoint, "authority_snapshot", None)
+    if (
+        type(now) is not int
+        or type(issued_at) is not int
+        or type(expires_at) is not int
+        or issued_at > now + MAX_CHECKPOINT_CLOCK_SKEW_SECONDS
+        or now >= expires_at
+    ):
+        raise ValueError("final mutation checkpoint is expired or outside bounded clock skew")
+    if not isinstance(expected_snapshot, Mapping) or expected_snapshot != current_snapshot:
+        raise ValueError("final mutation authority snapshot drifted")
+    authority_snapshot_digest(current_snapshot)
+    if not all((reviewer_is_admin, key_current, signature_verified, attestation_verified)):
+        raise ValueError("final mutation requires current admin, key, signature, and attestation proofs")
 
 
 def reviewer_ready(*, kind: str, concrete_user_id: int | None, membership_verified: bool) -> bool:

@@ -28,6 +28,7 @@ from .core.marker import strip_marker_from_text
 from .core.model import AuthorizationGuardDescriptor, deep_thaw
 from .core.pathguard import confined_target
 from .core.ports import Issue, RepositoryIdentity, RulesetApplyResult
+from .core.protection import ResponseLostError
 from .core.scaffold import atomic_write
 from .core.settingsdrift import CONSENT_ID_HEX_LEN
 
@@ -554,7 +555,9 @@ class GitHubPlatform:
     def resolve_environment_reviewer(self, repo: str, reviewer: str) -> dict[str, Any]:
         return github.environment_reviewer_identity(repo, reviewer)
 
-    def read_protection_state(self, repo: str, *, environments: tuple[str, ...] = ()) -> dict[str, Any]:
+    def read_protection_state(
+        self, repo: str, *, environments: tuple[str, ...] = (), aviato_pin: str = ""
+    ) -> dict[str, Any]:
         """Read every modeled protection surface for a composite confirmation."""
 
         identity = self.repository_identity(repo)
@@ -562,8 +565,15 @@ class GitHubPlatform:
         classic = {key: flat[key] for key in _BRANCH_PROTECTION_KEYS if key in flat}
         repository = {key: flat[key] for key in _REPOSITORY_SETTING_KEYS if key in flat}
         security = {key: flat[key] for key in _SECURITY_SETTING_KEYS if key in flat}
+        environment_pages = github.gh_json_paginated(f"repos/{repo}/environments?per_page=100", default=[])
+        discovered_environments: set[str] = set(environments)
+        for page in environment_pages if isinstance(environment_pages, list) else ():
+            candidates = page.get("environments", ()) if isinstance(page, dict) else ()
+            discovered_environments.update(
+                str(item["name"]) for item in candidates if isinstance(item, dict) and isinstance(item.get("name"), str)
+            )
         live_environments: dict[str, dict[str, Any]] = {}
-        for name in environments:
+        for name in sorted(discovered_environments):
             raw = github.protected_environment(repo, name)
             protection_rules = raw.get("protection_rules") or []
             reviewer_rule = next(
@@ -629,6 +639,31 @@ class GitHubPlatform:
                 "can_admins_bypass": raw.get("can_admins_bypass"),
             }
         checks = {name: "success" for name in classic.get("required_status_checks", ())}
+        required_checks: list[dict[str, Any]] = []
+        classic_checks = github.gh_json_optional(
+            f"repos/{repo}/branches/{quote(identity.default_branch, safe='')}/protection/required_status_checks",
+            default={},
+        )
+        if isinstance(classic_checks, dict):
+            detailed = classic_checks.get("checks") or []
+            detailed_contexts = {
+                item.get("context") for item in detailed if isinstance(item, dict) and item.get("context")
+            }
+            required_checks.extend(
+                {
+                    "context": item["context"],
+                    "app_id": item.get("app_id"),
+                    "integration_id": None,
+                    "source": "classic",
+                }
+                for item in detailed
+                if isinstance(item, dict) and isinstance(item.get("context"), str)
+            )
+            required_checks.extend(
+                {"context": context, "app_id": None, "integration_id": None, "source": "classic"}
+                for context in classic_checks.get("contexts") or ()
+                if isinstance(context, str) and context not in detailed_contexts
+            )
         workflow_path = ".github/workflows/aviato-protection-checkpoint.yml"
         workflow = github.gh_json_optional(
             f"repos/{repo}/contents/{quote(workflow_path, safe='/')}?ref={quote(identity.default_branch, safe='')}",
@@ -665,16 +700,50 @@ class GitHubPlatform:
                 receipt_schema_digest=hashlib.sha256(b"aviato-protection-receipt/v1").hexdigest(),
                 trust_policy_digest=hashlib.sha256(b"distinct-current-user-reviewer/v1").hexdigest(),
             )
+        rulesets = self.read_rulesets(repo)
+        for ruleset in rulesets:
+            for rule in ruleset.get("rules") or ():
+                if not isinstance(rule, dict) or rule.get("type") != "required_status_checks":
+                    continue
+                for item in (rule.get("parameters") or {}).get("required_status_checks") or ():
+                    if isinstance(item, dict) and isinstance(item.get("context"), str):
+                        required_checks.append(
+                            {
+                                "context": item["context"],
+                                "app_id": None,
+                                "integration_id": item.get("integration_id"),
+                                "source": f"ruleset:{ruleset.get('id')}",
+                            }
+                        )
+        release_guard = None
+        if repo == "amattas/aviato" or aviato_pin:
+            release_repository = repo if repo == "amattas/aviato" else "amattas/aviato"
+            release_ref = identity.default_branch if repo == "amattas/aviato" else aviato_pin
+            release_workflow = github.gh_json_optional(
+                "repos/"
+                f"{release_repository}/contents/.github/workflows/reusable-release.yml"
+                f"?ref={quote(release_ref, safe='')}",
+                default={},
+            )
+            if isinstance(release_workflow, dict) and isinstance(release_workflow.get("sha"), str):
+                release_guard = {
+                    "repository": release_repository,
+                    "ref": release_ref,
+                    "path": ".github/workflows/reusable-release.yml",
+                    "blob_sha": release_workflow["sha"],
+                }
         return {
             "repository_identity": identity,
             "classic": classic,
             "repository": {},
             "security": security,
             "merge": repository,
-            "rulesets": self.read_rulesets(repo),
+            "rulesets": rulesets,
             "environments": live_environments,
             "checks": checks,
+            "required_checks": required_checks,
             "guard": guard,
+            "release_guard": release_guard,
         }
 
     def apply_protection_operation(self, repo: str, operation: Any) -> object | None:
@@ -1336,6 +1405,11 @@ class GitHubPlatform:
             json.dump(payload, handle)
             path = Path(handle.name)
         try:
-            github.run(["gh", "api", *args, "--input", str(path)])
+            try:
+                github.run(["gh", "api", *args, "--input", str(path)])
+            except CommandError as exc:
+                if github._ambiguous_write_failure(exc.returncode, exc.stderr):
+                    raise ResponseLostError(exc.stderr or "GitHub mutation response was lost") from exc
+                raise
         finally:
             path.unlink(missing_ok=True)

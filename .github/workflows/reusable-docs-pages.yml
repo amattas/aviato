@@ -121,6 +121,19 @@ jobs:
           envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
           [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
           gh attestation verify "${envelope}" --repo "${GITHUB_REPOSITORY}" >/dev/null
+          jq -e '.checkpoint.authority_snapshot.schema == "aviato-protection-authority-snapshot/v1" and .checkpoint.issued_at <= (now + 30) and .checkpoint.expires_at > now' "${envelope}" >/dev/null
+          reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
+          key_id="$(jq -r .key_id "${envelope}")"
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
+          public_key="$(gh api -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys" --jq ".[] | select((.id|tostring) == \"${key_id}\") | .key")"
+          authority_dir="$(mktemp -d)"
+          printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
+          jq -cS .checkpoint "${envelope}" > "${authority_dir}/message"
+          jq -r .signature "${envelope}" | python3 -c 'import base64,sys; value=sys.stdin.read().strip(); sys.stdout.buffer.write(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)))' > "${authority_dir}/signature"
+          ssh-keygen -Y verify -f "${authority_dir}/allowed" -I "${reviewer}" -n aviato -s "${authority_dir}/signature" < "${authority_dir}/message"
+          while IFS= read -r environment_name; do
+            [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/${environment_name}" --jq .can_admins_bypass)" = "false" ]
+          done < <(jq -r '.checkpoint.authority_snapshot.environments | keys[]' "${envelope}")
           reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
           [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
           echo "checkpoint-digest=${CHECKPOINT_DIGEST}" >> "${GITHUB_OUTPUT}"
@@ -382,6 +395,19 @@ jobs:
           envelope="${RUNNER_TEMP}/push-authority/verified-checkpoint-envelope.json"
           [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
           gh attestation verify "${envelope}" --repo "${GITHUB_REPOSITORY}" >/dev/null
+          jq -e '.checkpoint.authority_snapshot.schema == "aviato-protection-authority-snapshot/v1" and .checkpoint.issued_at <= (now + 30) and .checkpoint.expires_at > now' "${envelope}" >/dev/null
+          reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
+          key_id="$(jq -r .key_id "${envelope}")"
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
+          public_key="$(gh api -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys" --jq ".[] | select((.id|tostring) == \"${key_id}\") | .key")"
+          authority_dir="$(mktemp -d)"
+          printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
+          jq -cS .checkpoint "${envelope}" > "${authority_dir}/message"
+          jq -r .signature "${envelope}" | python3 -c 'import base64,sys; value=sys.stdin.read().strip(); sys.stdout.buffer.write(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)))' > "${authority_dir}/signature"
+          ssh-keygen -Y verify -f "${authority_dir}/allowed" -I "${reviewer}" -n aviato -s "${authority_dir}/signature" < "${authority_dir}/message"
+          while IFS= read -r environment_name; do
+            [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/${environment_name}" --jq .can_admins_bypass)" = "false" ]
+          done < <(jq -r '.checkpoint.authority_snapshot.environments | keys[]' "${envelope}")
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -443,6 +469,16 @@ jobs:
           envelope="${RUNNER_TEMP}/deploy-authority/verified-checkpoint-envelope.json"
           [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
           gh attestation verify "${envelope}" --repo "${GITHUB_REPOSITORY}" >/dev/null
+          jq -e '.checkpoint.authority_snapshot.schema == "aviato-protection-authority-snapshot/v1" and .checkpoint.issued_at <= (now + 30) and .checkpoint.expires_at > now' "${envelope}" >/dev/null
+          reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
+          key_id="$(jq -r .key_id "${envelope}")"
+          [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
+          public_key="$(gh api -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys" --jq ".[] | select((.id|tostring) == \"${key_id}\") | .key")"
+          authority_dir="$(mktemp -d)"
+          printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
+          jq -cS .checkpoint "${envelope}" > "${authority_dir}/message"
+          jq -r .signature "${envelope}" | python3 -c 'import base64,sys; value=sys.stdin.read().strip(); sys.stdout.buffer.write(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)))' > "${authority_dir}/signature"
+          ssh-keygen -Y verify -f "${authority_dir}/allowed" -I "${reviewer}" -n aviato -s "${authority_dir}/signature" < "${authority_dir}/message"
           environment="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/github-pages")"
           [ "$(jq -r .can_admins_bypass <<<"${environment}")" = "false" ] || { echo "::error::github-pages permits admin bypass"; exit 1; }
       - name: Deploy GitHub Pages
