@@ -345,11 +345,133 @@ _PRIVILEGED_PROTECTED_PATHS = (
     "/aviato/library/rulesets/protect-default-branch.json",
     "/aviato/cli.py",
     "/aviato/plugins/privileged_review.py",
+    "/aviato/plugins/approved_release.py",
     "/aviato/plugins/release_mutations.py",
     "/MANIFEST.in",
     "/pyproject.toml",
     "/scripts/regen-privileged-execution-manifest.py",
+    "/scripts/build-approved-release.py",
 )
+_PRIVILEGED_POLICY_KEYS = {
+    "schema_version",
+    "minimum_approvals",
+    "require_non_author",
+    "require_code_owner_review",
+    "require_last_push_approval",
+    "dismiss_stale_reviews_on_push",
+    "maximum_attestation_ttl_seconds",
+    "required_status_checks",
+    "trusted_issuer",
+    "trusted_environment",
+    "trusted_workflow_path",
+    "trusted_signing_keys",
+    "revoked_key_versions",
+    "reviewer_database_ids",
+    "team_database_ids",
+    "protected_paths",
+}
+_PRIVILEGED_REVIEW_RECORD_KEYS = {
+    "schema_version",
+    "status",
+    "lifecycle",
+    "activation_request_id",
+    "activation_nonce",
+    "author_database_id",
+    "approvals",
+    "candidate_manifest_sha256",
+    "policy_sha256",
+    "codeowners_sha256",
+    "manual_prerequisites",
+}
+
+
+def _privileged_policy_errors(policy: object, *, label: str) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(policy, dict) or set(policy) != _PRIVILEGED_POLICY_KEYS:
+        return [f"{label} policy keys/schema are not exact"]
+    if policy.get("schema_version") != 2:
+        errors.append(f"{label} policy schema_version is unsupported")
+    minimum = policy.get("minimum_approvals")
+    ttl = policy.get("maximum_attestation_ttl_seconds")
+    if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < 2:
+        errors.append(f"{label} policy minimum approvals are invalid")
+    if isinstance(ttl, bool) or not isinstance(ttl, int) or not 31_536_000 <= ttl <= 63_072_000:
+        errors.append(f"{label} policy attestation TTL is invalid")
+    for flag in (
+        "require_non_author",
+        "require_code_owner_review",
+        "require_last_push_approval",
+        "dismiss_stale_reviews_on_push",
+    ):
+        if policy.get(flag) is not True:
+            errors.append(f"{label} policy must require {flag}")
+
+    def canonical_positive_ids(name: str) -> list[int]:
+        value = policy.get(name)
+        if (
+            not isinstance(value, list)
+            or any(isinstance(item, bool) or not isinstance(item, int) or item <= 0 for item in value)
+            or value != sorted(set(value))
+        ):
+            errors.append(f"{label} policy {name} must be canonical unique positive IDs")
+            return []
+        return value
+
+    canonical_positive_ids("reviewer_database_ids")
+    canonical_positive_ids("team_database_ids")
+    canonical_positive_ids("revoked_key_versions")
+    protected = policy.get("protected_paths")
+    if (
+        not isinstance(protected, list)
+        or any(
+            not isinstance(path, str) or not path.startswith("/") or ".." in Path(path).parts or "//" in path
+            for path in protected
+        )
+        or protected != sorted(set(protected))
+    ):
+        errors.append(f"{label} policy protected paths are not canonical unique absolute paths")
+    checks = policy.get("required_status_checks")
+    if (
+        not isinstance(checks, list)
+        or len(checks) < 2
+        or any(not isinstance(check, str) or not check or check.strip() != check for check in checks)
+        or checks != sorted(set(checks))
+    ):
+        errors.append(f"{label} policy required status checks are not canonical unique names")
+    if (
+        policy.get("trusted_issuer") != "aviato-privileged-review"
+        or policy.get("trusted_environment") != "privileged-review"
+        or policy.get("trusted_workflow_path") != ".github/workflows/aviato-privileged-review.yml"
+    ):
+        errors.append(f"{label} policy trusted issuer/environment/workflow is invalid")
+    signing_keys = policy.get("trusted_signing_keys")
+    identities: list[tuple[str, int]] = []
+    if not isinstance(signing_keys, list):
+        errors.append(f"{label} policy trusted signing keys are invalid")
+    else:
+        for item in signing_keys:
+            if not isinstance(item, dict) or set(item) != {"key_id", "key_version", "issuer", "public_key"}:
+                errors.append(f"{label} policy signing-key records are not exact")
+                continue
+            key_id = item.get("key_id")
+            version = item.get("key_version")
+            public_key = item.get("public_key")
+            if (
+                not isinstance(key_id, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", key_id) is None
+                or isinstance(version, bool)
+                or not isinstance(version, int)
+                or version <= 0
+                or item.get("issuer") != policy.get("trusted_issuer")
+                or not isinstance(public_key, str)
+                or re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/]+={0,2}", public_key) is None
+            ):
+                errors.append(f"{label} policy signing-key identity/public key is invalid")
+                continue
+            identities.append((key_id, version))
+        if identities != sorted(set(identities)):
+            errors.append(f"{label} policy signing-key identities are duplicate or non-canonical")
+    return errors
 
 
 def _load_privileged_execution_manifest() -> tuple[dict[str, Any], ...]:
@@ -412,6 +534,8 @@ def verify_privileged_review_declaration(
         errors.append("protected review declaration is missing or invalid: protect-default-branch ruleset")
     if policy is None or record is None or not codeowners or ruleset is None:
         return errors
+
+    errors.extend(_privileged_policy_errors(policy, label="protected review"))
 
     if policy.get("schema_version") != 2:
         errors.append("protected review policy must use schema_version 2")
@@ -494,8 +618,18 @@ def verify_privileged_review_declaration(
     }
     if record.get("schema_version") != 2:
         errors.append("protected review record has an unsupported schema_version")
+    if set(record) != _PRIVILEGED_REVIEW_RECORD_KEYS:
+        errors.append("protected review record keys are not exact")
     if record.get("status") != "pending" or record.get("lifecycle") != "pending":
         errors.append("source protected review record must remain an honest pending prerequisite")
+    request_id = record.get("activation_request_id")
+    activation_nonce = record.get("activation_nonce")
+    if (
+        not isinstance(request_id, str)
+        or re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", request_id) is None
+        or not _hex_digest(activation_nonce, 64)
+    ):
+        errors.append("protected review record activation request/nonce is invalid")
     for key, expected in expected_hashes.items():
         if record.get(key) != expected:
             errors.append(f"protected review record {key} does not bind the current protected candidate")
@@ -619,6 +753,12 @@ def verify_privileged_review_envelope(
     """
 
     errors: list[str] = []
+    policy_errors = [
+        *_privileged_policy_errors(trusted_base_policy, label="trusted base"),
+        *_privileged_policy_errors(current_policy, label="current default-branch"),
+    ]
+    if policy_errors:
+        return policy_errors
     if not isinstance(current_policy, dict):
         current_policy = {}
         errors.append("protected review current default-branch policy is unavailable")
@@ -628,6 +768,8 @@ def verify_privileged_review_envelope(
         or current_policy.get("trusted_environment") != trusted_base_policy.get("trusted_environment")
     ):
         errors.append("protected review current policy changed the immutable issuer/workflow trust identity")
+    if current_policy.get("protected_paths") != trusted_base_policy.get("protected_paths"):
+        errors.append("protected review current policy changed the protected-path trust boundary")
     for flag in (
         "require_non_author",
         "require_code_owner_review",
@@ -655,6 +797,7 @@ def verify_privileged_review_envelope(
         "lifecycle",
         "repository",
         "pull_request",
+        "activation_request",
         "protected_files",
         "changed_protected_paths",
         "reviews",
@@ -710,6 +853,9 @@ def verify_privileged_review_envelope(
         "last_push_sha",
         "last_push_at",
         "merged_sha",
+        "merged_at",
+        "merger_database_id",
+        "merger_login",
         "protected_tree_root",
     }:
         errors.append("protected review pull request identity is incomplete")
@@ -724,6 +870,34 @@ def verify_privileged_review_envelope(
     last_push_at = _parse_timestamp(pull_request.get("last_push_at"))
     if last_push_at is None:
         errors.append("protected review last-push time is invalid")
+    merged_at = _parse_timestamp(pull_request.get("merged_at"))
+    if (
+        merged_at is None
+        or not _positive_int(pull_request.get("merger_database_id"))
+        or not isinstance(pull_request.get("merger_login"), str)
+        or not pull_request.get("merger_login")
+    ):
+        errors.append("protected review merge time/identity is invalid")
+
+    activation_request = evidence.get("activation_request")
+    if not isinstance(activation_request, dict) or set(activation_request) != {
+        "request_id",
+        "nonce",
+        "anchor_sha256",
+    }:
+        errors.append("protected review activation request is incomplete")
+        activation_request = {}
+    if (
+        not isinstance(activation_request.get("request_id"), str)
+        or re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            str(activation_request.get("request_id")),
+        )
+        is None
+        or not _hex_digest(activation_request.get("nonce"), 64)
+        or not _hex_digest(activation_request.get("anchor_sha256"), 64)
+    ):
+        errors.append("protected review activation request identity/nonce is invalid")
 
     protected_files = evidence.get("protected_files")
     protected_policy_paths = trusted_base_policy.get("protected_paths")
@@ -771,6 +945,16 @@ def verify_privileged_review_envelope(
         changed_paths = []
     if any(path not in seen_paths for path in changed_paths):
         errors.append("protected review changed path lacks a content/mode identity")
+    activation_anchor = "/.github/aviato-privileged-review.json"
+    anchor_files = [
+        item for item in protected_files if isinstance(item, dict) and item.get("path") == activation_anchor
+    ]
+    if (
+        activation_anchor not in changed_paths
+        or len(anchor_files) != 1
+        or activation_request.get("anchor_sha256") != anchor_files[0].get("sha256")
+    ):
+        errors.append("protected review activation anchor is absent, unchanged, or not content-bound")
 
     required_workflow = {
         "repository_id",
@@ -817,7 +1001,13 @@ def verify_privileged_review_envelope(
         or workflow.get("environment") != trusted_base_policy.get("trusted_environment")
     ):
         errors.append("protected review was not issued by the trusted default-branch workflow")
-    required_trust_root = {"base_sha", "policy_blob_sha", "policy_sha256"}
+    required_trust_root = {
+        "base_sha",
+        "policy_blob_sha",
+        "policy_sha256",
+        "codeowners_blob_sha",
+        "codeowners_sha256",
+    }
     if not isinstance(trust_root, dict) or set(trust_root) != required_trust_root:
         errors.append("protected review trusted-base policy root is incomplete")
         trust_root = {}
@@ -825,6 +1015,8 @@ def verify_privileged_review_envelope(
         trust_root.get("base_sha") != pull_request.get("base_sha")
         or not _hex_digest(trust_root.get("policy_blob_sha"), 40)
         or trust_root.get("policy_sha256") != _digest(trusted_base_policy)
+        or not _hex_digest(trust_root.get("codeowners_blob_sha"), 40)
+        or not _hex_digest(trust_root.get("codeowners_sha256"), 64)
     ):
         errors.append("protected review does not bind the immutable trusted base policy")
 
@@ -995,6 +1187,8 @@ def verify_privileged_review_envelope(
             or submitted is None
             or last_push_at is None
             or submitted <= last_push_at
+            or merged_at is None
+            or submitted > merged_at
         ):
             errors.append("protected review approval is stale, dismissed, edited, or for the wrong commit")
         owned = review.get("eligible_codeowner_paths")
@@ -1346,6 +1540,8 @@ _MUTATION_CREDENTIAL_EXACT = {
     "TWINE_PASSWORD",
 }
 _MUTATION_CREDENTIAL_MARKERS = ("APP_STORE_CONNECT", "DEPLOY", "PUBLISH", "RELEASE", "SIGNING", "TOKEN")
+_ALLOWED_PERMISSION_LEVELS = {"read", "write", "none"}
+_EXPRESSION = re.compile(r"\$\{\{(?P<body>.*?)\}\}", re.DOTALL)
 
 
 def _job_needs(job: dict[str, Any]) -> set[str]:
@@ -1368,6 +1564,39 @@ def _job_env_keys(job: dict[str, Any]) -> set[str]:
     return keys
 
 
+def _validated_permissions(value: object, *, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} permissions must be an explicit mapping")
+    for scope, level in value.items():
+        if not isinstance(scope, str) or not scope or level not in _ALLOWED_PERMISSION_LEVELS:
+            raise ValueError(f"{label} permissions contain an unknown scope/value")
+    return value
+
+
+def _contains_credential_context(value: object) -> bool:
+    """Structurally find credential expressions without serialized-substring shortcuts."""
+
+    if isinstance(value, dict):
+        return any(
+            _contains_credential_context(key) or _contains_credential_context(item) for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_credential_context(item) for item in value)
+    if not isinstance(value, str):
+        return False
+    for match in _EXPRESSION.finditer(value):
+        body = match.group("body").casefold()
+        if re.search(r"\bsecrets\s*(?:\.|\[)", body):
+            return True
+        if re.search(r"\bgithub\s*\.\s*token\b", body):
+            return True
+        # Any dynamic bracket selection from github may resolve to token and is
+        # therefore conservatively enrolled.
+        if re.search(r"\bgithub\s*\[", body):
+            return True
+    return False
+
+
 def _trust_sensitive_seed(
     workflow: str,
     job_name: str,
@@ -1380,8 +1609,7 @@ def _trust_sensitive_seed(
         return True
     if job.get("environment") not in (None, "", {}):
         return True
-    serialized = _json(job).lower()
-    if "secrets." in serialized or "secrets:inherit" in serialized or "github.token" in serialized:
+    if "secrets" in job or _contains_credential_context(job):
         return True
     env_keys = _job_env_keys(job)
     if any(
@@ -1405,14 +1633,22 @@ def _trust_sensitive_seed(
 def _privileged_jobs(documents: dict[str, dict[str, Any]]) -> dict[tuple[str, str], PrivilegedJobContract]:
     found: dict[tuple[str, str], PrivilegedJobContract] = {}
     for workflow, document in documents.items():
-        top_permissions = document.get("permissions") or {}
+        if "permissions" not in document:
+            raise ValueError(f"{workflow} workflow permissions must be an explicit mapping")
+        top_permissions = _validated_permissions(document["permissions"], label=f"{workflow} workflow")
         jobs = document.get("jobs") or {}
+        if not isinstance(jobs, dict):
+            raise ValueError(f"{workflow} jobs must be a mapping")
         selected: set[str] = set()
         for job_name, job in jobs.items():
             if not isinstance(job, dict):
                 continue
-            permissions = job.get("permissions") if "permissions" in job else top_permissions
-            if isinstance(permissions, dict) and _trust_sensitive_seed(workflow, str(job_name), job, permissions):
+            permissions = (
+                _validated_permissions(job["permissions"], label=f"{workflow}:{job_name} job")
+                if "permissions" in job
+                else top_permissions
+            )
+            if "uses" in job or _trust_sensitive_seed(workflow, str(job_name), job, permissions):
                 selected.add(str(job_name))
 
         seeds = set(selected)
@@ -1429,8 +1665,7 @@ def _privileged_jobs(documents: dict[str, dict[str, Any]]) -> dict[tuple[str, st
         for job_name in sorted(selected):
             job = jobs[job_name]
             permissions = job.get("permissions") if "permissions" in job else top_permissions
-            if not isinstance(permissions, dict):
-                permissions = {}
+            permissions = _validated_permissions(permissions, label=f"{workflow}:{job_name} job")
             key = (workflow, str(job_name))
             found[key] = _privileged_job_contract(
                 workflow,

@@ -209,6 +209,7 @@ pypi-publish:
       fragment: workflow-fragments/pypi-build.yml
       needs: [release, release-gate, security]
       permissions: ["contents: read"]
+      secrets: *verifier-secrets
       runner: ubuntu-latest
     pypi-publish:
       identity: job/pypi-publish/v2
@@ -220,7 +221,7 @@ pypi-publish:
       environment: pypi
       authorization_gate: release-gate
       authorization_outputs: [gated-sha, checkpoint-digest, verified-envelope-digest]
-  reusable_privileges: ["contents: read"]
+  reusable_privileges: ["actions: read", "contents: read"]
   local_publisher_privileges: ["actions: read", "contents: read", "id-token: write", "attestations: write"]
 
 ghcr-publish:

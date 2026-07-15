@@ -32,10 +32,12 @@ def _protected_files() -> list[dict[str, str]]:
             {"path": "/aviato/library/privileged-review-policy.json", "mode": "100644", "sha256": "7" * 64},
             {"path": "/aviato/library/rulesets/protect-default-branch.json", "mode": "100644", "sha256": "8" * 64},
             {"path": "/aviato/plugins/privileged_review.py", "mode": "100644", "sha256": "9" * 64},
+            {"path": "/aviato/plugins/approved_release.py", "mode": "100644", "sha256": "e" * 64},
             {"path": "/aviato/plugins/release_mutations.py", "mode": "100644", "sha256": "a" * 64},
             {"path": "/MANIFEST.in", "mode": "100644", "sha256": "c" * 64},
             {"path": "/pyproject.toml", "mode": "100644", "sha256": "d" * 64},
             {"path": "/scripts/regen-privileged-execution-manifest.py", "mode": "100755", "sha256": "b" * 64},
+            {"path": "/scripts/build-approved-release.py", "mode": "100755", "sha256": "f" * 64},
         ],
         key=lambda item: item["path"],
     )
@@ -109,6 +111,14 @@ def _environment() -> dict[str, Any]:
     return payload
 
 
+def _activation_request() -> dict[str, str]:
+    return {
+        "request_id": "123e4567-e89b-42d3-a456-426614174000",
+        "nonce": "9" * 64,
+        "anchor_sha256": "2" * 64,
+    }
+
+
 def _evidence() -> dict[str, Any]:
     ruleset = _ruleset_payload()
     protected = _protected_files()
@@ -131,8 +141,12 @@ def _evidence() -> dict[str, Any]:
             "last_push_sha": "c" * 40,
             "last_push_at": "2026-07-15T13:00:00Z",
             "merged_sha": "d" * 40,
+            "merged_at": "2026-07-15T13:02:00Z",
+            "merger_database_id": 10,
+            "merger_login": "trusted-merger",
             "protected_tree_root": _digest(protected),
         },
+        "activation_request": _activation_request(),
         "protected_files": protected,
         "changed_protected_paths": [item["path"] for item in protected],
         "reviews": [_review(2, "reviewer-one", 201), _review(3, "reviewer-two", 202)],
@@ -177,6 +191,10 @@ def _evidence() -> dict[str, Any]:
             "base_sha": "a" * 40,
             "policy_blob_sha": "0" * 40,
             "policy_sha256": _digest(_policy()) if "_policy" in globals() else "0" * 64,
+            "codeowners_blob_sha": "1" * 40,
+            "codeowners_sha256": hashlib.sha256(
+                "\n".join(f"{item['path']} @reviewer-one @reviewer-two" for item in protected).encode()
+            ).hexdigest(),
         },
         "issued_at": 1_784_119_260,
         "expires_at": 1_784_120_160,
@@ -213,13 +231,13 @@ def _policy() -> dict[str, Any]:
                 "key_id": "review-key-1",
                 "key_version": 1,
                 "issuer": "aviato-privileged-review",
-                "public_key": "ssh-ed25519 AAAA-test",
+                "public_key": "ssh-ed25519 AAAAtest",
             }
         ],
         "revoked_key_versions": [],
         "reviewer_database_ids": [2, 3],
         "team_database_ids": [],
-        "protected_paths": [item["path"] for item in _protected_files()],
+        "protected_paths": sorted(item["path"] for item in _protected_files()),
     }
 
 
@@ -424,12 +442,92 @@ def test_current_policy_strengthening_cannot_be_silently_ignored() -> None:
     assert any("require_code_owner_review" in error for error in _verify(current_policy=current))
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda p: p.update(extra=True),
+        lambda p: p.update(schema_version=1),
+        lambda p: p.update(minimum_approvals=True),
+        lambda p: p.update(maximum_attestation_ttl_seconds=1),
+        lambda p: p.update(reviewer_database_ids=[3, 2]),
+        lambda p: p.update(team_database_ids=[8, 8]),
+        lambda p: p.update(revoked_key_versions=[2, 1]),
+        lambda p: p.update(protected_paths=[]),
+        lambda p: p.update(required_status_checks=["z", "a"]),
+        lambda p: p["trusted_signing_keys"][0].update(public_key="ssh-rsa AAAA-test"),
+        lambda p: p["trusted_signing_keys"].append(copy.deepcopy(p["trusted_signing_keys"][0])),
+    ),
+)
+def test_malformed_current_policy_never_coerces_to_empty_or_grants_authority(mutation: Any) -> None:
+    current = _policy()
+    mutation(current)
+    assert any("current" in error or "policy" in error for error in _verify(current_policy=current))
+
+
+def test_activation_requires_nonempty_anchor_change_and_nonreplayed_request() -> None:
+    for changed in ([], ["/README.md"], ["/aviato/cli.py"]):
+        envelope = _envelope()
+        live = copy.deepcopy(envelope["evidence"])
+        envelope["evidence"]["changed_protected_paths"] = changed
+        assert any("activation" in error or "anchor" in error for error in _verify(envelope, live=live))
+    envelope = _envelope()
+    envelope["evidence"]["activation_request"]["request_id"] = "not-canonical"
+    assert _verify(envelope, live=copy.deepcopy(_evidence()))
+
+
+def test_legitimate_renewal_anchor_is_nonvacuous_and_live_bound() -> None:
+    envelope = _envelope()
+    live = copy.deepcopy(envelope["evidence"])
+    assert "/.github/aviato-privileged-review.json" in envelope["evidence"]["changed_protected_paths"]
+    assert _verify(envelope, live=live) == []
+
+
+@pytest.mark.parametrize(
+    ("submitted_at", "accepted"),
+    (
+        ("2026-07-15T13:00:00Z", False),
+        ("2026-07-15T13:00:01Z", True),
+        ("2026-07-15T13:02:00Z", True),
+        ("2026-07-15T13:02:01Z", False),
+        ("malformed", False),
+    ),
+)
+def test_approval_time_is_strictly_after_push_and_not_after_merge(submitted_at: str, accepted: bool) -> None:
+    envelope = _envelope()
+    for review in envelope["evidence"]["reviews"]:
+        review["submitted_at"] = submitted_at
+    live = copy.deepcopy(envelope["evidence"])
+    assert (_verify(envelope, live=live) == []) is accepted
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda p: p.pop("merged_at"),
+        lambda p: p.update(merged_at="malformed"),
+        lambda p: p.update(merger_database_id=0),
+        lambda p: p.update(merger_login=""),
+    ),
+)
+def test_missing_or_malformed_merge_time_and_identity_fail_closed(mutation: Any) -> None:
+    envelope = _envelope()
+    live = copy.deepcopy(envelope["evidence"])
+    mutation(envelope["evidence"]["pull_request"])
+    assert _verify(envelope, live=live)
+
+
 def test_unrelated_default_branch_advance_with_identical_current_policy_does_not_expire_snapshot() -> None:
     envelope = _envelope()
     # Current branch/blob identity is intentionally runtime-only and therefore
     # absent from the signed trust root. A race-stable byte-identical policy
     # remains a valid intersection after unrelated main commits.
-    assert set(envelope["evidence"]["trust_root"]) == {"base_sha", "policy_blob_sha", "policy_sha256"}
+    assert set(envelope["evidence"]["trust_root"]) == {
+        "base_sha",
+        "policy_blob_sha",
+        "policy_sha256",
+        "codeowners_blob_sha",
+        "codeowners_sha256",
+    }
     assert _verify(envelope, current_policy=copy.deepcopy(_policy())) == []
     envelope = _envelope()
     live = copy.deepcopy(envelope["evidence"])
@@ -466,6 +564,31 @@ def test_generator_refuses_arbitrary_unsigned_approved_review_record(tmp_path: P
         module = module_from_spec(spec)
         spec.loader.exec_module(module)
         module.validate_review_record(forged, "[]\n")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda record: record.pop("activation_request_id"),
+        lambda record: record.update(activation_request_id="not-a-uuid"),
+        lambda record: record.update(activation_nonce="0" * 63),
+    ),
+)
+def test_source_pending_record_requires_fresh_canonical_activation_identity(tmp_path: Path, mutation: Any) -> None:
+    from importlib.util import module_from_spec, spec_from_file_location
+
+    spec = spec_from_file_location("regen_privileged", Path("scripts/regen-privileged-execution-manifest.py"))
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    body = module.generated_body()
+    actual = json.loads(Path(".github/aviato-privileged-review.json").read_text())
+    assert module.validate_review_record(Path(".github/aviato-privileged-review.json"), body) == actual
+    mutation(actual)
+    candidate = tmp_path / "record.json"
+    candidate.write_text(json.dumps(actual))
+    with pytest.raises(SystemExit, match="activation"):
+        module.validate_review_record(candidate, body)
 
 
 def test_network_client_is_exact_origin_non_redirecting_and_rejects_proxy_tls_env(
@@ -558,6 +681,153 @@ def test_app_installation_identity_uses_full_pagination_and_exact_read_only_perm
         privileged_review._installation_authority(123, token="app-token")
 
 
+def _review_graph_page(
+    nodes: list[dict[str, Any]],
+    *,
+    has_next: bool,
+    end_cursor: str | None,
+    head: str = "c" * 40,
+    pushed_at: str = "2026-07-15T13:00:00Z",
+) -> dict[str, Any]:
+    return {
+        "repository": {
+            "pullRequest": {
+                "headRefOid": head,
+                "commits": {"nodes": [{"commit": {"oid": head, "pushedDate": pushed_at}}]},
+                "reviews": {
+                    "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
+                    "nodes": nodes,
+                },
+            }
+        }
+    }
+
+
+def test_pull_graph_collects_more_than_one_hundred_reviews_and_rechecks_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aviato.plugins import privileged_review
+
+    calls: list[str | None] = []
+
+    def graphql(query: str, variables: dict[str, Any], *, token: str) -> dict[str, Any]:
+        assert "$cursor:String" in query and "after:$cursor" in query and token == "app-token"
+        cursor = variables.get("cursor")
+        calls.append(cursor)
+        if cursor is None:
+            return _review_graph_page([{"databaseId": item} for item in range(100)], has_next=True, end_cursor="p1")
+        assert cursor == "p1"
+        return _review_graph_page([{"databaseId": 100}], has_next=False, end_cursor="p2")
+
+    monkeypatch.setattr(privileged_review, "_graphql", graphql)
+    pull = privileged_review._pull_graph("amattas/aviato", 99, token="app-token")
+    assert len(pull["reviews"]["nodes"]) == 101
+    assert calls == [None, "p1", None]
+
+
+@pytest.mark.parametrize("bad_cursor", (None, "repeat"))
+def test_pull_graph_rejects_missing_or_repeated_review_cursor(
+    monkeypatch: pytest.MonkeyPatch, bad_cursor: str | None
+) -> None:
+    from aviato.plugins import privileged_review
+
+    calls = 0
+
+    def graphql(_query: str, variables: dict[str, Any], *, token: str) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        cursor = variables.get("cursor")
+        end_cursor = bad_cursor if cursor is None else "repeat"
+        return _review_graph_page([], has_next=True, end_cursor=end_cursor)
+
+    monkeypatch.setattr(privileged_review, "_graphql", graphql)
+    with pytest.raises(ValueError, match="cursor"):
+        privileged_review._pull_graph("amattas/aviato", 99, token="app-token")
+    assert calls <= 2
+
+
+def test_pull_graph_rejects_head_or_latest_push_change_across_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aviato.plugins import privileged_review
+
+    def graphql(_query: str, variables: dict[str, Any], *, token: str) -> dict[str, Any]:
+        if variables.get("cursor") is None:
+            return _review_graph_page([], has_next=True, end_cursor="p1")
+        return _review_graph_page([], has_next=False, end_cursor="p2", head="d" * 40)
+
+    monkeypatch.setattr(privileged_review, "_graphql", graphql)
+    with pytest.raises(ValueError, match="changed while paginating"):
+        privileged_review._pull_graph("amattas/aviato", 99, token="app-token")
+
+
+def test_pull_graph_review_pagination_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aviato.plugins import privileged_review
+
+    monkeypatch.setattr(privileged_review, "_MAX_REVIEW_PAGES", 2)
+
+    def graphql(_query: str, variables: dict[str, Any], *, token: str) -> dict[str, Any]:
+        cursor = variables.get("cursor")
+        next_cursor = "p1" if cursor is None else "p2"
+        return _review_graph_page([], has_next=True, end_cursor=next_cursor)
+
+    monkeypatch.setattr(privileged_review, "_graphql", graphql)
+    with pytest.raises(ValueError, match="bounded"):
+        privileged_review._pull_graph("amattas/aviato", 99, token="app-token")
+
+
+@pytest.mark.parametrize(
+    "entry",
+    (
+        {"path": ".github/workflows/nested", "type": "commit", "mode": "160000", "sha": "a" * 40},
+        {"path": ".github/workflows/link.yml", "type": "blob", "mode": "120000", "sha": "b" * 40},
+        {"path": ".github/workflows/device", "type": "blob", "mode": "100664", "sha": "c" * 40},
+    ),
+)
+def test_tree_inventory_rejects_gitlinks_symlinks_and_special_modes(
+    monkeypatch: pytest.MonkeyPatch, entry: dict[str, str]
+) -> None:
+    from aviato.plugins import privileged_review
+
+    def rest(path: str, *, token: str) -> object:
+        assert "git/trees" in path
+        return {
+            "truncated": False,
+            "tree": [
+                {"path": ".github", "type": "tree", "mode": "040000", "sha": "d" * 40},
+                {"path": ".github/workflows", "type": "tree", "mode": "040000", "sha": "e" * 40},
+                entry,
+            ],
+        }
+
+    monkeypatch.setattr(privileged_review, "_rest", rest)
+    with pytest.raises(ValueError, match="not one regular reviewed file"):
+        privileged_review._tree_inventory("amattas/aviato", "f" * 40, ["/.github/workflows/"], token="app-token")
+
+
+def test_tree_inventory_accepts_only_regular_git_blob_modes_and_hashes_exact_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aviato.plugins import privileged_review
+
+    body = b"#!/bin/sh\nexit 0\n"
+
+    def rest(path: str, *, token: str) -> object:
+        if "git/trees" in path:
+            return {
+                "truncated": False,
+                "tree": [
+                    {"path": "scripts", "type": "tree", "mode": "040000", "sha": "d" * 40},
+                    {"path": "scripts/run", "type": "blob", "mode": "100755", "sha": "a" * 40},
+                ],
+            }
+        assert path.endswith("/git/blobs/" + "a" * 40)
+        return {"encoding": "base64", "content": base64.b64encode(body).decode(), "sha": "a" * 40}
+
+    monkeypatch.setattr(privileged_review, "_rest", rest)
+    assert privileged_review._tree_inventory("amattas/aviato", "f" * 40, ["/scripts/"], token="app-token") == [
+        {"path": "/scripts/run", "mode": "100755", "sha256": hashlib.sha256(body).hexdigest()}
+    ]
+
+
 def test_live_collector_reconstructs_complete_app_pr_review_ruleset_transcript(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -572,9 +842,37 @@ def test_live_collector_reconstructs_complete_app_pr_review_ruleset_transcript(
     protected = evidence["protected_files"]
     policy_body = json.dumps(policy).encode()
     codeowners = "\n".join(f"{item['path']} @reviewer-one @reviewer-two" for item in protected).encode()
+    base_anchor = json.dumps(
+        {
+            "schema_version": 2,
+            "status": "pending",
+            "lifecycle": "pending",
+            "activation_request_id": "123e4567-e89b-42d3-a456-426614174001",
+            "activation_nonce": "8" * 64,
+        }
+    ).encode()
+    candidate_anchor = json.dumps(
+        {
+            "schema_version": 2,
+            "status": "pending",
+            "lifecycle": "pending",
+            "activation_request_id": evidence["activation_request"]["request_id"],
+            "activation_nonce": evidence["activation_request"]["nonce"],
+        }
+    ).encode()
+    candidate_anchor_sha256 = hashlib.sha256(candidate_anchor).hexdigest()
+    next(item for item in protected if item["path"] == "/.github/aviato-privileged-review.json")["sha256"] = (
+        candidate_anchor_sha256
+    )
+    evidence["activation_request"]["anchor_sha256"] = candidate_anchor_sha256
+    evidence["pull_request"]["protected_tree_root"] = _digest(protected)
     transcript: list[str] = []
     run_overrides: dict[str, Any] = {}
     branch_sha_override: list[str] = []
+    current_policy_override: list[dict[str, Any]] = []
+    current_codeowners_override: list[bytes] = []
+    base_anchor_override: list[bytes] = []
+    base_inventory_same: list[bool] = []
     workflow_body = b"name: Trusted review\n"
 
     def content(body: bytes, sha: str) -> dict[str, str]:
@@ -593,13 +891,30 @@ def test_live_collector_reconstructs_complete_app_pr_review_ruleset_transcript(
                 "base": {"sha": "a" * 40},
                 "head": {"sha": "c" * 40},
                 "user": {"id": 1, "login": "author"},
+                "merged_at": "2026-07-15T13:02:00Z",
+                "merged_by": {"id": 10, "login": "trusted-merger"},
             }
         if path.endswith("/branches/main"):
             return {"commit": {"sha": branch_sha_override.pop(0) if branch_sha_override else "f" * 40}}
         if path.startswith("/repos/amattas/aviato/contents/aviato/library/privileged-review-policy.json"):
-            return content(policy_body, "2" * 40 if "f" * 40 in path else "0" * 40)
+            body = (
+                json.dumps(current_policy_override[-1]).encode()
+                if "f" * 40 in path and current_policy_override
+                else policy_body
+            )
+            return content(body, "2" * 40 if "f" * 40 in path else "0" * 40)
         if path.startswith("/repos/amattas/aviato/contents/.github/CODEOWNERS"):
-            return content(codeowners, "1" * 40)
+            body = current_codeowners_override[-1] if "f" * 40 in path and current_codeowners_override else codeowners
+            return content(body, "1" * 40)
+        if path.startswith("/repos/amattas/aviato/contents/.github/aviato-privileged-review.json"):
+            body = (
+                base_anchor_override[-1]
+                if "a" * 40 in path and base_anchor_override
+                else base_anchor
+                if "a" * 40 in path
+                else candidate_anchor
+            )
+            return content(body, "9" * 40)
         if path.startswith("/repos/amattas/aviato/contents/.github/workflows/aviato-privileged-review.yml"):
             return content(workflow_body, "e" * 40)
         if path == "/repos/amattas/aviato/actions/runs/500":
@@ -681,7 +996,7 @@ def test_live_collector_reconstructs_complete_app_pr_review_ruleset_transcript(
     def inventory(repository: str, sha: str, paths: list[str], *, token: str) -> list[dict[str, str]]:
         assert repository == "amattas/aviato" and token == "app-token" and paths == policy["protected_paths"]
         transcript.append(f"tree:{sha}")
-        return [] if sha == "a" * 40 else copy.deepcopy(protected)
+        return [] if sha == "a" * 40 and not base_inventory_same else copy.deepcopy(protected)
 
     monkeypatch.setattr(privileged_review, "_rest", rest)
     monkeypatch.setattr(privileged_review, "_pull_graph", graph)
@@ -721,6 +1036,43 @@ def test_live_collector_reconstructs_complete_app_pr_review_ruleset_transcript(
     run_overrides.clear()
     branch_sha_override.extend(["f" * 40, "0" * 40])
     with pytest.raises(ValueError, match="ref moved"):
+        privileged_review.collect_live_privileged_review_evidence(envelope)
+    branch_sha_override.clear()
+
+    current_codeowners_override.append(codeowners.replace(b" @reviewer-two", b""))
+    _trusted, current, changed_live = privileged_review.collect_live_privileged_review_evidence(envelope)
+    assert any(
+        "CODEOWNER" in error or "live" in error
+        for error in _verify(envelope, current_policy=current, live=changed_live)
+    )
+    current_codeowners_override[-1] = codeowners.replace(b"@reviewer-one @reviewer-two", b"@attacker")
+    with pytest.raises(ValueError, match="intersection"):
+        privileged_review.collect_live_privileged_review_evidence(envelope)
+    current_codeowners_override.clear()
+
+    current_codeowners_override.append(codeowners.replace(b"@reviewer-two", b"@reviewer-two @attacker"))
+    _trusted, _current, strengthened_live = privileged_review.collect_live_privileged_review_evidence(envelope)
+    assert strengthened_live["reviews"] == evidence["reviews"]
+    current_codeowners_override.clear()
+
+    base_anchor_override.append(candidate_anchor)
+    with pytest.raises(ValueError, match="replays"):
+        privileged_review.collect_live_privileged_review_evidence(envelope)
+    base_anchor_override.clear()
+    base_inventory_same.append(True)
+    with pytest.raises(ValueError, match="anchor was not changed"):
+        privileged_review.collect_live_privileged_review_evidence(envelope)
+    base_inventory_same.clear()
+
+    malformed = copy.deepcopy(policy)
+    malformed["minimum_approvals"] = True
+    current_policy_override.append(malformed)
+    with pytest.raises(ValueError, match="current default-branch"):
+        privileged_review.collect_live_privileged_review_evidence(envelope)
+    current_policy_override[-1] = copy.deepcopy(policy)
+    current_policy_override[-1]["protected_paths"].append("/new-protected-file")
+    current_policy_override[-1]["protected_paths"].sort()
+    with pytest.raises(ValueError, match="protected-path trust boundary"):
         privileged_review.collect_live_privileged_review_evidence(envelope)
 
 
@@ -886,10 +1238,12 @@ def test_generated_envelope_is_not_a_self_hash_but_all_mutable_authority_remains
         "/.github/workflows/",
         "/aviato/cli.py",
         "/aviato/plugins/privileged_review.py",
+        "/aviato/plugins/approved_release.py",
         "/aviato/plugins/release_mutations.py",
         "/MANIFEST.in",
         "/pyproject.toml",
         "/scripts/regen-privileged-execution-manifest.py",
+        "/scripts/build-approved-release.py",
     ):
         assert required in protected
 
@@ -900,6 +1254,7 @@ def test_sdist_manifest_carries_the_trusted_lifecycle_sources() -> None:
         "include .github/CODEOWNERS",
         "include .github/aviato-privileged-review.json",
         "include .github/workflows/aviato-privileged-review.yml",
+        "include scripts/build-approved-release.py",
         "include scripts/regen-privileged-execution-manifest.py",
     }
 
@@ -914,16 +1269,45 @@ def test_generator_inventory_detects_added_deleted_content_and_mode_drift(
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
     module.REPO_ROOT = tmp_path  # type: ignore[attr-defined]
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "core.fileMode", "true"], cwd=tmp_path, check=True)
     protected = tmp_path / "protected"
     protected.mkdir()
     first = protected / "first.py"
     first.write_text("one\n")
+    subprocess.run(["git", "add", "protected/first.py"], cwd=tmp_path, check=True)
     baseline = module._local_protected_inventory(["/protected/"])
     first.write_text("two\n")
-    assert module._local_protected_inventory(["/protected/"]) != baseline
+    with pytest.raises(SystemExit, match="working-tree bytes"):
+        module._local_protected_inventory(["/protected/"])
+    first.write_text("one\n")
     first.chmod(0o755)
-    assert module._local_protected_inventory(["/protected/"])[0]["mode"] == "100755"
-    (protected / "added.py").write_text("added\n")
-    assert len(module._local_protected_inventory(["/protected/"])) == 2
+    with pytest.raises(SystemExit, match="working-tree mode"):
+        module._local_protected_inventory(["/protected/"])
+    first.chmod(0o644)
+    added = protected / "added.py"
+    added.write_text("added\n")
+    with pytest.raises(SystemExit, match="untracked"):
+        module._local_protected_inventory(["/protected/"])
+    added.unlink()
     first.unlink()
-    assert [item["path"] for item in module._local_protected_inventory(["/protected/"])] == ["/protected/added.py"]
+    with pytest.raises(SystemExit, match="absent"):
+        module._local_protected_inventory(["/protected/"])
+    first.write_text("one\n")
+    assert module._local_protected_inventory(["/protected/"]) == baseline
+    nested = protected / "nested"
+    subprocess.run(["git", "init", "-q", str(nested)], cwd=tmp_path, check=True)
+    (nested / "child.txt").write_text("child\n")
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "add", "child.txt"],
+        cwd=nested,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "nested"],
+        cwd=nested,
+        check=True,
+    )
+    subprocess.run(["git", "add", "protected/nested"], cwd=tmp_path, check=True)
+    with pytest.raises(SystemExit, match="regular stage-zero"):
+        module._local_protected_inventory(["/protected/"])

@@ -1,8 +1,10 @@
 {
+  "activation_nonce": "9999999999999999999999999999999999999999999999999999999999999999",
+  "activation_request_id": "123e4567-e89b-42d3-a456-426614174000",
   "approvals": [],
   "author_database_id": null,
-  "candidate_manifest_sha256": "cde2aff92625d24c6ae9f0848686027d2084a30e142798f14c1ac8a63cd88da1",
-  "codeowners_sha256": "e49fe4f86f27a3d85c259b072267fc9d9b786028f97c59c6e920b73555551f19",
+  "candidate_manifest_sha256": "147e074a04b9130d72a3ab0bc64083ee915b9cc4c71a760449742f03c61ea979",
+  "codeowners_sha256": "590e649318ca86ffa28b6cea62ebfa534b854799314e055bb6d6dbfed4bf991f",
   "lifecycle": "pending",
   "manual_prerequisites": [
     "Configure real reviewer_database_ids and/or team_database_ids without guessing GitHub identities.",
@@ -10,10 +12,11 @@
     "Apply the confirmation-bound default-branch ruleset with two approvals, code-owner review, stale-review dismissal, and last-push approval.",
     "Create the protected privileged-review environment with at least two configured independent reviewers, prevent-self-review, no admin bypass, and only protected branches; scope the verifier App credentials to that environment.",
     "Obtain at least two distinct current non-author CODEOWNER approvals for the exact last-pushed protected tree.",
+    "For every activation or renewal, replace both activation_request_id with a fresh UUIDv4 and activation_nonce with fresh 32-byte lowercase hex before review; never reuse either value from the base anchor.",
     "Collect the exact merged live PR/review/ruleset/environment evidence in the protected default-branch workflow, sign it offline with a trusted predecessor key, and package only the freshly live-verified envelope.",
     "Renew the durable signed review snapshot before its 400-day supported-release lifetime expires or before the release reaches end of support."
   ],
-  "policy_sha256": "6b29e4d093a32876a5b251d0d3d978cc6db95057ff0aa5d86f2694b0d0a1c9d5",
+  "policy_sha256": "8b6cad01e92870c33fc6a51a411e5e73fe0cc85dc203a64e5ddc3669164329ce",
   "schema_version": 2,
   "status": "pending"
 }

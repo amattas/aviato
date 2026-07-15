@@ -74,9 +74,12 @@ permissions, dependencies, outputs, container, services, and every step.
 Runtime/startup injection variables are forbidden at workflow, job, and step
 scope.
 
-Mechanical regeneration requires the protected review record and copies that
-record into the packaged Library attestation; regeneration never changes its
-pending/approved state. The protected policy requires two distinct non-author
+Mechanical regeneration requires the protected pending review anchor. Every
+activation or renewal must change both its UUIDv4 request ID and 32-byte nonce;
+the collector rejects an unchanged or replayed anchor. Approved packaging never
+promotes that source declaration. It overlays the separately signed, freshly
+live-verified consumed envelope only in an outside-checkout Git-tree export. The
+protected policy requires two distinct non-author
 approvals, code-owner review, stale-review dismissal, and last-push approval.
 `aviato validate` accepts a well-formed `pending` record because absent GitHub
 identities are a declared manual prerequisite, not a source-schema defect.
@@ -87,7 +90,8 @@ Before onboarding repositories, an operator must populate real reviewer or
 team database IDs in `privileged-review-policy.json`, add the corresponding
 independent eligible code owner or team to every privileged CODEOWNERS route,
 apply the default-branch ruleset with the declared two-approval policy, obtain
-two distinct non-author approvals for the exact manifest/policy/CODEOWNERS
-hashes, and replace the pending record with the immutable approval evidence.
+two distinct non-author approvals after the last push and no later than merge
+for the exact manifest/policy/CODEOWNERS hashes, then collect, sign offline, and
+verify the immutable approval envelope. The source anchor remains honestly pending.
 Reviewer identities must come from GitHub; they must never be guessed or
 synthesized.

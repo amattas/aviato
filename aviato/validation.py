@@ -1089,6 +1089,11 @@ def _check_pypi_privilege_split(root: Path, errors: list[str]) -> None:
     union_declared = set(module.get("privileges") or ())
     reusable = load_yaml(root / ".github" / "workflows" / "reusable-pypi-publish.yml")
     reusable_actual = _permission_set(reusable.get("permissions"))
+    reusable_jobs = reusable.get("jobs")
+    if isinstance(reusable_jobs, dict):
+        for job in reusable_jobs.values():
+            if isinstance(job, dict):
+                reusable_actual.update(_permission_set(job.get("permissions")))
     try:
         caller_body = _rendered_caller(root, "python-library", ".github/workflows/aviato-ci.yml")
     except Exception as exc:  # noqa: BLE001

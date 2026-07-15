@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=4433826e6438f307ce26cdd19e0fcb27025b989a195d64329b68c640926f44bc inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
+# aviato:managed profile=aviato-library version=0 hash=f9e57e7caadffa68701bb3e2942a5956ad4adba1e8fd06d0a5622b3955bd9b51 inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
 name: Aviato Python Library
 'on':
   pull_request:
@@ -79,6 +79,12 @@ jobs:
       release-tag: ${{ needs.release.outputs.tag }}
       gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
       consumer-publisher-present: true
+      approved-review-release: ${{ github.repository == 'amattas/aviato' }}
+      approved-review-run-id: ${{ vars.AVIATO_PRIVILEGED_REVIEW_RUN_ID }}
+    secrets:
+      AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+      AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY
+        }}
   pypi-publish:
     name: Publish Python package
     needs:

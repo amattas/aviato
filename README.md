@@ -191,6 +191,21 @@ operator verification checks the required-reviewer posture when applicable.
 Only the App Store workflow has an additional explicit fail-closed runtime
 preflight of the environment's reviewer list; the PyPI publisher does not.
 
+For Aviato's own PyPI release only, set the repository variable
+`AVIATO_PRIVILEGED_REVIEW_RUN_ID` to the exact successful `verify` run from
+`.github/workflows/aviato-privileged-review.yml`. The reusable PyPI workflow's
+approved mode is default-off and hard-bound to the configured Library repository;
+ordinary consumer builds continue through the generic build job. The approved
+builder derives the release SHA from that run, proves it equals the release-gate
+SHA, selects one API-digested consumed-envelope artifact, freshly verifies the
+live review, exports the immutable Git tree outside the checkout, and builds and
+tests the installed wheel without changing the source tree. Its fixed CLI is
+intended for the protected workflow, but the contract is inspectable locally:
+
+```bash
+python scripts/build-approved-release.py --help
+```
+
 Docs are always versioned onto `gh-pages` when `docs: true`. To serve them, set
 the non-secret profile variable `serve-pages: true`, configure Pages for the
 custom workflow build type, and verify the same release run contains a successful

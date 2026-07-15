@@ -498,7 +498,7 @@ def test_registry_publishes_run_in_deployment_environments() -> None:
 def test_pypi_reusable_only_builds_vetted_artifact_and_local_caller_publishes() -> None:
     reusable = _load("reusable-pypi-publish.yml")
     reusable_body = (WORKFLOWS / "reusable-pypi-publish.yml").read_text(encoding="utf-8")
-    assert set(reusable["jobs"]) == {"require-consumer-publisher", "build"}
+    assert set(reusable["jobs"]) == {"require-consumer-publisher", "build", "approved-review-release"}
     assert "pypa/gh-action-pypi-publish" not in reusable_body
     assert "id-token: write" not in reusable_body
     assert "attest-build-provenance" not in reusable_body
@@ -1221,19 +1221,89 @@ def test_privileged_manifest_discovers_yaml_workflows(tmp_path: Path) -> None:
     (workflows / "undeclared.yaml").write_text(
         yaml.safe_dump(
             {
+                "permissions": {},
                 "jobs": {
                     "publish": {
                         "permissions": {"contents": "write"},
                         "runs-on": "ubuntu-latest",
                         "steps": [{"name": "publish", "run": "true"}],
                     }
-                }
+                },
             }
         ),
         encoding="utf-8",
     )
-    errors = verify_privileged_execution_manifest(workflows, {"jobs": {}})
+    errors = verify_privileged_execution_manifest(workflows, {"permissions": {}, "jobs": {}})
     assert "undeclared privileged execution job: undeclared.yaml:publish" in errors
+
+
+@pytest.mark.parametrize(
+    ("workflow_permissions", "job_permissions"),
+    (
+        (None, None),
+        ("read-all", None),
+        ("write-all", None),
+        ({"contents": "admin"}, None),
+        ({"contents": "read"}, "read-all"),
+        ({"contents": "read"}, {"contents": "admin"}),
+    ),
+)
+def test_manifest_auditor_rejects_omitted_scalar_or_unknown_permissions(
+    workflow_permissions: object, job_permissions: object
+) -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_documents
+
+    document: JsonDict = {"jobs": {"job": {"runs-on": "ubuntu-24.04", "steps": [{"run": "true"}]}}}
+    if workflow_permissions is not None:
+        document["permissions"] = workflow_permissions
+    if job_permissions is not None:
+        document["jobs"]["job"]["permissions"] = job_permissions
+    errors = verify_privileged_execution_documents({"probe.yml": document}, manifest=())
+    assert any("permissions" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "secret_value",
+    (
+        "${{ secrets.foo }}",
+        "${{ secrets['foo'] }}",
+        "${{ secrets[inputs.secret_name] }}",
+        "${{ github.token }}",
+        "${{ github['token'] }}",
+        "${{ github[inputs.context_key] }}",
+    ),
+)
+def test_manifest_auditor_structurally_discovers_all_credential_context_forms(secret_value: str) -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_documents
+
+    document = {
+        "permissions": {"contents": "read"},
+        "jobs": {
+            "receiver": {
+                "runs-on": "ubuntu-24.04",
+                "steps": [{"run": "true", "with": {"nested": [{"credential": secret_value}]}}],
+            }
+        },
+    }
+    errors = verify_privileged_execution_documents({"probe.yml": document}, manifest=())
+    assert "undeclared privileged execution job: probe.yml:receiver" in errors
+
+
+@pytest.mark.parametrize("secret_binding", ("inherit", {"token": "${{ secrets['TOKEN'] }}"}))
+def test_every_reusable_workflow_job_and_secret_receiver_is_manifest_enrolled(secret_binding: object) -> None:
+    from aviato.plugins.release_mutations import verify_privileged_execution_documents
+
+    document = {
+        "permissions": {},
+        "jobs": {
+            "call": {
+                "uses": "./.github/workflows/reusable.yml",
+                "secrets": secret_binding,
+            }
+        },
+    }
+    errors = verify_privileged_execution_documents({"probe.yml": document}, manifest=())
+    assert "undeclared privileged execution job: probe.yml:call" in errors
 
 
 def test_canonical_bootstrap_fetches_with_stdlib_only_inside_isolated_python() -> None:
@@ -2220,7 +2290,10 @@ def test_pypi_artifact_upload_download_paths_are_symmetric() -> None:
     wd = "${{ inputs.working-directory }}"
 
     on_block = _on(wf)
-    assert on_block["workflow_call"]["outputs"]["artifact-name"]["value"] == "${{ jobs.build.outputs.artifact-name }}"
+    assert on_block["workflow_call"]["outputs"]["artifact-name"]["value"] == (
+        "${{ inputs.approved-review-release && jobs.approved-review-release.outputs.artifact-name "
+        "|| jobs.build.outputs.artifact-name }}"
+    )
     assert up["name"] == "aviato-pypi-dist"
     assert down["name"] == "${{ needs.pypi.outputs.artifact-name }}"
     # Every uploaded path is under <wd> (so the least-common-ancestor is <wd>).

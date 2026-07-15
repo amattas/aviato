@@ -7,7 +7,9 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
+import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -71,6 +73,17 @@ def validate_review_record(path: Path, body: str) -> dict[str, object]:
             "--review-record accepts only an honest pending declaration; "
             "approved evidence must be signed and live verified"
         )
+    if (
+        not isinstance(loaded.get("activation_request_id"), str)
+        or re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            str(loaded.get("activation_request_id")),
+        )
+        is None
+        or not isinstance(loaded.get("activation_nonce"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", str(loaded.get("activation_nonce"))) is None
+    ):
+        raise SystemExit("--review-record requires one fresh canonical activation request ID and nonce")
     candidate = json.loads(body)
     expected = {
         "candidate_manifest_sha256": privileged_manifest_sha256(tuple(candidate)),
@@ -86,29 +99,83 @@ def validate_review_record(path: Path, body: str) -> dict[str, object]:
 
 
 def _local_protected_inventory(protected_paths: list[str]) -> list[dict[str, str]]:
-    selected: dict[str, Path] = {}
+    normalized: list[str] = []
     for logical in protected_paths:
         if not logical.startswith("/") or ".." in Path(logical).parts:
             raise SystemExit(f"trusted protected path is invalid: {logical}")
-        target = REPO_ROOT / logical.removeprefix("/")
-        if logical.endswith("/"):
-            if not target.is_dir() or target.is_symlink():
-                raise SystemExit(f"trusted protected directory is absent or unsafe: {logical}")
-            for candidate in target.rglob("*"):
-                if candidate.is_file() or candidate.is_symlink():
-                    selected["/" + candidate.relative_to(REPO_ROOT).as_posix()] = candidate
-        else:
-            selected[logical] = target
+        normalized.append(logical)
+
+    def git(*args: str) -> bytes:
+        result = subprocess.run(
+            ["/usr/bin/git", *args],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise SystemExit("protected inventory requires one readable Git index")
+        return result.stdout
+
+    try:
+        top = Path(git("rev-parse", "--show-toplevel").decode().strip()).resolve()
+    except (UnicodeDecodeError, OSError) as exc:
+        raise SystemExit("protected inventory requires one readable Git worktree") from exc
+    if top != REPO_ROOT.resolve():
+        raise SystemExit("protected inventory Git root differs from the source root")
+
+    def covered(repo_path: str) -> bool:
+        logical = "/" + repo_path
+        return any(logical == item or (item.endswith("/") and logical.startswith(item)) for item in normalized)
+
+    selected: dict[str, tuple[str, str, Path]] = {}
+    try:
+        records = git("ls-files", "--stage", "-z").split(b"\0")
+        for raw in records:
+            if not raw:
+                continue
+            index_metadata, encoded_path = raw.split(b"\t", 1)
+            mode, blob_sha, stage = index_metadata.decode("ascii").split(" ")
+            repo_path = encoded_path.decode("utf-8")
+            if not covered(repo_path):
+                continue
+            if stage != "0" or mode not in {"100644", "100755"} or re.fullmatch(r"[0-9a-f]{40}", blob_sha) is None:
+                raise SystemExit(f"protected path is not one regular stage-zero Git file: /{repo_path}")
+            logical = "/" + repo_path
+            if logical in selected:
+                raise SystemExit(f"protected path is duplicated in the Git index: {logical}")
+            selected[logical] = (mode, blob_sha, REPO_ROOT / repo_path)
+        untracked = [
+            item.decode("utf-8")
+            for item in git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0")
+            if item
+        ]
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise SystemExit("protected Git index contains an invalid path or entry") from exc
+    unexpected = sorted(path for path in untracked if covered(path))
+    if unexpected:
+        raise SystemExit(f"protected directory contains untracked files: {unexpected!r}")
+    for logical in normalized:
+        if not any(
+            candidate == logical or (logical.endswith("/") and candidate.startswith(logical)) for candidate in selected
+        ):
+            raise SystemExit(f"trusted protected path is absent from the Git index: {logical}")
+
     inventory: list[dict[str, str]] = []
-    for logical, path in sorted(selected.items()):
+    for logical, (index_mode, index_blob_sha, path) in sorted(selected.items()):
         try:
-            metadata = path.lstat()
+            file_metadata = path.lstat()
         except OSError as exc:
-            raise SystemExit(f"protected path is unreadable: {logical}: {exc}") from exc
-        if not stat.S_ISREG(metadata.st_mode):
+            raise SystemExit(f"protected tracked path is absent or unreadable: {logical}: {exc}") from exc
+        if not stat.S_ISREG(file_metadata.st_mode):
             raise SystemExit(f"protected path is not one regular non-symlink file: {logical}")
-        mode = "100755" if metadata.st_mode & stat.S_IXUSR else "100644"
-        inventory.append({"path": logical, "mode": mode, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+        working_mode = "100755" if file_metadata.st_mode & stat.S_IXUSR else "100644"
+        if working_mode != index_mode:
+            raise SystemExit(f"protected working-tree mode differs from the Git index: {logical}")
+        body = path.read_bytes()
+        git_blob_sha = hashlib.sha1(f"blob {len(body)}\0".encode("ascii") + body).hexdigest()
+        if git_blob_sha != index_blob_sha:
+            raise SystemExit(f"protected working-tree bytes differ from the Git index: {logical}")
+        inventory.append({"path": logical, "mode": index_mode, "sha256": hashlib.sha256(body).hexdigest()})
     return inventory
 
 

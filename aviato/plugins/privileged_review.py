@@ -31,9 +31,11 @@ _API_HOST = "api.github.com"
 _TOKEN_ENV = "AVIATO_PRIVILEGED_REVIEW_TOKEN"
 _POLICY_PATH = "aviato/library/privileged-review-policy.json"
 _CODEOWNERS_PATH = ".github/CODEOWNERS"
+_ACTIVATION_ANCHOR_PATH = ".github/aviato-privileged-review.json"
 _TRUSTED_WORKFLOW_PATH = ".github/workflows/aviato-privileged-review.yml"
 _MAX_ENVELOPE_BASE64_CHARS = 60_000
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+_MAX_REVIEW_PAGES = 20
 _REPOSITORY_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}")
 _DANGEROUS_NETWORK_ENV = {
     "ALL_PROXY",
@@ -184,6 +186,24 @@ def _load_json_content(document: object, *, label: str) -> tuple[dict[str, Any],
     return loaded, blob_sha
 
 
+def _activation_identity(record: object, *, label: str) -> tuple[str, str]:
+    if not isinstance(record, dict):
+        raise ValueError(f"{label} activation anchor is not a mapping")
+    request_id = record.get("activation_request_id")
+    nonce = record.get("activation_nonce")
+    if (
+        record.get("schema_version") != 2
+        or record.get("status") != "pending"
+        or record.get("lifecycle") != "pending"
+        or not isinstance(request_id, str)
+        or re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", request_id) is None
+        or not isinstance(nonce, str)
+        or re.fullmatch(r"[0-9a-f]{64}", nonce) is None
+    ):
+        raise ValueError(f"{label} activation anchor identity/nonce is invalid")
+    return request_id, nonce
+
+
 def _covered(path: str, protected: list[str]) -> bool:
     logical = "/" + path
     return any(logical == item or (item.endswith("/") and logical.startswith(item)) for item in protected)
@@ -200,15 +220,27 @@ def _tree_inventory(repository: str, sha: str, protected: list[str], *, token: s
     ):
         raise ValueError("protected Git tree read is missing, truncated, or ambiguous")
     selected: list[dict[str, str]] = []
+    seen_paths: set[str] = set()
     for item in document["tree"]:
-        if not isinstance(item, dict) or item.get("type") != "blob" or not isinstance(item.get("path"), str):
-            continue
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            raise ValueError("protected Git tree contains an invalid entry")
         path = item["path"]
+        if path.startswith("/") or "\\" in path or ".." in Path(path).parts or path in seen_paths:
+            raise ValueError("protected Git tree contains an unsafe or duplicate path")
+        seen_paths.add(path)
         if not _covered(path, protected):
             continue
         mode = item.get("mode")
+        entry_type = item.get("type")
+        if entry_type == "tree" and mode == "040000":
+            continue
         blob_sha = item.get("sha")
-        if mode not in {"100644", "100755"} or not isinstance(blob_sha, str):
+        if (
+            entry_type != "blob"
+            or mode not in {"100644", "100755"}
+            or not isinstance(blob_sha, str)
+            or re.fullmatch(r"[0-9a-f]{40}", blob_sha) is None
+        ):
             raise ValueError(f"protected path is not one regular reviewed file: /{path}")
         blob = _rest(f"/repos/{repository}/git/blobs/{blob_sha}", token=token)
         body, returned_sha = _decode_content(blob, label=f"protected blob /{path}")
@@ -253,13 +285,13 @@ def _codeowner_tokens(body: bytes, path: str) -> set[str]:
 
 
 _PR_QUERY = """
-query AviatoPrivilegedReview($owner:String!,$name:String!,$number:Int!) {
+query AviatoPrivilegedReview($owner:String!,$name:String!,$number:Int!,$cursor:String) {
   repository(owner:$owner,name:$name) {
     pullRequest(number:$number) {
       headRefOid
       commits(last:1) { nodes { commit { oid pushedDate } } }
-      reviews(first:100) {
-        pageInfo { hasNextPage }
+      reviews(first:100,after:$cursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           databaseId id state submittedAt lastEditedAt dismissedAt
           commit { oid }
@@ -276,18 +308,62 @@ def _pull_graph(repository: str, number: int, *, token: str) -> dict[str, Any]:
     repository = _repository_slug(repository)
     number = _identifier(number, label="pull request number")
     owner, name = repository.split("/", 1)
-    data = _graphql(_PR_QUERY, {"owner": owner, "name": name, "number": number}, token=token)
-    repo = data.get("repository")
-    pull = repo.get("pullRequest") if isinstance(repo, dict) else None
-    reviews = pull.get("reviews") if isinstance(pull, dict) else None
-    if (
-        not isinstance(pull, dict)
-        or not isinstance(reviews, dict)
-        or reviews.get("pageInfo", {}).get("hasNextPage") is not False
-        or not isinstance(reviews.get("nodes"), list)
-    ):
-        raise ValueError("pull request review graph is absent, paginated, or ambiguous")
-    return pull
+    variables: dict[str, Any] = {"owner": owner, "name": name, "number": number, "cursor": None}
+
+    def page(cursor: str | None) -> tuple[dict[str, Any], dict[str, Any], tuple[str, str, str]]:
+        variables["cursor"] = cursor
+        data = _graphql(_PR_QUERY, variables, token=token)
+        repo = data.get("repository")
+        pull = repo.get("pullRequest") if isinstance(repo, dict) else None
+        reviews = pull.get("reviews") if isinstance(pull, dict) else None
+        commits = pull.get("commits") if isinstance(pull, dict) else None
+        commit_nodes = commits.get("nodes") if isinstance(commits, dict) else None
+        commit = commit_nodes[0].get("commit") if isinstance(commit_nodes, list) and len(commit_nodes) == 1 else None
+        page_info = reviews.get("pageInfo") if isinstance(reviews, dict) else None
+        if (
+            not isinstance(pull, dict)
+            or not isinstance(reviews, dict)
+            or not isinstance(reviews.get("nodes"), list)
+            or not isinstance(page_info, dict)
+            or type(page_info.get("hasNextPage")) is not bool
+            or not isinstance(commit, dict)
+            or not isinstance(pull.get("headRefOid"), str)
+            or not isinstance(commit.get("oid"), str)
+            or not isinstance(commit.get("pushedDate"), str)
+        ):
+            raise ValueError("pull request review graph is absent or ambiguous")
+        return pull, reviews, (pull["headRefOid"], commit["oid"], commit["pushedDate"])
+
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    all_nodes: list[object] = []
+    first_pull: dict[str, Any] | None = None
+    stable_identity: tuple[str, str, str] | None = None
+    for _page_number in range(_MAX_REVIEW_PAGES):
+        pull, reviews, identity = page(cursor)
+        if first_pull is None:
+            first_pull = pull
+            stable_identity = identity
+        elif identity != stable_identity:
+            raise ValueError("pull request head/latest push changed while paginating reviews")
+        all_nodes.extend(reviews["nodes"])
+        page_info = reviews["pageInfo"]
+        if page_info["hasNextPage"] is False:
+            break
+        next_cursor = page_info.get("endCursor")
+        if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
+            raise ValueError("pull request review pagination cursor is missing or repeated")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+    else:
+        raise ValueError("pull request review pagination exceeded the bounded page limit")
+    assert first_pull is not None and stable_identity is not None
+    _final_pull, _final_reviews, final_identity = page(None)
+    if final_identity != stable_identity:
+        raise ValueError("pull request head/latest push changed while paginating reviews")
+    combined = dict(first_pull)
+    combined["reviews"] = {"nodes": all_nodes}
+    return combined
 
 
 def _ruleset(repository: str, ruleset_id: int, *, token: str) -> dict[str, Any]:
@@ -452,13 +528,18 @@ def collect_live_privileged_review_evidence(
 
     policy_doc = _rest(f"/repos/{repository}/contents/{_POLICY_PATH}?ref={quote(str(base_sha), safe='')}", token=token)
     trusted_policy, policy_blob_sha = _load_json_content(policy_doc, label="trusted base review policy")
+    from .release_mutations import _privileged_policy_errors
+
+    base_policy_errors = _privileged_policy_errors(trusted_policy, label="trusted base")
+    if base_policy_errors:
+        raise ValueError("; ".join(base_policy_errors))
     protected = trusted_policy.get("protected_paths")
     if not isinstance(protected, list) or any(not isinstance(path, str) for path in protected):
         raise ValueError("trusted base review policy protected paths are invalid")
     codeowners_doc = _rest(
         f"/repos/{repository}/contents/{_CODEOWNERS_PATH}?ref={quote(str(base_sha), safe='')}", token=token
     )
-    codeowners_body, _codeowners_blob = _decode_content(codeowners_doc, label="trusted base CODEOWNERS")
+    codeowners_body, codeowners_blob = _decode_content(codeowners_doc, label="trusted base CODEOWNERS")
     branch_path = f"/repos/{repository}/branches/{quote(default_branch, safe='')}"
     current_branch = _rest(branch_path, token=token)
     current_commit = current_branch.get("commit") if isinstance(current_branch, dict) else None
@@ -473,6 +554,18 @@ def collect_live_privileged_review_evidence(
     current_policy, current_policy_blob_sha = _load_json_content(
         current_policy_doc, label="current default-branch review policy"
     )
+    current_policy_errors = _privileged_policy_errors(current_policy, label="current default-branch")
+    if current_policy_errors:
+        raise ValueError("; ".join(current_policy_errors))
+    if current_policy.get("protected_paths") != protected:
+        raise ValueError("current default-branch policy changed the protected-path trust boundary")
+    current_codeowners_doc = _rest(
+        f"/repos/{repository}/contents/{_CODEOWNERS_PATH}?ref={quote(current_default_branch_sha, safe='')}",
+        token=token,
+    )
+    current_codeowners_body, _current_codeowners_blob = _decode_content(
+        current_codeowners_doc, label="current default-branch CODEOWNERS"
+    )
     head_files = _tree_inventory(repository, str(head_sha), protected, token=token)
     merged_files = _tree_inventory(repository, str(merged_sha), protected, token=token)
     if merged_files != head_files:
@@ -481,6 +574,35 @@ def collect_live_privileged_review_evidence(
     before = {item["path"]: (item["mode"], item["sha256"]) for item in base_files}
     after = {item["path"]: (item["mode"], item["sha256"]) for item in head_files}
     changed_paths = sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
+    activation_path = "/" + _ACTIVATION_ANCHOR_PATH
+    if activation_path not in changed_paths:
+        raise ValueError("privileged review activation anchor was not changed by the evidence pull request")
+    anchor_documents: dict[str, tuple[dict[str, Any], bytes, str]] = {}
+    for label, ref in (
+        ("base", base_sha),
+        ("head", head_sha),
+        ("merged", merged_sha),
+        ("current", current_default_branch_sha),
+    ):
+        document = _rest(
+            f"/repos/{repository}/contents/{_ACTIVATION_ANCHOR_PATH}?ref={quote(str(ref), safe='')}", token=token
+        )
+        body, blob_sha = _decode_content(document, label=f"{label} activation anchor")
+        try:
+            record = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{label} activation anchor is not JSON") from exc
+        anchor_documents[label] = (record, body, blob_sha)
+    base_activation = _activation_identity(anchor_documents["base"][0], label="base")
+    candidate_activation = _activation_identity(anchor_documents["head"][0], label="head")
+    if base_activation[0] == candidate_activation[0] or base_activation[1] == candidate_activation[1]:
+        raise ValueError("privileged review activation request/nonce replays the immutable base anchor")
+    for label in ("merged", "current"):
+        if anchor_documents[label][1] != anchor_documents["head"][1]:
+            raise ValueError(f"{label} activation anchor differs from the reviewed head activation")
+    anchor_sha256 = hashlib.sha256(anchor_documents["head"][1]).hexdigest()
+    if after.get(activation_path) != ("100644", anchor_sha256):
+        raise ValueError("reviewed activation anchor inventory does not bind the collected anchor bytes")
 
     commits = graph.get("commits")
     commit_nodes = commits.get("nodes") if isinstance(commits, dict) else None
@@ -535,7 +657,15 @@ def collect_live_privileged_review_evidence(
         team_membership: bool | None = None
         eligible_paths: list[str] = []
         for changed in changed_paths:
-            owners = _codeowner_tokens(codeowners_body, changed)
+            base_owners = _codeowner_tokens(codeowners_body, changed)
+            current_owners = _codeowner_tokens(current_codeowners_body, changed)
+            owners = {
+                base_owner
+                for base_owner in base_owners
+                if base_owner.casefold() in {owner.casefold() for owner in current_owners}
+            }
+            if not owners:
+                raise ValueError(f"base/current CODEOWNERS intersection has no owner for {changed}")
             direct = f"@{login}".casefold() in {owner.casefold() for owner in owners}
             teams = [owner[1:] for owner in owners if "/" in owner]
             member_team_ids: list[int] = []
@@ -643,7 +773,19 @@ def collect_live_privileged_review_evidence(
                 "last_push_sha": graph.get("headRefOid"),
                 "last_push_at": pushed_at,
                 "merged_sha": merged_sha,
+                "merged_at": pull.get("merged_at"),
+                "merger_database_id": (
+                    pull.get("merged_by", {}).get("id") if isinstance(pull.get("merged_by"), dict) else None
+                ),
+                "merger_login": (
+                    pull.get("merged_by", {}).get("login") if isinstance(pull.get("merged_by"), dict) else None
+                ),
                 "protected_tree_root": _digest(head_files),
+            },
+            "activation_request": {
+                "request_id": candidate_activation[0],
+                "nonce": candidate_activation[1],
+                "anchor_sha256": anchor_sha256,
             },
             "protected_files": head_files,
             "changed_protected_paths": changed_paths,
@@ -680,6 +822,8 @@ def collect_live_privileged_review_evidence(
                 "base_sha": base_sha,
                 "policy_blob_sha": policy_blob_sha,
                 "policy_sha256": _digest(trusted_policy),
+                "codeowners_blob_sha": codeowners_blob,
+                "codeowners_sha256": hashlib.sha256(codeowners_body).hexdigest(),
             },
         }
     )

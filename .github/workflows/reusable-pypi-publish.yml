@@ -8,13 +8,18 @@ on:
         value: ${{ jobs.build.outputs.resolved-tag }}
       artifact-name:
         description: Fixed name of the vetted distribution and SBOM artifact.
-        value: ${{ jobs.build.outputs.artifact-name }}
+        value: ${{ inputs.approved-review-release && jobs.approved-review-release.outputs.artifact-name || jobs.build.outputs.artifact-name }}
       distribution-name:
         description: Distribution name read from every built archive's core metadata.
-        value: ${{ jobs.build.outputs.distribution-name }}
+        value: ${{ inputs.approved-review-release && jobs.approved-review-release.outputs.distribution-name || jobs.build.outputs.distribution-name }}
       package-version:
         description: Package version proven to match the release tag.
-        value: ${{ jobs.build.outputs.package-version }}
+        value: ${{ inputs.approved-review-release && jobs.approved-review-release.outputs.package-version || jobs.build.outputs.package-version }}
+    secrets:
+      AVIATO_VERIFIER_APP_ID:
+        required: false
+      AVIATO_VERIFIER_APP_PRIVATE_KEY:
+        required: false
     inputs:
       aviato-ref:
         description: Deprecated. Release validation is embedded in this pinned workflow.
@@ -51,6 +56,14 @@ on:
         required: false
         type: boolean
         default: false
+      approved-review-release:
+        required: false
+        type: boolean
+        default: false
+      approved-review-run-id:
+        required: false
+        type: string
+        default: ""
       install-command:
         required: false
         type: string
@@ -106,6 +119,7 @@ jobs:
   build:
     name: Build Python package
     needs: require-consumer-publisher
+    if: ${{ inputs.approved-review-release != true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -321,5 +335,102 @@ jobs:
           path: |
             ${{ inputs.working-directory }}/${{ inputs.packages-dir }}/
             ${{ inputs.working-directory }}/sbom.cyclonedx.json
+          if-no-files-found: error
+          retention-days: 1
+
+  approved-review-release:
+    name: Build approved Aviato release
+    needs: require-consumer-publisher
+    if: ${{ inputs.approved-review-release == true && github.repository == 'amattas/aviato' }}
+    runs-on: ubuntu-24.04
+    environment: privileged-review
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      artifact-name: ${{ steps.build.outputs.artifact-name }}
+      distribution-name: ${{ steps.build.outputs.distribution-name }}
+      package-version: ${{ steps.build.outputs.package-version }}
+    steps:
+      - name: Check out the exact release-gated revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ inputs.gated-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Use Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install fixed approved-build frontend
+        run: python -m pip install build==1.2.2
+
+      - name: Mint dedicated read-only verifier App token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+          private-key: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: read
+          permission-administration: read
+          permission-contents: read
+          permission-members: read
+          permission-metadata: read
+          permission-pull-requests: read
+
+      - name: Select the exact consumed-review artifact
+        id: select
+        env:
+          AVIATO_PRIVILEGED_REVIEW_TOKEN: ${{ steps.app-token.outputs.token }}
+          ARTIFACT_DIGEST: ${{ steps.select.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.select.outputs.artifact-id }}
+          GATED_SHA: ${{ inputs.gated-sha }}
+          REVIEW_RUN_ID: ${{ inputs.approved-review-run-id }}
+        run: |
+          set -euo pipefail
+          python scripts/build-approved-release.py \
+            --select-only \
+            --repository "${GITHUB_REPOSITORY}" \
+            --verify-run-id "${REVIEW_RUN_ID}" \
+            --expected-gated-sha "${GATED_SHA}" \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Download the exact consumed-review artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ steps.select.outputs.artifact-id }}
+          path: ${{ runner.temp }}/approved-review
+          github-token: ${{ steps.app-token.outputs.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.approved-review-run-id }}
+
+      - name: Build from the uniquely live-verified gated tree
+        id: build
+        env:
+          AVIATO_PRIVILEGED_REVIEW_TOKEN: ${{ steps.app-token.outputs.token }}
+          GATED_SHA: ${{ inputs.gated-sha }}
+          REVIEW_RUN_ID: ${{ inputs.approved-review-run-id }}
+        run: |
+          set -euo pipefail
+          python scripts/build-approved-release.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --verify-run-id "${REVIEW_RUN_ID}" \
+            --expected-gated-sha "${GATED_SHA}" \
+            --expected-artifact-id "${ARTIFACT_ID}" \
+            --expected-artifact-digest "${ARTIFACT_DIGEST}" \
+            --approved-envelope "${RUNNER_TEMP}/approved-review/aviato-privileged-review-consumed.json" \
+            --output-dir "${RUNNER_TEMP}/approved-dist" \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Upload exact approved distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: aviato-pypi-dist
+          path: ${{ runner.temp }}/approved-dist/
           if-no-files-found: error
           retention-days: 1

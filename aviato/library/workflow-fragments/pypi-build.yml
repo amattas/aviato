@@ -10,3 +10,8 @@ with:
   release-tag: ${{ needs.release.outputs.tag }}
   gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
   consumer-publisher-present: true
+  approved-review-release: ${{ github.repository == '{{ aviato-library-repository }}' }}
+  approved-review-run-id: ${{ vars.AVIATO_PRIVILEGED_REVIEW_RUN_ID }}
+secrets:
+  AVIATO_VERIFIER_APP_ID: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+  AVIATO_VERIFIER_APP_PRIVATE_KEY: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
