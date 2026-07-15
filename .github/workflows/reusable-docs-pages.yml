@@ -436,6 +436,14 @@ jobs:
               exit 1
             fi
           fi
+          envelope="${RUNNER_TEMP}/push-authority/verified-checkpoint-envelope.json"
+          verifier="${RUNNER_TEMP}/authority_verifier.py"
+          repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
+          ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
+          payload="$(gh api -H 'Cache-Control: no-cache' "repos/${repo}/contents/aviato/authority_verifier.py?ref=${ref}")"
+          [ "$(jq -r .sha <<<"${payload}")" = "$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")" ]
+          jq -r .content <<<"${payload}" | tr -d '\n' | base64 -d > "${verifier}"
+          python3 "${verifier}" --envelope "${envelope}" --repository "${GITHUB_REPOSITORY}"
           git push origin "refs/remotes/bundle/${DOCS_BRANCH}:refs/heads/${DOCS_BRANCH}"
 
   # The Pages/OIDC token is isolated from all consumer commands. It consumes only
@@ -481,6 +489,13 @@ jobs:
           ssh-keygen -Y verify -f "${authority_dir}/allowed" -I "${reviewer}" -n aviato -s "${authority_dir}/signature" < "${authority_dir}/message"
           environment="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/github-pages")"
           [ "$(jq -r .can_admins_bypass <<<"${environment}")" = "false" ] || { echo "::error::github-pages permits admin bypass"; exit 1; }
+          verifier="${RUNNER_TEMP}/authority_verifier.py"
+          repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
+          ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
+          payload="$(gh api -H 'Cache-Control: no-cache' "repos/${repo}/contents/aviato/authority_verifier.py?ref=${ref}")"
+          [ "$(jq -r .sha <<<"${payload}")" = "$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")" ]
+          jq -r .content <<<"${payload}" | tr -d '\n' | base64 -d > "${verifier}"
+          python3 "${verifier}" --envelope "${envelope}" --repository "${GITHUB_REPOSITORY}"
       - name: Deploy GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

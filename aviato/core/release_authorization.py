@@ -8,8 +8,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..authority_verifier import AUTHORITY_SNAPSHOT_SCHEMA
 from .model import deep_freeze, deep_thaw
-from .protection import AUTHORITY_SNAPSHOT_SCHEMA, authority_snapshot_digest
+from .protection import authority_snapshot_digest
 
 MAX_CHECKPOINT_TTL_SECONDS = 15 * 60
 MAX_CHECKPOINT_CLOCK_SKEW_SECONDS = 30

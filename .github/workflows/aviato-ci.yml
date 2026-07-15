@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=dbc947baabf63708da5bfaaab02e39c8ca9370a08df32bebab789698dae3cff1 inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
+# aviato:managed profile=aviato-library version=0 hash=61ddb2fd4301e57bd9a328f05ba3c76a5cf2d6e12c477c09a6aaab2399a7583a inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
 name: Aviato Python Library
 'on':
   pull_request:
@@ -260,6 +260,25 @@ jobs:
 
           ssh-keygen -Y verify -f "${authority_dir}/allowed" -I "${reviewer}" -n aviato
           -s "${authority_dir}/signature" < "${authority_dir}/message"
+
+          verifier="${RUNNER_TEMP}/authority_verifier.py"
+
+          verifier_repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository
+          "${envelope}")"
+
+          verifier_ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref
+          "${envelope}")"
+
+          verifier_blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha
+          "${envelope}")"
+
+          verifier_json="$(gh api -H ''Cache-Control: no-cache'' "repos/${verifier_repo}/contents/aviato/authority_verifier.py?ref=${verifier_ref}")"
+
+          [ "$(jq -r .sha <<<"${verifier_json}")" = "${verifier_blob}" ]
+
+          jq -r .content <<<"${verifier_json}" | tr -d ''\n'' | base64 -d > "${verifier}"
+
+          python3 "${verifier}" --envelope "${envelope}" --repository "${GITHUB_REPOSITORY}"
 
           '
       - name: Publish distributions

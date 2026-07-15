@@ -414,6 +414,22 @@ jobs:
             -exportPath "${EXPORT_PATH}" \
             -exportOptionsPlist "${RESOLVED_EXPORT_OPTIONS}"
 
+      - name: Final shared authority verification without App Store secrets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
+          verifier="${RUNNER_TEMP}/authority_verifier.py"
+          repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
+          ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
+          blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
+          payload="$(gh api -H 'Cache-Control: no-cache' "repos/${repo}/contents/aviato/authority_verifier.py?ref=${ref}")"
+          [ "$(jq -r .sha <<<"${payload}")" = "${blob}" ]
+          jq -r .content <<<"${payload}" | tr -d '\n' | base64 -d > "${verifier}"
+          python3 "${verifier}" --envelope "${envelope}" --repository "${GITHUB_REPOSITORY}"
+
       - name: Upload to App Store Connect
         shell: bash
         env:
@@ -613,6 +629,14 @@ jobs:
 
           # --clobber makes reruns replace the same durable release asset instead
           # of creating duplicates or failing after an otherwise successful upload.
+          envelope="${RUNNER_TEMP}/fresh-authority/verified-checkpoint-envelope.json"
+          verifier="${RUNNER_TEMP}/authority_verifier.py"
+          repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
+          ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
+          payload="$(gh api -H 'Cache-Control: no-cache' "repos/${repo}/contents/aviato/authority_verifier.py?ref=${ref}")"
+          [ "$(jq -r .sha <<<"${payload}")" = "$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")" ]
+          jq -r .content <<<"${payload}" | tr -d '\n' | base64 -d > "${verifier}"
+          python3 "${verifier}" --envelope "${envelope}" --repository "${GITHUB_REPOSITORY}"
           gh release upload "${RELEASE_TAG}" "${asset}" --clobber
 
           start='<!-- aviato:app-store-connect-receipt:start -->'

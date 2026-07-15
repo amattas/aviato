@@ -81,6 +81,29 @@ def test_ruleset_mutation_definitive_http_rejection_is_not_response_lost(monkeyp
         github._submit_ruleset("repos/o/r/rulesets/9", "PUT", {"name": "Protect"})
 
 
+@pytest.mark.parametrize("returncode,stderr", ((124, "timed out"), (1, "connection reset by peer")))
+def test_ruleset_delete_transport_ambiguity_is_response_lost(
+    monkeypatch: pytest.MonkeyPatch, returncode: int, stderr: str
+) -> None:
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(["gh"], returncode, "", stderr),
+    )
+    with pytest.raises(ResponseLostError):
+        github.delete_planned_ruleset("o/r", ruleset_id=9)
+
+
+def test_ruleset_delete_definitive_rejection_remains_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(["gh"], 1, "", "forbidden (HTTP 403)"),
+    )
+    with pytest.raises(github.GitHubAPIError):
+        github.delete_planned_ruleset("o/r", ruleset_id=9)
+
+
 def test_gh_json_can_allow_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(["gh"], 1, "", "not found")

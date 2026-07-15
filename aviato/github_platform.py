@@ -716,6 +716,7 @@ class GitHubPlatform:
                             }
                         )
         release_guard = None
+        verifier_guard = None
         if repo == "amattas/aviato" or aviato_pin:
             release_repository = repo if repo == "amattas/aviato" else "amattas/aviato"
             release_ref = identity.default_branch if repo == "amattas/aviato" else aviato_pin
@@ -732,6 +733,17 @@ class GitHubPlatform:
                     "path": ".github/workflows/reusable-release.yml",
                     "blob_sha": release_workflow["sha"],
                 }
+            verifier = github.gh_json_optional(
+                f"repos/{release_repository}/contents/aviato/authority_verifier.py?ref={quote(release_ref, safe='')}",
+                default={},
+            )
+            if isinstance(verifier, dict) and isinstance(verifier.get("sha"), str):
+                verifier_guard = {
+                    "repository": release_repository,
+                    "ref": release_ref,
+                    "path": "aviato/authority_verifier.py",
+                    "blob_sha": verifier["sha"],
+                }
         return {
             "repository_identity": identity,
             "classic": classic,
@@ -744,6 +756,7 @@ class GitHubPlatform:
             "required_checks": required_checks,
             "guard": guard,
             "release_guard": release_guard,
+            "verifier_guard": verifier_guard,
         }
 
     def apply_protection_operation(self, repo: str, operation: Any) -> object | None:
@@ -832,7 +845,7 @@ class GitHubPlatform:
                 if identity not in desired_policies:
                     if not isinstance(policy_id, int):
                         raise ValueError("deployment policy readback omitted its immutable id")
-                    self._gh("api", "--method", "DELETE", f"{endpoint}/{policy_id}")
+                    self._gh_input(["--method", "DELETE", f"{endpoint}/{policy_id}"], {})
             for policy_type, pattern in sorted(desired_policies - set(existing_policies)):
                 self._gh_input(
                     ["--method", "POST", endpoint],

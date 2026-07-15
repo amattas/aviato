@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
+from ..authority_verifier import AUTHORITY_SNAPSHOT_SCHEMA, project_authority_snapshot
 from .model import deep_freeze, deep_thaw
 from .ports import RepositoryIdentity
 from .ruleset_plan import RulesetIdentity, RulesetPlan, build_ruleset_plan
@@ -313,22 +314,8 @@ def _plain(value: object) -> Any:
     return value
 
 
-AUTHORITY_SNAPSHOT_SCHEMA = "aviato-protection-authority-snapshot/v1"
-
-
 def canonical_authority_snapshot(*, repository: RepositoryIdentity, live_state: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Project every release-authority surface into one stable, versioned document."""
-
-    rulesets = [_plain(item) for item in live_state.get("rulesets", ()) if isinstance(item, Mapping)]
-    rulesets.sort(key=lambda item: (item.get("id") is None, item.get("id"), _json(item)))
-    environments = live_state.get("environments", {})
-    normalized_environments = {
-        str(name): _plain(value)
-        for name, value in sorted(
-            environments.items() if isinstance(environments, Mapping) else (),
-            key=lambda item: str(item[0]),
-        )
-    }
+    plain = _plain(live_state)
     required_checks = live_state.get("required_checks")
     if not isinstance(required_checks, (list, tuple)):
         checks = live_state.get("checks", {})
@@ -336,30 +323,8 @@ def canonical_authority_snapshot(*, repository: RepositoryIdentity, live_state: 
             {"context": str(name), "app_id": None, "integration_id": None, "source": "normalized"}
             for name in sorted(checks if isinstance(checks, Mapping) else ())
         ]
-    normalized_checks = [_plain(item) for item in required_checks if isinstance(item, Mapping)]
-    normalized_checks.sort(
-        key=lambda item: (
-            str(item.get("context", "")),
-            str(item.get("app_id", "")),
-            str(item.get("integration_id", "")),
-            str(item.get("source", "")),
-        )
-    )
-    snapshot = {
-        "schema": AUTHORITY_SNAPSHOT_SCHEMA,
-        "repository": _plain(repository),
-        "classic": _plain(live_state.get("classic", {})),
-        "repository_settings": _plain(live_state.get("repository", {})),
-        "security": _plain(live_state.get("security", {})),
-        "merge": _plain(live_state.get("merge", {})),
-        "rulesets": rulesets,
-        "environments": normalized_environments,
-        "required_checks": normalized_checks,
-        "guard": {
-            "intake": _plain(live_state.get("guard")),
-            "release": _plain(live_state.get("release_guard")),
-        },
-    }
+    plain["required_checks"] = [_plain(item) for item in required_checks if isinstance(item, Mapping)]
+    snapshot = project_authority_snapshot(_plain(repository), plain)
     return cast(Mapping[str, Any], deep_freeze(snapshot))
 
 
@@ -502,6 +467,14 @@ def build_protection_plan(
         or len(release_guard["blob_sha"]) != 40
     ):
         blockers.append("reusable release repository/ref/blob is not proven live")
+    verifier_guard = live_state.get("verifier_guard")
+    if environments and (
+        not isinstance(verifier_guard, Mapping)
+        or verifier_guard.get("path") != "aviato/authority_verifier.py"
+        or not isinstance(verifier_guard.get("blob_sha"), str)
+        or len(verifier_guard["blob_sha"]) != 40
+    ):
+        blockers.append("shared authority verifier repository/ref/blob is not proven live")
     authority_snapshot = canonical_authority_snapshot(repository=repository, live_state=live_state)
     payload = {
         "repository": _plain(repository),

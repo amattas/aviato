@@ -751,4 +751,6 @@ def delete_planned_ruleset(slug: str, *, ruleset_id: int) -> None:
     endpoint = f"repos/{slug}/rulesets/{ruleset_id}"
     result = run(["gh", "api", "--method", "DELETE", endpoint], check=False)
     if result.returncode != 0:
+        if _ambiguous_write_failure(result.returncode, result.stderr):
+            raise ResponseLostError(result.stderr or f"GitHub ruleset DELETE response lost for {endpoint}")
         raise GitHubAPIError(endpoint, result.returncode, result.stderr)

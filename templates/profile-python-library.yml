@@ -260,6 +260,25 @@ jobs:
           ssh-keygen -Y verify -f "${authority_dir}/allowed" -I "${reviewer}" -n aviato
           -s "${authority_dir}/signature" < "${authority_dir}/message"
 
+          verifier="${RUNNER_TEMP}/authority_verifier.py"
+
+          verifier_repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository
+          "${envelope}")"
+
+          verifier_ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref
+          "${envelope}")"
+
+          verifier_blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha
+          "${envelope}")"
+
+          verifier_json="$(gh api -H ''Cache-Control: no-cache'' "repos/${verifier_repo}/contents/aviato/authority_verifier.py?ref=${verifier_ref}")"
+
+          [ "$(jq -r .sha <<<"${verifier_json}")" = "${verifier_blob}" ]
+
+          jq -r .content <<<"${verifier_json}" | tr -d ''\n'' | base64 -d > "${verifier}"
+
+          python3 "${verifier}" --envelope "${envelope}" --repository "${GITHUB_REPOSITORY}"
+
           '
       - name: Publish distributions
         if: ${{ vars.PYPI_REPOSITORY_URL == '' }}

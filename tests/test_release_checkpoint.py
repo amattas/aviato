@@ -16,6 +16,33 @@ def test_collector_has_no_arbitrary_caller_fingerprint_input() -> None:
     assert "fingerprints" not in inspect.signature(_module().collect_live_checkpoint).parameters
 
 
+def test_durable_receipt_selection_finds_page_two_and_rejects_duplicate_across_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+    receipt = {
+        "schema": "aviato-protection-receipt/v1",
+        "status": "ready",
+        "persistence_status": "attached",
+        "authority_snapshot": {"schema": "aviato-protection-authority-snapshot/v1"},
+    }
+    raw = __import__("json").dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+    digest = __import__("hashlib").sha256(raw).hexdigest()
+    envelope = {"receipt_base64url": __import__("base64").urlsafe_b64encode(raw).decode().rstrip("=")}
+    body = (
+        "Canonical `aviato-protection-receipt-envelope/v1` evidence:\n\n```json\n"
+        + __import__("json").dumps(envelope)
+        + "\n```"
+    )
+    monkeypatch.setattr(module, "_gh_json", lambda *_args, **_kwargs: [{"number": 3}])
+    pages = [[{"body": "unrelated"}] * 100, [{"body": body}]]
+    monkeypatch.setattr(module, "_gh_json_paginated", lambda *_args, **_kwargs: pages, raising=False)
+    assert module._durable_receipt_authority_snapshot("o/r", digest)["schema"].endswith("/v1")
+    pages[0][0] = {"body": body}
+    with pytest.raises(ValueError, match="exactly one"):
+        module._durable_receipt_authority_snapshot("o/r", digest)
+
+
 def test_receipt_persistence_is_derived_from_exact_graphql_issue_comment_readback(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

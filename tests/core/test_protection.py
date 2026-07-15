@@ -103,6 +103,12 @@ def _live(*, approvals: int = 0, admin_bypass: bool | None = False) -> dict[str,
             "path": ".github/workflows/reusable-release.yml",
             "blob_sha": "c" * 40,
         },
+        "verifier_guard": {
+            "repository": "amattas/aviato",
+            "ref": "1.0.0",
+            "path": "aviato/authority_verifier.py",
+            "blob_sha": "d" * 40,
+        },
     }
 
 

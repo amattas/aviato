@@ -1664,6 +1664,34 @@ def test_generic_protection_mutation_preserves_definitive_http_rejection(monkeyp
     assert raised.value is error
 
 
+@pytest.mark.parametrize("detail", ("timed out after send", "connection reset by peer"))
+def test_environment_policy_delete_transport_ambiguity_is_response_lost(
+    monkeypatch: pytest.MonkeyPatch, detail: str
+) -> None:
+    from aviato.core.protection import ResponseLostError
+
+    platform = GitHubPlatform()
+    monkeypatch.setattr(github, "gh_json_paginated", lambda *_args, **_kwargs: [{"id": 8, "name": "old"}])
+    monkeypatch.setattr(
+        github,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(CommandError(["gh", "api"], 124, detail)),
+    )
+    operation = SimpleNamespace(
+        kind="environment",
+        name="pypi",
+        desired={"branch_patterns": [], "tag_patterns": [], "reviewers": []},
+    )
+    original = GitHubPlatform._gh_input
+    monkeypatch.setattr(
+        platform,
+        "_gh_input",
+        lambda args, payload: None if "PUT" in args else original(args, payload),
+    )
+    with pytest.raises(ResponseLostError):
+        platform.apply_protection_operation("o/r", operation)
+
+
 def test_composite_ruleset_create_refuses_a_preexisting_confirmed_id() -> None:
     operation = SimpleNamespace(
         kind="ruleset",

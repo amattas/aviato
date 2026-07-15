@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=38a5c99a24da5a44a32a63ffd4de20ffba500a1894e4ca5724a2f4bf937d9b76 inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
+# aviato:managed profile=aviato-library version=0 hash=557a0db05f230844ec5005adebb6c424858ca4c75c500340300613efe9ccdc13 inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
 name: Aviato Protection Checkpoint Intake
 
 on:
@@ -43,6 +43,13 @@ jobs:
                   check=True, capture_output=True, text=True, env=os.environ,
               )
               return json.loads(result.stdout)
+          def gh_paginated(endpoint):
+              result = subprocess.run(
+                  ["gh", "api", "--paginate", "--slurp", "-H", "Cache-Control: no-cache", endpoint],
+                  check=True, capture_output=True, text=True, env=os.environ,
+              )
+              pages = json.loads(result.stdout)
+              return [item for page in pages if isinstance(page, list) for item in page]
           def graphql(query, **variables):
               command = ["gh", "api", "graphql", "-H", "Cache-Control: no-cache", "-f", f"query={query}"]
               for name, value in variables.items():
@@ -129,7 +136,7 @@ jobs:
           if not isinstance(issues, list) or len(issues) != 1 or type(issues[0].get("number")) is not int:
               fail("receipt tracking issue is absent or ambiguous")
           issue = issues[0]
-          comments = gh(f"repos/{document['repository']}/issues/{issue['number']}/comments?per_page=100")
+          comments = gh_paginated(f"repos/{document['repository']}/issues/{issue['number']}/comments?per_page=100")
           candidates = []
           marker = "Canonical `aviato-protection-receipt-envelope/v1` evidence:\n\n```json\n"
           for receipt_comment in comments if isinstance(comments, list) else []:

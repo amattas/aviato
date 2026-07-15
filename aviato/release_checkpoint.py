@@ -38,6 +38,15 @@ def _gh_json(endpoint: str) -> Any:
         raise ValueError(f"GitHub response is not JSON for {endpoint}") from exc
 
 
+def _gh_json_paginated(endpoint: str) -> list[Any]:
+    result = run(["gh", "api", "--paginate", "--slurp", "-H", "Cache-Control: no-cache", endpoint])
+    try:
+        pages = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"GitHub paginated response is not JSON for {endpoint}") from exc
+    return [item for page in pages if isinstance(page, list) for item in page] if isinstance(pages, list) else []
+
+
 def _gh_json_input(method: str, endpoint: str, payload: dict[str, Any]) -> Any:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:
         json.dump(payload, handle)
@@ -137,7 +146,9 @@ def _durable_receipt_authority_snapshot(repository: str, receipt_digest: str) ->
     issues = _gh_json(f"repos/{repository}/issues?state=all&labels=aviato-protection-receipt&per_page=10")
     if not isinstance(issues, list) or len(issues) != 1 or type(issues[0].get("number")) is not int:
         raise ValueError("exactly one durable protection receipt issue is required")
-    comments = _gh_json(f"repos/{repository}/issues/{issues[0]['number']}/comments?per_page=100")
+    comments = _gh_json_paginated(f"repos/{repository}/issues/{issues[0]['number']}/comments?per_page=100")
+    if comments and all(isinstance(page, list) for page in comments):
+        comments = [item for page in comments for item in page]
     marker = "Canonical `aviato-protection-receipt-envelope/v1` evidence:\n\n```json\n"
     matches: list[dict[str, Any]] = []
     for comment in comments if isinstance(comments, list) else ():

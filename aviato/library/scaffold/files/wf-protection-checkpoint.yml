@@ -42,6 +42,13 @@ jobs:
                   check=True, capture_output=True, text=True, env=os.environ,
               )
               return json.loads(result.stdout)
+          def gh_paginated(endpoint):
+              result = subprocess.run(
+                  ["gh", "api", "--paginate", "--slurp", "-H", "Cache-Control: no-cache", endpoint],
+                  check=True, capture_output=True, text=True, env=os.environ,
+              )
+              pages = json.loads(result.stdout)
+              return [item for page in pages if isinstance(page, list) for item in page]
           def graphql(query, **variables):
               command = ["gh", "api", "graphql", "-H", "Cache-Control: no-cache", "-f", f"query={query}"]
               for name, value in variables.items():
@@ -128,7 +135,7 @@ jobs:
           if not isinstance(issues, list) or len(issues) != 1 or type(issues[0].get("number")) is not int:
               fail("receipt tracking issue is absent or ambiguous")
           issue = issues[0]
-          comments = gh(f"repos/{document['repository']}/issues/{issue['number']}/comments?per_page=100")
+          comments = gh_paginated(f"repos/{document['repository']}/issues/{issue['number']}/comments?per_page=100")
           candidates = []
           marker = "Canonical `aviato-protection-receipt-envelope/v1` evidence:\n\n```json\n"
           for receipt_comment in comments if isinstance(comments, list) else []:

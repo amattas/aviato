@@ -769,7 +769,7 @@ def test_app_store_mutations_immediately_recheck_current_checkpoint_key_and_envi
     assert "ssh_signing_keys" in recheck["run"]
 
 
-def test_every_final_privileged_mutation_uses_the_same_full_fresh_authority_contract() -> None:
+def test_every_final_privileged_mutation_is_dominated_by_shared_executable_verifier() -> None:
     pypi = _rendered_python_library_workflow()["jobs"]["pypi-publish"]["steps"]
     cases = {
         "pypi": next(
@@ -785,10 +785,18 @@ def test_every_final_privileged_mutation_uses_the_same_full_fresh_authority_cont
         "asc": next(
             step["run"]
             for step in _load("reusable-app-store-connect.yml")["jobs"]["app-store-connect"]["steps"]
-            if step.get("name") == "Upload to App Store Connect"
+            if step.get("name") == "Final shared authority verification without App Store secrets"
         ),
-        "asc-evidence": _load("reusable-app-store-connect.yml")["jobs"]["release-evidence"]["steps"][0]["run"],
-        "docs-push": _load("reusable-docs-pages.yml")["jobs"]["push"]["steps"][0]["run"],
+        "asc-evidence": next(
+            step["run"]
+            for step in _load("reusable-app-store-connect.yml")["jobs"]["release-evidence"]["steps"]
+            if step.get("name") == "Persist receipt asset and release-note evidence"
+        ),
+        "docs-push": next(
+            step["run"]
+            for step in _load("reusable-docs-pages.yml")["jobs"]["push"]["steps"]
+            if step.get("name") == "Verify and fast-forward push"
+        ),
         "pages-deploy": _load("reusable-docs-pages.yml")["jobs"]["deploy"]["steps"][0]["run"],
         "github-release": next(
             step["run"]
@@ -796,19 +804,25 @@ def test_every_final_privileged_mutation_uses_the_same_full_fresh_authority_cont
             if step.get("name") == "Verify checkpoint and perform closed promotion"
         ),
     }
-    required = (
-        "aviato-protection-authority-snapshot/v1",
-        "authority_snapshot",
-        "expires_at",
-        "issued_at",
-        "ssh-keygen",
-        "ssh_signing_keys",
-        "can_admins_bypass",
-        "gh attestation verify",
-    )
     for name, script in cases.items():
-        for token in required:
-            assert token in script, f"{name} omits final live authority proof {token}"
+        assert "authority_verifier.py" in script, f"{name} omits the shared authority verifier"
+        assert "--envelope" in script and "--repository" in script
+
+    assert cases["ghcr"].count('python3 "${verifier}"') >= cases["ghcr"].count("skopeo copy") + 1
+    release_mutations = ("--method POST", "--method PATCH")
+    assert cases["github-release"].count('python3 "${verifier}"') >= sum(
+        cases["github-release"].count(token) for token in release_mutations
+    )
+
+    asc_steps = _load("reusable-app-store-connect.yml")["jobs"]["app-store-connect"]["steps"]
+    upload_index = next(
+        index for index, step in enumerate(asc_steps) if step.get("name") == "Upload to App Store Connect"
+    )
+    verifier_step = asc_steps[upload_index - 1]
+    assert "authority_verifier.py" in verifier_step.get("run", "")
+    assert not any(
+        name in verifier_step.get("env", {}) for name in ("APP_STORE_CONNECT_KEY_ID", "APP_STORE_CONNECT_ISSUER_ID")
+    )
 
 
 def test_promotion_accepts_two_person_actor_submitter_and_only_rejects_reviewer_overlap() -> None:
