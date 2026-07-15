@@ -17,8 +17,19 @@ OperationDisposition = Literal["ready", "manual", "indeterminate"]
 
 _SECURITY_KEYS = ("name", "target", "enforcement", "conditions", "bypass_actors", "rules")
 _RULESET_ID_KEY = "id"
-_DISPLAY_METADATA_KEYS = frozenset(
-    {"created_at", "updated_at", "html_url", "url", "_links", "display", "source", "current_user_can_bypass"}
+_RESPONSE_METADATA_KEYS = frozenset(
+    {
+        "created_at",
+        "updated_at",
+        "html_url",
+        "url",
+        "_links",
+        "display",
+        "node_id",
+        "source",
+        "source_type",
+        "current_user_can_bypass",
+    }
 )
 
 
@@ -52,6 +63,9 @@ class RulesetIdentity:
     name: str
     target: str
     live_id: int | None = None
+    live_node_id: str | None = None
+    source_type: str | None = None
+    source: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name or not isinstance(self.name, str):
@@ -60,6 +74,13 @@ class RulesetIdentity:
             raise ValueError("ruleset identity target must be branch or tag")
         if self.live_id is not None and (isinstance(self.live_id, bool) or self.live_id <= 0):
             raise ValueError("live ruleset id must be a positive integer")
+        for field_name, value in (
+            ("live_node_id", self.live_node_id),
+            ("source_type", self.source_type),
+            ("source", self.source),
+        ):
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"ruleset identity {field_name} must be a non-empty string")
 
     @property
     def key(self) -> tuple[str, str]:
@@ -124,11 +145,14 @@ def _canonical_value(value: Any) -> Any:
             raise ValueError("ruleset security mappings require string keys")
         return {key: _canonical_value(value[key]) for key in sorted(value)}
     if isinstance(value, (list, tuple)):
-        values = [_canonical_value(item) for item in value]
-        return sorted(values, key=_canonical_json)
+        return [_canonical_value(item) for item in value]
     if value is None or isinstance(value, (str, int, bool)):
         return value
     raise ValueError(f"ruleset security value has unsupported type {type(value).__name__}")
+
+
+def _canonical_set(values: Sequence[Any]) -> list[Any]:
+    return sorted((_canonical_value(item) for item in values), key=_canonical_json)
 
 
 def _evidence_value(value: Any) -> Any:
@@ -229,10 +253,10 @@ def _security_payload(
             "target": target,
             "enforcement": enforcement,
             "conditions": deep_thaw(conditions.value),
-            "bypass_actors": _canonical_value(bypass),
-            "rules": _canonical_value(rules),
+            "bypass_actors": _canonical_set(bypass),
+            "rules": _canonical_set(rules),
         }
-        for key in sorted(set(payload) - set(_SECURITY_KEYS) - _DISPLAY_METADATA_KEYS - {_RULESET_ID_KEY}):
+        for key in sorted(set(payload) - set(_SECURITY_KEYS) - _RESPONSE_METADATA_KEYS - {_RULESET_ID_KEY}):
             security[key] = _canonical_value(payload[key])
     except (KeyError, TypeError, ValueError) as exc:
         return None, str(exc)
@@ -280,6 +304,27 @@ def _live_id(payload: Mapping[str, Any] | None) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
+def _response_identity(
+    payload: Mapping[str, Any] | None,
+    *,
+    repository: RepositoryIdentity,
+) -> tuple[str | None, str | None, str | None, str]:
+    if payload is None:
+        return None, None, None, ""
+    fields = (payload.get("node_id"), payload.get("source_type"), payload.get("source"))
+    if fields == (None, None, None):
+        return None, None, None, ""
+    node_id, source_type, source = fields
+    if not all(isinstance(value, str) and value for value in fields):
+        return None, None, None, "ruleset response identity metadata is incomplete or malformed"
+    assert isinstance(node_id, str) and isinstance(source_type, str) and isinstance(source, str)
+    if source_type != "Repository":
+        return node_id, source_type, source, "ruleset source_type is not Repository"
+    if source.casefold() != repository.full_name.casefold():
+        return node_id, source_type, source, "ruleset source does not match the bound repository"
+    return node_id, source_type, repository.full_name, ""
+
+
 def _plan_payload(
     repository: RepositoryIdentity,
     tool_version: str,
@@ -304,6 +349,9 @@ def _plan_payload(
                     "name": operation.identity.name,
                     "target": operation.identity.target,
                     "live_id": operation.identity.live_id,
+                    "live_node_id": operation.identity.live_node_id,
+                    "source_type": operation.identity.source_type,
+                    "source": operation.identity.source,
                 },
                 "action": operation.action,
                 "comparison": operation.comparison.state,
@@ -348,6 +396,10 @@ def build_ruleset_plan(
     for index, key in enumerate(keys, 1):
         desired_raw = desired.get(key)
         live_raw = live.get(key)
+        live_node_id, source_type, source, response_error = _response_identity(
+            live_raw,
+            repository=repository,
+        )
         desired_security, desired_error = (
             _security_payload(desired_raw, target=key[1], default_branch=repository.default_branch)
             if desired_raw is not None
@@ -358,8 +410,11 @@ def build_ruleset_plan(
             if live_raw is not None
             else (None, "")
         )
+        if response_error:
+            live_security = None
+            live_error = response_error
         live_id = _live_id(live_raw)
-        identity = RulesetIdentity(key[0], key[1], live_id)
+        identity = RulesetIdentity(key[0], key[1], live_id, live_node_id, source_type, source)
         before_fingerprint = (
             hashlib.sha256(_canonical_json(deep_thaw(live_security)).encode("ascii")).hexdigest()
             if live_security is not None
@@ -548,6 +603,10 @@ def _verify_evolving_plan(
             or candidate.desired_fingerprint != expected.desired_fingerprint
             or candidate.before_fingerprint != expected.desired_fingerprint
             or (expected.identity.live_id is not None and candidate.identity.live_id != expected.identity.live_id)
+            or (
+                expected.identity.live_node_id is not None
+                and candidate.identity.live_node_id != expected.identity.live_node_id
+            )
             or (
                 expected.identity.live_id is None
                 and key in completed_live_ids

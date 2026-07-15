@@ -67,6 +67,18 @@ def _live(*, ruleset_id: int = 41, desired: dict[str, Any] | None = None) -> dic
     return payload
 
 
+def _api_live(*, ruleset_id: int, desired: dict[str, Any]) -> dict[str, Any]:
+    payload = _live(ruleset_id=ruleset_id, desired=desired)
+    payload.update(
+        {
+            "node_id": f"RRS_{ruleset_id}",
+            "source_type": "Repository",
+            "source": "owner/repo",
+        }
+    )
+    return payload
+
+
 def _plan(
     *,
     desired: list[dict[str, Any]] | None = None,
@@ -439,3 +451,67 @@ def test_distinct_malformed_condition_state_never_collapses_to_one_plan_id() -> 
     assert first.operations[0].comparison.state == "indeterminate"
     assert second.operations[0].comparison.state == "indeterminate"
     assert first.plan_id != second.plan_id
+
+
+def test_real_api_response_identity_metadata_converges_across_two_writes() -> None:
+    api = _api()
+    desired = [_desired(name="A"), _desired(name="B")]
+    mutable_live = [
+        _api_live(ruleset_id=41, desired=desired[0]),
+        _api_live(ruleset_id=42, desired=desired[1]),
+    ]
+    for payload in mutable_live:
+        payload["rules"][0]["parameters"]["required_approving_review_count"] = 1
+    plan = _plan(desired=desired, live=mutable_live)
+    writes: list[str] = []
+
+    def upsert(operation: Any) -> None:
+        writes.append(operation.identity.name)
+        index = 0 if operation.identity.name == "A" else 1
+        mutable_live[index] = _api_live(ruleset_id=41 + index, desired=desired[index])
+
+    result = api.execute_ruleset_plan(
+        plan,
+        confirmation=plan.plan_id,
+        recompute=lambda: _plan(desired=desired, live=mutable_live),
+        upsert=upsert,
+        delete=lambda _operation: pytest.fail("no deletion expected"),
+    )
+
+    assert result.success is True
+    assert writes == ["A", "B"]
+    converged = _plan(desired=desired, live=mutable_live)
+    assert [operation.action for operation in converged.operations] == ["noop", "noop"]
+
+
+@pytest.mark.parametrize(
+    ("source_type", "source"),
+    [("Organization", "owner"), ("Repository", "other/repo"), (None, "owner/repo")],
+)
+def test_non_repository_or_inconsistent_ruleset_source_fails_closed(
+    source_type: str | None,
+    source: str,
+) -> None:
+    live = _api_live(ruleset_id=41, desired=_desired())
+    if source_type is None:
+        live.pop("source_type")
+    else:
+        live["source_type"] = source_type
+    live["source"] = source
+
+    plan = _plan(live=[live])
+
+    assert plan.operations[0].comparison.state == "indeterminate"
+    assert plan.applicable is False
+
+
+def test_order_distinct_unknown_security_arrays_have_distinct_plan_ids() -> None:
+    first = _desired()
+    first["future_ordered_steps"] = ["scan", "approve"]
+    second = _desired()
+    second["future_ordered_steps"] = ["approve", "scan"]
+
+    first_plan = _plan(desired=[first])
+    second_plan = _plan(desired=[second])
+
+    assert first_plan.plan_id != second_plan.plan_id
