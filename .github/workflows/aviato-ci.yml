@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=6d2ec7959cc15b9343ad070fbde5f214e15eadf295cbb153d5c43efb4fbdd1a6 inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
+# aviato:managed profile=aviato-library version=0 hash=b9d09900fce76761da34ed9beb86159281ba497c13665ba11111d06b73adec24 inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
 name: Aviato Python Library
 'on':
   pull_request:
@@ -7,11 +7,45 @@ name: Aviato Python Library
   push:
     branches:
       - main
-    tags:
-      - '*.*.*'
   schedule:
     - cron: 23 5 * * 1
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      checkpoint-digest:
+        default: ''
+        description: Canonical checkpoint digest
+        required: false
+        type: string
+      checkpoint-run-id:
+        default: ''
+        description: Verified checkpoint intake run
+        required: false
+        type: string
+      checkpoint-workflow:
+        default: aviato-protection-checkpoint.yml
+        description: Generator-owned intake workflow
+        required: true
+        type: string
+      intended-actor:
+        default: ''
+        description: Exact signed release actor
+        required: false
+        type: string
+      intended-tag:
+        default: ''
+        description: Exact SemVer tag
+        required: false
+        type: string
+      merged-sha:
+        default: ''
+        description: Exact merged default-branch SHA
+        required: false
+        type: string
+      promotion:
+        default: false
+        description: Closed release promotion mode
+        required: true
+        type: boolean
 permissions:
   contents: read
 jobs:
@@ -72,6 +106,16 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - name: Recheck managed checkpoint before OIDC
+        shell: bash
+        env:
+          CHECKPOINT_DIGEST: ${{ needs.release-gate.outputs.checkpoint-digest }}
+        run: 'set -euo pipefail
+
+          [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::managed
+          checkpoint is absent"; exit 1; }
+
+          '
       - name: Download vetted build artifacts
         uses: actions/download-artifact@v7
         with:
@@ -193,7 +237,8 @@ jobs:
           raise SystemExit(f\"published artifacts did not become verifiable: {last_error}\"\
           )\nPY\n"
   release:
-    if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
+    if: ${{ github.ref_type != 'tag' && (github.event_name == 'push' || (github.event_name
+      == 'workflow_dispatch' && inputs.promotion)) }}
     needs:
       - ci
       - security
@@ -206,6 +251,13 @@ jobs:
     with:
       aviato-ref: '0'
       local-install: true
+      checkpoint-workflow: ${{ inputs.checkpoint-workflow }}
+      promotion: ${{ inputs.promotion || false }}
+      merged-sha: ${{ inputs.merged-sha || '' }}
+      intended-tag: ${{ inputs.intended-tag || '' }}
+      intended-actor: ${{ inputs.intended-actor || '' }}
+      checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
+      checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
   release-gate:
     needs:
       - release
@@ -220,6 +272,10 @@ jobs:
       default-branch: main
       require-merged-pr: true
       release-tag: ${{ needs.release.outputs.tag }}
+      checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
+      checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
+      intended-actor: ${{ inputs.intended-actor || '' }}
+      merged-sha: ${{ inputs.merged-sha || '' }}
   security:
     uses: ./.github/workflows/reusable-security-baseline.yml
     permissions:

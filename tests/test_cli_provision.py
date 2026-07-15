@@ -9,7 +9,7 @@ import pytest
 
 from aviato import __version__, cli
 from aviato.cli import main
-from aviato.core.ports import Issue, Platform
+from aviato.core.ports import Issue, Platform, RepositoryIdentity
 from aviato.core.provision import ProvisionOutcome
 
 pytestmark = pytest.mark.usefixtures("task3_pinned_context")
@@ -32,6 +32,12 @@ class _FakePlatform:
 
     def read_rulesets(self, repo: str) -> list[dict[str, Any]]:
         return []
+
+    def repository_identity(self, repo: str) -> RepositoryIdentity:
+        return RepositoryIdentity(7, "R_7", repo, "main")
+
+    def read_protection_state(self, repo: str, *, environments: tuple[str, ...] = ()) -> dict[str, Any]:
+        return {"repository_identity": self.repository_identity(repo)}
 
     def get_issue(self, repo: str, key: str) -> Issue | None:
         return None
@@ -82,35 +88,44 @@ def _consumer(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_complete_protection_applies_full_desired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_complete_protection_defaults_to_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _consumer(tmp_path)
     platform = _FakePlatform()
     monkeypatch.setattr(cli, "remote_url", lambda r: "git@github.com:o/r.git")
     monkeypatch.setattr(cli, "normalize_slug", lambda remote: "o/r")
     monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: platform)
+    monkeypatch.setattr(
+        cli,
+        "build_protection_plan",
+        lambda **_kwargs: SimpleNamespace(plan_id="a" * 64, ready=True, blockers=()),
+    )
 
     rc = main(["complete-protection", str(root)])
     assert rc == 0
-    assert platform.applied and platform.applied[0][0] == "o/r"
-    # Full desired state carries the always-on protections (e.g. PR requirement).
-    assert platform.applied[0][1].get("requires_pull_request") is True
+    assert platform.applied == []
 
 
-def test_complete_protection_reports_skipped_unavailable_toggle(
+def test_complete_protection_apply_requires_exact_confirmation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # R2-4-3/R2-5-F1: when apply_settings surfaces-and-skips an unavailable §17 toggle, the CLI must
     # NOT claim a clean apply — it must name the skipped toggle and point at §17.
     root = _consumer(tmp_path)
-    platform = _FakePlatform(skipped=["secret_scanning"])
+    platform = _FakePlatform()
     monkeypatch.setattr(cli, "remote_url", lambda r: "git@github.com:o/r.git")
     monkeypatch.setattr(cli, "normalize_slug", lambda remote: "o/r")
     monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: platform)
+    monkeypatch.setattr(
+        cli,
+        "build_protection_plan",
+        lambda **_kwargs: SimpleNamespace(plan_id="a" * 64, ready=True, blockers=()),
+    )
 
-    rc = main(["complete-protection", str(root)])
-    assert rc == 0
+    rc = main(["complete-protection", str(root), "--apply", "--confirm", "wrong"])
+    assert rc == 2
     err = capsys.readouterr().err
-    assert "SKIPPED" in err and "secret_scanning" in err and "§17" in err
+    assert "exact --confirm" in err
+    assert platform.applied == []
 
 
 def test_complete_protection_missing_declaration_errors(tmp_path: Path) -> None:

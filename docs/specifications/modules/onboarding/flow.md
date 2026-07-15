@@ -119,6 +119,14 @@ first commit) is **safe to persist** indefinitely. If full protection fails afte
 the first commit, the process reports the partial state and exposes an
 **idempotent `complete-protection` recovery operation** that re-applies full
 protection and is safe to re-run any number of times.
+`complete-protection` and the final provision stage use the same immutable
+composite `ProtectionPlan`. They remain previews until the operator supplies
+`--apply --confirm <plan-id>`. The confirmation includes the pinned desired
+state, repository identity/default branch, every live before-fingerprint,
+concrete environment reviewers and ref policy, the read-only
+`can_admins_bypass == false` assertion, the managed authorization guard, and
+any explicit degraded-tag consent. Provision is not `full_applied` unless the
+receipt passes the final all-surface convergence barrier.
 When GitHub rejects the `tag_name_pattern` metadata restriction with an explicit
 HTTP 422 unsupported-rule response, full-protection application retries exactly
 once with only that rule omitted. The CLI reports the repository and omitted rule

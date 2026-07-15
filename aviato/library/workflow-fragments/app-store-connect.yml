@@ -5,6 +5,7 @@ permissions:
   actions: read
   contents: write
 with:
+  # The reusable publisher rechecks the managed checkpoint before environment secrets.
   release-tag: ${{ needs.release.outputs.tag }}
   gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
   environment-name: "{{ environment-name }}"

@@ -311,7 +311,9 @@ def test_bootstrap_self_sync_generates_ci_drift_and_consumer_automation_parity()
     expected = {
         REPO_ROOT / ".github/workflows/aviato-ci.yml",
         REPO_ROOT / ".github/workflows/aviato-drift.yml",
+        REPO_ROOT / ".github/workflows/aviato-protection-checkpoint.yml",
         REPO_ROOT / "templates/consumer-automation.yml",
+        REPO_ROOT / "templates/consumer-protection-checkpoint.yml",
         *(REPO_ROOT / path for path in _PROFILE_TEMPLATE_FILES.values()),
     }
 

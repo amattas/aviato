@@ -6,11 +6,45 @@ name: Aviato Python Component
   push:
     branches:
       - main
-    tags:
-      - '*.*.*'
   schedule:
     - cron: 23 5 * * 1
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      checkpoint-digest:
+        default: ''
+        description: Canonical checkpoint digest
+        required: false
+        type: string
+      checkpoint-run-id:
+        default: ''
+        description: Verified checkpoint intake run
+        required: false
+        type: string
+      checkpoint-workflow:
+        default: aviato-protection-checkpoint.yml
+        description: Generator-owned intake workflow
+        required: true
+        type: string
+      intended-actor:
+        default: ''
+        description: Exact signed release actor
+        required: false
+        type: string
+      intended-tag:
+        default: ''
+        description: Exact SemVer tag
+        required: false
+        type: string
+      merged-sha:
+        default: ''
+        description: Exact merged default-branch SHA
+        required: false
+        type: string
+      promotion:
+        default: false
+        description: Closed release promotion mode
+        required: true
+        type: boolean
 permissions:
   contents: read
 jobs:
@@ -37,7 +71,8 @@ jobs:
       aviato-ref: EXAMPLE_PIN
       local-install: false
   release:
-    if: ${{ github.ref_type != 'tag' && github.event_name == 'push' }}
+    if: ${{ github.ref_type != 'tag' && (github.event_name == 'push' || (github.event_name
+      == 'workflow_dispatch' && inputs.promotion)) }}
     needs:
       - ci
       - security
@@ -50,6 +85,13 @@ jobs:
     with:
       aviato-ref: EXAMPLE_PIN
       local-install: false
+      checkpoint-workflow: ${{ inputs.checkpoint-workflow }}
+      promotion: ${{ inputs.promotion || false }}
+      merged-sha: ${{ inputs.merged-sha || '' }}
+      intended-tag: ${{ inputs.intended-tag || '' }}
+      intended-actor: ${{ inputs.intended-actor || '' }}
+      checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
+      checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
   release-gate:
     needs:
       - release
@@ -64,6 +106,10 @@ jobs:
       default-branch: main
       require-merged-pr: true
       release-tag: ${{ needs.release.outputs.tag }}
+      checkpoint-run-id: ${{ inputs.checkpoint-run-id || '' }}
+      checkpoint-digest: ${{ inputs.checkpoint-digest || '' }}
+      intended-actor: ${{ inputs.intended-actor || '' }}
+      merged-sha: ${{ inputs.merged-sha || '' }}
   security:
     uses: amattas/aviato/.github/workflows/reusable-security-baseline.yml@EXAMPLE_PIN
     permissions:

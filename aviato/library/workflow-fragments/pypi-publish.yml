@@ -11,6 +11,13 @@ permissions:
   id-token: write
   attestations: write
 steps:
+  - name: Recheck managed checkpoint before OIDC
+    shell: bash
+    env:
+      CHECKPOINT_DIGEST: ${{ needs.release-gate.outputs.checkpoint-digest }}
+    run: |
+      set -euo pipefail
+      [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::managed checkpoint is absent"; exit 1; }
   - name: Download vetted build artifacts
     uses: actions/download-artifact@v7
     with:

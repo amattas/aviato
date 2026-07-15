@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import defaultdict, deque
 from collections.abc import Mapping, Sequence
@@ -11,6 +12,7 @@ import yaml
 
 from .errors import CompositionError, DeclarationError
 from .model import (
+    AuthorizationGuardDescriptor,
     PipelineModule,
     ResolvedSet,
     Unknown,
@@ -98,6 +100,7 @@ class DesiredState:
     environments: tuple[str, ...]
     required_status_checks: tuple[str, ...]
     privileges: tuple[str, ...]
+    authorization_guard: AuthorizationGuardDescriptor | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "settings", deep_freeze(self.settings))
@@ -693,6 +696,29 @@ def compile_desired_state(
     if not isinstance(branch, dict):
         raise CompositionError("desired default_branch settings must be a mapping")
     branch["required_status_checks"] = sorted(checks)
+    checkpoint = next(
+        (
+            artifact
+            for artifact in artifacts
+            if artifact.output_path == ".github/workflows/aviato-protection-checkpoint.yml"
+        ),
+        None,
+    )
+    guard = None
+    if environments and checkpoint is not None:
+        checkpoint_bytes = checkpoint.body.encode("utf-8")
+        guard = AuthorizationGuardDescriptor(
+            path=checkpoint.output_path,
+            blob_sha=hashlib.sha1(
+                f"blob {len(checkpoint_bytes)}\0".encode("ascii") + checkpoint_bytes,
+                usedforsecurity=False,
+            ).hexdigest(),
+            schema="aviato-managed-release-checkpoint/v1",
+            allowed_events=("workflow_dispatch",),
+            allowed_refs=("default-branch",),
+            receipt_schema_digest=hashlib.sha256(b"aviato-protection-receipt/v1").hexdigest(),
+            trust_policy_digest=hashlib.sha256(b"distinct-current-user-reviewer/v1").hexdigest(),
+        )
     return DesiredState(
         profile=resolved.profile,
         pipelines=tuple(resolved.pipelines),
@@ -702,6 +728,7 @@ def compile_desired_state(
         environments=tuple(sorted(environments)),
         required_status_checks=tuple(sorted(checks)),
         privileges=tuple(sorted(privileges)),
+        authorization_guard=guard,
     )
 
 

@@ -6,6 +6,7 @@ permissions:
   pages: write
   id-token: write
 with:
+  # Pages OIDC is closed until the managed checkpoint digest is revalidated.
   working-directory: website
   release-tag: ${{ needs.docs-resolve.outputs.tag }}
   gated-sha: ${{ needs.docs-release-gate.outputs.gated-sha }}

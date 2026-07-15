@@ -31,6 +31,26 @@ on:
         required: false
         type: string
         default: ""
+      checkpoint-run-id:
+        description: Exact successful managed checkpoint intake run.
+        required: false
+        type: string
+        default: ""
+      checkpoint-digest:
+        description: SHA-256 of the canonical verified checkpoint.
+        required: false
+        type: string
+        default: ""
+      intended-actor:
+        description: Exact actor bound by the signed checkpoint.
+        required: false
+        type: string
+        default: ""
+      merged-sha:
+        description: Exact default-branch commit bound by the checkpoint.
+        required: false
+        type: string
+        default: ""
     outputs:
       gated-sha:
         description: >-
@@ -40,6 +60,9 @@ on:
           tag still points at it before publishing — a tag force-moved between gate
           and publish must abort the deploy, never ship.
         value: ${{ jobs.gate.outputs.gated-sha }}
+      checkpoint-digest:
+        description: Revalidated canonical checkpoint digest for downstream manifests.
+        value: ${{ jobs.gate.outputs.checkpoint-digest }}
 
 permissions:
   actions: read
@@ -52,7 +75,39 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       gated-sha: ${{ steps.resolve-gated-sha.outputs.gated-sha }}
+      checkpoint-digest: ${{ steps.checkpoint.outputs.checkpoint-digest }}
     steps:
+      - name: Verify one exact fresh managed checkpoint before privilege
+        id: checkpoint
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
+          CHECKPOINT_DIGEST: ${{ inputs.checkpoint-digest }}
+          INTENDED_ACTOR: ${{ inputs.intended-actor }}
+          MERGED_SHA: ${{ inputs.merged-sha }}
+          DEFAULT_BRANCH: ${{ inputs.default-branch }}
+        run: |
+          set -euo pipefail
+          [[ "${CHECKPOINT_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "::error::missing checkpoint run"; exit 1; }
+          [[ "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::invalid checkpoint digest"; exit 1; }
+          [ "${GITHUB_ACTOR}" = "${INTENDED_ACTOR}" ] || { echo "::error::actual release actor differs from signed intended actor"; exit 1; }
+          run="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/actions/runs/${CHECKPOINT_RUN_ID}")"
+          jq -e --arg branch "${DEFAULT_BRANCH}" --arg actor "${INTENDED_ACTOR}" --arg sha "${MERGED_SHA}" '
+            .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success"
+            and .head_branch == $branch and .head_sha == $sha and .actor.login != $actor
+          ' <<<"${run}" >/dev/null || { echo "::error::checkpoint run binding mismatch"; exit 1; }
+          mkdir -p "${RUNNER_TEMP}/checkpoint"
+          gh run download "${CHECKPOINT_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name verified-checkpoint --dir "${RUNNER_TEMP}/checkpoint"
+          document="${RUNNER_TEMP}/checkpoint/verified-checkpoint.json"
+          [ -f "${document}" ] || { echo "::error::verified checkpoint artifact missing"; exit 1; }
+          actual="$(shasum -a 256 "${document}" | awk '{print $1}')"
+          [ "${actual}" = "${CHECKPOINT_DIGEST}" ] || { echo "::error::checkpoint digest mismatch"; exit 1; }
+          jq -e --arg repo "${GITHUB_REPOSITORY}" --arg actor "${INTENDED_ACTOR}" --arg sha "${MERGED_SHA}" '
+            .repository == $repo and .intended_actor == $actor and .sha == $sha
+            and .reviewer != $actor and (.expires_at | fromdateiso8601) > now
+          ' "${document}" >/dev/null || { echo "::error::checkpoint payload is missing, stale, team-only, or mismatched"; exit 1; }
+          echo "checkpoint-digest=${CHECKPOINT_DIGEST}" >> "${GITHUB_OUTPUT}"
       - name: Checkout consumer repository
         uses: actions/checkout@v4
         with:

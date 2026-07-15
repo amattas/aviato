@@ -1,3 +1,4 @@
 name: aviato-library-sc
 # Workflow and optional docs artifacts are pipeline-owned under schema v2.
-templates: []
+templates:
+  - wf-protection-checkpoint

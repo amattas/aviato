@@ -32,3 +32,20 @@ Privileged jobs do not trust read-shaped API responses as write payloads and do
 not rebuild verified artifacts. External platforms remain outside Aviato's
 control; their required reviewers, ruleset state, registry identity, and Pages
 configuration therefore require explicit live evidence in traceability.
+
+## Managed release authorization
+
+Release proposal and promotion are separate trust phases. Default-branch
+pushes may open or update a release proposal but cannot create tags, floating
+tags, releases, OIDC tokens, or deployments. Closed promotion mode binds the
+merged SHA, tag, actual actor, and one fresh signed checkpoint digest. The
+checkpoint uses a concrete current user reviewer distinct from collector,
+submitter, and release actor; team-membership assertions alone are rejected.
+Each privileged job revalidates that checkpoint before environment secrets,
+OIDC, or hosted mutation.
+
+Composite confirmations bind the full before-state and primary/degraded
+ruleset payload fingerprints. A correlated unsupported tag pattern may be
+previewed only with explicit consent and remains non-ready until policy
+converges. Lost responses are resolved only by semantic readback; unreadable
+state is indeterminate and is never blindly retried.

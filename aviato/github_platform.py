@@ -10,6 +10,7 @@ logic below is unit-tested.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -21,6 +22,7 @@ from urllib.parse import quote
 from . import github
 from .command import CommandError
 from .core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
+from .core.model import AuthorizationGuardDescriptor, deep_thaw
 from .core.pathguard import confined_target
 from .core.ports import Issue, RepositoryIdentity, RulesetApplyResult
 from .core.scaffold import atomic_write
@@ -545,6 +547,199 @@ class GitHubPlatform:
 
     def delete_planned_ruleset(self, repo: str, *, ruleset_id: int) -> None:
         github.delete_planned_ruleset(repo, ruleset_id=ruleset_id)
+
+    def resolve_environment_reviewer(self, repo: str, reviewer: str) -> dict[str, Any]:
+        return github.environment_reviewer_identity(repo, reviewer)
+
+    def read_protection_state(self, repo: str, *, environments: tuple[str, ...] = ()) -> dict[str, Any]:
+        """Read every modeled protection surface for a composite confirmation."""
+
+        identity = self.repository_identity(repo)
+        flat = self.read_settings(repo)
+        classic = {key: flat[key] for key in _BRANCH_PROTECTION_KEYS if key in flat}
+        repository = {key: flat[key] for key in _REPOSITORY_SETTING_KEYS if key in flat}
+        security = {key: flat[key] for key in _SECURITY_SETTING_KEYS if key in flat}
+        live_environments: dict[str, dict[str, Any]] = {}
+        for name in environments:
+            raw = github.protected_environment(repo, name)
+            protection_rules = raw.get("protection_rules") or []
+            reviewer_rule = next(
+                (
+                    rule
+                    for rule in protection_rules
+                    if isinstance(rule, dict) and rule.get("type") == "required_reviewers"
+                ),
+                {},
+            )
+            wait_rule = next(
+                (rule for rule in protection_rules if isinstance(rule, dict) and rule.get("type") == "wait_timer"),
+                {},
+            )
+            normalized_reviewers: list[dict[str, Any]] = []
+            for entry in reviewer_rule.get("reviewers", raw.get("reviewers", ())) or ():
+                if not isinstance(entry, dict):
+                    continue
+                reviewer: dict[str, Any] = entry
+                nested_reviewer = entry.get("reviewer")
+                if isinstance(nested_reviewer, dict):
+                    reviewer = nested_reviewer
+                kind = str(entry.get("type", reviewer.get("type", ""))).title()
+                normalized = {
+                    "type": kind,
+                    "id": reviewer.get("id"),
+                    "node_id": reviewer.get("node_id"),
+                }
+                if kind == "User":
+                    normalized["login"] = reviewer.get("login")
+                elif kind == "Team":
+                    normalized["slug"] = reviewer.get("slug")
+                normalized_reviewers.append(normalized)
+            policies = github.gh_json_paginated(
+                f"repos/{repo}/environments/{quote(name, safe='')}/deployment-branch-policies",
+                default=[],
+            )
+            if isinstance(policies, dict):
+                policies = policies.get("branch_policies", [])
+            branch_patterns = sorted(
+                str(item["name"])
+                for item in policies or ()
+                if isinstance(item, dict) and item.get("type", "branch") == "branch" and item.get("name")
+            )
+            tag_patterns = sorted(
+                str(item["name"])
+                for item in policies or ()
+                if isinstance(item, dict) and item.get("type") == "tag" and item.get("name")
+            )
+            custom_rules = [
+                rule
+                for rule in protection_rules
+                if isinstance(rule, dict) and rule.get("type") not in {"required_reviewers", "wait_timer"}
+            ]
+            live_environments[name] = {
+                "reviewers": normalized_reviewers,
+                "minimum_approvals": 1,
+                "prevent_self_review": bool(reviewer_rule.get("prevent_self_review", raw.get("prevent_self_review"))),
+                "branch_patterns": branch_patterns,
+                "tag_patterns": tag_patterns,
+                "wait_timer": int(wait_rule.get("wait_timer", raw.get("wait_timer", 0)) or 0),
+                "custom_rules": custom_rules,
+                "can_admins_bypass": raw.get("can_admins_bypass"),
+            }
+        checks = {name: "success" for name in classic.get("required_status_checks", ())}
+        workflow_path = ".github/workflows/aviato-protection-checkpoint.yml"
+        workflow = github.gh_json_optional(
+            f"repos/{repo}/contents/{quote(workflow_path, safe='/')}?ref={quote(identity.default_branch, safe='')}",
+            default={},
+        )
+        guard = None
+        if isinstance(workflow, dict) and isinstance(workflow.get("sha"), str):
+            guard = AuthorizationGuardDescriptor(
+                path=workflow_path,
+                blob_sha=workflow["sha"],
+                schema="aviato-managed-release-checkpoint/v1",
+                allowed_events=("workflow_dispatch",),
+                allowed_refs=("default-branch",),
+                receipt_schema_digest=hashlib.sha256(b"aviato-protection-receipt/v1").hexdigest(),
+                trust_policy_digest=hashlib.sha256(b"distinct-current-user-reviewer/v1").hexdigest(),
+            )
+        return {
+            "repository_identity": identity,
+            "classic": classic,
+            "repository": {},
+            "security": security,
+            "merge": repository,
+            "rulesets": self.read_rulesets(repo),
+            "environments": live_environments,
+            "checks": checks,
+            "guard": guard,
+        }
+
+    def apply_protection_operation(self, repo: str, operation: Any) -> None:
+        """Apply one already-confirmed operation; callers perform semantic readback."""
+
+        desired = deep_thaw(operation.desired)
+        if operation.kind == "classic":
+            if not isinstance(desired, dict):
+                raise ValueError("settings operation requires an object payload")
+            self.apply_settings(repo, desired)
+            return
+        if operation.kind in {"repository", "merge"}:
+            if not isinstance(desired, dict):
+                raise ValueError("repository operation requires an object payload")
+            payload = to_repository_payload(desired)
+            if payload:
+                self._gh_input(["--method", "PATCH", f"repos/{repo}"], payload)
+            return
+        if operation.kind == "security":
+            if not isinstance(desired, dict):
+                raise ValueError("security operation requires an object payload")
+            payload = to_security_payload(desired)
+            if payload:
+                self._gh_input(["--method", "PATCH", f"repos/{repo}"], {"security_and_analysis": payload})
+            return
+        if operation.kind == "ruleset":
+            target = operation.identity.rpartition(":")[2]
+            live_id = next(
+                (
+                    item.get("id")
+                    for item in self.read_rulesets(repo)
+                    if item.get("name") == operation.name and item.get("target") == target
+                ),
+                None,
+            )
+            if operation.action == "delete":
+                if not isinstance(live_id, int):
+                    raise ValueError("ruleset delete readback omitted its immutable id")
+                self.delete_planned_ruleset(repo, ruleset_id=live_id)
+                return
+            if not isinstance(desired, dict):
+                raise ValueError("ruleset operation requires an object payload")
+            self.apply_planned_ruleset(repo, desired, ruleset_id=live_id)
+            return
+        if operation.kind == "environment":
+            if not isinstance(desired, dict):
+                raise ValueError("environment operation requires an object payload")
+            # can_admins_bypass is read-only in the documented update schema.
+            payload = {
+                "wait_timer": desired.get("wait_timer", 0),
+                "prevent_self_review": bool(desired.get("prevent_self_review")),
+                "reviewers": [
+                    {"type": item["type"], "id": item["id"]}
+                    for item in desired.get("reviewers", ())
+                    if isinstance(item, dict) and item.get("type") in {"User", "Team"} and item.get("id")
+                ],
+                "deployment_branch_policy": {
+                    "protected_branches": False,
+                    "custom_branch_policies": True,
+                },
+            }
+            self._gh_input(["--method", "PUT", f"repos/{repo}/environments/{quote(operation.name, safe='')}"], payload)
+            endpoint = f"repos/{repo}/environments/{quote(operation.name, safe='')}/deployment-branch-policies"
+            existing = github.gh_json_paginated(endpoint, default=[])
+            if isinstance(existing, dict):
+                existing = existing.get("branch_policies", [])
+            desired_policies = {("branch", str(pattern)) for pattern in desired.get("branch_patterns", ())} | {
+                ("tag", str(pattern)) for pattern in desired.get("tag_patterns", ())
+            }
+            existing_policies = {
+                (str(item.get("type", "branch")), str(item.get("name"))): item.get("id")
+                for item in existing or ()
+                if isinstance(item, dict) and item.get("name")
+            }
+            for identity, policy_id in existing_policies.items():
+                if identity not in desired_policies:
+                    if not isinstance(policy_id, int):
+                        raise ValueError("deployment policy readback omitted its immutable id")
+                    self._gh("api", "--method", "DELETE", f"{endpoint}/{policy_id}")
+            for policy_type, pattern in sorted(desired_policies - set(existing_policies)):
+                self._gh_input(
+                    ["--method", "POST", endpoint],
+                    {"name": pattern, "type": policy_type},
+                )
+            return
+        if operation.kind == "checks":
+            raise ValueError("expected checks are verified state, not a writable surface")
+        raise ValueError(f"unsupported protection operation {operation.kind!r}")
 
     def get_issue(self, repo: str, key: str) -> Issue | None:
         # Fail-closed read (§2.7): the issues-list endpoint returns ``200 []`` when no

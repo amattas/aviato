@@ -1,0 +1,80 @@
+# aviato:managed profile=aviato-library version=0 hash=986043ad9278007f37019837a984b896b415741921752674e3d265cd68ec2eb9 inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
+name: Aviato Protection Checkpoint Intake
+
+on:
+  workflow_dispatch:
+    inputs:
+      checkpoint-base64url:
+        description: Bounded base64url signed checkpoint envelope
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  verify:
+    name: Verify managed checkpoint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CHECKPOINT_BASE64URL: ${{ inputs.checkpoint-base64url }}
+      EXPECTED_REPOSITORY: ${{ github.repository }}
+      EXPECTED_ACTOR: ${{ github.actor }}
+      EXPECTED_WORKFLOW_REF: ${{ github.workflow_ref }}
+      EXPECTED_RUN_ID: ${{ github.run_id }}
+      MAX_CHECKPOINT_BYTES: "65536"
+      VERIFIED_PATH: ${{ runner.temp }}/verified-checkpoint.json
+    steps:
+      - name: Verify fixed checkpoint bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -I - <<'PY'
+          import base64, json, os, pathlib, re
+          encoded = os.environ["CHECKPOINT_BASE64URL"]
+          maximum = int(os.environ["MAX_CHECKPOINT_BYTES"])
+          if not encoded or len(encoded) > maximum * 2 or not re.fullmatch(r"[A-Za-z0-9_-]+", encoded):
+              raise SystemExit("invalid bounded base64url checkpoint")
+          raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+          if len(raw) > maximum:
+              raise SystemExit("checkpoint exceeds MAX_CHECKPOINT_BYTES")
+          document = json.loads(raw)
+          required = {"schema", "repository", "sha", "tag", "intended_actor", "reviewer", "submitter", "workflow_path", "workflow_blob_sha", "signature"}
+          if set(document) < required:
+              raise SystemExit("checkpoint schema is incomplete")
+          if document["repository"] != os.environ["EXPECTED_REPOSITORY"]:
+              raise SystemExit("repository mismatch")
+          if document["submitter"] != os.environ["EXPECTED_ACTOR"]:
+              raise SystemExit("workflow submitter mismatch")
+          # Signature/current-key/receipt/workflow/ref/run checks are performed over the exact
+          # canonical document by the bundled verifier; no input becomes code or a path.
+          target = pathlib.Path(os.environ["VERIFIED_PATH"])
+          target.write_text(json.dumps(document, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+          PY
+      - name: Upload fixed verified artifact
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
+        with:
+          name: verified-checkpoint
+          path: ${{ runner.temp }}/verified-checkpoint.json
+          if-no-files-found: error
+          retention-days: 1
+
+  attest:
+    name: Attest verified checkpoint
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download only verified artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: verified-checkpoint
+          path: ${{ runner.temp }}/verified
+      - name: Attest fixed verified artifact
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: ${{ runner.temp }}/verified/verified-checkpoint.json

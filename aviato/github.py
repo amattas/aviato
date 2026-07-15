@@ -145,12 +145,10 @@ def _terminal_http_status(stderr: str) -> int | None:
     """
 
     markers = [
-        (match.start(), match.end(), int(match.group(1)), "suffix")
-        for match in _HTTP_STATUS_SUFFIX_RE.finditer(stderr)
+        (match.start(), match.end(), int(match.group(1)), "suffix") for match in _HTTP_STATUS_SUFFIX_RE.finditer(stderr)
     ]
     markers.extend(
-        (match.start(), match.end(), int(match.group(1)), "prefix")
-        for match in _HTTP_STATUS_PREFIX_RE.finditer(stderr)
+        (match.start(), match.end(), int(match.group(1)), "prefix") for match in _HTTP_STATUS_PREFIX_RE.finditer(stderr)
     )
     if not markers:
         return None
@@ -322,6 +320,35 @@ def gh_json_optional(endpoint: str, *, default: Any = None) -> Any:
         return json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise GitHubAPIError(endpoint, result.returncode, f"invalid JSON response: {exc}") from exc
+
+
+def protected_environment(slug: str, name: str) -> dict[str, Any]:
+    """Read one documented deployment environment without collapsing non-404 errors."""
+
+    payload = gh_json_optional(f"repos/{slug}/environments/{quote(name, safe='')}", default={})
+    if not isinstance(payload, dict):
+        raise GitHubAPIError(f"repos/{slug}/environments/{name}", 0, "environment response was not an object")
+    return payload
+
+
+def environment_reviewer_identity(slug: str, reviewer: str) -> dict[str, Any]:
+    """Resolve ``user:LOGIN`` or ``team:ORG/SLUG`` to immutable GitHub identifiers."""
+
+    kind, separator, value = reviewer.partition(":")
+    if not separator or kind not in {"user", "team"} or not value:
+        raise ValueError("environment reviewer must be user:LOGIN or team:ORG/SLUG")
+    if kind == "user":
+        payload = gh_json(f"users/{quote(value, safe='')}")
+        name = value
+    else:
+        org, slash, team = value.partition("/")
+        if not slash or not org or not team or org.casefold() != slug.partition("/")[0].casefold():
+            raise ValueError("team reviewer must be team:REPOSITORY_OWNER/SLUG")
+        payload = gh_json(f"orgs/{quote(org, safe='')}/teams/{quote(team, safe='')}")
+        name = team
+    if not isinstance(payload, dict) or not isinstance(payload.get("id"), int) or not payload.get("node_id"):
+        raise GitHubAPIError("environment reviewer", 0, "reviewer response omitted immutable identity")
+    return {"kind": kind, "name": name, "database_id": payload["id"], "node_id": payload["node_id"]}
 
 
 def gh_json_paginated_optional(endpoint: str, *, default: Any = None) -> Any:
@@ -667,9 +694,7 @@ def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> Rulese
     return RulesetApplyResult(f"{verb} {name} on {slug}")
 
 
-def apply_planned_ruleset(
-    slug: str, payload: dict[str, Any], *, ruleset_id: int | None
-) -> RulesetApplyResult:
+def apply_planned_ruleset(slug: str, payload: dict[str, Any], *, ruleset_id: int | None) -> RulesetApplyResult:
     """Write to the exact endpoint selected by a confirmed semantic plan."""
 
     name = payload.get("name")

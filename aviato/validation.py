@@ -59,6 +59,8 @@ REQUIRED_FILES = [
     "templates/profile-node-service.yml",
     "templates/profile-swift-app.yml",
     "templates/consumer-automation.yml",
+    ".github/workflows/aviato-protection-checkpoint.yml",
+    "templates/consumer-protection-checkpoint.yml",
 ]
 
 RELEASE_WORKFLOWS = [
@@ -280,7 +282,8 @@ def _check_reusable_call_contract(root: Path, job: dict[str, Any], *, source: st
         spec = declared_inputs.get(name)
         declared_type = spec.get("type") if isinstance(spec, dict) else None
         expected = expected_types.get(declared_type) if isinstance(declared_type, str) else None
-        wrong_type = expected is not None and not isinstance(value, expected)
+        expression_typed = isinstance(value, str) and value.strip().startswith("${{") and value.strip().endswith("}}")
+        wrong_type = expected is not None and not expression_typed and not isinstance(value, expected)
         if declared_type == "number" and isinstance(value, bool):
             wrong_type = True
         if wrong_type:
@@ -789,6 +792,13 @@ def _check_template_scaffold_parity(root: Path, errors: list[str]) -> None:
     """Documented caller templates must equal graph-compiled output (no drift)."""
     checks = [(p, f, ".github/workflows/aviato-ci.yml") for p, f in _PROFILE_TEMPLATE_FILES.items()]
     checks.append(("python-library", "templates/consumer-automation.yml", ".github/workflows/aviato-drift.yml"))
+    checks.append(
+        (
+            "python-library",
+            "templates/consumer-protection-checkpoint.yml",
+            ".github/workflows/aviato-protection-checkpoint.yml",
+        )
+    )
     for profile, rel_path, output in checks:
         path = root / rel_path
         if not path.exists():

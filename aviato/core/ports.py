@@ -3,7 +3,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from .protection import ProtectionOperation
 
 _REPOSITORY_SLUG_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._-]*/(?:[A-Za-z0-9][A-Za-z0-9._-]*|\.[A-Za-z0-9_-][A-Za-z0-9._-]*)$"
@@ -26,13 +29,7 @@ def _is_repository_slug(value: str) -> bool:
 def validate_git_ref_name(name: str) -> None:
     """Validate one branch/tag name using Git ref-format and branch safety rules."""
 
-    invalid = (
-        not isinstance(name, str)
-        or not name
-        or name.endswith(".")
-        or ".." in name
-        or "@{" in name
-    )
+    invalid = not isinstance(name, str) or not name or name.endswith(".") or ".." in name or "@{" in name
     components = name.split("/") if isinstance(name, str) else []
     invalid = invalid or any(
         not component or component.startswith(".") or component.endswith(".lock") for component in components
@@ -192,6 +189,17 @@ class RulesetPlanningPlatform(Protocol):
     ) -> RulesetApplyResult: ...
 
     def delete_planned_ruleset(self, repo: str, *, ruleset_id: int) -> None: ...
+
+
+@runtime_checkable
+class ProtectionPlanningPlatform(RulesetPlanningPlatform, Protocol):
+    """Composite protection reads/writes used by one confirmation-bound plan."""
+
+    def read_protection_state(self, repo: str, *, environments: tuple[str, ...] = ()) -> dict[str, Any]: ...
+
+    def apply_protection_operation(self, repo: str, operation: ProtectionOperation) -> None: ...
+
+    def resolve_environment_reviewer(self, repo: str, reviewer: str) -> dict[str, Any]: ...
 
 
 @runtime_checkable

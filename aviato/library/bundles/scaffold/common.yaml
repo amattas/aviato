@@ -12,3 +12,4 @@ templates:
   - issue-template-bug
   - issue-template-feature
   - pr-template
+  - wf-protection-checkpoint

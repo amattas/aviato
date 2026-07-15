@@ -17,6 +17,13 @@ consent-issue mechanism). §5.6 detects ruleset drift (presence + content) and d
 to `apply-rulesets … --apply --declaration .github/aviato.yaml`. The declaration-aware form is
 mandatory once a declaration exists so repository-specific checks and settings overrides cannot
 be silently reset to profile defaults during remediation.
+The operator-direct composite path uses a separate plan ID binding all classic,
+repository/security/merge, ruleset, environment, expected-check, and
+authorization-guard surfaces. Before every write it re-reads identity and the
+bound before-state, after every write it requires semantic readback, and after
+the last operation it runs one final convergence barrier. Rejected writes are
+`failed`; lost responses or unreadable post-write state are `indeterminate`;
+later operations remain unattempted.
 **Steps:** fetch the issue; refuse if closed → confirm the consent record is
 present and **bound to the current diff** (§6.4) → identify the human who granted
 consent via the issue's authoritative event history (most recent grant not later

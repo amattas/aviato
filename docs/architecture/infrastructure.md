@@ -209,8 +209,18 @@ The Python CLI lives in `aviato/`.
   (`--file-only`, `--settings-only`, `--require-settings`) (§5.5/§5.6).
 - `aviato reconcile <path> <issue> --confirm <diff-id>` applies settings from a
   tracking issue — operator-gated and diff-bound (§5.7).
-- `aviato complete-protection <path>` idempotently (re-)applies full branch
-  protection (§5.2 recovery).
+- `aviato complete-protection <path>` previews one composite protection plan.
+  Mutation requires `--apply --confirm <plan-id>`; the plan binds repository
+  identity/default branch, classic and repository settings, security toggles,
+  full rulesets, protected environments, expected checks, and the managed
+  authorization guard to the same pinned desired-state snapshot. Every write
+  has semantic readback and a final all-surface convergence barrier.
+
+Protected environments require explicit concrete user/team reviewers and ref
+policy inputs. GitHub's read-only `can_admins_bypass` field must read back
+`false`; Aviato never guesses or sends an undocumented write for it. A ready
+run emits a redacted local receipt. Failure to publish signed retirement
+evidence preserves that local mutation truth but blocks automatic retirement.
 - `aviato repin <path> <version>` moves the Library version pin: `--write`
   mutates locally, `--open-pr` opens a reviewable re-pin proposal (§5.12).
 - `aviato offboard <path>` removes a consumer from Aviato management:

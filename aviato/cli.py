@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import json
 import os
 import re
 import shlex
-import shutil
+import shutil as shutil
 import sys
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
@@ -20,7 +21,7 @@ from . import __version__
 from .audit import audit_repos, render_json, render_tsv
 from .command import CommandError, run
 from .core.bootstrap import bootstrap_authorized, is_library
-from .core.compiler import compile_partial_desired_state, require_workflow_schema_v2
+from .core.compiler import compile_desired_state, compile_partial_desired_state, require_workflow_schema_v2
 from .core.composition import resolve_profile
 from .core.declaration import Declaration, declaration_to_yaml, load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
@@ -40,6 +41,14 @@ from .core.operation_context import (
 )
 from .core.pathguard import confined_target
 from .core.ports import Platform
+from .core.protection import (
+    EnvironmentReviewer,
+    ProtectedEnvironment,
+    ProtectionPlan,
+    build_protection_plan,
+    execute_protection_plan,
+    require_protection_confirmation,
+)
 from .core.provision import provision_repo
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
@@ -282,9 +291,7 @@ def _derive_ruleset_declaration_slug(root: Path, remote: str, supplied: Sequence
     if not derived:
         raise ValueError(f"declaration repository {root} has no canonical GitHub remote")
     if any(candidate.casefold() != derived.casefold() for candidate in supplied):
-        raise ValueError(
-            f"supplied repository does not match declaration checkout GitHub repository {derived}"
-        )
+        raise ValueError(f"supplied repository does not match declaration checkout GitHub repository {derived}")
     return derived
 
 
@@ -1091,9 +1098,7 @@ def _onboard_proposal(args: argparse.Namespace) -> int:
     branch = f"aviato/onboard-{args.profile}"
     title = f"Adopt Aviato conventions ({args.profile})"
     try:
-        opened_branch = GitHubPlatform(workdir=clone).open_worktree_proposal(
-            slug, branch, title, "\n".join(body_lines)
-        )
+        opened_branch = GitHubPlatform(workdir=clone).open_worktree_proposal(slug, branch, title, "\n".join(body_lines))
     except (GitHubAPIError, CommandError) as exc:
         print(f"could not open onboarding proposal: {exc}", file=sys.stderr)
         return 1
@@ -2076,9 +2081,7 @@ def _repin_proposal(args: argparse.Namespace) -> int:
     branch = f"aviato/repin-{plan.target_version}"
     title = f"chore: re-pin Aviato to {plan.target_version} (§5.12)"
     try:
-        opened_branch = GitHubPlatform(workdir=clone).open_worktree_proposal(
-            slug, branch, title, "\n".join(body_lines)
-        )
+        opened_branch = GitHubPlatform(workdir=clone).open_worktree_proposal(slug, branch, title, "\n".join(body_lines))
     except (GitHubAPIError, CommandError) as exc:
         print(f"could not open re-pin proposal: {exc}", file=sys.stderr)
         return 1
@@ -2291,9 +2294,7 @@ def _offboard_proposal(args: argparse.Namespace) -> int:
     branch = "aviato/offboard"
     title = "Offboard from Aviato management (§5.13)"
     try:
-        opened_branch = GitHubPlatform(workdir=clone).open_worktree_proposal(
-            slug, branch, title, "\n".join(body_lines)
-        )
+        opened_branch = GitHubPlatform(workdir=clone).open_worktree_proposal(slug, branch, title, "\n".join(body_lines))
     except (GitHubAPIError, CommandError) as exc:
         print(f"could not open offboarding proposal: {exc}", file=sys.stderr)
         return 1
@@ -2330,7 +2331,8 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
 
     try:
         declaration = _load_consumer_declaration(root)
-        registry = _open_consumer_context(root, declaration).registry
+        context = _open_consumer_context(root, declaration)
+        registry = context.registry
         resolved = resolve_profile(
             registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
         )
@@ -2347,9 +2349,56 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
         print(pin_error, file=sys.stderr)
         return 2
 
-    desired = _desired_settings(resolved)
+    desired_state = compile_desired_state(
+        registry,
+        resolved,
+        declaration.variables,
+        pin=declaration.version,
+        docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
+    )
+    desired_rulesets = render_all_rulesets(
+        root=context.policy_root,
+        required_approvals=int(resolved.settings.get("default_branch", {}).get("required_reviews", 1)),
+        extra_status_checks=list(desired_state.required_status_checks),
+    )
+    platform = GitHubPlatform()
     try:
-        skipped = GitHubPlatform().apply_settings(slug, desired)
+        reviewers = tuple(
+            EnvironmentReviewer(**platform.resolve_environment_reviewer(slug, reviewer))
+            for reviewer in (args.environment_reviewer or ())
+        )
+        environments = tuple(
+            ProtectedEnvironment(
+                name=name,
+                reviewers=reviewers,
+                minimum_approvals=1,
+                prevent_self_review=args.prevent_self_review,
+                branch_patterns=tuple(args.environment_branch or ()),
+                tag_patterns=tuple(args.environment_tag or ()),
+                wait_timer=args.environment_wait_minutes,
+                custom_rules=(),
+                forbid_admin_bypass=args.forbid_admin_bypass,
+            )
+            for name in desired_state.environments
+        )
+
+        def recompute() -> ProtectionPlan:
+            identity = platform.repository_identity(slug)
+            live = platform.read_protection_state(slug, environments=tuple(item.name for item in environments))
+            return build_protection_plan(
+                repository=identity,
+                tool_version=__version__,
+                declaration_pin=declaration.version,
+                snapshot_sha=context.snapshot.commit_sha,
+                desired_state=desired_state,
+                desired_rulesets=desired_rulesets,
+                live_state=live,
+                environments=environments,
+                allow_degraded_tag_pattern=args.allow_degraded_tag_pattern,
+            )
+
+        plan = recompute()
     except UnmodeledProtectionError as exc:
         # The live protection surface carries something this reconcile cannot safely write
         # (unmodeled classic protection, or ruleset-owned branch protection). Fail closed with
@@ -2357,17 +2406,27 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
         print(f"complete-protection aborted (fail-closed): {exc}", file=sys.stderr)
         return 1
     except (GitHubAPIError, CommandError) as exc:
-        print(f"error applying protection: {exc}", file=sys.stderr)
+        print(f"error reading protection plan: {exc}", file=sys.stderr)
         return 1
-    print(f"applied full protection to {slug} (idempotent, §5.2 complete-protection).")
-    if skipped:
-        # R2-4-3: a requested §17 toggle was surfaced-and-skipped (feature unavailable). Branch
-        # protection landed; do not let the success line imply the security toggle did too.
-        print(
-            f"NOTE: security toggle(s) SKIPPED (unavailable on the repo — enable per §17, then "
-            f"re-run): {sorted(skipped)}",
-            file=sys.stderr,
-        )
+    print(json.dumps({"plan_id": plan.plan_id, "ready": plan.ready, "blockers": plan.blockers}, indent=2))
+    try:
+        selected = require_protection_confirmation(plan, apply=args.apply, confirmation=args.confirm)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if selected is None:
+        print(f"dry-run only; apply with --apply --confirm {plan.plan_id}")
+        return 0 if plan.ready else 1
+    result = execute_protection_plan(
+        selected,
+        confirmation=args.confirm,
+        recompute=recompute,
+        write=lambda operation: platform.apply_protection_operation(slug, operation),
+    )
+    if not result.receipt.ready:
+        print(f"complete-protection did not converge: {result.receipt.status}", file=sys.stderr)
+        return 1
+    print(f"applied composite protection to {slug}; receipt={result.receipt.plan_id}")
     return 0
 
 
@@ -3128,6 +3187,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Proceed despite a version-pin mismatch (§2.6).",
     )
+    complete.add_argument("--apply", action="store_true", help="Apply the previewed composite plan.")
+    complete.add_argument("--confirm", metavar="PLAN_ID", help="Exact composite plan id required with --apply.")
+    complete.add_argument("--environment-reviewer", action="append", metavar="user:LOGIN|team:ORG/SLUG")
+    complete.add_argument("--environment-branch", action="append", metavar="PATTERN")
+    complete.add_argument("--environment-tag", action="append", metavar="PATTERN")
+    complete.add_argument("--environment-wait-minutes", type=int, default=0, metavar="N")
+    complete.add_argument("--prevent-self-review", action="store_true")
+    complete.add_argument("--forbid-admin-bypass", action="store_true")
+    complete.add_argument("--allow-degraded-tag-pattern", action="store_true")
     complete.set_defaults(func=cmd_complete_protection)
 
     provision = subparsers.add_parser(

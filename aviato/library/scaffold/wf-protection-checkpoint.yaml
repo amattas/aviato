@@ -1,0 +1,6 @@
+name: wf-protection-checkpoint
+identity: scaffold/workflow-protection-checkpoint/v1
+output_path: .github/workflows/aviato-protection-checkpoint.yml
+source: files/wf-protection-checkpoint.yml
+comment: "#"
+seed_once: false

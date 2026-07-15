@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .ports import Platform
+from .protection import ProtectionReceipt
 
 
 def minimal_settings() -> dict[str, Any]:
@@ -40,6 +41,7 @@ class ProvisionOutcome:
     # unavailable on the repo. Full protection still landed, but the caller must report this rather
     # than claim a clean apply (mirrors the reconcile audit's "SKIPPED unavailable").
     skipped_security: list[str] = field(default_factory=list)
+    protection_receipt: ProtectionReceipt | None = None
 
     @property
     def ok(self) -> bool:
@@ -53,6 +55,7 @@ def provision_repo(
     desired: dict[str, Any],
     private: bool,
     scaffold_push: Callable[[], None],
+    full_protection: Callable[[], ProtectionReceipt] | None = None,
 ) -> ProvisionOutcome:
     """Provision-new staged protection order (§5.2/§2.11), operator-direct (§2.3).
 
@@ -82,7 +85,15 @@ def provision_repo(
         # R2-1-PROV: the full-protection apply can surface-and-skip an unavailable §17 toggle;
         # capture it so the caller reports a partial apply instead of overstating clean success.
         # (The minimal apply carries no security keys, so its skipped set is always empty.)
-        outcome.skipped_security = platform.apply_settings(repo, desired)
+        if full_protection is None:
+            outcome.skipped_security = platform.apply_settings(repo, desired)
+        else:
+            outcome.protection_receipt = full_protection()
+            if not outcome.protection_receipt.ready:
+                raise RuntimeError(
+                    f"composite protection receipt is {outcome.protection_receipt.status}; "
+                    "repository is not fully protected"
+                )
     except Exception as exc:  # noqa: BLE001 - §8.7 boundary: a post-create failure must surface
         # the exposed/partial state + recovery op, never crash or half-apply. The outcome flags
         # record exactly how far provisioning got (minimal_applied / scaffolded).

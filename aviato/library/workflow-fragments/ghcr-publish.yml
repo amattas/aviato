@@ -8,6 +8,7 @@ permissions:
   id-token: write
   attestations: write
 with:
+  # The reusable publisher rechecks the managed checkpoint before package/OIDC privilege.
   context: "."
   dockerfile: Dockerfile
   platforms: linux/amd64

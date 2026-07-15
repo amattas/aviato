@@ -95,11 +95,12 @@ def test_serializing_workflows_declare_per_repo_concurrency() -> None:
 
 def test_release_floating_major_is_monotonic_guarded() -> None:
     # review (floating-major monotonicity): the release workflow must not regress the mutable @N
-    # pointer for an out-of-order/older release — the force-move is gated on `is-highest`.
+    # pointer for an out-of-order/older release. Promotion cannot execute consumer
+    # helpers, so the trusted workflow compares the complete remote tag set itself.
     body = (WORKFLOWS / "reusable-release.yml").read_text()
-    assert "aviato is-highest" in body, "floating-major move must be gated on is-highest"
-    # the gate must precede the force-push of the major
-    assert body.index("aviato is-highest") < body.index('git push -f origin "${major}"')
+    assert "sort -V | tail -n1" in body
+    assert 'if [ "${highest}" = "${NEXT}" ]' in body
+    assert body.index("sort -V | tail -n1") < body.index("git/refs/tags/${major}")
 
 
 def test_docs_callers_gate_workflow_run_to_origin_repo() -> None:
@@ -1031,25 +1032,24 @@ def test_consumer_automation_settings_drift_token_is_optional_and_read_only() ->
     assert "administration:" not in caller
 
 
-def test_release_tag_phase_proves_version_source_was_bumped() -> None:
+def test_release_promotion_proves_signed_checkpoint_before_tag_mutation() -> None:
     # §5.9/§719: the tag phase must PROVE the merged commit actually bumped the version-
     # source to NEXT before tagging — a commit whose subject merely claims `chore(release):
     # NEXT` but never bumped the manifest must not be tagged/deployed. The proof re-runs the
     # idempotent bump and fails if it produces any change. Guard it structurally (the live
     # gate is operator-verified; nothing else catches a regression here).
     wf = _load("reusable-release.yml")
-    tag_step = next(
+    promote_step = next(
         s
         for j in wf["jobs"].values()
         if isinstance(j, dict)
         for s in j.get("steps", [])
-        if isinstance(s, dict) and s.get("id") == "tag"
+        if isinstance(s, dict) and s.get("id") == "promote"
     )
-    run = tag_step["run"]
-    assert "aviato bump-version" in run, "tag phase must re-run the bump to verify it"
-    assert "git diff" in run, "tag phase must detect an un-bumped manifest via git diff"
-    # The verification must come BEFORE the actual `git tag`.
-    assert run.index("aviato bump-version") < run.index("git tag"), "verify the bump before tagging"
+    run = promote_step["run"]
+    assert "checkpoint digest mismatch" in run
+    assert "MERGED_SHA" in run and "INTENDED_ACTOR" in run
+    assert run.index("checkpoint digest mismatch") < run.index("git/refs")
 
 
 def test_security_baseline_retains_fail_closed_structure() -> None:
@@ -1496,35 +1496,17 @@ def test_release_propose_tolerates_preseeded_version_source() -> None:
     assert marker_commit in body, "propose must fall back to an empty marker commit on a pre-seeded version-source"
 
 
-def test_release_phase_detector_accepts_squash_merge_subject() -> None:
+def test_release_phase_is_explicit_promotion_not_merge_subject_detection() -> None:
     # R6-4-SQUASH: GitHub's DEFAULT squash-merge title format appends ' (#N)' (the PR number) to
     # the PR title, so the merged subject is `chore(release): NEXT (#42)`. The phase-detector regex
     # MUST accept that form — a bare end-anchor would miss it and the workflow would silently fall
     # through to the propose phase, refusing to tag any release on a repo using the default merge
     # mode. Extract the regex literal and exercise both subject formats.
-    import re
-
-    # R7-4-SQUASH-TAUT: exercise the regex actually present in the workflow, not a hand-written
-    # copy. Extract the literal from `grep -Eq "<regex>"`, substitute the bash ${NEXT} interpolation
-    # with a concrete version, and translate the bash end-anchor `\$` into a Python `$`. A future
-    # workflow regex regression must make this test fail.
     body = (WORKFLOWS / "reusable-release.yml").read_text()
-    match = re.search(r'grep -Eq "(\^chore[^"]+)"', body)
-    assert match, "is_release_commit grep -Eq regex not found in reusable-release.yml"
-    workflow_regex = match.group(1).replace("${NEXT}", re.escape("1.2.3")).replace(r"\$", "$")
-    pattern = re.compile(workflow_regex)
-    for accepted in (
-        "chore(release): 1.2.3",
-        "chore(release): 1.2.3 (#42)",
-        "chore(release): 1.2.3 (#1234)",
-    ):
-        assert pattern.match(accepted), f"phase detector must accept: {accepted!r}"
-    for rejected in (
-        "chore(release): 1.2.4 (#42)",
-        "chore: 1.2.3",
-        "chore(release): 1.2.3-extra",
-    ):
-        assert not pattern.match(rejected), f"phase detector must NOT accept: {rejected!r}"
+    assert "is_release_commit" not in body
+    assert 'echo "phase=promotion"' in body
+    assert 'echo "phase=propose"' in body
+    assert "PROMOTION: ${{ inputs.promotion }}" in body
 
 
 def test_app_store_secrets_not_exposed_to_operator_eval_steps() -> None:

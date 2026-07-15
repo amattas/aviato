@@ -111,6 +111,26 @@ Unknown: Final[UnknownValue] = UnknownValue.VALUE
 
 
 @dataclass(frozen=True)
+class AuthorizationGuardDescriptor:
+    """Independent managed guard required before any privileged environment job."""
+
+    path: str
+    blob_sha: str
+    schema: str
+    allowed_events: tuple[str, ...]
+    allowed_refs: tuple[str, ...]
+    receipt_schema_digest: str
+    trust_policy_digest: str
+
+    def __post_init__(self) -> None:
+        if not self.path.startswith(".github/workflows/") or len(self.blob_sha) != 40:
+            raise ValueError("authorization guard requires a trusted workflow path/blob")
+        for digest in (self.receipt_schema_digest, self.trust_policy_digest):
+            if len(digest) != 64:
+                raise ValueError("authorization guard schema/trust digests must be SHA-256")
+
+
+@dataclass(frozen=True)
 class PartialVariableResolution:
     """Typed variable values available to a non-applicable partial preview."""
 

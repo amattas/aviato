@@ -13,7 +13,13 @@ Usage: python3 scripts/regen-templates.py [--check]
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+# Direct script execution otherwise lets an editable install from another
+# worktree win module resolution.  Generator input must always come from the
+# checkout whose outputs are being regenerated.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from aviato.core.declaration import load_declaration
 from aviato.core.onboarding import materialize_items, resolved_artifacts
@@ -34,8 +40,10 @@ def _body(registry: Registry, profile: str, output: str) -> str:
 _OUTPUTS = (
     Path(".github/workflows/aviato-ci.yml"),
     Path(".github/workflows/aviato-drift.yml"),
+    Path(".github/workflows/aviato-protection-checkpoint.yml"),
     *(Path(path) for path in _PROFILE_TEMPLATE_FILES.values()),
     Path("templates/consumer-automation.yml"),
+    Path("templates/consumer-protection-checkpoint.yml"),
 )
 
 
@@ -58,6 +66,9 @@ def _render_templates(root: Path) -> dict[Path, str]:
     rendered[Path("templates/consumer-automation.yml")] = _body(
         registry, "python-library", ".github/workflows/aviato-drift.yml"
     )
+    rendered[Path("templates/consumer-protection-checkpoint.yml")] = _body(
+        registry, "python-library", ".github/workflows/aviato-protection-checkpoint.yml"
+    )
     declaration = load_declaration(root / ".github/aviato.yaml")
     if not declaration.bootstrap:
         raise ValueError(".github/aviato.yaml must declare bootstrap: true")
@@ -75,7 +86,11 @@ def _render_templates(root: Path) -> dict[Path, str]:
         for item in bootstrap
         if not item.seed_once
     }
-    for output in (".github/workflows/aviato-ci.yml", ".github/workflows/aviato-drift.yml"):
+    for output in (
+        ".github/workflows/aviato-ci.yml",
+        ".github/workflows/aviato-drift.yml",
+        ".github/workflows/aviato-protection-checkpoint.yml",
+    ):
         rendered[Path(output)] = bootstrap_by_output[output]
     return rendered
 

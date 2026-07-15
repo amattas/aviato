@@ -52,6 +52,35 @@ on:
         required: false
         type: string
         default: ""
+      promotion:
+        description: Closed mutation phase; false runs proposal only.
+        required: false
+        type: boolean
+        default: false
+      merged-sha:
+        required: false
+        type: string
+        default: ""
+      intended-tag:
+        required: false
+        type: string
+        default: ""
+      intended-actor:
+        required: false
+        type: string
+        default: ""
+      checkpoint-run-id:
+        required: false
+        type: string
+        default: ""
+      checkpoint-digest:
+        required: false
+        type: string
+        default: ""
+      checkpoint-workflow:
+        description: Generator-owned trusted intake workflow filename.
+        required: true
+        type: string
     outputs:
       released:
         description: Set to true when this run cut a release (tagged + published).
@@ -78,14 +107,15 @@ jobs:
       contents: read
     outputs:
       last: ${{ steps.derive.outputs.last }}
-      next: ${{ steps.derive.outputs.next }}
-      release: ${{ steps.derive.outputs.release }}
+      next: ${{ inputs.promotion && inputs.intended-tag || steps.derive.outputs.next }}
+      release: ${{ inputs.promotion && 'true' || steps.derive.outputs.release }}
       phase: ${{ steps.phase.outputs.phase }}
     env:
       AVIATO_REF: ${{ inputs.aviato-ref }}
       AVIATO_LOCAL_INSTALL: ${{ inputs.local-install }}
     steps:
-      - name: Checkout (full history)
+      - name: Checkout proposal source (full history)
+        if: ${{ !inputs.promotion }}
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -94,11 +124,13 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
+        if: ${{ !inputs.promotion }}
         uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python-version }}
 
       - name: Verify Aviato ref is pinned (§11.3 fail-closed)
+        if: ${{ !inputs.promotion }}
         shell: bash
         run: |
           set -euo pipefail
@@ -112,6 +144,7 @@ jobs:
           fi
 
       - name: Install Aviato (pinned)
+        if: ${{ !inputs.promotion }}
         shell: bash
         run: |
           set -euo pipefail
@@ -141,6 +174,7 @@ jobs:
 
       - name: Derive next version
         id: derive
+        if: ${{ !inputs.promotion }}
         shell: bash
         run: |
           set -euo pipefail
@@ -162,26 +196,17 @@ jobs:
             echo "release=true" >> "${GITHUB_OUTPUT}"
           fi
 
-      - name: Choose phase (propose vs tag)
+      - name: Choose closed proposal or promotion phase
         id: phase
-        if: ${{ steps.derive.outputs.release == 'true' }}
+        if: ${{ inputs.promotion || steps.derive.outputs.release == 'true' }}
         shell: bash
         env:
           NEXT: ${{ steps.derive.outputs.next }}
+          PROMOTION: ${{ inputs.promotion }}
         run: |
           set -euo pipefail
-          # TAG phase iff the merged HEAD carries the release bump for NEXT. Robust to the merge
-          # strategy: a squash merge puts "chore(release): <NEXT>" on HEAD; a merge commit puts it
-          # on the second parent (HEAD^2). R6-4-SQUASH: GitHub's DEFAULT squash-merge title format
-          # appends " (#N)" (the PR number) to the PR title, so the merged subject is
-          # `chore(release): NEXT (#42)` — a bare end-anchor would MISS it, silently fall through to
-          # the propose phase, and the workflow would refuse to tag any release on a repo using the
-          # default merge mode. Accept an optional `(#N)` suffix.
-          is_release_commit() {
-            git log -1 --format=%s "$1" 2>/dev/null | grep -Eq "^chore\(release\): ${NEXT}( \(#[0-9]+\))?\$"
-          }
-          if is_release_commit HEAD || is_release_commit "HEAD^2"; then
-            echo "phase=tag" >> "${GITHUB_OUTPUT}"
+          if [ "${PROMOTION}" = "true" ]; then
+            echo "phase=promotion" >> "${GITHUB_OUTPUT}"
           else
             echo "phase=propose" >> "${GITHUB_OUTPUT}"
           fi
@@ -199,17 +224,18 @@ jobs:
       # suppression), so required status checks can report on the release PR.
       actions: write
     outputs:
-      released: ${{ steps.tag.outputs.released }}
+      released: ${{ steps.promote.outputs.released }}
       # R2-1-REL-TAG: sourced from the TAG-phase step (set only when a tag was cut), so it is empty
       # on a propose/no-release run — matching the `tag` output's documented "set only when released".
-      tag: ${{ steps.tag.outputs.tag }}
+      tag: ${{ steps.promote.outputs.tag }}
     env:
       GH_TOKEN: ${{ github.token }}
       AVIATO_REF: ${{ inputs.aviato-ref }}
       AVIATO_LOCAL_INSTALL: ${{ inputs.local-install }}
       BUILD_NUMBER: ${{ inputs.build-number || github.run_number }}
     steps:
-      - name: Checkout (full history)
+      - name: Checkout proposal source (full history)
+        if: ${{ !inputs.promotion }}
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -217,11 +243,13 @@ jobs:
           persist-credentials: true
 
       - name: Set up Python
+        if: ${{ !inputs.promotion }}
         uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python-version }}
 
       - name: Verify Aviato ref is pinned (§11.3 fail-closed)
+        if: ${{ !inputs.promotion }}
         shell: bash
         run: |
           set -euo pipefail
@@ -233,6 +261,7 @@ jobs:
           fi
 
       - name: Install Aviato (pinned)
+        if: ${{ !inputs.promotion }}
         shell: bash
         run: |
           set -euo pipefail
@@ -312,61 +341,64 @@ jobs:
             echo "::warning::Could not dispatch ${workflow_path##*/} at ${branch}; release-PR status checks will be missing until the caller declares workflow_dispatch (re-run aviato sync)."
           fi
 
-      - name: Tag release, advance floating major, publish
-        id: tag
-        if: ${{ needs.derive.outputs.phase == 'tag' }}
+      - name: Verify checkpoint and perform closed promotion
+        id: promote
+        if: ${{ needs.derive.outputs.phase == 'promotion' }}
         shell: bash
         env:
-          NEXT: ${{ needs.derive.outputs.next }}
-          LAST: ${{ needs.derive.outputs.last }}
+          NEXT: ${{ inputs.intended-tag }}
+          MERGED_SHA: ${{ inputs.merged-sha }}
+          INTENDED_ACTOR: ${{ inputs.intended-actor }}
+          CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
+          CHECKPOINT_DIGEST: ${{ inputs.checkpoint-digest }}
+          CHECKPOINT_WORKFLOW: ${{ inputs.checkpoint-workflow }}
         run: |
           set -euo pipefail
-          git config user.name aviato-bot
-          git config user.email aviato-bot@users.noreply.github.com
-          # §5.9/§719: PROVE the merged commit actually wrote the version-source bump for
-          # NEXT before tagging. A commit whose subject claims `chore(release): NEXT` but
-          # never bumped the manifest must not be tagged/deployed. Re-running the bump is
-          # idempotent (§2.5): a no-op leaves the tree clean; any change means the manifest
-          # was NOT at NEXT, so fail closed. (Build number is per-run and omitted from the
-          # semantic-version proof.)
-          aviato bump-version "${NEXT}" . >/dev/null
-          if ! git diff --quiet; then
-            git checkout -- . 2>/dev/null || true
-            echo "::error::Release commit subject claims ${NEXT} but the version-source was not bumped to ${NEXT}; refusing to tag." >&2
+          [[ "${NEXT}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "::error::invalid intended tag"; exit 1; }
+          [[ "${MERGED_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::invalid merged SHA"; exit 1; }
+          [[ "${CHECKPOINT_RUN_ID}" =~ ^[1-9][0-9]*$ && "${CHECKPOINT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::missing checkpoint"; exit 1; }
+          [ "${CHECKPOINT_WORKFLOW}" = "aviato-protection-checkpoint.yml" ] || { echo "::error::untrusted checkpoint workflow"; exit 1; }
+          [ "${GITHUB_ACTOR}" = "${INTENDED_ACTOR}" ] || { echo "::error::actual actor mismatch"; exit 1; }
+          default_branch="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}" --jq .default_branch)"
+          branch_sha="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/git/ref/heads/${default_branch}" --jq .object.sha)"
+          compare="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/compare/${MERGED_SHA}...${branch_sha}" --jq .status)"
+          [ "${compare}" = "ahead" ] || [ "${compare}" = "identical" ] || { echo "::error::merged SHA is not reachable from default branch"; exit 1; }
+          run="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/actions/runs/${CHECKPOINT_RUN_ID}")"
+          jq -e --arg branch "${default_branch}" --arg actor "${INTENDED_ACTOR}" --arg sha "${MERGED_SHA}" '
+            .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success"
+            and .path == ".github/workflows/aviato-protection-checkpoint.yml"
+            and .head_branch == $branch and .head_sha == $sha and .actor.login != $actor
+          ' <<<"${run}" >/dev/null || { echo "::error::checkpoint run mismatch"; exit 1; }
+          mkdir -p "${RUNNER_TEMP}/checkpoint"
+          gh run download "${CHECKPOINT_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name verified-checkpoint --dir "${RUNNER_TEMP}/checkpoint"
+          checkpoint="${RUNNER_TEMP}/checkpoint/verified-checkpoint.json"
+          [ "$(shasum -a 256 "${checkpoint}" | awk '{print $1}')" = "${CHECKPOINT_DIGEST}" ] || { echo "::error::checkpoint digest mismatch"; exit 1; }
+          jq -e --arg repo "${GITHUB_REPOSITORY}" --arg tag "${NEXT}" --arg sha "${MERGED_SHA}" --arg actor "${INTENDED_ACTOR}" '
+            .repository == $repo and .tag == $tag and .sha == $sha and .intended_actor == $actor
+            and .reviewer != $actor and (.expires_at | fromdateiso8601) > now
+          ' "${checkpoint}" >/dev/null || { echo "::error::missing, stale, or mismatched checkpoint"; exit 1; }
+          # Correlated idempotence: an existing tag is accepted only at the exact bound SHA.
+          existing="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${NEXT}" --jq .object.sha 2>/dev/null || true)"
+          if [ -n "${existing}" ] && [ "${existing}" != "${MERGED_SHA}" ]; then
+            echo "::error::existing tag is not correlated with this promotion"
             exit 1
           fi
-          # Idempotent re-run (§5.9): a transient failure AFTER the tag/release was created must be
-          # retriable, so create the immutable version tag + release only if absent (never -f the
-          # release tag — it's an immutable published ref). The floating major IS force-moved (it's
-          # the mutable pointer). `gh release create` likewise skipped if the release already exists.
-          if ! git rev-parse -q --verify "refs/tags/${NEXT}" >/dev/null; then
-            git tag "${NEXT}"
-            git push origin "${NEXT}"
+          if [ -z "${existing}" ]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${NEXT}" -f sha="${MERGED_SHA}" >/dev/null
+            [ "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${NEXT}" --jq .object.sha)" = "${MERGED_SHA}" ] || { echo "::error::tag response lost and readback did not converge"; exit 1; }
           fi
-          # §5.9: advance the floating major (e.g. 1) to this release — a mutable
-          # published pointer consumers pin with @N (§6.1/§11.3).
           major="$(printf '%s' "${NEXT}" | sed -E 's/^([0-9]+).*/\1/')"
-          # review (floating-major monotonicity): only advance @N if NEXT is the HIGHEST release
-          # in that major line — an out-of-order or re-run release of an OLDER patch must never
-          # regress the mutable pointer (mirrors the GHCR/Pages `is_highest` latest-alias guard).
-          # NEXT was just tagged above, so it is included in the candidate set.
-          mapfile -t major_tags < <(git tag --list "${major}.*.*")
-          if aviato is-highest "${NEXT}" "${major_tags[@]}"; then
-            git tag -f "${major}"
-            git push -f origin "${major}"
+          highest="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/tags?per_page=100" --jq '.[].name' \
+            | grep -E "^${major}\.[0-9]+\.[0-9]+$" | sort -V | tail -n1)"
+          if [ "${highest}" = "${NEXT}" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${major}" -f sha="${MERGED_SHA}" -F force=true >/dev/null 2>&1 || \
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${major}" -f sha="${MERGED_SHA}" >/dev/null
           else
-            echo "Not advancing floating major ${major}: ${NEXT} is not the highest ${major}.x.y release."
+            echo "Not advancing floating major ${major}: ${NEXT} is not the highest release (${highest})."
           fi
-          range="${LAST}..HEAD"
-          if ! git rev-parse "${LAST}" >/dev/null 2>&1; then range="HEAD"; fi
-          git log "${range}" --pretty=format:'- %s' > /tmp/changelog.md || true
-          if ! gh release view "${NEXT}" >/dev/null 2>&1; then
-            gh release create "${NEXT}" --title "${NEXT}" --notes-file /tmp/changelog.md
+          if ! gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${NEXT}" >/dev/null 2>&1; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" -f tag_name="${NEXT}" -f target_commitish="${MERGED_SHA}" -f name="${NEXT}" -f body="Checkpoint ${CHECKPOINT_DIGEST}" >/dev/null
           fi
-          # Signal the caller to run deploy as in-run downstream jobs for this tag. R2-1-REL-TAG:
-          # emit `tag` HERE (the tag phase) — not from `derive.next` — so the job's `tag` output is
-          # set ONLY when a release was actually cut, matching its documented contract (empty on a
-          # propose/no-release run, so a caller can't read a phantom tag).
           echo "released=true" >> "${GITHUB_OUTPUT}"
           echo "tag=${NEXT}" >> "${GITHUB_OUTPUT}"
-          echo "Tagged and published ${NEXT}; deploy runs in-run from caller."
+          echo "Promoted ${NEXT} from checkpoint ${CHECKPOINT_DIGEST}."

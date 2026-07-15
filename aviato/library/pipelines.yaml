@@ -107,9 +107,15 @@ release-python:
   envelope: ci
   privileges: &release-privileges ["contents: write", "pull-requests: write", "actions: write", "statuses: write"]
   triggers: &release-triggers
-    push:
-      tags: {add: ["*.*.*"]}
-    workflow_dispatch: {}
+    workflow_dispatch:
+      inputs:
+        promotion: {description: "Closed release promotion mode", required: true, type: boolean, default: false}
+        merged-sha: {description: "Exact merged default-branch SHA", required: false, type: string, default: ""}
+        intended-tag: {description: "Exact SemVer tag", required: false, type: string, default: ""}
+        intended-actor: {description: "Exact signed release actor", required: false, type: string, default: ""}
+        checkpoint-run-id: {description: "Verified checkpoint intake run", required: false, type: string, default: ""}
+        checkpoint-digest: {description: "Canonical checkpoint digest", required: false, type: string, default: ""}
+        checkpoint-workflow: {description: "Generator-owned intake workflow", required: true, type: string, default: "aviato-protection-checkpoint.yml"}
   jobs: &release-python-jobs
     status-bridge:
       identity: job/release-python-status-bridge/v2
@@ -120,12 +126,14 @@ release-python:
     release:
       identity: job/release-python/v2
       fragment: workflow-fragments/release-python.yml
+      inputs: [checkpoint-workflow, promotion, merged-sha, intended-tag, intended-actor, checkpoint-run-id, checkpoint-digest]
       needs: [ci, security, common-lint]
       permissions: ["contents: write", "pull-requests: write", "actions: write"]
       runner: ubuntu-latest
     release-gate:
       identity: job/release-python-gate/v2
       fragment: workflow-fragments/release-gate.yml
+      inputs: [checkpoint-run-id, checkpoint-digest, intended-actor, merged-sha]
       needs: [release]
       permissions: ["actions: read", "contents: read", "pull-requests: read"]
       runner: ubuntu-latest
@@ -145,12 +153,14 @@ release-node:
     release:
       identity: job/release-node/v2
       fragment: workflow-fragments/release-node.yml
+      inputs: [checkpoint-workflow, promotion, merged-sha, intended-tag, intended-actor, checkpoint-run-id, checkpoint-digest]
       needs: [ci, security, common-lint]
       permissions: ["contents: write", "pull-requests: write", "actions: write"]
       runner: ubuntu-latest
     release-gate:
       identity: job/release-node-gate/v2
       fragment: workflow-fragments/release-gate.yml
+      inputs: [checkpoint-run-id, checkpoint-digest, intended-actor, merged-sha]
       needs: [release]
       permissions: ["actions: read", "contents: read", "pull-requests: read"]
       runner: ubuntu-latest
@@ -170,12 +180,14 @@ release-swift:
     release:
       identity: job/release-swift/v2
       fragment: workflow-fragments/release-swift.yml
+      inputs: [checkpoint-workflow, promotion, merged-sha, intended-tag, intended-actor, checkpoint-run-id, checkpoint-digest]
       needs: [ci, security, common-lint]
       permissions: ["contents: write", "pull-requests: write", "actions: write"]
       runner: ubuntu-latest
     release-gate:
       identity: job/release-swift-gate/v2
       fragment: workflow-fragments/release-gate.yml
+      inputs: [checkpoint-run-id, checkpoint-digest, intended-actor, merged-sha]
       needs: [release]
       permissions: ["actions: read", "contents: read", "pull-requests: read"]
       runner: ubuntu-latest
