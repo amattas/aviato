@@ -16,7 +16,7 @@ from aviato.core import transition as transition_module
 from aviato.core.inventory import InventoryEntry, ManagedInventory, render_managed_inventory
 from aviato.core.marker import canonical_input_hash, content_hash, marker_line_from_text
 from aviato.core.outcomes import OperationStatus
-from aviato.core.scaffold import ScaffoldItem, render_managed
+from aviato.core.scaffold import ScaffoldItem, inventory_entry_for_item, render_managed
 from aviato.core.transition import (
     TransitionChange,
     TransitionConflictError,
@@ -26,6 +26,7 @@ from aviato.core.transition import (
     build_transition_plan,
     execute_transition,
     inspect_transition,
+    plan_transition,
     resume_pending_transition,
     resume_transition,
     rollback_transition,
@@ -198,6 +199,235 @@ def test_executor_orders_managed_changes_then_sidecar_declaration_and_inventory_
         ".github/aviato.yaml",
         ".github/aviato.managed.yml",
     ]
+
+
+def test_high_level_transition_plans_seed_sidecar_declaration_and_inventory_together(repo: Path) -> None:
+    managed = ScaffoldItem(
+        "managed.yml",
+        "name: managed\n",
+        "#",
+        input_hash=canonical_input_hash({"fixture": True}),
+        artifact_id="artifact/managed/v1",
+        pipeline_owners=("pipeline/verify/v2",),
+    )
+    seed = ScaffoldItem(
+        "LICENSE",
+        "seed\n",
+        "#",
+        seed_once=True,
+        input_hash=canonical_input_hash({"fixture": True}),
+        artifact_id="artifact/license/v1",
+    )
+
+    prepared = plan_transition(
+        repo,
+        snapshot_sha="a" * 40,
+        declaration_identity="aviato-profile/test/v1",
+        profile="test",
+        pin="0",
+        items=(managed, seed),
+        declaration_bytes=b"profile: test\n",
+        baseline_existing_seeds=True,
+        allow_fresh_seed_initialization=True,
+    )
+
+    assert [operation.category for operation in prepared.plan.operations] == [
+        "managed",
+        "seed",
+        "sidecar",
+        "declaration",
+        "inventory",
+    ]
+    assert execute_transition(prepared.plan).success
+    assert (repo / "managed.yml").exists()
+    assert (repo / "LICENSE").read_bytes() == b"seed\n"
+    assert (repo / ".github/aviato.seed.json").is_file()
+    assert (repo / ".github/aviato.yaml").is_file()
+    assert (repo / ".github/aviato.managed.yml").is_file()
+
+
+def test_high_level_transition_collision_blocks_before_declaration_write(repo: Path) -> None:
+    (repo / "managed.yml").write_text("operator-owned\n")
+    managed = ScaffoldItem(
+        "managed.yml",
+        "name: managed\n",
+        "#",
+        input_hash=canonical_input_hash({"fixture": True}),
+        artifact_id="artifact/managed/v1",
+        pipeline_owners=("pipeline/verify/v2",),
+    )
+
+    prepared = plan_transition(
+        repo,
+        snapshot_sha="a" * 40,
+        declaration_identity="aviato-profile/test/v1",
+        profile="test",
+        pin="0",
+        items=(managed,),
+        declaration_bytes=b"profile: test\n",
+    )
+
+    with pytest.raises(TransitionConflictError, match="unmanaged"):
+        execute_transition(prepared.plan)
+    assert not (repo / ".github/aviato.yaml").exists()
+    assert not (repo / ".github/aviato.managed.yml").exists()
+
+
+def test_fresh_transition_never_overwrites_an_operator_owned_inventory(repo: Path) -> None:
+    inventory = repo / ".github/aviato.managed.yml"
+    inventory.parent.mkdir(parents=True)
+    inventory.write_text("operator-owned\n", encoding="utf-8")
+
+    prepared = plan_transition(
+        repo,
+        snapshot_sha="a" * 40,
+        declaration_identity="aviato-profile/test/v1",
+        profile="test",
+        pin="0",
+        items=(),
+        declaration_bytes=b"profile: test\n",
+        allow_dirty=True,
+    )
+
+    assert any("inventory is invalid or operator-owned" in conflict for conflict in prepared.plan.conflicts)
+    with pytest.raises(TransitionConflictError):
+        execute_transition(prepared.plan)
+    assert inventory.read_text(encoding="utf-8") == "operator-owned\n"
+    assert not (repo / ".github/aviato.yaml").exists()
+
+
+def test_legacy_source_inventory_retires_artifact_removed_from_target_snapshot(repo: Path) -> None:
+    old = ScaffoldItem(
+        "obsolete.yml",
+        "name: obsolete\n",
+        "#",
+        input_hash=canonical_input_hash({"artifact": "obsolete"}),
+        artifact_id="artifact/obsolete/v1",
+        pipeline_owners=("pipeline/verify/v2",),
+    )
+    (repo / "obsolete.yml").write_text(render_managed(old, profile="test", version="0"), encoding="utf-8")
+    (repo / ".github").mkdir()
+    (repo / ".github/aviato.yaml").write_text("profile: test\nversion: 0\n", encoding="utf-8")
+    _commit_fixture(repo)
+    source_inventory = ManagedInventory(
+        schema_version=1,
+        profile="test",
+        profile_identity="aviato-profile/test/v1",
+        pin="0",
+        snapshot_commit="a" * 40,
+        entries={"obsolete.yml": inventory_entry_for_item(old, profile="test", version="0")},
+    )
+
+    prepared = plan_transition(
+        repo,
+        snapshot_sha="b" * 40,
+        declaration_identity="aviato-profile/test/v1",
+        profile="test",
+        pin="1",
+        items=(),
+        declaration_bytes=b"profile: test\nversion: 1\n",
+        source_inventory=source_inventory,
+        allow_dirty=True,
+    )
+
+    assert prepared.plan.conflicts == ()
+    assert prepared.retired == ("obsolete.yml",)
+    execute_transition(prepared.plan)
+    assert not (repo / "obsolete.yml").exists()
+
+
+def test_profile_migration_rejects_live_body_that_only_matches_new_desired_body(repo: Path) -> None:
+    old = ScaffoldItem(
+        "managed.yml",
+        "old body\n",
+        "#",
+        input_hash=canonical_input_hash({"artifact": "managed"}),
+        artifact_id="artifact/managed/v1",
+        pipeline_owners=("pipeline/verify/v2",),
+    )
+    new = replace(old, body="new desired body\n")
+    live = render_managed(old, profile="old-profile", version="0").replace("old body\n", new.body)
+    (repo / "managed.yml").write_text(live, encoding="utf-8")
+
+    prepared = plan_transition(
+        repo,
+        snapshot_sha="b" * 40,
+        declaration_identity="aviato-profile/new/v1",
+        profile="new-profile",
+        pin="1",
+        items=(new,),
+        declaration_bytes=b"profile: new-profile\nversion: 1\n",
+        migrating_from="old-profile",
+        allow_dirty=True,
+    )
+
+    assert any("hand-edited" in conflict for conflict in prepared.plan.conflicts)
+
+
+def test_sync_and_repin_retire_only_clean_prior_snapshot_artifacts(repo: Path) -> None:
+    old = ScaffoldItem(
+        "obsolete.yml",
+        "name: obsolete\n",
+        "#",
+        input_hash=canonical_input_hash({"artifact": "obsolete"}),
+        artifact_id="artifact/obsolete/v1",
+        pipeline_owners=("pipeline/verify/v2",),
+    )
+    kept = ScaffoldItem(
+        "kept.yml",
+        "name: kept\n",
+        "#",
+        input_hash=canonical_input_hash({"artifact": "kept"}),
+        artifact_id="artifact/kept/v1",
+        pipeline_owners=("pipeline/verify/v2",),
+    )
+    initial = plan_transition(
+        repo,
+        snapshot_sha="a" * 40,
+        declaration_identity="aviato-profile/test/v1",
+        profile="test",
+        pin="0",
+        items=(old, kept),
+        declaration_bytes=b"profile: test\nversion: 0\n",
+        baseline_existing_seeds=True,
+        allow_fresh_seed_initialization=True,
+    )
+    execute_transition(initial.plan)
+    _commit_fixture(repo)
+    obsolete = repo / "obsolete.yml"
+    clean = obsolete.read_bytes()
+    obsolete.write_bytes(clean + b"# operator edit\n")
+
+    blocked = plan_transition(
+        repo,
+        snapshot_sha="b" * 40,
+        declaration_identity="aviato-profile/test/v1",
+        profile="test",
+        pin="1",
+        items=(kept,),
+        declaration_bytes=b"profile: test\nversion: 1\n",
+        allow_dirty=True,
+    )
+    assert any("obsolete body is modified" in conflict for conflict in blocked.plan.conflicts)
+    with pytest.raises(TransitionConflictError):
+        execute_transition(blocked.plan)
+    assert obsolete.exists()
+
+    obsolete.write_bytes(clean)
+    converged = plan_transition(
+        repo,
+        snapshot_sha="b" * 40,
+        declaration_identity="aviato-profile/test/v1",
+        profile="test",
+        pin="1",
+        items=(kept,),
+        declaration_bytes=b"profile: test\nversion: 1\n",
+        allow_dirty=True,
+    )
+    assert converged.plan.conflicts == ()
+    assert "obsolete.yml" in converged.retired
+    execute_transition(converged.plan)
+    assert not obsolete.exists()
 
 
 def test_executor_preserves_mode_line_endings_and_atomic_replacement(repo: Path) -> None:

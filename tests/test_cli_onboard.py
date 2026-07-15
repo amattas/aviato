@@ -331,12 +331,13 @@ def test_legacy_reonboard_with_matching_pin_requires_repin_and_preserves_existin
     assert decl.read_text(encoding="utf-8") == original
 
 
-def test_legacy_fresh_write_requires_repin_and_creates_no_declaration(
+def test_schema_v2_fresh_write_creates_declaration_and_managed_inventory(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert _adopt(tmp_path) == 2
-    assert "repin" in capsys.readouterr().err
-    assert not (tmp_path / ".github/aviato.yaml").exists()
+    assert _adopt(tmp_path) == 0
+    assert capsys.readouterr().err == ""
+    assert (tmp_path / ".github/aviato.yaml").is_file()
+    assert (tmp_path / ".github/aviato.managed.yml").is_file()
 
 
 def test_doctor_reports_clean_and_missing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

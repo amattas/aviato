@@ -13,9 +13,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-# GitHubPlatform and tests access this helper through the real `aviato.github.run`
-# module attribute.
-from .command import CommandError, run
+from .command import CommandError
+from .command import run as _run
 from .core.ports import (
     GitObjectRead,
     GitObjectReadStatus,
@@ -26,6 +25,10 @@ from .core.ports import (
     validate_git_ref_name,
 )
 from .repos import is_owner_repo_slug
+
+# GitHubPlatform and tests access this helper through the real `aviato.github.run`
+# module attribute. The assignment also makes the re-export explicit to mypy.
+run = _run
 
 # §5.5 (finding 30): rate-limit responses are tolerated and RETRIED (bounded), so a
 # scheduled fleet run doesn't fail outright on the first 403/429 throttle; a

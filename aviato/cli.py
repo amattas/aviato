@@ -11,6 +11,7 @@ import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import ExitStack
 from contextvars import ContextVar
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, TypedDict
 from urllib.parse import quote
@@ -21,14 +22,15 @@ from .command import CommandError, run
 from .core.bootstrap import bootstrap_authorized, is_library
 from .core.compiler import compile_partial_desired_state, require_workflow_schema_v2
 from .core.composition import resolve_profile
-from .core.declaration import Declaration, declaration_to_yaml, dump_declaration, load_declaration
+from .core.declaration import Declaration, declaration_to_yaml, load_declaration
 from .core.diagnosis import ExpectedArtifact, diagnose
 from .core.errors import AviatoError, CompatibilityError, DeclarationError
 from .core.file_drift_flow import _PROPOSABLE, FileDriftOutcome, run_file_drift
 from .core.fleet import RepoScan, scan_fleet
+from .core.inventory import ManagedInventory, load_managed_inventory
 from .core.marker import parse_marker_from_text
 from .core.model import ResolvedSet, Unknown, VariableSpec
-from .core.offboarding import offboard as offboard_repo
+from .core.offboarding import plan_offboarding_transition
 from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, resolved_artifacts
 from .core.operation_context import (
     LibrarySnapshot,
@@ -43,16 +45,19 @@ from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
 from .core.repin import plan_repin
 from .core.scaffold import (
-    MigrationProtection,
     ScaffoldItem,
-    classify_migration_targets,
-    preflight_seed_integrity,
+    inventory_entry_for_item,
     read_sidecar,
     render_managed,
-    scaffold,
 )
 from .core.settings_drift_flow import run_settings_drift
-from .core.transition import inspect_transition, resume_pending_transition, rollback_transition
+from .core.transition import (
+    execute_transition,
+    inspect_transition,
+    plan_transition,
+    resume_pending_transition,
+    rollback_transition,
+)
 from .core.variables import (
     resolve_declared_variables,
     resolve_partial_variables,
@@ -63,7 +68,7 @@ from .core.version import is_compatible, is_known_version_pin, most_restrictive_
 from .core.versioning import classify_commits, is_highest, next_version
 from .github import GitHubAPIError, SettingsReadError, gh_json_paginated_optional, is_archived
 from .github_platform import GitHubPlatform, UnmodeledProtectionError
-from .library_source import configured_library_repository, fetch_library_snapshot
+from .library_source import configured_library_repository, fetch_library_snapshot, fetch_library_snapshot_at_commit
 from .paths import REPO_ROOT
 from .plugins.version_formats import bump_files
 from .policy import library_repository, load_policy
@@ -81,6 +86,31 @@ DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
 DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
 DECLARATION_RELATIVE_PATH = ".github/aviato.yaml"
 _COMMAND_STACK: ContextVar[ExitStack | None] = ContextVar("aviato_command_stack", default=None)
+
+
+def _cleanup_transition_workdir(workdir: Path, repository: Path) -> None:
+    """Remove a temporary clone unless it contains a recoverable transition.
+
+    A retained journal is the operator's only durable recovery handle after a
+    process interruption.  Never let routine temp cleanup erase it.
+    """
+
+    try:
+        if repository.is_dir() and (repository / ".git").exists() and inspect_transition(repository).pending:
+            print(
+                f"retained interrupted transition at {repository}; run "
+                f"`aviato recover-transition {repository}` for recovery instructions",
+                file=sys.stderr,
+            )
+            return
+    except (AviatoError, OSError) as exc:
+        print(f"retained temporary repository {repository}: could not verify transition state: {exc}", file=sys.stderr)
+        return
+    shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _register_transition_workdir(workdir: Path, repository: Path) -> None:
+    atexit.register(_cleanup_transition_workdir, workdir, repository)
 
 
 def _declaration_ruleset_command(repo: str, declaration_path: str | Path) -> str:
@@ -131,6 +161,19 @@ def _open_published_snapshot(pin: str) -> LibrarySnapshot:
     return stack.enter_context(fetch_library_snapshot(_library_repository(), pin))
 
 
+def _open_recorded_snapshot(commit_sha: str, *, requested_pin: str) -> LibrarySnapshot:
+    stack = _COMMAND_STACK.get()
+    if stack is None:
+        raise RuntimeError("recorded snapshot requested outside command dispatch")
+    return stack.enter_context(
+        fetch_library_snapshot_at_commit(
+            _library_repository(),
+            commit_sha,
+            requested_pin=requested_pin,
+        )
+    )
+
+
 def _print_seed_integrity_error() -> None:
     print(
         "seed-once integrity state is missing, corrupt, or incomplete; review current seed files "
@@ -139,22 +182,12 @@ def _print_seed_integrity_error() -> None:
     )
 
 
-def _print_migration_protections(protections: Iterable[MigrationProtection]) -> None:
-    print("profile migration blocked by protected target(s):", file=sys.stderr)
-    for protection in protections:
-        print(f"- {protection.output}: {protection.reason}", file=sys.stderr)
-
-
 def _consumer_declaration_target(root: Path, *, operation: str) -> Path:
     return confined_target(root, DECLARATION_RELATIVE_PATH, operation=operation)
 
 
 def _load_consumer_declaration(root: Path) -> Declaration:
     return load_declaration(_consumer_declaration_target(root, operation="read declaration"))
-
-
-def _dump_consumer_declaration(declaration: Declaration, root: Path) -> None:
-    dump_declaration(declaration, root, DECLARATION_RELATIVE_PATH)
 
 
 def _non_negative_int(value: str) -> int:
@@ -659,7 +692,12 @@ def _diagnosis_probe_inputs(registry: Registry, profile: str) -> _DiagnosisProbe
 
 
 def _resolve_onboard_declaration(
-    args: argparse.Namespace, registry: Registry, resolved: ResolvedSet, existing: Declaration | None
+    args: argparse.Namespace,
+    registry: Registry,
+    resolved: ResolvedSet,
+    existing: Declaration | None,
+    *,
+    source_registry: Registry | None = None,
 ) -> tuple[Declaration, dict[str, Any]]:
     """Resolve variables (§5.2 precedence), enforce the migrate guard, resolve the
     version pin (§5.12 re-pin exclusivity), and build the declaration. Raises
@@ -697,7 +735,7 @@ def _resolve_onboard_declaration(
         # Old-profile-only values are deliberately retired; arbitrary unknown keys
         # still fail at the current-profile validation boundary.
         current_resolved = resolve_profile(
-            registry,
+            source_registry or registry,
             existing.profile,
             overrides=existing.overrides,
             docs=existing.docs,
@@ -745,8 +783,42 @@ def _resolve_onboard_declaration(
     return declaration, variables
 
 
-def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: ResolvedSet) -> int:
+def _migration_source_registry(
+    root: Path,
+    existing: Declaration,
+    target_context: OperationContext,
+) -> Registry:
+    """Open and authenticate the immutable source snapshot for a profile migration."""
+
+    prior = load_managed_inventory(root)
+    if prior.status != "valid" or prior.inventory is None:
+        raise DeclarationError(
+            "existing declaration predates the managed inventory; use `aviato repin` "
+            "to migrate it through the reviewed v1-to-v2 transition"
+        )
+    inventory = prior.inventory
+    if inventory.profile != existing.profile:
+        raise DeclarationError("managed inventory profile does not match the declaration being migrated")
+    if existing.profile_identity is not None and inventory.profile_identity != existing.profile_identity:
+        raise DeclarationError("managed inventory profile identity does not match the declaration being migrated")
+    source_snapshot = target_context.snapshot
+    if not existing.bootstrap and source_snapshot.commit_sha != inventory.snapshot_commit:
+        source_snapshot = _open_recorded_snapshot(
+            inventory.snapshot_commit,
+            requested_pin=existing.version,
+        )
+    source_identity = source_snapshot.registry.profile(existing.profile).identity
+    if source_identity != inventory.profile_identity:
+        raise DeclarationError(
+            "recorded Library snapshot profile identity does not match the managed inventory; "
+            "refusing profile migration"
+        )
+    return source_snapshot.registry
+
+
+def _onboard_write(args: argparse.Namespace, context: OperationContext, resolved: ResolvedSet) -> int:
     """Adopt a local repository (§5.2): resolve variables, write the declaration, scaffold."""
+    registry = context.registry
     target = Path(args.target)
     if not target.is_dir():
         print(f"--write requires a local repository path; {args.target!r} is not a directory", file=sys.stderr)
@@ -769,9 +841,27 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         return 2
 
     try:
-        declaration, variables = _resolve_onboard_declaration(args, registry, resolved, existing)
+        source_registry = (
+            _migration_source_registry(target, existing, context)
+            if existing is not None and existing.profile != args.profile and args.migrate_profile
+            else None
+        )
+        declaration, variables = _resolve_onboard_declaration(
+            args,
+            registry,
+            resolved,
+            existing,
+            source_registry=source_registry,
+        )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
+        return 2
+    if existing is not None and load_managed_inventory(target).status != "valid":
+        print(
+            "existing declaration predates the managed inventory; use `aviato repin` "
+            "to migrate it through the reviewed v1-to-v2 transition",
+            file=sys.stderr,
+        )
         return 2
 
     # Scaffold with the RESOLVED declaration.docs (the preserved/effective value), so the docs
@@ -787,11 +877,6 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
     )
     fresh_onboarding = existing is None
     migrating_from = existing.profile if existing is not None and existing.profile != args.profile else None
-    if migrating_from is not None:
-        protections = classify_migration_targets(target, items, migrating_from=migrating_from)
-        if protections:
-            _print_migration_protections(protections)
-            return 2
     if fresh_onboarding:
         baselined = [
             item.output
@@ -801,39 +886,39 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         for output in baselined:
             print(f"baselined {output}")
 
-    result = scaffold(
+    prepared = plan_transition(
         target,
-        items,
+        snapshot_sha=context.snapshot.commit_sha,
+        declaration_identity=declaration.profile_identity or registry.profile(args.profile).identity,
         profile=args.profile,
-        version=args.pin,
+        pin=args.pin,
+        items=items,
+        declaration_bytes=declaration_to_yaml(declaration).encode("utf-8"),
         baseline_existing_seeds=fresh_onboarding,
         allow_fresh_seed_initialization=fresh_onboarding,
         allow_seed_set_expansion=migrating_from is not None,
         migrating_from=migrating_from,
+        allow_dirty=args.allow_dirty,
     )
-    if result.seed_integrity_unknown:
-        _print_seed_integrity_error()
+    if prepared.plan.conflicts:
+        for conflict in prepared.plan.conflicts:
+            print(f"BLOCKED: {conflict}", file=sys.stderr)
         return 2
-    if result.migration_protections:
-        _print_migration_protections(result.migration_protections)
+    try:
+        execute_transition(prepared.plan)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
 
-    _dump_consumer_declaration(declaration, target)
     print(f"wrote {declaration_path.relative_to(target)}")
-    for output in result.written:
+    for output in prepared.written:
         print(f"wrote {output}")
-    for output in result.seeded:
+    for output in prepared.seeded:
         print(f"seeded {output}")
-    for output in result.skipped_unmanaged + result.skipped_modified:
-        # review #30: a marker-less file at a managed output path (e.g. a formerly-managed file left
-        # by `offboard --keep-files`, or a hand-edited one) is never silently clobbered; surface it
-        # and tell the operator how to (re-)adopt it as managed, so the orphaned state isn't hidden.
-        print(f"SKIPPED (operator-owned; run `aviato sync --force` to (re-)adopt as managed) {output}")
-    for output in result.skipped_foreign:
-        print(
-            "SKIPPED (marker from a different profile or unknown version — run `aviato sync --force` "
-            f"to overwrite) {output}"
-        )
+    for output in prepared.preserved_seeds:
+        print(f"preserved seed-once {output}")
+    for output in prepared.retired:
+        print(f"retired obsolete managed artifact {output}")
     print(
         "next: review the changes, then apply protections with "
         f"`{_declaration_ruleset_command('OWNER/REPO', declaration_path)}` "
@@ -857,10 +942,8 @@ def _onboard_proposal(args: argparse.Namespace) -> int:
         return 2
 
     workdir = Path(tempfile.mkdtemp(prefix="aviato-onboard-"))
-    # The CLI runs one command per process; clean the full clone at exit so repeated runs
-    # don't leak hundreds of MB into the temp dir regardless of which return path is taken.
-    atexit.register(shutil.rmtree, workdir, True)
     clone = workdir / "repo"
+    _register_transition_workdir(workdir, clone)
     try:
         run(["gh", "repo", "clone", slug, str(clone)])
         clone = canonical_repository_root(clone)
@@ -870,6 +953,9 @@ def _onboard_proposal(args: argparse.Namespace) -> int:
 
     declaration_path = _consumer_declaration_target(clone, operation="inspect declaration")
     existing = _load_consumer_declaration(clone) if declaration_path.is_file() else None
+    if existing is None and read_sidecar(clone).status != "missing":
+        _print_seed_integrity_error()
+        return 2
     try:
         pin = _resolve_onboard_pin(args, existing)
         args.pin = pin
@@ -877,20 +963,30 @@ def _onboard_proposal(args: argparse.Namespace) -> int:
         registry = context.registry
         resolved = resolve_profile(registry, args.profile, docs=args.docs or (existing.docs if existing else False))
         require_workflow_schema_v2(resolved, operation="onboarding proposal")
-        declaration, variables = _resolve_onboard_declaration(args, registry, resolved, existing)
+        source_registry = (
+            _migration_source_registry(clone, existing, context)
+            if existing is not None and existing.profile != args.profile and args.migrate_profile
+            else None
+        )
+        declaration, variables = _resolve_onboard_declaration(
+            args,
+            registry,
+            resolved,
+            existing,
+            source_registry=source_registry,
+        )
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    if existing is not None and load_managed_inventory(clone).status != "valid":
+        print(
+            "existing declaration predates the managed inventory; use `aviato repin` "
+            "to migrate it through the reviewed v1-to-v2 transition",
+            file=sys.stderr,
+        )
+        return 2
 
-    # Build the proposal file set: the declaration + managed (marker-stamped) bodies +
-    # seed-once bodies for files that DON'T already exist. Existing seed-once / operator
-    # files are left untouched and enumerated (§5.2).
-    files: dict[str, str] = {".github/aviato.yaml": declaration_to_yaml(declaration)}
-    untouched: list[str] = []
-    managed_items: list[ScaffoldItem] = []
-    # Use the RESOLVED declaration.docs (preserved from the clone's existing declaration), so the
-    # proposed docs artifacts match the declaration written above — never the raw args.docs (§13.3).
-    for artifact in resolved_artifacts(
+    items = materialize_items(
         registry,
         args.profile,
         variables,
@@ -898,29 +994,37 @@ def _onboard_proposal(args: argparse.Namespace) -> int:
         docs=declaration.docs,
         bootstrap=declaration.bootstrap,
         overrides=declaration.overrides,
-    ):
-        present = confined_target(clone, artifact.output, operation="probe proposal artifact").exists()
-        if artifact.seed_once:
-            if present:
-                untouched.append(artifact.output)
-                continue
-            files[artifact.output] = artifact.body
-        else:
-            item = ScaffoldItem(
-                output=artifact.output,
-                body=artifact.body,
-                comment=artifact.comment,
-                input_hash=artifact.input_hash,
-            )
-            managed_items.append(item)
-            files[artifact.output] = render_managed(item, profile=args.profile, version=args.pin)
+    )
 
+    fresh_onboarding = existing is None
     migrating_from = existing.profile if existing is not None and existing.profile != args.profile else None
-    if migrating_from is not None:
-        protections = classify_migration_targets(clone, managed_items, migrating_from=migrating_from)
-        if protections:
-            _print_migration_protections(protections)
-            return 2
+    try:
+        prepared = plan_transition(
+            clone,
+            snapshot_sha=context.snapshot.commit_sha,
+            declaration_identity=declaration.profile_identity or registry.profile(args.profile).identity,
+            profile=args.profile,
+            pin=args.pin,
+            items=items,
+            declaration_bytes=declaration_to_yaml(declaration).encode("utf-8"),
+            baseline_existing_seeds=fresh_onboarding,
+            allow_fresh_seed_initialization=fresh_onboarding,
+            allow_seed_set_expansion=migrating_from is not None,
+            migrating_from=migrating_from,
+            allow_dirty=True,
+        )
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if prepared.plan.conflicts:
+        for conflict in prepared.plan.conflicts:
+            print(f"BLOCKED: {conflict}", file=sys.stderr)
+        return 2
+    try:
+        execute_transition(prepared.plan)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     body_lines = [
         "Aviato onboarding proposal (§5.2 adopt-existing).",
@@ -929,19 +1033,27 @@ def _onboard_proposal(args: argparse.Namespace) -> int:
         "",
         "Adds the declaration and managed artifacts on this branch for review.",
     ]
-    if untouched:
+    if prepared.preserved_seeds:
         body_lines += ["", "Left untouched (seed-once already present / operator-owned):"]
-        body_lines += [f"- `{p}`" for p in untouched]
+        body_lines += [f"- `{p}`" for p in prepared.preserved_seeds]
+    if prepared.retired:
+        body_lines += ["", "Retires obsolete managed artifacts:"]
+        body_lines += [f"- `{p}`" for p in prepared.retired]
     branch = f"aviato/onboard-{args.profile}"
     title = f"Adopt Aviato conventions ({args.profile})"
     try:
-        GitHubPlatform(workdir=clone).open_or_update_proposal(slug, branch, title, files, "\n".join(body_lines))
+        opened_branch = GitHubPlatform(workdir=clone).open_worktree_proposal(
+            slug, branch, title, "\n".join(body_lines)
+        )
     except (GitHubAPIError, CommandError) as exc:
         print(f"could not open onboarding proposal: {exc}", file=sys.stderr)
         return 1
 
-    print(f"opened onboarding proposal for {slug} on branch {branch} ({len(files)} files).")
-    for p in untouched:
+    if not opened_branch:
+        print(f"{slug} already matches the requested onboarding transition; no proposal opened.")
+        return 0
+    print(f"opened onboarding proposal for {slug} on branch {branch} ({len(prepared.plan.operations)} changes).")
+    for p in prepared.preserved_seeds:
         print(f"untouched (left for the operator): {p}")
     checkout = "/path/to/checkout"
     print(
@@ -973,6 +1085,11 @@ def cmd_onboard(args: argparse.Namespace) -> int:
             args.target = str(target_root)
             decl_path = _consumer_declaration_target(target_root, operation="inspect declaration")
             existing = _load_consumer_declaration(target_root) if decl_path.is_file() else None
+            if existing is not None and existing.profile != args.profile and not args.migrate_profile:
+                raise AviatoError(
+                    f"repository already declares profile {existing.profile!r}; pass --migrate-profile "
+                    f"to change it to {args.profile!r}"
+                )
         else:
             decl_path = Path(DECLARATION_RELATIVE_PATH)
         pin = _resolve_onboard_pin(args, existing)
@@ -996,7 +1113,8 @@ def cmd_onboard(args: argparse.Namespace) -> int:
         return 2
 
     if args.write:
-        return _onboard_write(args, registry, resolved)
+        assert target_root is not None
+        return _onboard_write(args, context, resolved)
 
     # R3-4/R3-15: validate --var and --pin and run the same existing-declaration guard the
     # write/proposal paths use BEFORE emitting any plan, so the dry-run never prints a partial plan
@@ -1008,7 +1126,25 @@ def cmd_onboard(args: argparse.Namespace) -> int:
         # declaration value: this is a pure plan and must not mutate the target. Saved
         # declaration values therefore beat defaults, while explicit --var values beat
         # both, exactly as they do for --write.
-        _, known = _resolve_onboard_declaration(args, registry, resolved, existing)
+        source_registry = (
+            _migration_source_registry(target_root, existing, context)
+            if target_root is not None and existing.profile != args.profile and args.migrate_profile
+            else None
+        )
+        _, known = _resolve_onboard_declaration(
+            args,
+            registry,
+            resolved,
+            existing,
+            source_registry=source_registry,
+        )
+        if target_root is not None and load_managed_inventory(target_root).status != "valid":
+            print(
+                "existing declaration predates the managed inventory; use `aviato repin` "
+                "to migrate it through the reviewed v1-to-v2 transition",
+                file=sys.stderr,
+            )
+            return 2
     else:
         # A fresh plan intentionally remains usable before required variables and a pin
         # are known. Resolve the subset available to preview conditional artifacts and
@@ -1229,6 +1365,11 @@ def cmd_sync(args: argparse.Namespace) -> int:
         declaration = _load_consumer_declaration(root)
         context = _open_consumer_context(root, declaration)
         registry = context.registry
+        if load_managed_inventory(root).status != "valid":
+            raise AviatoError(
+                "existing declaration predates the managed inventory; use `aviato repin` "
+                "to migrate it through the reviewed v1-to-v2 transition"
+            )
         backfilled: Declaration | None = None
         if declaration.profile_identity is None:
             pinned_identity = registry.profile(declaration.profile).identity
@@ -1270,42 +1411,48 @@ def cmd_sync(args: argparse.Namespace) -> int:
         print(pin_error, file=sys.stderr)
         return 2
 
-    baselined = [
-        item.output
-        for item in items
-        if item.seed_once and confined_target(root, item.output, operation="inspect seed baseline").exists()
-    ]
-    if args.rebaseline_seeds:
-        for output in baselined:
-            print(f"baselined {output}")
-
-    result = scaffold(
-        root,
-        items,
-        profile=declaration.profile,
-        version=declaration.version,
-        force=args.force,
-        baseline_existing_seeds=args.rebaseline_seeds,
-        allow_fresh_seed_initialization=False,
-    )
-    if result.seed_integrity_unknown:
-        _print_seed_integrity_error()
+    effective = backfilled or declaration
+    try:
+        prepared = plan_transition(
+            root,
+            snapshot_sha=context.snapshot.commit_sha,
+            declaration_identity=effective.profile_identity or registry.profile(effective.profile).identity,
+            profile=effective.profile,
+            pin=effective.version,
+            items=items,
+            declaration_bytes=declaration_to_yaml(effective).encode("utf-8"),
+            force=args.force,
+            baseline_existing_seeds=args.rebaseline_seeds,
+            allow_fresh_seed_initialization=False,
+            allow_dirty=True,
+        )
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
+    if prepared.plan.conflicts:
+        for conflict in prepared.plan.conflicts:
+            print(f"BLOCKED: {conflict}", file=sys.stderr)
+        return 2
+    try:
+        execute_transition(prepared.plan)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
     if backfilled is not None:
-        _dump_consumer_declaration(backfilled, root)
         print(f"wrote profile-identity {backfilled.profile_identity} to {declaration_path.relative_to(root)}")
-    for output in result.written:
+    for output in prepared.written:
         print(f"wrote {output}")
-    for output in result.seeded:
+    for output in prepared.seeded:
         print(f"seeded {output}")
-    for output in result.unchanged:
+    for output in prepared.unchanged:
         print(f"unchanged {output}")
-    for output in result.skipped_unmanaged:
-        print(f"SKIPPED (unmanaged/malformed) {output}")
-    for output in result.skipped_modified:
-        print(f"SKIPPED (hand-edited — use --force to overwrite) {output}")
-    for output in result.skipped_foreign:
-        print(f"SKIPPED (marker from a different profile or unknown version — use --force to overwrite) {output}")
+    for output in prepared.preserved_seeds:
+        print(f"preserved seed-once {output}")
+    for output in prepared.baselined:
+        print(f"baselined {output}")
+    for output in prepared.retired:
+        print(f"retired obsolete managed artifact {output}")
     return 0
 
 
@@ -1550,6 +1697,85 @@ def _gate_repin_target(
     return None
 
 
+def _repin_items_with_recorded_aliases(
+    root: Path,
+    declaration: Declaration,
+    current_context: OperationContext,
+    target_items: list[ScaffoldItem],
+) -> tuple[list[ScaffoldItem], ManagedInventory]:
+    """Carry the exact source artifact set into legacy retirement reconciliation."""
+
+    prior = load_managed_inventory(root)
+    source_snapshot = current_context.snapshot
+    if (
+        prior.status == "valid"
+        and prior.inventory is not None
+        and source_snapshot.commit_sha != prior.inventory.snapshot_commit
+    ):
+        source_snapshot = _open_recorded_snapshot(
+            prior.inventory.snapshot_commit,
+            requested_pin=declaration.version,
+        )
+    source_identity = source_snapshot.registry.profile(declaration.profile).identity
+    expected_identity = (
+        prior.inventory.profile_identity
+        if prior.status == "valid" and prior.inventory is not None
+        else declaration.profile_identity
+    )
+    if expected_identity is not None and source_identity != expected_identity:
+        raise AviatoError(
+            "recorded Library snapshot profile identity does not match the managed inventory; "
+            "refusing to infer migration aliases"
+        )
+    source_artifacts = resolved_artifacts(
+        source_snapshot.registry,
+        declaration.profile,
+        declaration.variables,
+        pin=declaration.version,
+        docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
+        overrides=declaration.overrides,
+    )
+    old_paths: dict[str, set[str]] = {}
+    source_items: list[ScaffoldItem] = []
+    for artifact in source_artifacts:
+        if not artifact.seed_once and artifact.artifact_id:
+            old_paths.setdefault(artifact.artifact_id, set()).add(artifact.output)
+            source_items.append(
+                ScaffoldItem(
+                    output=artifact.output,
+                    body=artifact.body,
+                    comment=artifact.comment,
+                    input_hash=artifact.input_hash,
+                    artifact_id=artifact.artifact_id,
+                    pipeline_owners=artifact.pipeline_owners,
+                    legacy_aliases=artifact.legacy_aliases,
+                )
+            )
+    enriched: list[ScaffoldItem] = []
+    for item in target_items:
+        aliases = set(item.legacy_aliases)
+        if item.artifact_id:
+            aliases.update(path for path in old_paths.get(item.artifact_id, ()) if path != item.output)
+        enriched.append(replace(item, legacy_aliases=tuple(sorted(aliases))))
+    source_inventory = ManagedInventory(
+        schema_version=1,
+        profile=declaration.profile,
+        profile_identity=source_identity,
+        pin=declaration.version,
+        snapshot_commit=source_snapshot.commit_sha,
+        entries={
+            item.output: inventory_entry_for_item(
+                item,
+                profile=declaration.profile,
+                version=declaration.version,
+            )
+            for item in source_items
+        },
+    )
+    return enriched, source_inventory
+
+
 def cmd_repin(args: argparse.Namespace) -> int:
     """Move a consumer to a different Library version (§5.12) — the only sanctioned pin move."""
     try:
@@ -1580,7 +1806,7 @@ def cmd_repin(args: argparse.Namespace) -> int:
         resolve_declared_variables(base_resolved.variables, declaration.variables)
         target_snapshot = _open_published_snapshot(normalize_pin(args.version))
         target_registry = target_snapshot.registry
-        plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
+        plan = plan_repin(current_context.registry, declaration, args.version, target_registry=target_registry)
         items = (
             materialize_items(
                 target_registry,
@@ -1633,43 +1859,50 @@ def cmd_repin(args: argparse.Namespace) -> int:
     updated = Declaration(
         profile=declaration.profile,
         version=plan.target_version,
-        profile_identity=declaration.profile_identity,
+        profile_identity=target_registry.profile(declaration.profile).identity,
         docs=declaration.docs,
         bootstrap=declaration.bootstrap,
         variables=declaration.variables,
         overrides=declaration.overrides,
     )
-    # R3-4-3: render the new-pin artifacts BEFORE persisting the pin, so a render-time failure aborts
-    # the re-pin without leaving the declaration moved to the new pin but the managed files still at
-    # the old one (a non-transactional state that a re-run would report as `X -> X` and re-fail).
-    if preflight_seed_integrity(root, items, allow_fresh_seed_initialization=False).unknown:
-        _print_seed_integrity_error()
+    prior = load_managed_inventory(root)
+    if prior.status == "invalid":
+        print(f"managed inventory is invalid: {prior.reason}", file=sys.stderr)
         return 2
-    _dump_consumer_declaration(updated, root)
-    print(f"wrote pin {plan.target_version} to {declaration_path.relative_to(root)}")
-    result = scaffold(
-        root,
-        items,
-        profile=updated.profile,
-        version=updated.version,
-        allow_fresh_seed_initialization=False,
-    )
-    if result.seed_integrity_unknown:
-        _print_seed_integrity_error()
-        return 2
-    for output in result.written:
-        print(f"rewrote {output}")
-    # §5.12: surface files the no-clobber guard left at the OLD pin so the operator
-    # knows the re-pin did not fully apply (a silent skip would misrepresent success).
-    for output in result.skipped_modified:
-        print(f"skipped (hand-edited; still at old pin — reconcile manually): {output}")
-    for output in result.skipped_unmanaged:
-        print(f"skipped (unmanaged file at this path — not re-pinned): {output}")
-    for output in result.skipped_foreign:
-        print(
-            "skipped (marker from a different profile or unknown version; still at old pin — run "
-            f"`aviato sync --force`): {output}"
+    try:
+        items, source_inventory = _repin_items_with_recorded_aliases(root, declaration, current_context, items)
+        prepared = plan_transition(
+            root,
+            snapshot_sha=target_snapshot.commit_sha,
+            declaration_identity=target_registry.profile(updated.profile).identity,
+            profile=updated.profile,
+            pin=updated.version,
+            items=items,
+            declaration_bytes=declaration_to_yaml(updated).encode("utf-8"),
+            allow_fresh_seed_initialization=False,
+            source_inventory=source_inventory,
+            allow_dirty=True,
         )
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if prepared.plan.conflicts:
+        for conflict in prepared.plan.conflicts:
+            print(f"BLOCKED: {conflict}", file=sys.stderr)
+        return 2
+    try:
+        execute_transition(prepared.plan)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    print(f"wrote pin {plan.target_version} to {declaration_path.relative_to(root)}")
+    for output in prepared.written:
+        print(f"rewrote {output}")
+    for output in prepared.preserved_seeds:
+        print(f"preserved seed-once {output}")
+    for output in prepared.retired:
+        print(f"retired obsolete managed artifact {output}")
     print("next: review the re-pinned artifacts, commit on a branch, and open a PR (§5.2/§5.12).")
     return 0
 
@@ -1689,8 +1922,8 @@ def _repin_proposal(args: argparse.Namespace) -> int:
         return 2
 
     workdir = Path(tempfile.mkdtemp(prefix="aviato-repin-"))
-    atexit.register(shutil.rmtree, workdir, True)  # clean the clone at exit (one command per process)
     clone = workdir / "repo"
+    _register_transition_workdir(workdir, clone)
     try:
         run(["gh", "repo", "clone", slug, str(clone)])
         clone = canonical_repository_root(clone)
@@ -1708,8 +1941,9 @@ def _repin_proposal(args: argparse.Namespace) -> int:
         current_context = _open_consumer_context(clone, declaration)
         current_resolved = resolve_profile(current_context.registry, declaration.profile)
         resolve_declared_variables(current_resolved.variables, declaration.variables)
-        target_registry = _open_published_snapshot(normalize_pin(args.version)).registry
-        plan = plan_repin(target_registry, declaration, args.version, target_registry=target_registry)
+        target_snapshot = _open_published_snapshot(normalize_pin(args.version))
+        target_registry = target_snapshot.registry
+        plan = plan_repin(current_context.registry, declaration, args.version, target_registry=target_registry)
         items = (
             materialize_items(
                 target_registry,
@@ -1744,44 +1978,65 @@ def _repin_proposal(args: argparse.Namespace) -> int:
     updated = Declaration(
         profile=declaration.profile,
         version=plan.target_version,
-        profile_identity=declaration.profile_identity,
+        profile_identity=target_registry.profile(declaration.profile).identity,
         docs=declaration.docs,
         bootstrap=declaration.bootstrap,
         variables=declaration.variables,
         overrides=declaration.overrides,
     )
-    if preflight_seed_integrity(clone, items, allow_fresh_seed_initialization=False).unknown:
-        _print_seed_integrity_error()
+    prior = load_managed_inventory(clone)
+    if prior.status == "invalid":
+        print(f"managed inventory is invalid: {prior.reason}", file=sys.stderr)
         return 2
-    _dump_consumer_declaration(updated, clone)
-    result = scaffold(
-        clone,
-        items,
-        profile=updated.profile,
-        version=updated.version,
-        allow_fresh_seed_initialization=False,
-    )
-    if result.seed_integrity_unknown:
-        _print_seed_integrity_error()
+    try:
+        items, source_inventory = _repin_items_with_recorded_aliases(clone, declaration, current_context, items)
+        prepared = plan_transition(
+            clone,
+            snapshot_sha=target_snapshot.commit_sha,
+            declaration_identity=target_registry.profile(updated.profile).identity,
+            profile=updated.profile,
+            pin=updated.version,
+            items=items,
+            declaration_bytes=declaration_to_yaml(updated).encode("utf-8"),
+            allow_fresh_seed_initialization=False,
+            source_inventory=source_inventory,
+            allow_dirty=True,
+        )
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if prepared.plan.conflicts:
+        for conflict in prepared.plan.conflicts:
+            print(f"BLOCKED: {conflict}", file=sys.stderr)
+        return 2
+    try:
+        execute_transition(prepared.plan)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
 
     body_lines = [
         f"Aviato re-pin proposal (§5.12): {declaration.version} -> {plan.target_version}.",
         "",
-        f"- rewrote {len(result.written)} managed file(s) at the target pin",
+        f"- rewrote {len(prepared.written)} managed file(s) at the target pin",
     ]
     if plan.downgrade_warning:
         body_lines[1:1] = ["", f"WARNING: {plan.downgrade_warning}"]
-    for output in result.skipped_modified:
-        body_lines.append(f"- skipped (hand-edited; still at old pin): {output}")
+    for output in prepared.retired:
+        body_lines.append(f"- retired obsolete clean managed artifact: {output}")
     branch = f"aviato/repin-{plan.target_version}"
     title = f"chore: re-pin Aviato to {plan.target_version} (§5.12)"
     try:
-        GitHubPlatform(workdir=clone).open_worktree_proposal(slug, branch, title, "\n".join(body_lines))
+        opened_branch = GitHubPlatform(workdir=clone).open_worktree_proposal(
+            slug, branch, title, "\n".join(body_lines)
+        )
     except (GitHubAPIError, CommandError) as exc:
         print(f"could not open re-pin proposal: {exc}", file=sys.stderr)
         return 1
 
+    if not opened_branch:
+        print(f"{slug} already matches target pin {plan.target_version}; no proposal opened.")
+        return 0
     print(f"opened re-pin proposal for {slug} on branch {branch}.")
     if plan.downgrade_warning:
         print(f"WARNING: {plan.downgrade_warning}")
@@ -1808,7 +2063,8 @@ def cmd_offboard(args: argparse.Namespace) -> int:
 
     try:
         declaration = _load_consumer_declaration(root)
-        registry = _open_consumer_context(root, declaration).registry
+        context = _open_consumer_context(root, declaration)
+        registry = context.registry
         expected = _expected_artifacts(registry, declaration)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
@@ -1834,7 +2090,29 @@ def cmd_offboard(args: argparse.Namespace) -> int:
 
     _require_no_pending_transition(root)
 
-    result = offboard_repo(root, managed_outputs, keep_files=not args.delete_files)
+    try:
+        prepared = plan_offboarding_transition(
+            root,
+            managed_outputs,
+            snapshot_sha=context.snapshot.commit_sha,
+            declaration_identity=declaration.profile_identity or registry.profile(declaration.profile).identity,
+            profile=declaration.profile,
+            keep_files=not args.delete_files,
+            allow_dirty=True,
+        )
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if prepared.plan.conflicts:
+        for conflict in prepared.plan.conflicts:
+            print(f"BLOCKED: {conflict}", file=sys.stderr)
+        return 2
+    try:
+        execute_transition(prepared.plan)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    result = prepared.result
     for output in result.stripped:
         print(f"stripped marker: {output}")
     for output in result.removed:
@@ -1903,8 +2181,8 @@ def _offboard_proposal(args: argparse.Namespace) -> int:
         return 2
 
     workdir = Path(tempfile.mkdtemp(prefix="aviato-offboard-"))
-    atexit.register(shutil.rmtree, workdir, True)  # clean the clone at exit (one command per process)
     clone = workdir / "repo"
+    _register_transition_workdir(workdir, clone)
     try:
         run(["gh", "repo", "clone", slug, str(clone)])
         clone = canonical_repository_root(clone)
@@ -1919,14 +2197,37 @@ def _offboard_proposal(args: argparse.Namespace) -> int:
 
     try:
         declaration = _load_consumer_declaration(clone)
-        registry = _open_consumer_context(clone, declaration).registry
+        context = _open_consumer_context(clone, declaration)
+        registry = context.registry
         expected = _expected_artifacts(registry, declaration)
     except AviatoError as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
     managed_outputs = [a.output_path for a in expected if not a.seed_once]
-    result = offboard_repo(clone, managed_outputs, keep_files=not args.delete_files)
+    try:
+        prepared = plan_offboarding_transition(
+            clone,
+            managed_outputs,
+            snapshot_sha=context.snapshot.commit_sha,
+            declaration_identity=declaration.profile_identity or registry.profile(declaration.profile).identity,
+            profile=declaration.profile,
+            keep_files=not args.delete_files,
+            allow_dirty=True,
+        )
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if prepared.plan.conflicts:
+        for conflict in prepared.plan.conflicts:
+            print(f"BLOCKED: {conflict}", file=sys.stderr)
+        return 2
+    try:
+        execute_transition(prepared.plan)
+    except AviatoError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    result = prepared.result
 
     body_lines = [
         "Aviato offboarding proposal (§5.13).",
@@ -1941,11 +2242,16 @@ def _offboard_proposal(args: argparse.Namespace) -> int:
     branch = "aviato/offboard"
     title = "Offboard from Aviato management (§5.13)"
     try:
-        GitHubPlatform(workdir=clone).open_worktree_proposal(slug, branch, title, "\n".join(body_lines))
+        opened_branch = GitHubPlatform(workdir=clone).open_worktree_proposal(
+            slug, branch, title, "\n".join(body_lines)
+        )
     except (GitHubAPIError, CommandError) as exc:
         print(f"could not open offboarding proposal: {exc}", file=sys.stderr)
         return 1
 
+    if not opened_branch:
+        print(f"{slug} is already offboarded; no proposal opened.")
+        return 0
     print(f"opened offboarding proposal for {slug} on branch {branch}.")
     print(f"WARNING: {result.warning}")
     return 0
@@ -2076,12 +2382,25 @@ def cmd_provision(args: argparse.Namespace) -> int:
         # write the declaration + scaffold managed files, commit, and push DIRECTLY to
         # the default branch — allowed because minimal protection has no PR gate (§2.11).
         workdir = Path(tempfile.mkdtemp(prefix="aviato-provision-"))
-        atexit.register(shutil.rmtree, workdir, True)  # clean the clone at exit (one command per process)
         clone = workdir / "repo"
+        _register_transition_workdir(workdir, clone)
         run(["gh", "repo", "clone", slug, str(clone)])
         clone = canonical_repository_root(clone)
-        _dump_consumer_declaration(declaration, clone)
-        scaffold(clone, items, profile=args.profile, version=args.pin)
+        prepared = plan_transition(
+            clone,
+            snapshot_sha=snapshot.commit_sha,
+            declaration_identity=declaration.profile_identity or registry.profile(args.profile).identity,
+            profile=args.profile,
+            pin=args.pin,
+            items=items,
+            declaration_bytes=declaration_to_yaml(declaration).encode("utf-8"),
+            baseline_existing_seeds=True,
+            allow_fresh_seed_initialization=True,
+            allow_dirty=True,
+        )
+        if prepared.plan.conflicts:
+            raise AviatoError("provision transition blocked: " + "; ".join(prepared.plan.conflicts))
+        execute_transition(prepared.plan)
         run(["git", "-C", str(clone), "config", "user.name", "aviato-bot"])
         run(["git", "-C", str(clone), "config", "user.email", "aviato-bot@users.noreply.github.com"])
         run(["git", "-C", str(clone), "add", "-A"])

@@ -136,12 +136,14 @@ class TemplateModule:
 
     output_path: str
     source: str
+    identity: str = ""
     seed_once: bool = False
     comment: str | None = None
     required_variables: tuple[str, ...] = ()
     # Variable-conditional inclusion (§12.2): the template applies only when every
     # (variable, value) pair matches the resolved variables. Empty = always applies.
     when: tuple[tuple[str, str], ...] = ()
+    legacy_aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

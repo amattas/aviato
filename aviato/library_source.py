@@ -174,9 +174,9 @@ def _contained_extraction_path(root: Path, relative: PurePosixPath) -> Path:
 
 
 @contextmanager
-def fetch_library_snapshot(repository: str, pin: str) -> Iterator[LibrarySnapshot]:
-    """Yield one resolved, commit-addressed Library tree and its complete identity."""
-    resolved = resolve_library_ref(repository, pin)
+def _fetch_resolved_snapshot(resolved: ResolvedLibraryRef, *, requested_pin: str) -> Iterator[LibrarySnapshot]:
+    """Download and validate the immutable tree selected by ``resolved``."""
+
     sha = resolved.commit_sha
     workdir = Path(tempfile.mkdtemp(prefix="aviato-library-"))
     try:
@@ -222,7 +222,7 @@ def fetch_library_snapshot(repository: str, pin: str) -> Iterator[LibrarySnapsho
             root=extract_root,
             registry=registry,
             policy_root=extract_root,
-            requested_pin=pin,
+            requested_pin=requested_pin,
             resolved_ref=resolved,
             _cleanup=lambda: shutil.rmtree(workdir, ignore_errors=True),
         )
@@ -232,6 +232,46 @@ def fetch_library_snapshot(repository: str, pin: str) -> Iterator[LibrarySnapsho
             snapshot.close()
         else:
             shutil.rmtree(workdir, ignore_errors=True)
+
+
+@contextmanager
+def fetch_library_snapshot(repository: str, pin: str) -> Iterator[LibrarySnapshot]:
+    """Yield one resolved, commit-addressed Library tree and its complete identity."""
+
+    resolved = resolve_library_ref(repository, pin)
+    with _fetch_resolved_snapshot(resolved, requested_pin=pin) as snapshot:
+        yield snapshot
+
+
+@contextmanager
+def fetch_library_snapshot_at_commit(
+    repository: str,
+    commit_sha: str,
+    *,
+    requested_pin: str,
+) -> Iterator[LibrarySnapshot]:
+    """Yield an already-recorded immutable Library commit without re-resolving its ref.
+
+    Managed inventory records the commit that produced the current repository state.
+    A branch or moved tag may no longer resolve to that commit during a later re-pin,
+    so migration metadata must be read from the recorded commit itself.
+    """
+
+    if not _SHA_RE.fullmatch(commit_sha):
+        raise AviatoError(f"recorded Library snapshot commit is invalid: {commit_sha!r}")
+    try:
+        identity = github.repository_identity(repository)
+    except (github.GitHubAPIError, ValueError) as exc:
+        raise AviatoError(f"could not establish access to Library repository {repository}: {exc}") from exc
+    resolved = ResolvedLibraryRef(
+        repository_identity=identity,
+        ref_kind=LibraryRefKind.COMMIT,
+        requested_pin=requested_pin,
+        object_sha=commit_sha,
+        commit_sha=commit_sha,
+    )
+    with _fetch_resolved_snapshot(resolved, requested_pin=requested_pin) as snapshot:
+        yield snapshot
 
 
 @contextmanager

@@ -131,8 +131,7 @@ def test_repin_refuses_when_profile_identity_changes_at_target(module_root: Path
         plan_repin(Registry(module_root), _decl(), "v2.0.0", target_registry=Registry(target))
 
 
-def test_repin_legacy_declaration_requires_sync_first(module_root: Path) -> None:
+def test_repin_legacy_declaration_migrates_when_source_and_target_identities_match(module_root: Path) -> None:
     declaration = _decl()
     declaration.profile_identity = None
-    with pytest.raises(CompositionError, match=r"sync.*current pin"):
-        plan_repin(Registry(module_root), declaration, "2", target_registry=Registry(module_root))
+    assert plan_repin(Registry(module_root), declaration, "2", target_registry=Registry(module_root)).ok

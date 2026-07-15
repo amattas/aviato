@@ -5,9 +5,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .errors import AviatoError
+from .inventory import INVENTORY_PATH, load_managed_inventory, scan_marker_universe
 from .marker import parse_marker_from_text, strip_marker_from_text
 from .pathguard import confined_target
-from .scaffold import atomic_write
+from .scaffold import SIDECAR_PATH, atomic_write, read_sidecar
+from .transition import TransitionChange, TransitionPlan, build_transition_plan
+from .version import is_known_version_pin
 
 BASELINE_REMOVAL_WARNING = (
     "Offboarding removes the always-on security baseline (§2.13) automation and stops "
@@ -27,6 +30,12 @@ class OffboardingResult:
     warning: str = BASELINE_REMOVAL_WARNING
 
 
+@dataclass(frozen=True)
+class PlannedOffboarding:
+    plan: TransitionPlan
+    result: OffboardingResult
+
+
 def _is_consumer_automation(output: str) -> bool:
     """True for a managed file GitHub auto-executes — a workflow under
     ``.github/workflows/``.
@@ -42,6 +51,115 @@ def _is_consumer_automation(output: str) -> bool:
     """
     parts = Path(output).parts
     return len(parts) >= 2 and parts[0] == ".github" and parts[1] == "workflows"
+
+
+def plan_offboarding_transition(
+    root: Path,
+    managed_outputs: Sequence[str],
+    *,
+    snapshot_sha: str,
+    declaration_identity: str,
+    profile: str,
+    keep_files: bool,
+    allow_dirty: bool = True,
+) -> PlannedOffboarding:
+    """Plan complete offboarding from inventory plus the live managed-marker universe."""
+
+    root = Path(root).resolve()
+    inventory_read = load_managed_inventory(root)
+    if inventory_read.status == "invalid":
+        raise AviatoError(f"managed inventory is invalid: {inventory_read.reason}")
+    if inventory_read.inventory is not None and (
+        inventory_read.inventory.profile != profile
+        or inventory_read.inventory.profile_identity != declaration_identity
+    ):
+        raise AviatoError("managed inventory profile identity does not match the declaration being offboarded")
+    sidecar = read_sidecar(root)
+    if sidecar.status == "corrupt":
+        raise AviatoError("seed-once sidecar is corrupt; restore it before offboarding")
+    seed_paths = frozenset(sidecar.hashes) if sidecar.status == "ok" else frozenset()
+    universe = scan_marker_universe(root)
+    prior_entries = inventory_read.inventory.entries if inventory_read.inventory is not None else {}
+    candidates = set(managed_outputs) | set(prior_entries) | set(universe)
+    conflicts: list[str] = []
+    changes: list[TransitionChange] = []
+    stripped: list[str] = []
+    removed: list[str] = []
+
+    for output in sorted(candidates):
+        if output in seed_paths:
+            continue
+        artifact = universe.get(output)
+        entry = prior_entries.get(output)
+        target = confined_target(root, output, operation="plan offboard target")
+        if artifact is None:
+            if entry is not None and (target.exists() or target.is_symlink()):
+                conflicts.append(f"{output}: inventoried managed artifact has no verifiable marker")
+            elif _is_consumer_automation(output) and target.is_file():
+                conflicts.append(
+                    f"{output}: automation workflow has no verifiable Aviato marker and would remain active"
+                )
+            continue
+        if artifact.status != "valid" or artifact.marker is None:
+            conflicts.append(f"{output}: managed-marker candidate is {artifact.status}")
+            continue
+        marker = artifact.marker
+        if marker.profile != profile:
+            conflicts.append(f"{output}: managed marker belongs to foreign profile {marker.profile!r}")
+            continue
+        if not is_known_version_pin(marker.version) or artifact.live_body_hash != marker.hash:
+            conflicts.append(f"{output}: managed artifact is hand-edited or records an unknown version")
+            continue
+        if entry is not None and (
+            marker.input_hash != entry.input_hash
+            or marker.hash != entry.body_hash
+            or artifact.marker_line_hash != entry.marker_hash
+        ):
+            conflicts.append(f"{output}: managed artifact does not match its inventory entry")
+            continue
+        text = target.read_text(encoding="utf-8")
+        if keep_files and not _is_consumer_automation(output):
+            changes.append(
+                TransitionChange.write(output, strip_marker_from_text(text).encode("utf-8"), category="managed")
+            )
+            stripped.append(output)
+        else:
+            changes.append(TransitionChange.delete(output, category="managed"))
+            removed.append(output)
+
+    declaration_output = ".github/aviato.yaml"
+    declaration = confined_target(root, declaration_output, operation="plan offboard declaration")
+    sidecar_target = confined_target(root, SIDECAR_PATH, operation="plan offboard sidecar")
+    confined_target(root, INVENTORY_PATH, operation="plan offboard inventory")
+    declaration_removed = declaration.is_file()
+    sidecar_removed = sidecar_target.is_file()
+    if declaration_removed:
+        changes.append(TransitionChange.delete(declaration_output, category="declaration"))
+    if sidecar_removed:
+        changes.append(TransitionChange.delete(SIDECAR_PATH, category="sidecar"))
+    # Keep an explicit inventory-delete operation even for legacy consumers that
+    # never had an inventory.  The transition validator uses that final operation
+    # as its cue to rescan the complete marker universe before accepting removal.
+    changes.append(TransitionChange.delete(INVENTORY_PATH, category="inventory"))
+
+    plan = build_transition_plan(
+        root,
+        snapshot_sha=snapshot_sha,
+        declaration_identity=declaration_identity,
+        changes=changes,
+        conflicts=conflicts,
+        validation_exclusions=seed_paths,
+        allow_dirty=allow_dirty,
+    )
+    return PlannedOffboarding(
+        plan,
+        OffboardingResult(
+            stripped=stripped,
+            removed=removed,
+            declaration_removed=declaration_removed,
+            sidecar_removed=sidecar_removed,
+        ),
+    )
 
 
 def offboard(root: Path, managed_outputs: Sequence[str], *, keep_files: bool) -> OffboardingResult:

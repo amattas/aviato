@@ -514,12 +514,17 @@ class Registry:
     def template_module(self, name: str) -> TemplateModule:
         doc = _load_doc(self.root, f"scaffold/{name}.yaml")
         return TemplateModule(
+            identity=f"artifact/{_nonempty_string(doc.get('name', name), f'template {name!r} name')}/v1",
             output_path=_confined_relpath(doc.get("output_path"), "output_path"),
             source=_confined_relpath(doc.get("source"), "source"),
             seed_once=bool(doc.get("seed_once", False)),
             comment=doc.get("comment"),
             required_variables=tuple(doc.get("required_variables", ())),
             when=tuple(sorted((str(k), str(v)) for k, v in (doc.get("when") or {}).items())),
+            legacy_aliases=tuple(
+                _confined_relpath(alias, f"template {name!r} legacy alias")
+                for alias in _string_list(doc.get("legacy_aliases", []), f"template {name!r} legacy aliases")
+            ),
         )
 
     def template_body(self, module: TemplateModule) -> str:

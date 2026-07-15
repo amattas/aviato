@@ -888,6 +888,15 @@ class GitHubPlatform:
 
         self._git("switch", "-C", branch)
         self._git("add", "-A")
+        staged = github.run(["git", "diff", "--cached", "--quiet"], cwd=self.workdir, check=False)
+        if staged.returncode == 0:
+            return ""
+        if staged.returncode != 1:
+            raise CommandError(
+                ["git", "diff", "--cached", "--quiet"],
+                staged.returncode,
+                staged.stderr,
+            )
         self._git(
             "-c",
             "user.name=aviato-bot",

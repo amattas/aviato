@@ -741,6 +741,32 @@ def test_fetch_library_snapshot_exposes_one_provenance_and_shared_tree(
     assert sum(f"/tarball/{SHA}" in part for call in calls for part in call) == 1
 
 
+def test_fetch_library_snapshot_at_commit_never_reresolves_floating_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _fake_run(monkeypatch, _archive())
+
+    with library_source.fetch_library_snapshot_at_commit(
+        REPOSITORY, SHA, requested_pin="moving-branch"
+    ) as snapshot:
+        assert snapshot.requested_pin == "moving-branch"
+        assert snapshot.commit_sha == SHA
+        assert snapshot.resolved_ref_kind == "commit"
+        assert snapshot.registry.profile("profile").identity == "aviato-profile/profile/v1"
+
+    flattened = [part for call in calls for part in call]
+    assert not any("/git/ref/tags/" in part or "/git/ref/heads/moving-branch" in part for part in flattened)
+    assert sum(f"/tarball/{SHA}" in part for part in flattened) == 1
+
+
+def test_fetch_library_snapshot_at_commit_rejects_invalid_recorded_sha() -> None:
+    with (
+        pytest.raises(AviatoError, match="snapshot commit is invalid"),
+        library_source.fetch_library_snapshot_at_commit(REPOSITORY, "not-a-sha", requested_pin="main"),
+    ):
+        pass
+
+
 def test_fetch_library_snapshot_rejects_policy_identity_mismatch_before_yield_and_cleans_up(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

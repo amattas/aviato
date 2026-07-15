@@ -1250,6 +1250,104 @@ def test_open_or_update_proposal_skips_pr_create_when_pr_exists(
     assert not any("pr create" in " ".join(c) for c in calls)  # push updated the existing PR
 
 
+def test_open_worktree_proposal_returns_noop_without_empty_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **__: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(github, "default_branch", lambda _repo: "main")
+    monkeypatch.setattr(github, "run", fake_run)
+    monkeypatch.setattr(
+        github,
+        "gh_json_optional",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no-diff proposal must not read PRs")),
+    )
+
+    branch = GitHubPlatform(workdir=tmp_path).open_worktree_proposal(
+        "owner/repo", "aviato/sync/x", "Aviato sync", "body"
+    )
+
+    assert branch == ""
+    joined = [" ".join(command) for command in calls]
+    assert "git switch -C aviato/sync/x" in joined
+    assert "git add -A" in joined
+    assert "git diff --cached --quiet" in joined
+    assert not any(" commit " in f" {command} " or " push " in f" {command} " for command in joined)
+
+
+def test_open_worktree_proposal_real_remote_includes_inventory_and_deletions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    remote = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    seed.mkdir()
+    subprocess.run(["git", "-C", str(seed), "init", "-q", "-b", "main"], check=True)
+    (seed / "obsolete.yml").write_text("obsolete\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(seed), "add", "obsolete.yml"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(seed),
+            "-c",
+            "user.name=Aviato Test",
+            "-c",
+            "user.email=aviato@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "seed",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "-C", str(seed), "remote", "add", "origin", str(remote)], check=True)
+    subprocess.run(["git", "-C", str(seed), "push", "-q", "origin", "main"], check=True)
+    subprocess.run(["git", "--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+    subprocess.run(["git", "clone", "-q", str(remote), str(clone)], check=True)
+    (clone / "obsolete.yml").unlink()
+    inventory = clone / ".github/aviato.managed.yml"
+    inventory.parent.mkdir()
+    inventory.write_text("inventory receipt\n", encoding="utf-8")
+
+    def real_git_fake_gh(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[0] == "git":
+            return subprocess.run(
+                command,
+                cwd=kwargs.get("cwd"),
+                check=bool(kwargs.get("check", True)),
+                text=True,
+                capture_output=True,
+            )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(github, "default_branch", lambda _repo: "main")
+    monkeypatch.setattr(github, "run", real_git_fake_gh)
+    monkeypatch.setattr(github, "gh_json_optional", lambda *_args, **_kwargs: [])
+
+    assert (
+        GitHubPlatform(workdir=clone).open_worktree_proposal(
+            "owner/repo", "aviato/onboard-python-library", "Adopt", "body"
+        )
+        == "aviato/onboard-python-library"
+    )
+    tree = subprocess.run(
+        ["git", "--git-dir", str(remote), "ls-tree", "-r", "--name-only", "aviato/onboard-python-library"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.splitlines()
+    assert ".github/aviato.managed.yml" in tree
+    assert "obsolete.yml" not in tree
+
+
 def test_apply_settings_issues_put_with_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 

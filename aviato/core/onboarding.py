@@ -139,6 +139,9 @@ class ResolvedArtifact:
     comment: str
     seed_once: bool
     input_hash: str
+    artifact_id: str
+    pipeline_owners: tuple[str, ...]
+    legacy_aliases: tuple[str, ...] = ()
 
 
 def resolved_artifacts(
@@ -191,6 +194,9 @@ def resolved_artifacts(
                 artifact.comment,
                 artifact.seed_once,
                 input_hash,
+                artifact.identity,
+                artifact.owners,
+                artifact.legacy_aliases,
             )
             for artifact in desired.artifacts
         ]
@@ -231,7 +237,16 @@ def resolved_artifacts(
         # and completes them); managed files are re-rendered strictly every sync.
         rendered = render(body, render_vars, strict=not template.seed_once)
         artifacts.append(
-            ResolvedArtifact(template.output_path, rendered, template.comment or "#", template.seed_once, input_hash)
+            ResolvedArtifact(
+                template.output_path,
+                rendered,
+                template.comment or "#",
+                template.seed_once,
+                input_hash,
+                template.identity,
+                ("scaffold",),
+                template.legacy_aliases,
+            )
         )
     return artifacts
 
@@ -262,6 +277,9 @@ def materialize_items(
             comment=a.comment,
             seed_once=a.seed_once,
             input_hash=a.input_hash,
+            artifact_id=a.artifact_id,
+            pipeline_owners=a.pipeline_owners,
+            legacy_aliases=a.legacy_aliases,
         )
         for a in resolved_artifacts(
             registry, profile, variables, pin=pin, docs=docs, bootstrap=bootstrap, overrides=overrides

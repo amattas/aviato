@@ -19,13 +19,35 @@ teardown is out of scope, §2.x) — the operator removes them manually if full
 protection removal is desired. After offboarding, no Aviato automation runs and
 no markers remain to drift-check.
 
+Before the first mutation, offboarding inspects the complete managed inventory,
+the tracked and untracked marker universe, and the seed sidecar—not only outputs
+that the current profile happens to render. Every inventoried file must still
+match its receipt; every additional marker candidate must be a clean,
+known-version artifact owned by the declared profile. Malformed, foreign,
+hand-edited, ambiguous, symlinked, or unverified automation blocks the whole
+operation. Seed-once paths are explicit operator-owned validation exclusions and
+are never stripped or deleted.
+
+Marker stripping or deletion, mandatory workflow deletion, declaration removal,
+sidecar removal, and inventory removal form one journaled transition. Inventory
+removal is last—even for a legacy consumer where that path is already absent—so
+final acceptance always rescans and proves no non-seed managed marker remains.
+An interruption therefore yields a resumable or rollback-capable journal instead
+of a half-offboarded success. `--open-pr` executes this same transition in a
+fresh clone and publishes all replacements and deletions; a no-diff rerun does
+not create an empty proposal.
+
 ```mermaid
 flowchart TD
-    A["Operator: offboard Consumer"] --> B{"Keep files as plain, or remove?"}
-    B -- keep --> C["Strip markers → operator-owned files"]
-    B -- remove --> D["Delete managed files"]
+    A["Operator: offboard Consumer"] --> P["Preflight inventory + full marker universe + seed exclusions"]
+    P --> B{"All managed state clean and complete?"}
+    B -- no --> X["FAIL CLOSED before mutation"]
+    B -- yes --> K{"Keep passive files as plain, or remove?"}
+    K -- keep --> C["Strip markers → operator-owned files"]
+    K -- remove --> D["Delete managed files"]
     C --> E["Remove consumer drift/report automation"]
     D --> E
-    E --> F["Delete declaration file"]
-    F --> G["Apply locally or open proposal — WARN: removes §2.13 baseline automation; GitHub protection remains but UNMANAGED"]
+    E --> F["Delete declaration + sidecar"]
+    F --> I["Delete inventory last; verify no managed markers remain"]
+    I --> G["Apply locally or publish complete clone diff — WARN: removes §2.13 baseline automation; GitHub protection remains but UNMANAGED"]
 ```

@@ -17,6 +17,7 @@ from aviato.core.model import VariableSpec
 from aviato.core.onboarding import resolved_artifacts
 from aviato.core.registry import Registry
 from aviato.core.scaffold import ScaffoldItem, scaffold
+from aviato.core.transition import execute_transition, plan_transition
 from aviato.github_platform import GitHubPlatform
 from aviato.paths import MODULE_SOURCE_ROOT
 
@@ -50,6 +51,25 @@ def _adopt(tmp_path: Path) -> None:
         for artifact in artifacts
     ]
     scaffold(tmp_path, items, profile="python-library", version="0", baseline_existing_seeds=True)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "-c",
+            "user.name=Aviato Test",
+            "-c",
+            "user.email=aviato@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "legacy adoption",
+        ],
+        check=True,
+        capture_output=True,
+    )
 
 
 def _git_init(root: Path) -> None:
@@ -80,10 +100,36 @@ def test_repin_target_gate_skip_requires_structure_and_bootstrap_declaration(
         assert "version-pin mismatch" in str(error)
 
 
-def test_legacy_repin_dry_run_remains_readable_but_write_requires_v2(
+def test_v1_to_v2_repin_adopts_only_unambiguous_legacy_aliases(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _adopt(tmp_path)
+    declaration_path = tmp_path / ".github/aviato.yaml"
+    declaration_path.write_text(
+        declaration_path.read_text(encoding="utf-8").replace(
+            "profile-identity: aviato-profile/python-library/v1\n", ""
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "add", ".github/aviato.yaml"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "-c",
+            "user.name=Aviato Test",
+            "-c",
+            "user.email=aviato@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "legacy declaration",
+        ],
+        check=True,
+        capture_output=True,
+    )
     capsys.readouterr()
     # finding 9: the write path now gates on the target resolving as a PUBLISHED ref;
     # fake the resolution here (the refusal paths get their own tests below).
@@ -100,11 +146,80 @@ def test_legacy_repin_dry_run_remains_readable_but_write_requires_v2(
     assert "re-pin 0 -> 1.0.0" in out
     assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "0"
 
-    before = (tmp_path / ".github" / "aviato.yaml").read_text(encoding="utf-8")
     rc = main(["repin", str(tmp_path), "v1.0.0", "--write", "--override-version-pin"])
-    assert rc == 2
-    assert "repin" in capsys.readouterr().err
-    assert (tmp_path / ".github" / "aviato.yaml").read_text(encoding="utf-8") == before
+    assert rc == 0
+    assert capsys.readouterr().err == ""
+    migrated = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
+    assert migrated["version"] == "1.0.0"
+    assert migrated["profile-identity"] == "aviato-profile/python-library/v1"
+    assert (tmp_path / ".github" / "aviato.managed.yml").is_file()
+
+
+def test_profile_migration_carries_old_and_new_snapshots_for_retirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = ScaffoldItem(
+        "old-location.yml",
+        "name: old\n",
+        "#",
+        input_hash="0" * 64,
+        artifact_id="artifact/moved/v1",
+        pipeline_owners=("pipeline/verify/v2",),
+    )
+    new = ScaffoldItem(
+        "new-location.yml",
+        "name: new\n",
+        "#",
+        input_hash="1" * 64,
+        artifact_id="artifact/moved/v1",
+        pipeline_owners=("pipeline/verify/v2",),
+    )
+    initial = plan_transition(
+        tmp_path,
+        snapshot_sha="a" * 40,
+        declaration_identity="aviato-profile/python-library/v1",
+        profile="python-library",
+        pin="0",
+        items=(old,),
+        declaration_bytes=(
+            b"profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
+            b"version: 0\nvariables: {}\n"
+        ),
+        baseline_existing_seeds=True,
+        allow_fresh_seed_initialization=True,
+        allow_dirty=True,
+    )
+    execute_transition(initial.plan)
+    declaration = Declaration(
+        profile="python-library",
+        version="0",
+        profile_identity="aviato-profile/python-library/v1",
+    )
+    profile = SimpleNamespace(identity="aviato-profile/python-library/v1")
+    source_registry = SimpleNamespace(profile=lambda _name: profile)
+    source_snapshot = SimpleNamespace(commit_sha="a" * 40, registry=source_registry)
+    current_context = SimpleNamespace(
+        snapshot=SimpleNamespace(commit_sha="b" * 40, registry=source_registry)
+    )
+    opened: list[tuple[str, str]] = []
+
+    def open_recorded(commit_sha: str, *, requested_pin: str) -> object:
+        opened.append((commit_sha, requested_pin))
+        return source_snapshot
+
+    monkeypatch.setattr(cli, "_open_recorded_snapshot", open_recorded)
+    monkeypatch.setattr(cli, "resolved_artifacts", lambda registry, *args, **kwargs: [old])
+
+    enriched, source_inventory = cli._repin_items_with_recorded_aliases(
+        tmp_path,
+        declaration,
+        current_context,  # type: ignore[arg-type]
+        [new],
+    )
+
+    assert opened == [("a" * 40, "0")]
+    assert enriched[0].legacy_aliases == ("old-location.yml",)
+    assert source_inventory.entries["old-location.yml"].artifact_id == "artifact/moved/v1"
 
 
 def test_repin_rejects_invalid_declared_enum_before_write(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -201,7 +316,7 @@ def test_legacy_repin_write_rejects_before_touching_hand_edited_files(
     rc = main(["repin", str(tmp_path), "1.0.0", "--write", "--override-version-pin"])
     captured = capsys.readouterr()
     assert rc == 2
-    assert "repin" in captured.err
+    assert "hand-edited" in captured.err
     assert ci_path.read_text(encoding="utf-8").endswith("# operator hand-edit\n")
 
 
@@ -237,7 +352,7 @@ def test_repin_write_refuses_cross_major_without_override(
     rc = main(["repin", str(tmp_path), "9.0.0", "--write"])
     err = capsys.readouterr().err
     assert rc == 2
-    assert "repin" in err
+    assert "version-pin mismatch" in err
     assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "0"
 
 
@@ -254,7 +369,7 @@ def test_repin_write_unknown_seed_integrity_mutates_nothing(
     captured = capsys.readouterr()
     after = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     assert rc == 2
-    assert "repin" in captured.err
+    assert "seed-once integrity is unknown" in captured.err
     assert after == before
 
 
@@ -289,7 +404,7 @@ def test_repin_open_pr_unknown_seed_integrity_opens_no_proposal(
 
     captured = capsys.readouterr()
     assert rc == 2
-    assert "repin" in captured.err
+    assert "seed-once integrity is unknown" in captured.err
     assert proposal_called is False
     assert clone_path is not None
     assert (clone_path / ".github" / "aviato.yaml").read_text(encoding="utf-8") == original_declaration
@@ -330,7 +445,7 @@ def test_legacy_sync_and_local_repin_require_v2_without_mutation(
     assert not (tmp_path / "ruff.toml").exists()
 
 
-def test_legacy_repin_proposal_requires_v2_before_opening_proposal(
+def test_legacy_repin_proposal_migrates_to_v2_inventory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     source = tmp_path / "source"
@@ -344,7 +459,7 @@ def test_legacy_repin_proposal_requires_v2_before_opening_proposal(
     captured: dict[str, str] = {}
 
     def fake_snapshot(_pin: str) -> object:
-        return SimpleNamespace(registry=Registry(target), policy_root=target)
+        return SimpleNamespace(registry=Registry(target), policy_root=target, commit_sha="b" * 40)
 
     def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gh", "repo", "clone"]:
@@ -353,15 +468,17 @@ def test_legacy_repin_proposal_requires_v2_before_opening_proposal(
 
     def fake_proposal(self: GitHubPlatform, *_args: object, **_kwargs: object) -> str:
         captured["ruff"] = (self.workdir / "ruff.toml").read_text()
+        captured["inventory"] = (self.workdir / ".github/aviato.managed.yml").read_text()
         return "branch"
 
     monkeypatch.setattr(cli, "_open_published_snapshot", fake_snapshot)
     monkeypatch.setattr(cli, "run", fake_run)
     monkeypatch.setattr(GitHubPlatform, "open_worktree_proposal", fake_proposal)
 
-    assert main(["repin", "acme/widget", "0.1.0", "--open-pr"]) == 2
-    assert "repin" in capsys.readouterr().err
-    assert captured == {}
+    assert main(["repin", "acme/widget", "0.1.0", "--open-pr"]) == 0
+    assert capsys.readouterr().err == ""
+    assert sentinel in captured["ruff"]
+    assert "snapshot_commit: " + "b" * 40 in captured["inventory"]
 
 
 def test_repin_proposal_rejects_unauthorized_bootstrap_before_target_authority(
@@ -388,8 +505,8 @@ def test_repin_proposal_rejects_unauthorized_bootstrap_before_target_authority(
         "_open_published_snapshot",
         "plan_repin",
         "materialize_items",
-        "_dump_consumer_declaration",
-        "scaffold",
+        "plan_transition",
+        "execute_transition",
     ):
         monkeypatch.setattr(cli, name, lambda *_args, _name=name, **_kwargs: pytest.fail(f"crossed {_name}"))
     monkeypatch.setattr(
@@ -432,7 +549,11 @@ def test_repin_proposal_validates_authorized_bootstrap_before_target_snapshot(
 
     def open_target(_pin: str) -> object:
         events.append("target")
-        return SimpleNamespace(registry=Registry(MODULE_SOURCE_ROOT), policy_root=MODULE_SOURCE_ROOT)
+        return SimpleNamespace(
+            registry=Registry(MODULE_SOURCE_ROOT),
+            policy_root=MODULE_SOURCE_ROOT,
+            commit_sha="c" * 40,
+        )
 
     monkeypatch.setattr(cli, "run", fake_run)
     monkeypatch.setattr(cli, "_open_consumer_context", open_current)
@@ -440,7 +561,7 @@ def test_repin_proposal_validates_authorized_bootstrap_before_target_snapshot(
     monkeypatch.setattr(GitHubPlatform, "open_worktree_proposal", lambda *_args, **_kwargs: "branch")
 
     assert main(["repin", "acme/widget", "0.1.0", "--open-pr"]) == 2
-    assert "repin" in capsys.readouterr().err
+    assert "marker universe" in capsys.readouterr().err
     assert events == ["current", "target"]
 
 
@@ -502,15 +623,8 @@ def test_offboard_open_pr_opens_reviewable_removal_proposal(monkeypatch: pytest.
     def fake_run(cmd: list[str], **__: object) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
-            (dest / ".github").mkdir(parents=True, exist_ok=True)
-            (dest / ".github" / "aviato.yaml").write_text(
-                "profile: python-library\nversion: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
-                encoding="utf-8",
-            )
-            (dest / "ruff.toml").write_text(
-                "# aviato:managed profile=python-library version=0 hash=abc\nline-length = 100\n", encoding="utf-8"
-            )
-            _git_init(dest)
+            dest.mkdir(parents=True)
+            _adopt(dest)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     captured: dict[str, object] = {}

@@ -13,12 +13,15 @@ from collections.abc import Callable, Iterable, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from aviato.command import CommandError, run_bytes
 
 from .errors import AviatoError
 from .outcomes import OperationResult, OperationStatus, TransitionResult
+
+if TYPE_CHECKING:
+    from .inventory import ManagedInventory
 
 OperationCategory = Literal["managed", "seed", "sidecar", "declaration", "inventory"]
 FingerprintKind = Literal["missing", "file", "unsafe"]
@@ -115,6 +118,7 @@ class TransitionPlan:
     operations: tuple[TransitionOperation, ...]
     conflicts: tuple[str, ...]
     notices: tuple[str, ...]
+    validation_exclusions: tuple[str, ...]
     digest: str
 
 
@@ -124,6 +128,17 @@ class TransitionInspection:
     journal_id: str = ""
     plan_digest: str = ""
     operations: tuple[OperationResult, ...] = ()
+
+
+@dataclass(frozen=True)
+class PlannedRepositoryTransition:
+    plan: TransitionPlan
+    written: tuple[str, ...] = ()
+    seeded: tuple[str, ...] = ()
+    unchanged: tuple[str, ...] = ()
+    preserved_seeds: tuple[str, ...] = ()
+    baselined: tuple[str, ...] = ()
+    retired: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -336,6 +351,9 @@ def _validate_plan(plan: TransitionPlan) -> None:
             raise TransitionConflictError("transition plan contains an unknown operation kind")
         if operation.expected.kind == "unsafe":
             raise TransitionConflictError("transition plan contains an unsafe preimage")
+    canonical_exclusions = tuple(sorted({_validate_relative(path) for path in plan.validation_exclusions}))
+    if canonical_exclusions != plan.validation_exclusions:
+        raise TransitionConflictError("transition validation exclusions are not canonical")
     payload = _plan_payload(
         plan.canonical_root,
         plan.snapshot_sha,
@@ -343,6 +361,7 @@ def _validate_plan(plan: TransitionPlan) -> None:
         plan.operations,
         plan.conflicts,
         plan.notices,
+        plan.validation_exclusions,
     )
     expected_digest = hashlib.sha256(_canonical_json(payload)).hexdigest()
     if plan.digest != expected_digest:
@@ -356,6 +375,7 @@ def _plan_payload(
     operations: Sequence[TransitionOperation],
     conflicts: Sequence[str],
     notices: Sequence[str],
+    validation_exclusions: Sequence[str],
 ) -> dict[str, object]:
     return {
         "canonical_root": str(root),
@@ -364,6 +384,7 @@ def _plan_payload(
         "operations": [_operation_data(operation) for operation in operations],
         "conflicts": list(conflicts),
         "notices": list(notices),
+        "validation_exclusions": list(validation_exclusions),
     }
 
 
@@ -375,6 +396,7 @@ def build_transition_plan(
     changes: Iterable[TransitionChange],
     conflicts: Iterable[str] = (),
     notices: Iterable[str] = (),
+    validation_exclusions: Iterable[str] = (),
     allow_dirty: bool = False,
 ) -> TransitionPlan:
     canonical = _canonical_repo(Path(root))
@@ -430,7 +452,16 @@ def build_transition_plan(
 
     frozen_conflicts = tuple(sorted(set(planning_conflicts)))
     frozen_notices = tuple(sorted(set(notices)))
-    payload = _plan_payload(canonical, snapshot_sha, declaration_identity, operations, frozen_conflicts, frozen_notices)
+    frozen_exclusions = tuple(sorted({_validate_relative(path) for path in validation_exclusions}))
+    payload = _plan_payload(
+        canonical,
+        snapshot_sha,
+        declaration_identity,
+        operations,
+        frozen_conflicts,
+        frozen_notices,
+        frozen_exclusions,
+    )
     digest = hashlib.sha256(_canonical_json(payload)).hexdigest()
     return TransitionPlan(
         canonical,
@@ -439,7 +470,212 @@ def build_transition_plan(
         tuple(operations),
         frozen_conflicts,
         frozen_notices,
+        frozen_exclusions,
         digest,
+    )
+
+
+def plan_transition(
+    root: Path,
+    *,
+    snapshot_sha: str,
+    declaration_identity: str,
+    profile: str,
+    pin: str,
+    items: Sequence[Any],
+    declaration_bytes: bytes,
+    force: bool = False,
+    baseline_existing_seeds: bool = False,
+    allow_fresh_seed_initialization: bool = False,
+    allow_seed_set_expansion: bool = False,
+    migrating_from: str | None = None,
+    source_inventory: ManagedInventory | None = None,
+    allow_dirty: bool = True,
+) -> PlannedRepositoryTransition:
+    """Build the complete local Consumer transition without mutating the worktree."""
+    from .inventory import (
+        INVENTORY_PATH,
+        InventoryRead,
+        ManagedInventory,
+        load_managed_inventory,
+        reconcile_managed_inventory,
+        render_managed_inventory,
+    )
+    from .marker import content_hash, parse_marker_from_text, strip_marker_from_text
+    from .pathguard import confined_target
+    from .scaffold import (
+        SIDECAR_PATH,
+        ScaffoldItem,
+        inventory_entry_for_item,
+        preflight_seed_integrity,
+        render_managed,
+    )
+    from .version import is_known_version_pin
+
+    canonical = _canonical_repo(Path(root))
+    overlay: dict[str, ScaffoldItem] = {}
+    conflicts: list[str] = []
+    notices: list[str] = []
+    for raw_item in items:
+        if not isinstance(raw_item, ScaffoldItem):
+            raise TransitionConflictError("transition items must be ScaffoldItem values")
+        _validate_relative(raw_item.output)
+        if raw_item.output in {INVENTORY_PATH, SIDECAR_PATH, ".github/aviato.yaml"}:
+            conflicts.append(f"artifact output collides with Aviato metadata path: {raw_item.output}")
+        overlay[raw_item.output] = raw_item
+
+    seed_items = [item for item in overlay.values() if item.seed_once]
+    managed_items = [item for item in overlay.values() if not item.seed_once]
+    seed_preflight = preflight_seed_integrity(
+        canonical,
+        list(overlay.values()),
+        baseline_existing_seeds=baseline_existing_seeds,
+        allow_fresh_seed_initialization=allow_fresh_seed_initialization,
+        allow_seed_set_expansion=allow_seed_set_expansion,
+    )
+    if seed_preflight.unknown:
+        conflicts.append("seed-once integrity is unknown; restore or explicitly rebaseline the seed sidecar")
+
+    changes: list[TransitionChange] = []
+    written: list[str] = []
+    seeded: list[str] = []
+    unchanged: list[str] = []
+    preserved_seeds: list[str] = []
+    baselined: list[str] = []
+
+    sidecar = {} if baseline_existing_seeds else dict(seed_preflight.sidecar.hashes)
+    if baseline_existing_seeds:
+        sidecar.update(seed_preflight.existing_hashes)
+        baselined.extend(sorted(seed_preflight.existing_hashes))
+    sidecar_changed = baseline_existing_seeds
+    for item in sorted(seed_items, key=lambda candidate: candidate.output):
+        target = confined_target(canonical, item.output, operation="plan seed-once artifact")
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or not target.is_file():
+                conflicts.append(f"seed-once path is not a safe regular file: {item.output}")
+            else:
+                preserved_seeds.append(item.output)
+            continue
+        changes.append(TransitionChange.write(item.output, item.body.encode("utf-8"), category="seed"))
+        sidecar[item.output] = content_hash(item.body)
+        sidecar_changed = True
+        seeded.append(item.output)
+
+    for item in sorted(managed_items, key=lambda candidate: candidate.output):
+        if not item.artifact_id or not item.pipeline_owners:
+            conflicts.append(f"managed artifact lacks stable identity or owners: {item.output}")
+            continue
+        target = confined_target(canonical, item.output, operation="plan managed artifact")
+        desired_text = render_managed(item, profile=profile, version=pin)
+        should_write = not target.exists()
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or not target.is_file():
+                conflicts.append(f"managed target is not a safe regular file: {item.output}")
+                continue
+            try:
+                existing = target.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                if not force:
+                    conflicts.append(f"managed target is unreadable or non-text: {item.output}")
+                    continue
+                existing = ""
+            marker = parse_marker_from_text(existing)
+            if marker is None:
+                if not force:
+                    conflicts.append(f"managed target is unmanaged or has a malformed marker: {item.output}")
+                    continue
+                should_write = True
+            else:
+                if not force and marker.profile not in {profile, migrating_from}:
+                    conflicts.append(f"managed target belongs to foreign profile {marker.profile!r}: {item.output}")
+                    continue
+                if not force and not is_known_version_pin(marker.version):
+                    conflicts.append(f"managed target records unknown version {marker.version!r}: {item.output}")
+                    continue
+                body_hash = content_hash(strip_marker_from_text(existing))
+                if not force and body_hash != marker.hash:
+                    conflicts.append(f"managed target is hand-edited: {item.output}")
+                    continue
+                should_write = existing != desired_text
+        if should_write:
+            changes.append(TransitionChange.write(item.output, desired_text.encode("utf-8"), category="managed"))
+            written.append(item.output)
+        else:
+            unchanged.append(item.output)
+
+    if sidecar_changed:
+        sidecar_bytes = (json.dumps(sidecar, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        changes.append(TransitionChange.write(SIDECAR_PATH, sidecar_bytes, category="sidecar"))
+
+    declaration_path = ".github/aviato.yaml"
+    declaration_target = confined_target(canonical, declaration_path, operation="plan declaration")
+    if not declaration_target.is_file() or declaration_target.read_bytes() != declaration_bytes:
+        changes.append(TransitionChange.write(declaration_path, declaration_bytes, category="declaration"))
+
+    prior = load_managed_inventory(canonical)
+    if prior.status == "invalid":
+        conflicts.append(f"managed inventory is invalid or operator-owned: {prior.reason}")
+    effective_prior = (
+        InventoryRead("valid", inventory=source_inventory)
+        if prior.status == "missing" and source_inventory is not None
+        else prior
+    )
+    entries = {
+        item.output: inventory_entry_for_item(item, profile=profile, version=pin)
+        for item in managed_items
+        if item.artifact_id and item.pipeline_owners
+    }
+    desired_inventory = ManagedInventory(
+        schema_version=1,
+        profile=profile,
+        profile_identity=declaration_identity,
+        pin=pin,
+        snapshot_commit=snapshot_sha,
+        entries=entries,
+        owned_rulesets=(
+            effective_prior.inventory.owned_rulesets
+            if effective_prior.status == "valid" and effective_prior.inventory
+            else ()
+        ),
+    )
+    reconciliation = reconcile_managed_inventory(
+        canonical,
+        desired_inventory,
+        prior=effective_prior,
+        source_profile=migrating_from,
+        seed_once_paths=frozenset(item.output for item in seed_items),
+    )
+    for path, reason in reconciliation.obsolete_blocked.items():
+        conflicts.append(f"{path}: {reason}")
+    for path, candidates in reconciliation.ambiguous.items():
+        conflicts.append(f"{path}: legacy identity is ambiguous among {', '.join(candidates)}")
+    retired = sorted(set(reconciliation.obsolete_clean) | set(reconciliation.legacy_adoptable))
+    for path in retired:
+        changes.append(TransitionChange.delete(path, category="managed"))
+    notices.extend(f"obsolete managed artifact already absent: {path}" for path in reconciliation.obsolete_missing)
+    notices.extend(f"preserved seed-once artifact: {path}" for path in preserved_seeds)
+    inventory_bytes = render_managed_inventory(desired_inventory).encode("utf-8")
+    inventory_target = confined_target(canonical, INVENTORY_PATH, operation="plan managed inventory")
+    if not inventory_target.is_file() or inventory_target.read_bytes() != inventory_bytes:
+        changes.append(TransitionChange.write(INVENTORY_PATH, inventory_bytes, category="inventory"))
+
+    plan = build_transition_plan(
+        canonical,
+        snapshot_sha=snapshot_sha,
+        declaration_identity=declaration_identity,
+        changes=changes,
+        conflicts=conflicts,
+        notices=notices,
+        allow_dirty=allow_dirty,
+    )
+    return PlannedRepositoryTransition(
+        plan,
+        tuple(written),
+        tuple(seeded),
+        tuple(unchanged),
+        tuple(preserved_seeds),
+        tuple(baselined),
+        tuple(retired),
     )
 
 
@@ -1004,6 +1240,7 @@ def _manifest_data(plan: TransitionPlan, journal_id: str, created_dirs: Sequence
         plan.operations,
         plan.conflicts,
         plan.notices,
+        plan.validation_exclusions,
     )
     core = {
         "schema": _STATE_SCHEMA,
@@ -1322,12 +1559,19 @@ def _default_validate(root: Path, plan: TransitionPlan) -> bool:
         reconcile_managed_inventory,
         scan_marker_universe,
     )
+    from .scaffold import read_sidecar
 
     if len(inventory_operations) != 1 or inventory_operations[0].path != INVENTORY_PATH:
         return False
     inventory_read = load_managed_inventory(root)
     if inventory_operations[0].kind == "delete":
-        return inventory_read.status == "missing" and not scan_marker_universe(root)
+        excluded = {_path_identity(path) for path in plan.validation_exclusions}
+        remaining = {
+            path: artifact
+            for path, artifact in scan_marker_universe(root).items()
+            if _path_identity(path) not in excluded
+        }
+        return inventory_read.status == "missing" and not remaining
     if inventory_read.status != "valid" or inventory_read.inventory is None:
         return False
     if (
@@ -1335,7 +1579,14 @@ def _default_validate(root: Path, plan: TransitionPlan) -> bool:
         or inventory_read.inventory.profile_identity != plan.declaration_identity
     ):
         return False
-    universe = scan_marker_universe(root)
+    sidecar = read_sidecar(root)
+    seed_once_paths = frozenset(sidecar.hashes) if sidecar.status == "ok" else frozenset()
+    seed_identities = {_path_identity(path) for path in seed_once_paths}
+    universe = {
+        path: artifact
+        for path, artifact in scan_marker_universe(root).items()
+        if _path_identity(path) not in seed_identities
+    }
     for path, entry in inventory_read.inventory.entries.items():
         artifact = universe.get(path)
         if (
@@ -1354,6 +1605,7 @@ def _default_validate(root: Path, plan: TransitionPlan) -> bool:
         root,
         inventory_read.inventory,
         prior=InventoryRead("valid", inventory=inventory_read.inventory),
+        seed_once_paths=seed_once_paths,
     )
     return not (
         reconciliation.obsolete_clean
@@ -1388,6 +1640,7 @@ def _restore_operation(
     elif operation.expected.kind == "file":
         payload = _read_preimage(journal, operation)
         assert operation.expected.mode is not None
+        restore_temporary = temporary or _new_operation_temp(journal.name, operation)
         tree.replace(
             operation.path,
             payload,
@@ -1395,7 +1648,7 @@ def _restore_operation(
             quiet,
             operation,
             operation.desired,
-            temporary,
+            restore_temporary,
             recovering=True,
         )
     else:
@@ -1622,6 +1875,7 @@ def _plan_from_manifest(manifest: dict[str, Any]) -> TransitionPlan:
         "operations",
         "conflicts",
         "notices",
+        "validation_exclusions",
     }:
         raise TransitionRecoveryError("transition manifest plan has an invalid schema")
     if (
@@ -1632,6 +1886,8 @@ def _plan_from_manifest(manifest: dict[str, Any]) -> TransitionPlan:
         or any(not isinstance(item, str) for item in payload["conflicts"])
         or not isinstance(payload["notices"], list)
         or any(not isinstance(item, str) for item in payload["notices"])
+        or not isinstance(payload["validation_exclusions"], list)
+        or any(not isinstance(item, str) for item in payload["validation_exclusions"])
     ):
         raise TransitionRecoveryError("transition manifest plan metadata has invalid types")
     operations: list[TransitionOperation] = []
@@ -1687,6 +1943,7 @@ def _plan_from_manifest(manifest: dict[str, Any]) -> TransitionPlan:
         tuple(operations),
         tuple(payload["conflicts"]),
         tuple(payload["notices"]),
+        tuple(payload["validation_exclusions"]),
         digest,
     )
     _validate_plan(plan)

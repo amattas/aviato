@@ -675,7 +675,9 @@ def reconcile_managed_inventory(
         if identity in known_path_identities or identity in inspected_alias_identities:
             continue
         if identity in seed_path_identities:
-            blocked[path] = "seed-once artifact is operator-owned and cannot be adopted or retired"
+            # Seed-once files are explicitly operator-owned and may mention the
+            # marker token in documentation or examples. Their sidecar identity
+            # excludes them from managed-universe adoption/retirement.
             continue
         candidates = tuple(sorted(alias_owners.get(identity, ())))
         if candidates:

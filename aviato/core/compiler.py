@@ -72,6 +72,8 @@ class DesiredArtifact:
     seed_once: bool = False
     comment: str = "#"
     owners: tuple[str, ...] = ()
+    identity: str = ""
+    legacy_aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -461,6 +463,8 @@ def _render_template_artifacts(
                 template.seed_once,
                 template.comment or "#",
                 tuple(sorted(owners)),
+                template.identity,
+                template.legacy_aliases,
             )
         )
     return artifacts, sorted({item.output_path for item in applicable}), sorted(set(conditional))
@@ -681,6 +685,7 @@ def compile_desired_state(
                 False,
                 "#",
                 tuple(sorted(workflow_owners)),
+                workflow.identity,
             )
         )
     settings = deep_thaw(resolved.settings)

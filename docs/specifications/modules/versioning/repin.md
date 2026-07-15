@@ -23,21 +23,37 @@ The upgrade/downgrade path is the **only** sanctioned way a pin moves; drift
 (§5.5) never advances it.
 The fetched target registry is the sole source for identity verification, newly
 required variables, orphaned overrides, and materialization in local and proposal
-flows. A legacy declaration without `profile-identity` must first sync using the
-registry fetched at its current declared pin; an unresolved pin or identity mismatch
-must leave the declaration and managed files unchanged.
+flows. Re-pin carries both source and target snapshot identities into one atomic
+transition. When a v2 managed inventory exists, its recorded source commit SHA
+is authoritative: if the old branch or tag has moved, migration metadata is
+loaded from that exact immutable commit rather than from the newly resolved ref.
+Stable artifact identities join source paths to target paths; old paths become
+legacy aliases and are retired only when their marker, input hash, marker hash,
+and body still match the prior receipt. Dirty, foreign, malformed, or ambiguous
+aliases block the entire re-pin before the declaration moves.
+
+Re-pin is also the v1-to-v2 migration boundary. With no managed inventory, it
+combines the source declaration, seed sidecar, clean marker universe, and target
+artifact receipts. The complete source artifact set remains retirement authority,
+including stable identities that disappear entirely from the target snapshot.
+Only a clean, known-version, unambiguous legacy artifact may be adopted or
+retired. The existing seed sidecar is preserved, the declaration
+and all managed changes execute in one recoverable transition, and the new v2
+inventory is accepted last. Local and proposal re-pin execute the same plan;
+proposal mode publishes its complete clone diff, including deletions. An invalid
+existing inventory is not treated as v1 and fails closed.
 
 ```mermaid
 flowchart TD
-    A["Operator: re-pin Consumer to version X"] --> B["Read current pin"]
+    A["Operator: re-pin Consumer to version X"] --> B["Read current declaration + inventory<br/>open exact recorded source commit when present"]
     B --> C{"Profile exists at X with same identity?"}
     C -- "no / repurposed" --> Cf["REFUSE: profile absent or identity changed"]
     C -- yes --> Dn{"X lower than current?"}
     Dn -- yes --> Warn["WARN: moving backward; protection/behavior may reduce"]
     Dn -- no --> Set
-    Warn --> Set["Set new pin"]
-    Set --> Mig["Migrate vars/overrides: prompt on newly-required, report orphaned"]
-    Mig --> Res["Re-resolve at X; re-scaffold (update markers)"]
-    Res --> Prop["Surface changes as reviewable proposal"]
+    Warn --> Set["Build one source-to-target transition plan"]
+    Set --> Mig["Migrate vars/overrides; join stable artifact identities;<br/>block dirty or ambiguous retirements"]
+    Mig --> Res["Execute declaration + managed changes + deletions;<br/>accept target inventory last"]
+    Res --> Prop["Apply locally or publish complete clone diff"]
     Prop --> Done["Operator reviews + merges"]
 ```

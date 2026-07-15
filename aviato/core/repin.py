@@ -70,16 +70,20 @@ def plan_repin(
     target_version = normalize_pin(target_version)
 
     target_registry = target_registry or registry
-    if declaration.profile_identity is None:
-        raise CompositionError(
-            "legacy declaration has no profile identity; run `aviato sync` using its current pin first, "
-            "then retry the re-pin (§5.12/§6.5)"
-        )
     target_identity = target_registry.profile(declaration.profile).identity
-    if declaration.profile_identity != target_identity:
+    recorded_identity = declaration.profile_identity
+    if recorded_identity is None:
+        source_identity = registry.profile(declaration.profile).identity
+        if source_identity != target_identity:
+            raise CompositionError(
+                f"legacy profile {declaration.profile!r} changed identity from {source_identity!r} "
+                f"to {target_identity!r}; refusing an ambiguous v1-to-v2 re-pin (§5.12/§6.5)"
+            )
+        recorded_identity = source_identity
+    if recorded_identity != target_identity:
         raise CompositionError(
             f"profile {declaration.profile!r} has identity {target_identity!r} at the target version, "
-            f"but the declaration records {declaration.profile_identity!r}: it has been repurposed — "
+            f"but the declaration records {recorded_identity!r}: it has been repurposed — "
             "refusing to re-pin (§5.12/§6.5). Treat it like a profile change."
         )
     # Resolve the BASE profile at the target (no overrides): variables, settings, and the

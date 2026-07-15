@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -8,6 +10,7 @@ import pytest
 from aviato import __version__, cli
 from aviato.cli import main
 from aviato.core.ports import Issue, Platform
+from aviato.core.provision import ProvisionOutcome
 
 pytestmark = pytest.mark.usefixtures("task3_pinned_context")
 
@@ -50,6 +53,22 @@ class _FakePlatform:
 
 
 _platform_contract: Platform = _FakePlatform()
+
+
+def test_transition_workdir_cleanup_retains_pending_clone_and_prints_exact_recovery_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workdir = tmp_path / "workdir"
+    repository = workdir / "repo"
+    (repository / ".git").mkdir(parents=True)
+    removed: list[Path] = []
+    monkeypatch.setattr(cli, "inspect_transition", lambda _root: SimpleNamespace(pending=True))
+    monkeypatch.setattr(cli.shutil, "rmtree", lambda path, **_kwargs: removed.append(Path(path)))
+
+    cli._cleanup_transition_workdir(workdir, repository)
+
+    assert removed == []
+    assert f"aviato recover-transition {repository}" in capsys.readouterr().err
 
 
 def _consumer(tmp_path: Path) -> Path:
@@ -195,14 +214,20 @@ def test_provision_refuses_unpublished_pin(monkeypatch: pytest.MonkeyPatch, caps
     assert "does not resolve" in err
 
 
-def test_legacy_provision_partial_path_requires_repin_before_remote_mutation(
+def test_provision_reports_partial_full_protection_failure(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: object())
     monkeypatch.setattr(
         cli,
         "provision_repo",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("legacy provision must not mutate remote state")),
+        lambda *a, **k: ProvisionOutcome(
+            created=True,
+            minimal_applied=True,
+            scaffolded=True,
+            partial=True,
+            reason="full protection failed",
+        ),
     )
     rc = main(
         [
@@ -218,11 +243,11 @@ def test_legacy_provision_partial_path_requires_repin_before_remote_mutation(
             "import-name=acme",
         ]
     )
-    assert rc == 2
-    assert "repin" in capsys.readouterr().err
+    assert rc == 1
+    assert "PARTIAL" in capsys.readouterr().err
 
 
-def test_legacy_provision_exposed_path_requires_repin_before_remote_mutation(
+def test_provision_reports_exposed_repository_when_minimal_protection_fails(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # §8.7: created but minimal protection failed → the repo EXISTS and is UNPROTECTED; the CLI
@@ -231,7 +256,7 @@ def test_legacy_provision_exposed_path_requires_repin_before_remote_mutation(
     monkeypatch.setattr(
         cli,
         "provision_repo",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("legacy provision must not mutate remote state")),
+        lambda *a, **k: ProvisionOutcome(created=True, partial=True, reason="minimal failed"),
     )
     rc = main(
         [
@@ -247,20 +272,39 @@ def test_legacy_provision_exposed_path_requires_repin_before_remote_mutation(
             "import-name=a",
         ]
     )
-    assert rc == 2
+    assert rc == 1
     err = capsys.readouterr().err
-    assert "repin" in err
+    assert "UNPROTECTED" in err
 
 
-def test_legacy_provision_success_path_requires_repin_before_remote_mutation(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_provision_clone_scaffold_uses_same_sidecar_inventory_and_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: object())
-    monkeypatch.setattr(
-        cli,
-        "provision_repo",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("legacy provision must not mutate remote state")),
-    )
+    clone_paths: list[Path] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[:3] == ["gh", "repo", "clone"]:
+            clone_path = Path(command[4])
+            clone_paths.append(clone_path)
+            clone_path.mkdir(parents=True)
+            subprocess.run(["git", "-C", str(clone_path), "init", "-q"], check=True)
+            (clone_path / "README.md").write_text("operator seed\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    def fake_provision(*_args: object, **kwargs: object) -> ProvisionOutcome:
+        callback = kwargs["scaffold_push"]
+        assert callable(callback)
+        callback()
+        clone_path = clone_paths[0]
+        assert (clone_path / ".github/aviato.yaml").is_file()
+        assert (clone_path / ".github/aviato.seed.json").is_file()
+        assert (clone_path / ".github/aviato.managed.yml").is_file()
+        assert (clone_path / "README.md").read_text(encoding="utf-8") == "operator seed\n"
+        return ProvisionOutcome(created=True, minimal_applied=True, scaffolded=True, full_applied=True)
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli, "provision_repo", fake_provision)
     rc = main(
         [
             "provision",
@@ -275,11 +319,11 @@ def test_legacy_provision_success_path_requires_repin_before_remote_mutation(
             "import-name=acme",
         ]
     )
-    assert rc == 2
-    assert "repin" in capsys.readouterr().err
+    assert rc == 0
+    assert capsys.readouterr().err == ""
 
 
-def test_legacy_provision_toggle_path_requires_repin_before_remote_mutation(
+def test_provision_reports_skipped_security_toggle(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # R2-1-PROV/R2-5-F1: a successful provision that surfaced-and-skipped a §17 toggle must say so
@@ -288,7 +332,13 @@ def test_legacy_provision_toggle_path_requires_repin_before_remote_mutation(
     monkeypatch.setattr(
         cli,
         "provision_repo",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("legacy provision must not mutate remote state")),
+        lambda *a, **k: ProvisionOutcome(
+            created=True,
+            minimal_applied=True,
+            scaffolded=True,
+            full_applied=True,
+            skipped_security=["secret_scanning"],
+        ),
     )
     rc = main(
         [
@@ -304,6 +354,6 @@ def test_legacy_provision_toggle_path_requires_repin_before_remote_mutation(
             "import-name=a",
         ]
     )
-    assert rc == 2
+    assert rc == 0
     err = capsys.readouterr().err
-    assert "repin" in err
+    assert "SKIPPED" in err and "secret_scanning" in err

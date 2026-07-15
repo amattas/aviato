@@ -63,6 +63,24 @@ serialized per worktree and journaled in Git administrative storage; the
 managed inventory is the final operation and success requires a final local
 convergence diagnosis before journal removal.
 
+Local `--write` and `--open-pr` are two delivery modes for identical transition
+bytes. Proposal mode first clones the repository, plans and executes the
+transition inside that clone, and gives the complete worktree diff (including
+deletions, seed sidecar, declaration, and inventory) to the proposal publisher.
+It never constructs a second ad-hoc file dictionary. A collision, dirty managed
+artifact, foreign or malformed marker, invalid seed record, or pending recovery
+journal prevents both local success and proposal creation. Existing seed-once
+files remain operator-owned and are enumerated in proposal output. A proposal
+with no resulting diff is a successful no-op and does not attempt an empty
+commit. A pre-existing invalid or operator-owned inventory path is a collision,
+never a fresh-state signal, and is not overwritten.
+
+Profile migration validates the saved source declaration against the immutable
+source commit recorded by its managed inventory, even when the declared branch
+or tag now resolves elsewhere. The newly resolved snapshot supplies only the
+target profile and target artifacts. Local and proposal migrations share these
+same source-trust and clean-marker checks.
+
 An interrupted transition blocks ordinary onboarding, sync, repin, and
 offboarding mutation. `aviato recover-transition PATH` inspects it without
 mutation. Resume or rollback requires exactly one requested action and the
@@ -128,7 +146,7 @@ flowchart TD
 
     Mode -- new --> N1["Create repository"]
     N1 --> N2["Apply MINIMAL protection<br/>(safe to persist; does not block first commit)"]
-    N2 --> N3["Scaffold managed artifacts"]
+    N2 --> N3["Clone and execute the same WAL transition<br/>declaration + seeds + sidecar + managed files + inventory"]
     N3 --> N4["First commit + push"]
     N4 --> N5["Apply FULL protection"]
     N5 --> N6{"Full protection applied?"}
@@ -141,6 +159,6 @@ flowchart TD
     E1 -- no --> Edirty["REFUSE: clean tree or pass --allow-dirty"]
     E1 -- yes --> E2["Build one pure transition plan<br/>(all bytes, modes, preimages, inventory)"]
     E2 --> E3["Execute WAL transition onto a branch<br/>inventory last; final local diagnosis"]
-    E3 --> E4["Open proposal; enumerate UNCHANGED<br/>seed-once/unmanaged files"]
+    E3 --> E4["Publish the complete worktree diff;<br/>enumerate preserved seed-once files"]
     E4 --> Done
 ```

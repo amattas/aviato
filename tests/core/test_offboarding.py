@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import subprocess
 from functools import partial
 from pathlib import Path
 
 import pytest
 
+from aviato.core.declaration import Declaration, declaration_to_yaml
 from aviato.core.errors import PathConfinementError
-from aviato.core.offboarding import offboard
+from aviato.core.offboarding import offboard, plan_offboarding_transition
+from aviato.core.onboarding import materialize_items
 from aviato.core.pathguard import confined_target
+from aviato.core.registry import Registry
 from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
-from aviato.core.scaffold import scaffold
+from aviato.core.scaffold import render_managed, scaffold
+from aviato.core.transition import TransitionExecutionError, execute_transition, plan_transition
+from aviato.paths import MODULE_SOURCE_ROOT
 
 ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 
@@ -153,3 +159,123 @@ def test_offboard_fails_closed_on_unmarked_automation_workflow(tmp_path: Path) -
     with pytest.raises(AviatoError):
         offboard(tmp_path, [".github/workflows/aviato-ci.yml"], keep_files=False)
     assert declaration.is_file()  # fail-closed: declaration not removed
+
+
+def test_offboard_preflights_complete_removal_and_cannot_leave_half_state(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    registry = Registry(MODULE_SOURCE_ROOT)
+    declaration = Declaration(
+        profile="python-library",
+        profile_identity=registry.profile("python-library").identity,
+        version="0",
+        variables={"distribution-name": "acme", "import-name": "acme"},
+    )
+    items = materialize_items(
+        registry,
+        declaration.profile,
+        declaration.variables,
+        pin=declaration.version,
+    )
+    onboarding = plan_transition(
+        tmp_path,
+        snapshot_sha="a" * 40,
+        declaration_identity=declaration.profile_identity or "",
+        profile=declaration.profile,
+        pin=declaration.version,
+        items=items,
+        declaration_bytes=declaration_to_yaml(declaration).encode(),
+        baseline_existing_seeds=True,
+        allow_fresh_seed_initialization=True,
+        allow_dirty=True,
+    )
+    execute_transition(onboarding.plan)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "-c",
+            "user.name=Aviato Test",
+            "-c",
+            "user.email=aviato@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "onboard",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    prepared = plan_offboarding_transition(
+        tmp_path,
+        [item.output for item in items if not item.seed_once],
+        snapshot_sha="a" * 40,
+        declaration_identity=declaration.profile_identity or "",
+        profile=declaration.profile,
+        keep_files=True,
+    )
+    assert prepared.plan.conflicts == ()
+    execute_transition(prepared.plan)
+
+    assert not (tmp_path / ".github/aviato.yaml").exists()
+    assert not (tmp_path / ".github/aviato.seed.json").exists()
+    assert not (tmp_path / ".github/aviato.managed.yml").exists()
+    assert not (tmp_path / ".github/workflows/aviato-ci.yml").exists()
+    assert not (tmp_path / ".github/workflows/aviato-drift.yml").exists()
+    assert "aviato:managed" not in (tmp_path / "ruff.toml").read_text(encoding="utf-8")
+    assert (tmp_path / "LICENSE").is_file()
+
+
+def test_legacy_offboard_rejects_a_managed_workflow_introduced_at_final_diagnosis(tmp_path: Path) -> None:
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    _setup_consumer(tmp_path)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "-c",
+            "user.name=Aviato Test",
+            "-c",
+            "user.email=aviato@example.invalid",
+            "commit",
+            "-m",
+            "legacy consumer",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    prepared = plan_offboarding_transition(
+        tmp_path,
+        ["ruff.toml"],
+        snapshot_sha="a" * 40,
+        declaration_identity="aviato-profile/p/v1",
+        profile="p",
+        keep_files=True,
+    )
+    workflow = tmp_path / ".github/workflows/new-managed.yml"
+
+    def introduce_workflow(phase: str, _operation: object) -> None:
+        if phase == "final_diagnosis":
+            workflow.parent.mkdir(parents=True, exist_ok=True)
+            workflow.write_text(
+                render_managed(
+                    ScaffoldItem(".github/workflows/new-managed.yml", "on: push\n", "#", False),
+                    profile="p",
+                    version="v1",
+                ),
+                encoding="utf-8",
+            )
+
+    with pytest.raises(TransitionExecutionError, match="convergence diagnosis") as caught:
+        execute_transition(prepared.plan, fault=introduce_workflow)
+
+    assert "rolled back" in str(caught.value)
+    assert (tmp_path / ".github/aviato.yaml").is_file()
+    assert workflow.is_file()

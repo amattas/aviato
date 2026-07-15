@@ -20,7 +20,12 @@ def task3_pinned_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
     snapshot_root = tmp_path.parent / f"{tmp_path.name}-library-snapshot"
     shutil.copytree(Path("aviato/library"), snapshot_root)
-    snapshot = SimpleNamespace(registry=Registry(snapshot_root), policy_root=snapshot_root)
+    snapshot = SimpleNamespace(
+        registry=Registry(snapshot_root),
+        policy_root=snapshot_root,
+        commit_sha="a" * 40,
+        snapshot=SimpleNamespace(commit_sha="a" * 40, registry=Registry(snapshot_root)),
+    )
     monkeypatch.setattr(cli, "_open_consumer_context", lambda _root, _declaration: snapshot)
     monkeypatch.setattr(cli, "_open_new_context", lambda _root, _pin: snapshot)
     monkeypatch.setattr(cli, "_open_published_snapshot", lambda _pin: snapshot)

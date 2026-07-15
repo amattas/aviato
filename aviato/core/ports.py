@@ -125,6 +125,7 @@ class LibraryRefKind(StrEnum):
 
     TAG = "tag"
     BRANCH = "branch"
+    COMMIT = "commit"
 
 
 @dataclass(frozen=True)
