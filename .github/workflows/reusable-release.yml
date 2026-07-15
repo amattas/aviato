@@ -308,7 +308,7 @@ jobs:
           verifier_blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
           verifier_json="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${verifier_repo}/contents/${verifier_path}" -f "ref=${verifier_ref}")"
           # AVIATO_SECURE_VERIFIER_BOOTSTRAP: execute the locally Git-hash-bound verifier only in memory.
-          AVIATO_VERIFIER_JSON="${verifier_json}" AVIATO_VERIFIER_BLOB="${verifier_blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${verifier_json}" AVIATO_VERIFIER_BLOB="${verifier_blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
@@ -542,7 +542,7 @@ jobs:
           aviato_verify_authority() {
             local envelope="$1"
             # AVIATO_SECURE_VERIFIER_BOOTSTRAP: execute the locally Git-hash-bound verifier only in memory.
-            AVIATO_VERIFIER_JSON="${verifier_json}" AVIATO_VERIFIER_BLOB="${verifier_blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+            /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${verifier_json}" AVIATO_VERIFIER_BLOB="${verifier_blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")

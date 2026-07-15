@@ -4,6 +4,8 @@ import copy
 import hashlib
 import importlib
 import inspect
+import ssl
+import urllib.error
 from typing import Any
 
 import pytest
@@ -136,13 +138,17 @@ def test_verifier_github_reads_use_stdlib_https_and_bearer_token(monkeypatch: py
         def read(self) -> bytes:
             return b'{"id": 7}'
 
-    def fake_urlopen(request: Any, timeout: int) -> Response:
-        calls.append((request, timeout))
-        return Response()
+        def geturl(self) -> str:
+            return "https://api.github.com/repos/o/r"
+
+    class Opener:
+        def open(self, request: Any, timeout: int) -> Response:
+            calls.append((request, timeout))
+            return Response()
 
     monkeypatch.setenv("GH_TOKEN", "verifier-token")
     monkeypatch.setenv("PATH", "/attacker")
-    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(module, "_github_opener", lambda: Opener())
     assert module._gh("repos/o/r") == {"id": 7}
     request, timeout = calls[0]
     assert request.full_url == "https://api.github.com/repos/o/r"
@@ -169,6 +175,74 @@ def test_signature_verifier_uses_absolute_binary_and_minimal_environment(
     assert captured["command"][0] == "/usr/bin/ssh-keygen"
     assert captured["env"] == {"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"}
     assert "must-not-leak" not in repr(captured)
+
+
+def test_github_opener_ignores_proxy_and_malicious_ca_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+    captured: dict[str, Any] = {}
+
+    def fake_context(*_args: Any, **_kwargs: Any) -> ssl.SSLContext:
+        captured["ssl_env"] = {key: module.os.environ.get(key) for key in ("SSL_CERT_FILE", "SSL_CERT_DIR")}
+        return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+    def fake_build_opener(*handlers: Any) -> Any:
+        captured["handlers"] = handlers
+        return object()
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://attacker.invalid:8080")
+    monkeypatch.setenv("https_proxy", "http://attacker.invalid:8080")
+    monkeypatch.setenv("SSL_CERT_FILE", "/attacker/ca.pem")
+    monkeypatch.setenv("SSL_CERT_DIR", "/attacker/certs")
+    monkeypatch.setattr(module.ssl, "create_default_context", fake_context)
+    monkeypatch.setattr(module.urllib.request, "build_opener", fake_build_opener)
+    module._github_opener()
+
+    assert captured["ssl_env"] == {"SSL_CERT_FILE": None, "SSL_CERT_DIR": None}
+    proxy = next(handler for handler in captured["handlers"] if isinstance(handler, module.urllib.request.ProxyHandler))
+    assert proxy.proxies == {}
+    assert any(isinstance(handler, module.DenyRedirectHandler) for handler in captured["handlers"])
+
+
+def test_github_reader_denies_redirect_without_forwarding_authorization(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+    requests: list[Any] = []
+
+    class RedirectingOpener:
+        def open(self, request: Any, timeout: int) -> Any:
+            requests.append(request)
+            raise urllib.error.HTTPError(
+                request.full_url,
+                302,
+                "redirect denied",
+                {"Location": "https://attacker.invalid/steal"},
+                None,
+            )
+
+    monkeypatch.setenv("GH_TOKEN", "verifier-token")
+    monkeypatch.setattr(module, "_github_opener", lambda: RedirectingOpener())
+    with pytest.raises(urllib.error.HTTPError):
+        module._gh("repos/o/r")
+    assert len(requests) == 1
+    assert requests[0].full_url.startswith("https://api.github.com/")
+    assert requests[0].get_header("Authorization") == "Bearer verifier-token"
+
+
+def test_full_verifier_bootstraps_clear_ambient_network_and_python_environment() -> None:
+    from aviato.paths import REPO_ROOT
+
+    paths = (
+        REPO_ROOT / ".github/workflows/reusable-release.yml",
+        REPO_ROOT / ".github/workflows/reusable-docker-ghcr.yml",
+        REPO_ROOT / ".github/workflows/reusable-app-store-connect.yml",
+        REPO_ROOT / ".github/workflows/reusable-docs-pages.yml",
+        REPO_ROOT / "aviato/library/workflow-fragments/pypi-publish.yml",
+    )
+    for path in paths:
+        body = path.read_text(encoding="utf-8")
+        assert "/usr/bin/env -i" in body, path
+        assert "PATH=/usr/bin:/bin" in body, path
+        assert "PYTHONPATH" not in body, path
+        assert "SSL_CERT_FILE" not in body, path
 
 
 def test_live_collector_explicitly_excludes_parent_rulesets() -> None:

@@ -94,7 +94,12 @@ def test_managed_checkpoint_intake_attestation_job_sees_only_verified_fixed_arti
     document = yaml.safe_load((ROOT / "templates/consumer-protection-checkpoint.yml").read_text())
     attest = document["jobs"]["attest"]
     assert attest["needs"] == "verify"
-    assert attest["permissions"] == {"contents": "read", "id-token": "write", "attestations": "write"}
+    assert attest["permissions"] == {
+        "actions": "read",
+        "contents": "read",
+        "id-token": "write",
+        "attestations": "write",
+    }
     download = next(step for step in attest["steps"] if "download-artifact" in step.get("uses", ""))
     assert download["with"]["name"] == "verified-checkpoint"
 

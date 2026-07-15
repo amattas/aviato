@@ -455,8 +455,10 @@ jobs:
           path: /tmp
 
       - name: Verify docs bundle and final push authority
+        id: aviato-verify-docs-push
         shell: bash
         env:
+          AVIATO_AUTHORITY_VERIFIER_CONTRACT: aviato-full-authority-verifier/v1
           DOCS_BRANCH: ${{ inputs.docs-branch }}
           VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
         run: |
@@ -478,7 +480,7 @@ jobs:
           blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
           payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
           # AVIATO_SECURE_VERIFIER_BOOTSTRAP: no executable tempfile; bind decoded bytes locally.
-          AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
@@ -546,8 +548,10 @@ jobs:
           gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=false&per_page=100" >/dev/null
           gh api --paginate -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments?per_page=100" >/dev/null
       - name: Recheck exact authorization before Pages OIDC
+        id: aviato-verify-pages-deploy
         shell: bash
         env:
+          AVIATO_AUTHORITY_VERIFIER_CONTRACT: aviato-full-authority-verifier/v1
           GH_TOKEN: ${{ github.token }}
           CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
           CHECKPOINT_DIGEST: ${{ inputs.checkpoint-digest }}
@@ -580,7 +584,7 @@ jobs:
           blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
           payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
           # AVIATO_SECURE_VERIFIER_BOOTSTRAP: no executable tempfile; bind decoded bytes locally.
-          AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")

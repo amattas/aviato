@@ -61,9 +61,9 @@ on:
         type: string
         default: ""
       team-id:
-        required: false
+        description: Exact ten-character Apple Developer Team ID (uppercase ASCII letters or digits).
+        required: true
         type: string
-        default: ""
       configuration:
         required: false
         type: string
@@ -307,6 +307,55 @@ jobs:
           set -euo pipefail
           [[ "${EXPECTED_SHA256}" =~ ^[0-9a-f]{64}$ ]]
           [ "$(shasum -a 256 unsigned-attestation-input/unsigned-xcarchive.zip | awk '{print $1}')" = "${EXPECTED_SHA256}" ]
+      - name: Mint verifier-only read token
+        id: verifier-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+          private-key: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.verifier-app-owner || github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          skip-token-revoke: false
+          permission-administration: read
+          permission-actions: read
+          permission-contents: read
+          permission-metadata: read
+      - name: Verify full authority immediately before unsigned archive attestation
+        id: aviato-verify-app-archive-attestation
+        shell: bash
+        env:
+          AVIATO_AUTHORITY_VERIFIER_CONTRACT: aviato-full-authority-verifier/v1
+          GH_TOKEN: ${{ github.token }}
+          VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
+          CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
+          VERIFIED_ENVELOPE_DIGEST: ${{ inputs.verified-envelope-digest }}
+        run: |
+          set -euo pipefail
+          rm -rf "${RUNNER_TEMP}/attest-authority" && mkdir -p "${RUNNER_TEMP}/attest-authority"
+          gh run download "${CHECKPOINT_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name verified-checkpoint --dir "${RUNNER_TEMP}/attest-authority"
+          envelope="${RUNNER_TEMP}/attest-authority/verified-checkpoint-envelope.json"
+          [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
+          repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
+          ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
+          path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
+          blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
+          payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
+          # AVIATO_SECURE_VERIFIER_BOOTSTRAP: execute checkpoint-bound bytes in a cleared environment.
+          /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          import base64, hashlib, json, os, sys
+          payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
+          if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
+          content = payload["content"]
+          if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
+          encoded = content.replace("\r", "").replace("\n", "")
+          if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
+          body = base64.b64decode(encoded, validate=True)
+          if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
+          actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
+          if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
+          sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
+          exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
+          PY
       - name: Attest unsigned archive provenance
         uses: actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e
         with:
@@ -455,6 +504,7 @@ jobs:
                   path = pathlib.PurePosixPath(item.filename)
                   mode = item.external_attr >> 16
                   file_type = stat.S_IFMT(mode)
+                  permissions = stat.S_IMODE(mode)
                   is_directory = item.is_dir() or file_type == stat.S_IFDIR
                   if (
                       not item.filename
@@ -465,12 +515,14 @@ jobs:
                       or path.parts[0] != "App.xcarchive"
                       or item.flag_bits & 1
                       or file_type not in {0, stat.S_IFREG, stat.S_IFDIR}
+                      or permissions & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX | 0o022)
                   ):
                       raise SystemExit("unsigned archive contains an unsafe member")
                   if is_directory:
                       directories.add(path)
                   else:
-                      files.append((item, path))
+                      safe_mode = 0o755 if permissions & 0o111 else 0o644
+                      files.append((item, path, safe_mode))
                       directories.update(pathlib.PurePosixPath(*path.parts[:index]) for index in range(1, len(path.parts)))
               directories.add(pathlib.PurePosixPath("App.xcarchive"))
               for relative in sorted(directories, key=lambda item: (len(item.parts), item.parts)):
@@ -479,7 +531,7 @@ jobs:
               flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
               if hasattr(os, "O_NOFOLLOW"):
                   flags |= os.O_NOFOLLOW
-              for item, relative in files:
+              for item, relative, safe_mode in files:
                   destination = root.joinpath(*relative.parts)
                   descriptor = os.open(destination, flags, 0o600)
                   written = 0
@@ -488,16 +540,31 @@ jobs:
                           while chunk := source.read(1024 * 1024):
                               output.write(chunk)
                               written += len(chunk)
+                          if written != item.file_size:
+                              raise SystemExit("unsigned archive member size changed during extraction")
+                          os.fchmod(output.fileno(), safe_mode)
                   except BaseException:
                       destination.unlink(missing_ok=True)
                       raise
                   if written != item.file_size:
                       destination.unlink(missing_ok=True)
                       raise SystemExit("unsigned archive member size changed")
-                  os.chmod(destination, 0o644)
           PY
           [ -d "${trusted_root}/App.xcarchive" ]
           echo "TRUSTED_ARCHIVE_PATH=${trusted_root}/App.xcarchive" >> "${GITHUB_ENV}"
+
+      - name: Validate declarative signing inputs
+        working-directory: .
+        shell: bash
+        env:
+          TEAM_ID_INPUT: ${{ inputs.team-id }}
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 -I - "${TEAM_ID_INPUT}" <<'PY'
+          import re, sys
+          if re.fullmatch(r"[A-Z0-9]{10}", sys.argv[1]) is None:
+              raise SystemExit("team-id must be exactly ten uppercase ASCII letters or digits")
+          PY
 
       - name: Verify full authority before importing signing secrets
         working-directory: "."
@@ -515,7 +582,7 @@ jobs:
           blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
           payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
           # AVIATO_SECURE_VERIFIER_BOOTSTRAP: this step must immediately precede Apple-secret import.
-          AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
@@ -606,20 +673,10 @@ jobs:
             *) echo "::error::Unsupported export-method '${EXPORT_METHOD}' (app-store, ad-hoc, development)."; exit 1 ;;
           esac
           generated="${RUNNER_TEMP}/ExportOptions.plist"
-          {
-            echo '<?xml version="1.0" encoding="UTF-8"?>'
-            echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
-            echo '<plist version="1.0">'
-            echo '<dict>'
-            echo '  <key>method</key>'
-            printf '  <string>%s</string>\n' "${EXPORT_METHOD}"
-            if [ -n "${TEAM_ID}" ]; then
-              echo '  <key>teamID</key>'
-              printf '  <string>%s</string>\n' "${TEAM_ID}"
-            fi
-            echo '</dict>'
-            echo '</plist>'
-          } > "${generated}"
+          rm -f "${generated}"
+          /usr/libexec/PlistBuddy -c "Add :method string ${EXPORT_METHOD}" "${generated}"
+          /usr/libexec/PlistBuddy -c "Add :teamID string ${TEAM_ID}" "${generated}"
+          plutil -lint "${generated}"
           echo "RESOLVED_EXPORT_OPTIONS=${generated}" >> "${GITHUB_ENV}"
 
       - name: Export signed app
@@ -670,8 +727,9 @@ jobs:
           path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
           blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
           payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
+          aviato_verify_authority() {
           # AVIATO_SECURE_VERIFIER_BOOTSTRAP: fresh full authority immediately before upload.
-          AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
@@ -686,12 +744,14 @@ jobs:
           sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
           exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
           PY
+          }
           ipa_path="$(find "${EXPORT_PATH}" -maxdepth 1 -name '*.ipa' -print | head -n1)"
           if [ -z "${ipa_path}" ]; then
             echo "::error::No .ipa found in ${EXPORT_PATH}."
             exit 1
           fi
 
+          aviato_verify_authority
           xcrun altool --upload-app \
             --type ios \
             --file "${ipa_path}" \
@@ -725,8 +785,9 @@ jobs:
           path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
           blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
           payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
+          aviato_verify_authority() {
           # AVIATO_SECURE_VERIFIER_BOOTSTRAP: fresh full authority immediately before built-in submit.
-          AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
@@ -741,6 +802,7 @@ jobs:
           sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
           exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
           PY
+          }
           if ! command -v fastlane >/dev/null 2>&1; then
             echo "::error::fastlane is not available on the runner; cannot run the built-in submit (C12-W6)."
             exit 1
@@ -761,6 +823,7 @@ jobs:
           # processing (a deterministic race: altool returns on receipt, processing
           # takes minutes). Without it, deliver selects the latest build for the app
           # version and WAITS for processing itself.
+          aviato_verify_authority
           fastlane deliver \
             --api_key_path "${api_key_path}" \
             --app_identifier "${BUNDLE_IDENTIFIER}" \
@@ -913,7 +976,7 @@ jobs:
           payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
           aviato_verify_authority() {
             # AVIATO_SECURE_VERIFIER_BOOTSTRAP: fresh full authority before each release write.
-            AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+            /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")

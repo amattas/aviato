@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import re
 import stat
 import subprocess
@@ -796,7 +797,7 @@ def test_every_final_privileged_mutation_is_dominated_by_shared_executable_verif
     ) in identities
     assert (
         "reusable-docker-ghcr.yml",
-        "docker",
+        "attest-image",
         "Attest published image provenance",
         "oidc-attestation",
     ) in identities
@@ -821,6 +822,111 @@ def test_mutation_inventory_rejects_undeclared_and_stale_entries() -> None:
     )
     errors = verify_mutation_inventory(WORKFLOWS, _rendered_python_library_workflow(), manifest=stale)
     assert any("stale declared mutation" in error and "Missing declared mutation" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("suffix", "script"),
+    (
+        ("yaml", "command /usr/bin/gh api \\\n  --method DELETE repos/o/r/releases/1"),
+        ("yml", "/usr/bin/env gh api -X DELETE repos/o/r/releases/1"),
+        ("yml", "GH_TOKEN=x /usr/bin/gh api --method=DELETE repos/o/r/releases/1"),
+    ),
+)
+def test_mutation_inventory_structurally_discovers_wrapped_multiline_api_writes(
+    tmp_path: Path, suffix: str, script: str
+) -> None:
+    from aviato.plugins.release_mutations import verify_mutation_inventory
+
+    workflow = {
+        "jobs": {
+            "write": {
+                "permissions": {"contents": "write"},
+                "runs-on": "ubuntu-latest",
+                "steps": [{"name": "Hidden API write", "run": script}],
+            }
+        }
+    }
+    workflows = tmp_path / "workflows"
+    workflows.mkdir()
+    (workflows / f"probe.{suffix}").write_text(yaml.safe_dump(workflow), encoding="utf-8")
+    errors = verify_mutation_inventory(workflows, {"jobs": {}}, manifest=())
+    assert any("undeclared hosted mutation" in error and "Hidden API write" in error for error in errors)
+
+
+def test_mutation_inventory_rejects_comment_only_verifier_spoof(tmp_path: Path) -> None:
+    from aviato.plugins.release_mutations import HostedMutation, verify_mutation_inventory
+
+    workflow = {
+        "jobs": {
+            "publish": {
+                "permissions": {"id-token": "write", "contents": "read"},
+                "runs-on": "ubuntu-latest",
+                "steps": [
+                    {
+                        "name": "Fake verifier",
+                        "id": "aviato-verify-publish",
+                        "env": {"AVIATO_AUTHORITY_VERIFIER_CONTRACT": "aviato-full-authority-verifier/v1"},
+                        "run": "# AVIATO_SECURE_VERIFIER_BOOTSTRAP\n# /usr/bin/python3 -I\ntrue",
+                    },
+                    {
+                        "name": "Publish",
+                        "uses": "pypa/gh-action-pypi-publish@" + "a" * 40,
+                    },
+                ],
+            }
+        }
+    }
+    workflows = tmp_path / "workflows"
+    workflows.mkdir()
+    (workflows / "probe.yml").write_text(yaml.safe_dump(workflow), encoding="utf-8")
+    manifest = (
+        HostedMutation(
+            "probe.yml",
+            "publish",
+            "Publish",
+            "pypa/gh-action-pypi-publish",
+            "action",
+            verifier_step_id="aviato-verify-publish",
+        ),
+    )
+    errors = verify_mutation_inventory(workflows, {"jobs": {}}, manifest=manifest)
+    assert any("canonical verifier" in error for error in errors)
+
+
+def test_every_oidc_mutation_has_an_adjacent_canonical_full_verifier() -> None:
+    from aviato.plugins.release_mutations import OIDC_ACTIONS, is_canonical_verifier_step
+
+    documents = {path.name: _load(path.name) for path in WORKFLOWS.glob("*.yml")}
+    documents["rendered-python"] = _rendered_python_library_workflow()
+    for workflow_name, document in documents.items():
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            permissions = job.get("permissions") or document.get("permissions") or {}
+            if permissions.get("id-token") != "write":
+                continue
+            encoded = json.dumps(job)
+            for forbidden in ("actions/checkout", "eval ", "xcodebuild archive", "docker buildx build"):
+                assert forbidden not in encoded, f"{workflow_name}:{job_name} shares OIDC with consumer execution"
+            steps = job.get("steps") or []
+            for index, step in enumerate(steps):
+                action = str(step.get("uses", "")).split("@", 1)[0]
+                if action not in OIDC_ACTIONS:
+                    continue
+                assert index > 0, f"{workflow_name}:{job_name}:{action} has no verifier predecessor"
+                assert is_canonical_verifier_step(steps[index - 1]), (
+                    f"{workflow_name}:{job_name}:{action} lacks an adjacent canonical full verifier"
+                )
+
+
+def test_canonical_verifier_run_digest_rejects_executable_drift() -> None:
+    from aviato.plugins.release_mutations import is_canonical_verifier_step
+
+    workflow = _load("reusable-docs-pages.yml")
+    step = next(item for item in workflow["jobs"]["deploy"]["steps"] if item.get("id") == "aviato-verify-pages-deploy")
+    assert is_canonical_verifier_step(step)
+    step["run"] += "\ntrue\n"
+    assert not is_canonical_verifier_step(step)
 
 
 def test_normal_validation_wires_the_bijective_mutation_inventory() -> None:
@@ -1009,16 +1115,24 @@ def test_app_store_trusted_archive_extractor_rejects_escape_types_and_overwrite(
         [
             ("App.xcarchive/", b"", stat.S_IFDIR | 0o755),
             ("App.xcarchive/Info.plist", b"safe", stat.S_IFREG | 0o644),
+            ("App.xcarchive/Products/App", b"executable", stat.S_IFREG | 0o755),
         ],
     )
     subprocess.run([sys.executable, "-c", script, str(good), str(good_root)], check=True)
     assert (good_root / "App.xcarchive" / "Info.plist").read_bytes() == b"safe"
+    assert stat.S_IMODE((good_root / "App.xcarchive" / "Info.plist").stat().st_mode) == 0o644
+    assert stat.S_IMODE((good_root / "App.xcarchive" / "Products/App").stat().st_mode) == 0o755
 
     hostile = {
         "absolute": [("/usr/local/bin/aviato", b"owned", stat.S_IFREG | 0o755)],
         "traversal": [("App.xcarchive/../../../../../usr/local/bin/aviato", b"owned", stat.S_IFREG | 0o755)],
         "symlink": [("App.xcarchive/link", b"/usr/local/bin", stat.S_IFLNK | 0o777)],
         "device": [("App.xcarchive/device", b"", stat.S_IFCHR | 0o600)],
+        "setuid": [("App.xcarchive/setuid", b"bad", stat.S_IFREG | 0o4755)],
+        "setgid": [("App.xcarchive/setgid", b"bad", stat.S_IFREG | 0o2755)],
+        "sticky": [("App.xcarchive/sticky", b"bad", stat.S_IFREG | 0o1755)],
+        "group-writable": [("App.xcarchive/group", b"bad", stat.S_IFREG | 0o775)],
+        "world-writable": [("App.xcarchive/world", b"bad", stat.S_IFREG | 0o757)],
     }
     for name, entries in hostile.items():
         root = tmp_path / f"root-{name}"
@@ -1040,6 +1154,33 @@ def test_app_store_trusted_archive_extractor_rejects_escape_types_and_overwrite(
     )
     assert result.returncode != 0
     assert target.read_bytes() == b"original"
+
+
+def test_app_store_team_id_is_exact_and_export_plist_is_structured(tmp_path: Path) -> None:
+    workflow = _load("reusable-app-store-connect.yml")
+    publish = workflow["jobs"]["app-store-connect"]
+    validate = next(step for step in publish["steps"] if step.get("name") == "Validate declarative signing inputs")
+    validation_script = _single_python_heredoc(validate["run"])
+    assert subprocess.run([sys.executable, "-c", validation_script, "ABCDEFGHIJ"]).returncode == 0
+    for invalid in ("", "ABCDE1234", "abcde12345", "ABCDE1234-", "ABCDE</string><key>PWN</key>"):
+        result = subprocess.run([sys.executable, "-c", validation_script, invalid], capture_output=True, text=True)
+        assert result.returncode != 0, invalid
+
+    resolve = next(step for step in publish["steps"] if step.get("name") == "Resolve export options")
+    run = resolve["run"]
+    assert "/usr/libexec/PlistBuddy" in run
+    assert "<plist" not in run and "<string>%s" not in run
+    github_env = tmp_path / "github-env"
+    env = {
+        **os.environ,
+        "RUNNER_TEMP": str(tmp_path),
+        "GITHUB_ENV": str(github_env),
+        "EXPORT_METHOD": "app-store",
+        "TEAM_ID": "ABCDEFGHIJ",
+    }
+    subprocess.run(["bash", "-c", run], env=env, check=True, capture_output=True, text=True)
+    generated = tmp_path / "ExportOptions.plist"
+    assert plistlib.loads(generated.read_bytes()) == {"method": "app-store", "teamID": "ABCDEFGHIJ"}
 
 
 def test_promotion_accepts_two_person_actor_submitter_and_only_rejects_reviewer_overlap() -> None:

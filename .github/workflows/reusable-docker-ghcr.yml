@@ -74,30 +74,9 @@ on:
       AVIATO_VERIFIER_APP_PRIVATE_KEY:
         required: true
 
-permissions:
-  actions: read
-  contents: read
-  packages: write
-  security-events: write
-  # Keyless OIDC build provenance/attestation for the published image (§13.2/§11.7).
-  id-token: write
-  attestations: write
-# R7-4-GHCR-OIDC (ACCEPTED scope): unlike the PyPI workflow (which splits a `contents:read` build
-# job from an `id-token:write` publish job, isolating the operator-controlled `eval` build/install
-# commands from the OIDC token), this single-job design holds `id-token:write` during the
-# operator-controlled `docker buildx build` of the consumer's committed Dockerfile. The two reasons
-# this is accepted as documented scope, NOT a deferred TODO:
-#   1. The operator surface here is a COMMITTED Dockerfile (reviewable code in the consumer repo),
-#      not arbitrary `pip install` / `python -m build` shell commands that pull untrusted build
-#      deps. The threat model — a compromised build-time dependency exfiltrating the OIDC token —
-#      doesn't apply with the same force because there are no per-build dep installs at this layer
-#      (a Dockerfile's RUN steps execute INSIDE the built image, not on the runner, so they don't
-#      see the runner's GITHUB_TOKEN or OIDC env vars).
-#   2. A true split requires writing the OCI image to a tarball, uploading as an artifact,
-#      downloading in a separate push job, then `docker load` + push + attest — non-trivial and
-#      changes the attestation subject from the as-pushed digest to the local-tarball digest, which
-#      needs careful re-verification. The risk-reduction-vs-complexity tradeoff favors leaving this
-#      as one job WITH this rationale documented inline.
+permissions: {}
+# Consumer checkout/build/scan/push runs without OIDC. A fresh attest-image runner receives only
+# the published image identity and mints OIDC immediately after a checkpoint-bound full verifier.
 
 # Per-alias deploy concurrency group so a slower, older-release deploy cannot
 # regress the mutable `latest` tag (§8.14). Queue rather than cancel.
@@ -109,8 +88,15 @@ jobs:
   docker:
     name: Build and publish image
     runs-on: ubuntu-latest
-    # finding 7: platform-level gate on the registry publish (single-job design per
-    # R7-4, so the environment wraps build+scan+push — reviewers approve the run).
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      security-events: write
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+    # Platform-level gate wraps build+scan+push; the isolated attestation consumes its exact outputs.
     environment:
       name: ${{ inputs.environment-name }}
     steps:
@@ -375,7 +361,7 @@ jobs:
           verifier_json="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${verifier_repo}/contents/${verifier_path}" -f "ref=${verifier_ref}")"
           aviato_verify_authority() {
             # AVIATO_SECURE_VERIFIER_BOOTSTRAP: execute the locally Git-hash-bound verifier only in memory.
-            AVIATO_VERIFIER_JSON="${verifier_json}" AVIATO_VERIFIER_BLOB="${verifier_blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+            /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${verifier_json}" AVIATO_VERIFIER_BLOB="${verifier_blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
@@ -432,15 +418,6 @@ jobs:
           done
           tag_digest="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
           echo "digest=${tag_digest}" >> "${GITHUB_OUTPUT}"
-
-      # §13.2/§11.7: keyless OIDC build provenance attestation for the pushed image.
-      - name: Attest published image provenance
-        if: ${{ inputs.push }}
-        uses: actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e
-        with:
-          subject-name: ${{ steps.vars.outputs.image }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
 
       # §8.14/§13.2: move the mutable `latest` tag only if this release is the
       # highest released version. The comparison mirrors aviato.core.versioning
@@ -505,8 +482,9 @@ jobs:
           path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
           blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
           payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
+          aviato_verify_authority() {
           # AVIATO_SECURE_VERIFIER_BOOTSTRAP: fresh full authority immediately before latest.
-          AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
           import base64, hashlib, json, os, sys
           payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
           if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
@@ -521,4 +499,74 @@ jobs:
           sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
           exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
           PY
+          }
+          aviato_verify_authority
           docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}:${TAG}"
+
+  attest-image:
+    name: Attest exact published image on an isolated runner
+    needs: docker
+    if: ${{ inputs.push }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Mint verifier-only read token
+        id: verifier-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.AVIATO_VERIFIER_APP_ID }}
+          private-key: ${{ secrets.AVIATO_VERIFIER_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.verifier-app-owner || github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          skip-token-revoke: false
+          permission-administration: read
+          permission-actions: read
+          permission-contents: read
+          permission-metadata: read
+      - name: Verify full authority immediately before image attestation
+        id: aviato-verify-image-attestation
+        shell: bash
+        env:
+          AVIATO_AUTHORITY_VERIFIER_CONTRACT: aviato-full-authority-verifier/v1
+          GH_TOKEN: ${{ github.token }}
+          VERIFIER_GH_TOKEN: ${{ steps.verifier-token.outputs.token }}
+          CHECKPOINT_RUN_ID: ${{ inputs.checkpoint-run-id }}
+          VERIFIED_ENVELOPE_DIGEST: ${{ inputs.verified-envelope-digest }}
+        run: |
+          set -euo pipefail
+          rm -rf "${RUNNER_TEMP}/attest-authority" && mkdir -p "${RUNNER_TEMP}/attest-authority"
+          gh run download "${CHECKPOINT_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name verified-checkpoint --dir "${RUNNER_TEMP}/attest-authority"
+          envelope="${RUNNER_TEMP}/attest-authority/verified-checkpoint-envelope.json"
+          [ "$(shasum -a 256 "${envelope}" | awk '{print $1}')" = "${VERIFIED_ENVELOPE_DIGEST}" ]
+          repo="$(jq -r .checkpoint.authority_snapshot.guard.verifier.repository "${envelope}")"
+          ref="$(jq -r .checkpoint.authority_snapshot.guard.verifier.ref "${envelope}")"
+          path="$(jq -r .checkpoint.authority_snapshot.guard.verifier.path "${envelope}")"
+          blob="$(jq -r .checkpoint.authority_snapshot.guard.verifier.blob_sha "${envelope}")"
+          payload="$(GH_TOKEN="${VERIFIER_GH_TOKEN}" gh api --method GET -H 'Cache-Control: no-cache' "repos/${repo}/contents/${path}" -f "ref=${ref}")"
+          # AVIATO_SECURE_VERIFIER_BOOTSTRAP: execute checkpoint-bound bytes in a cleared environment.
+          /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C AVIATO_VERIFIER_JSON="${payload}" AVIATO_VERIFIER_BLOB="${blob}" GH_TOKEN="${VERIFIER_GH_TOKEN}" /usr/bin/python3 -I - "${envelope}" "${GITHUB_REPOSITORY}" <<'PY'
+          import base64, hashlib, json, os, sys
+          payload = json.loads(os.environ.pop("AVIATO_VERIFIER_JSON")); expected = os.environ.pop("AVIATO_VERIFIER_BLOB")
+          if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str): raise SystemExit("invalid verifier encoding")
+          content = payload["content"]
+          if any(character.isspace() and character not in "\r\n" for character in content): raise SystemExit("invalid verifier whitespace")
+          encoded = content.replace("\r", "").replace("\n", "")
+          if len(encoded) > 349_528: raise SystemExit("invalid verifier size")
+          body = base64.b64decode(encoded, validate=True)
+          if not 1 <= len(body) <= 262_144: raise SystemExit("invalid verifier size")
+          actual = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
+          if actual != expected or payload.get("sha") != expected: raise SystemExit("verifier blob mismatch")
+          sys.argv = ["authority_verifier.py", "--envelope", sys.argv[1], "--repository", sys.argv[2]]
+          exec(compile(body, "<checkpoint-bound-authority-verifier>", "exec"), {"__name__": "__main__", "__file__": "<memory>"})
+          PY
+      - name: Attest published image provenance
+        uses: actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e
+        with:
+          subject-name: ${{ needs.docker.outputs.image }}
+          subject-digest: ${{ needs.docker.outputs.digest }}
+          push-to-registry: true

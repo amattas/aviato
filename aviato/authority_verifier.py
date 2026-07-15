@@ -13,16 +13,47 @@ import hashlib
 import json
 import os
 import pathlib
+import ssl
 import subprocess
 import tempfile
 import time
 import urllib.request
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 AUTHORITY_SNAPSHOT_SCHEMA = "aviato-protection-authority-snapshot/v1"
 JsonReader = Callable[[str, bool], Any]
+
+
+class DenyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Fail closed instead of forwarding the verifier token across redirects."""
+
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+def _system_ssl_context() -> ssl.SSLContext:
+    """Load platform trust roots while ignoring attacker-controlled OpenSSL env."""
+
+    removed = {key: os.environ.pop(key) for key in ("SSL_CERT_FILE", "SSL_CERT_DIR") if key in os.environ}
+    try:
+        return ssl.create_default_context()
+    finally:
+        os.environ.update(removed)
+
+
+def _github_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPSHandler(context=_system_ssl_context()),
+        DenyRedirectHandler(),
+    )
+
+
+def _is_github_api_url(url: str) -> bool:
+    parsed = urlsplit(url)
+    return parsed.scheme == "https" and parsed.netloc == "api.github.com" and parsed.path.startswith("/")
 
 
 def flatten_paginated_pages(pages: object, collection_key: str | None) -> list[Any]:
@@ -116,6 +147,7 @@ def _gh(endpoint: str, paginated: bool = False) -> Any:
         raise RuntimeError("GH_TOKEN is required for authority verification")
     url: str | None = f"https://api.github.com/{endpoint.lstrip('/')}"
     pages: list[Any] = []
+    opener = _github_opener()
     while url:
         request = urllib.request.Request(
             url,
@@ -127,7 +159,9 @@ def _gh(endpoint: str, paginated: bool = False) -> Any:
                 "X-GitHub-Api-Version": "2022-11-28",
             },
         )
-        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - fixed GitHub API origin
+        with opener.open(request, timeout=30) as response:  # noqa: S310 - fixed GitHub API origin
+            if not _is_github_api_url(response.geturl()):
+                raise RuntimeError("GitHub API response escaped the exact HTTPS origin")
             pages.append(json.loads(response.read()))
             link = response.headers.get("Link", "")
         next_url = None
@@ -135,7 +169,7 @@ def _gh(endpoint: str, paginated: bool = False) -> Any:
             for item in link.split(","):
                 if 'rel="next"' in item:
                     candidate = item.split(";", 1)[0].strip()
-                    if candidate.startswith("<https://api.github.com/") and candidate.endswith(">"):
+                    if candidate.startswith("<") and candidate.endswith(">") and _is_github_api_url(candidate[1:-1]):
                         next_url = candidate[1:-1]
                     else:
                         raise RuntimeError("GitHub pagination escaped the API origin")
