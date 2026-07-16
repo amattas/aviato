@@ -75,7 +75,7 @@ jobs:
           echo "canonical-ref=${canonical_ref}" >> "${GITHUB_OUTPUT}"
 
       - name: Fetch requested ref and tags
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           ref: ${{ steps.canonicalize.outputs.canonical-ref }}
@@ -155,7 +155,7 @@ jobs:
     runs-on: ${{ inputs.codeql-runner }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
@@ -264,7 +264,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
@@ -282,7 +282,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           ref: ${{ needs.resolve-target.outputs.analyzed-sha }}
@@ -331,7 +331,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           ref: ${{ needs.resolve-target.outputs.analyzed-sha }}

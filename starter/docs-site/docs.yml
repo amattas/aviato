@@ -38,7 +38,7 @@ jobs:
     permissions:
       contents: write # mike commits versions to the gh-pages branch
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # mike deploy --push writes the gh-pages branch from this checkout, so
           # this job deliberately keeps the token (it is the only privilege holder).
