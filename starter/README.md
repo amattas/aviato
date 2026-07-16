@@ -47,9 +47,9 @@ pydoc-markdown block in `docs.yml` for docstring-generated API docs.
 3. Swap in the new `docs.yml`.
 4. Delete `versioned_docs/`, `versioned_sidebars/`, `versions.json` — version
    history now lives on the `gh-pages` branch via `mike`, not in the source tree.
-6. Set Pages source to **GitHub Actions** (Settings → Pages) so the workflow can
-   deploy the exact versioned branch artifact after its branch push succeeds.
-7. Then run once, from `website/`, to seed `gh-pages` with the existing
+5. Set Pages source to **Deploy from a branch → `gh-pages`** (Settings → Pages)
+   so Pages serves the versioned branch mike maintains.
+6. Then run once, from the repo root, to seed `gh-pages` with the existing
    history: `mike deploy --push <current-release> latest && mike set-default
    --push latest && mike deploy --push dev`.
 
