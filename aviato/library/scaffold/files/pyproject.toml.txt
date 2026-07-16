@@ -17,11 +17,11 @@ dependencies = []
 # floating floor would silently pull untested tool releases (§11.3); `aviato
 # lint-actions` now enforces the exact pins here too. Bump deliberately.
 dev = [
-  "pytest==9.0.3",
+  "pytest==9.1.1",
   "pytest-cov==7.1.0",
-  "mypy==1.13.0",
-  "ruff==0.8.0",
-  "build==1.2.2",
+  "mypy==2.3.0",
+  "ruff==0.15.22",
+  "build==1.5.0",
 ]
 
 [tool.setuptools.packages.find]
