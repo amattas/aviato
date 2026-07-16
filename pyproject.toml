@@ -12,7 +12,7 @@ requires-python = ">=3.12"
 dependencies = [
   "PyYAML>=6.0",
   # §11.3: zizmor performs uses:/image pin enforcement; pinned EXACTLY (Dependabot bumps it).
-  "zizmor==1.25.2",
+  "zizmor==1.27.0",
   # §11.3: a REAL shell parser for the fetch-execute gate (curl|bash). Regex/string matching flapped
   # for four cycles; bashlex tokenizes shell correctly (comments, 2>&1, option clusters, $()/<()).
   "bashlex==0.18",
@@ -25,10 +25,10 @@ dependencies = [
 dev = [
   "black==26.5.1",
   "build==1.5.0",
-  "mypy==2.1.0",
+  "mypy==2.3.0",
   "pytest==9.0.3",
   "pytest-cov==7.1.0",
-  "ruff==0.15.16",
+  "ruff==0.15.22",
   # CI-failure fix: mypy --strict needs the PyYAML stubs in the SAME env (they were
   # only ever installed locally); without them the type gate fails on import-untyped.
   "types-PyYAML==6.0.12.20260518",
