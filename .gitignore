@@ -9,6 +9,7 @@ dist/
 .aviato/
 _wheelout/
 starter/docs-site/site/
+/site/
 catalog.md
 repos-*.txt
 

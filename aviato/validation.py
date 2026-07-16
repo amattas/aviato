@@ -824,6 +824,8 @@ _MONOTONIC_ALIAS_WORKFLOWS = [
     # `<<'PY'` heredoc), so it joins the parity battery — a drifted kit copy would let an
     # older release move the `latest` alias backward just as a workflow copy would.
     "starter/docs-site/docs.yml",
+    # Aviato's own instantiation of the starter docs caller carries the same heredoc.
+    ".github/workflows/docs.yml",
 ]
 
 # (candidate, existing tags). Expected results are computed from is_highest itself, so the check
