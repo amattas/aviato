@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -482,11 +483,16 @@ def test_monotonic_alias_timeout_is_one_actionable_error(repo_copy: Path, monkey
 def test_root_pyproject_floating_dev_extra_is_detected(repo_copy: Path) -> None:
     manifest = repo_copy / "pyproject.toml"
     text = manifest.read_text(encoding="utf-8")
-    manifest.write_text(text.replace('"ruff==0.15.16"', '"ruff>=0.15.16"'), encoding="utf-8")
+    # Pin-agnostic: derive the current exact ruff pin so dependabot bumps don't
+    # silently turn the replacement into a no-op and break the fixture.
+    pinned = re.search(r'"ruff==([0-9][0-9.]*)"', text)
+    assert pinned is not None, "pyproject dev extra must carry an exact ruff pin"
+    floating = f'"ruff>={pinned[1]}"'
+    manifest.write_text(text.replace(pinned[0], floating), encoding="utf-8")
 
     errors = validate(repo_copy)
 
-    assert any("pyproject.toml" in e and "ruff>=0.15.16" in e and "exact version" in e for e in errors)
+    assert any("pyproject.toml" in e and f"ruff>={pinned[1]}" in e and "exact version" in e for e in errors)
 
 
 def test_library_slug_copy_drift_is_detected(repo_copy: Path) -> None:

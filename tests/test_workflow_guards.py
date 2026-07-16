@@ -367,7 +367,7 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
         {
             "name": "Deploy GitHub Pages",
             "id": "deployment",
-            "uses": "actions/deploy-pages@v4",
+            "uses": "actions/deploy-pages@v5",
         }
     ], "the privileged deploy job must execute no consumer commands"
 
@@ -493,7 +493,7 @@ def test_pypi_reusable_only_builds_vetted_artifact_and_local_caller_publishes() 
     caller_body = (SCAFFOLD_FILES / "wf-python-library.yml").read_text(encoding="utf-8")
     assert "consumer-publisher-present: true" in caller_body
     assert "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b" in caller_body
-    assert "actions/download-artifact@v7" in caller_body
+    assert "actions/download-artifact@v8" in caller_body
     assert "environment: pypi" in caller_body
     assert "id-token: write" in caller_body and "attestations: write" in caller_body
     caller = _rendered_python_library_workflow()
