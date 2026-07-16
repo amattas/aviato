@@ -44,10 +44,15 @@ def test_lint_actions_undeclared_repository_binds_target_and_pin_in_context(
 
     opened: list[tuple[Path, str]] = []
     context = SimpleNamespace(policy_root=POLICY_DATA_ROOT)
+
+    def open_new_context(root: Path, pin: str) -> SimpleNamespace:
+        opened.append((root, pin))
+        return context
+
     monkeypatch.setattr(
         cli,
         "_open_new_context",
-        lambda root, pin: opened.append((root, pin)) or context,
+        open_new_context,
     )
     monkeypatch.setattr(
         cli,

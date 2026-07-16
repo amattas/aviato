@@ -1661,6 +1661,65 @@ def _print_repo_audit(root: Path) -> None:
         print(f"  audit: #{issue.get('number')} {str(issue.get('title'))!r} updated {issue.get('updated_at')}")
 
 
+def _file_remediation_inventory_error(
+    root: Path,
+    declaration: Declaration,
+    registry: Registry,
+) -> str | None:
+    """Return the fail-closed inventory error for managed-file proposal paths."""
+
+    prior = load_managed_inventory(root)
+    if prior.status == "missing":
+        return (
+            "existing declaration predates the managed inventory; use `aviato repin` "
+            "to migrate it through the reviewed v1-to-v2 transition"
+        )
+    if prior.status == "invalid":
+        return f"managed inventory is invalid: {prior.reason or 'unknown validation failure'}"
+    inventory = prior.inventory
+    if inventory is None:
+        return "managed inventory is invalid: valid inventory read has no parsed inventory"
+
+    expected_identity = registry.profile(declaration.profile).identity
+    if (
+        inventory.profile != declaration.profile
+        or declaration.profile_identity != expected_identity
+        or inventory.profile_identity != expected_identity
+        or normalize_pin(inventory.pin) != normalize_pin(declaration.version)
+    ):
+        return "managed inventory does not match the declaration profile, identity, or pin"
+
+    items = materialize_items(
+        registry,
+        declaration.profile,
+        declaration.variables,
+        pin=declaration.version,
+        docs=declaration.docs,
+        bootstrap=declaration.bootstrap,
+        overrides=declaration.overrides,
+    )
+    expected_entries = {
+        item.output: inventory_entry_for_item(item, profile=declaration.profile, version=declaration.version)
+        for item in items
+        if not item.seed_once
+    }
+    if set(inventory.entries) != set(expected_entries):
+        return "managed inventory does not match the declaration's managed artifact receipts"
+    for path, expected_entry in expected_entries.items():
+        recorded_entry = inventory.entries[path]
+        if not set(expected_entry.legacy_aliases).issubset(recorded_entry.legacy_aliases):
+            return "managed inventory does not match the declaration's managed artifact receipts"
+        # A repin records clean historical output paths as additional aliases so a
+        # later transition can retire a moved artifact safely. Those paths cannot be
+        # reconstructed from the current template, but InventoryEntry validation
+        # still confines them and keeps them disjoint from all current output paths.
+        # Bind every reproducible receipt field exactly while preserving that
+        # migration history.
+        if replace(recorded_entry, legacy_aliases=expected_entry.legacy_aliases) != expected_entry:
+            return "managed inventory does not match the declaration's managed artifact receipts"
+    return None
+
+
 def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin: bool = False) -> FileDriftOutcome:
     """Open a managed-file drift proposal for one repo (§5.5), shared by scan --fix.
 
@@ -1681,6 +1740,10 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
     pin_error = _version_pin_error(root, declaration, expected, override_version_pin)
     if pin_error:
         raise AviatoError(pin_error)
+    if bootstrap_authorized(root, declared=declaration.bootstrap):
+        return FileDriftOutcome()
+    if inventory_error := _file_remediation_inventory_error(root, declaration, registry):
+        raise AviatoError(inventory_error)
 
     slug = normalize_slug(remote_url(root))
     if not slug:
@@ -1688,17 +1751,6 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
     resolved = resolve_profile(registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs)
     require_workflow_schema_v2(resolved, operation="file-drift proposal")
     secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
-    report = diagnose(
-        root,
-        expected,
-        declaration_variables=declaration.variables,
-        secret_var_names=secret_names,
-        **_diagnosis_probe_inputs(registry, declaration.profile),
-        profile=declaration.profile,
-        is_library=is_library(root),
-        bootstrap_declared=declaration.bootstrap,
-    )
-
     managed_bodies: dict[str, str] = {}
     for artifact in resolved_artifacts(
         registry,
@@ -1719,12 +1771,9 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
         )
         managed_bodies[artifact.output] = render_managed(item, profile=declaration.profile, version=declaration.version)
 
-    # review #5: drift is DIAGNOSED against the operator's local tree (above), but the proposal
-    # must be pushed from a FRESH CLONE — never the operator's live checkout. open_or_update_proposal
-    # does `git switch -C` + `git push --force` in its workdir; doing that in `root` would rip the
-    # operator's checkout onto the proposal branch and clobber uncommitted work (and race a second
-    # scan). The regenerated bodies come from the library, so they're identical regardless of which
-    # tree they're written into. Mirrors the onboard/offboard --open-pr isolation.
+    # Diagnose and propose from a fresh clone. The fleet scan already reported the
+    # operator checkout; the write path must re-establish the remote declaration and
+    # inventory authority immediately before mutating its proposal branch.
     workdir = Path(tempfile.mkdtemp(prefix="aviato-scanfix-"))
     atexit.register(shutil.rmtree, workdir, True)
     clone = workdir / "repo"
@@ -1734,13 +1783,36 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
     except CommandError as exc:
         raise AviatoError(f"could not clone {slug} to propose a fix: {exc}") from exc
 
+    clone_slug = normalize_slug(remote_url(clone))
+    if clone_slug is None or clone_slug.casefold() != slug.casefold():
+        raise AviatoError(f"fresh clone repository identity does not match requested repository {slug}")
+    clone_declaration_path = _consumer_declaration_target(clone, operation="inspect cloned declaration")
+    if not clone_declaration_path.is_file():
+        raise AviatoError(f"fresh clone has no declaration at {clone_declaration_path}")
+    clone_declaration = _load_consumer_declaration(clone)
+    if clone_declaration != declaration:
+        raise AviatoError("fresh clone declaration differs from the inspected checkout; update the checkout and retry")
+    if inventory_error := _file_remediation_inventory_error(clone, clone_declaration, registry):
+        raise AviatoError(inventory_error)
+    clone_expected = _expected_artifacts(registry, clone_declaration)
+    report = diagnose(
+        clone,
+        clone_expected,
+        declaration_variables=clone_declaration.variables,
+        secret_var_names=secret_names,
+        **_diagnosis_probe_inputs(registry, clone_declaration.profile),
+        profile=clone_declaration.profile,
+        is_library=False,
+        bootstrap_declared=False,
+    )
+
     return run_file_drift(
         GitHubPlatform(workdir=clone),
         repo=slug,
         profile=declaration.profile,
         statuses=report.statuses,
         expected_bodies=managed_bodies,
-        is_bootstrap=bootstrap_authorized(root, declared=declaration.bootstrap),
+        is_bootstrap=False,
     )
 
 
@@ -2860,7 +2932,16 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
     platform = GitHubPlatform(workdir=root)
     rc = 0  # R3-3: a file-drift channel failure sets rc=1 but must NOT abort the settings phase
 
+    if do_file and bootstrap_authorized(root, declared=declaration.bootstrap):
+        print("file drift: proposed=[] dirty=[]")
+        do_file = False
+
     if do_file:
+        # Legacy declarations remain readable through --settings-only, but generated
+        # file remediation requires a present, internally valid managed inventory.
+        if inventory_error := _file_remediation_inventory_error(root, declaration, registry):
+            print(inventory_error, file=sys.stderr)
+            return 2
         try:
             require_workflow_schema_v2(resolved, operation="drift remediation proposal")
         except AviatoError as exc:

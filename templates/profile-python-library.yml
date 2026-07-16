@@ -89,9 +89,9 @@ jobs:
     needs:
       - release-gate
       - pypi
-    if: ${{ always() && needs.release-gate.result == 'success' && needs.pypi.result
-      == 'success' && needs.release-gate.outputs.gated-sha != '' && needs.release-gate.outputs.checkpoint-digest
-      != '' && needs.release-gate.outputs.verified-envelope-digest != '' }}
+    if: "${{\n  always()\n  && needs.release-gate.result == 'success'\n  && needs.pypi.result\
+      \ == 'success'\n  && needs.release-gate.outputs.gated-sha != ''\n  && needs.release-gate.outputs.checkpoint-digest\
+      \ != ''\n  && needs.release-gate.outputs.verified-envelope-digest != ''\n}}"
     runs-on: ubuntu-latest
     environment: pypi
     concurrency:

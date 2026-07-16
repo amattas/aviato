@@ -6,8 +6,11 @@ from typing import Any
 import pytest
 
 from aviato import cli
+from aviato.core.inventory import ManagedInventory, render_managed_inventory
+from aviato.core.onboarding import materialize_items
 from aviato.core.ports import Issue, Platform
 from aviato.core.registry import Registry
+from aviato.core.scaffold import inventory_entry_for_item
 from aviato.paths import MODULE_SOURCE_ROOT, POLICY_DATA_ROOT
 
 pytestmark = pytest.mark.usefixtures("task3_pinned_context")
@@ -77,10 +80,36 @@ def _consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
     (github / "aviato.yaml").write_text(
-        "profile: python-library\nversion: v0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
+        "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
+        "version: v0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",
     )
     return tmp_path
+
+
+def _write_valid_inventory(root: Path) -> None:
+    items = materialize_items(
+        Registry(MODULE_SOURCE_ROOT),
+        "python-library",
+        {"distribution-name": "acme", "import-name": "acme"},
+        pin="v0",
+    )
+    inventory = ManagedInventory(
+        schema_version=1,
+        profile="python-library",
+        profile_identity="aviato-profile/python-library/v1",
+        pin="v0",
+        snapshot_commit="a" * 40,
+        entries={
+            item.output: inventory_entry_for_item(item, profile="python-library", version="v0")
+            for item in items
+            if not item.seed_once
+        },
+    )
+    (root / ".github/aviato.managed.yml").write_text(
+        render_managed_inventory(inventory),
+        encoding="utf-8",
+    )
 
 
 def _library_shape(root: Path) -> None:
@@ -91,23 +120,36 @@ def _library_shape(root: Path) -> None:
     (root / "aviato/library/policy.yml").write_text("library: {}\n", encoding="utf-8")
 
 
-@pytest.mark.parametrize(("bootstrap", "proposal_expected"), [(False, True), (True, False)])
-def test_drift_proposal_suppression_requires_structure_and_bootstrap_declaration(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    bootstrap: bool,
-    proposal_expected: bool,
+def test_drift_file_proposal_requires_managed_inventory_for_undeclared_library_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     consumer = _consumer(tmp_path)
-    if bootstrap:
-        declaration = consumer / ".github/aviato.yaml"
-        declaration.write_text(declaration.read_text(encoding="utf-8") + "bootstrap: true\n", encoding="utf-8")
     _library_shape(consumer)
     fake = FakePlatform()
     monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
     monkeypatch.setattr(cli, "remote_url", lambda _root: "git@github.com:owner/repo.git")
 
     assert cli.main(["drift-report", str(consumer), "--file-only"]) == 2
+    assert "open_or_update_proposal" not in fake.call_names()
+
+
+def test_drift_bootstrap_skips_file_proposal_and_continues_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    consumer = _consumer(tmp_path)
+    declaration = consumer / ".github/aviato.yaml"
+    declaration.write_text(declaration.read_text(encoding="utf-8") + "bootstrap: true\n", encoding="utf-8")
+    _library_shape(consumer)
+    fake = FakePlatform(settings={"required_reviews": 1})
+    monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
+    monkeypatch.setattr(cli, "remote_url", lambda _root: "git@github.com:owner/repo.git")
+
+    rc = cli.main(["drift-report", str(consumer)])
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "file drift: proposed=[] dirty=[]" in out
+    assert "settings drift:" in out
     assert "open_or_update_proposal" not in fake.call_names()
 
 
@@ -135,6 +177,7 @@ def test_drift_report_proposes_missing_files_and_reports_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     consumer = _consumer(tmp_path)
+    _write_valid_inventory(consumer)
     fake = FakePlatform(settings={"required_reviews": 1})
 
     monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
@@ -142,9 +185,10 @@ def test_drift_report_proposes_missing_files_and_reports_settings(
 
     rc = cli.main(["drift-report", str(consumer)])
     out = capsys.readouterr().out
-    assert rc == 2
-    assert "proposed=" not in out
-    assert "open_or_update_proposal" not in fake.call_names()
+    assert rc == 0
+    assert "proposed=" in out
+    assert "open_or_update_proposal" in fake.call_names()
+    assert "settings drift:" in out
     assert "apply_settings" not in fake.call_names()
 
 
@@ -203,6 +247,7 @@ def test_drift_report_settings_only_skips_file_drift(
     # --settings-only runs only the settings read (under the admin token in its own step);
     # file-drift writes are not performed, so that token never sees a write operation.
     consumer = _consumer(tmp_path)
+    (consumer / ".github/aviato.managed.yml").write_text("not a valid inventory\n", encoding="utf-8")
     fake = FakePlatform(settings={"required_reviews": 1})
     monkeypatch.setattr(cli, "GitHubPlatform", lambda workdir=None: fake)
     monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:owner/repo.git")
@@ -211,6 +256,71 @@ def test_drift_report_settings_only_skips_file_drift(
     assert rc == 0
     assert "open_or_update_proposal" not in fake.call_names()  # file drift skipped
     assert "settings drift" in out
+
+
+def test_drift_report_rejects_invalid_inventory_without_repin_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    consumer = _consumer(tmp_path)
+    (consumer / ".github/aviato.managed.yml").write_text("not a valid inventory\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "remote_url", lambda _root: "git@github.com:owner/repo.git")
+
+    rc = cli.main(["drift-report", str(consumer), "--file-only"])
+
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "managed inventory is invalid:" in err
+    assert "repin" not in err
+
+
+def test_drift_report_rejects_valid_inventory_not_bound_to_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    consumer = _consumer(tmp_path)
+    inventory = ManagedInventory(
+        schema_version=1,
+        profile="node-service",
+        profile_identity="aviato-profile/node-service/v1",
+        pin="v0",
+        snapshot_commit="a" * 40,
+        entries={},
+    )
+    (consumer / ".github/aviato.managed.yml").write_text(
+        render_managed_inventory(inventory),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "remote_url", lambda _root: "git@github.com:owner/repo.git")
+
+    rc = cli.main(["drift-report", str(consumer), "--file-only"])
+
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "managed inventory does not match the declaration" in err
+
+
+def test_drift_report_rejects_incomplete_inventory_receipts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    consumer = _consumer(tmp_path)
+    inventory = ManagedInventory(
+        schema_version=1,
+        profile="python-library",
+        profile_identity="aviato-profile/python-library/v1",
+        pin="v0",
+        snapshot_commit="a" * 40,
+        entries={},
+    )
+    (consumer / ".github/aviato.managed.yml").write_text(
+        render_managed_inventory(inventory),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "remote_url", lambda _root: "git@github.com:owner/repo.git")
+
+    rc = cli.main(["drift-report", str(consumer), "--file-only"])
+
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "managed artifact receipts" in err
 
 
 def test_drift_report_requires_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

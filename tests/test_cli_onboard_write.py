@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import yaml
@@ -11,6 +12,7 @@ import aviato.cli as cli
 from aviato.cli import main
 from aviato.core.declaration import Declaration
 from aviato.core.inventory import ManagedInventory, render_managed_inventory
+from aviato.core.operation_context import OperationContext
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT
 
@@ -64,9 +66,12 @@ def test_profile_migration_opens_the_inventory_recorded_source_snapshot(
         version="0",
         variables={"distribution-name": "acme", "import-name": "acme"},
     )
-    target_context = SimpleNamespace(
-        snapshot=SimpleNamespace(commit_sha="b" * 40, registry=target_registry),
-        registry=target_registry,
+    target_context = cast(
+        OperationContext,
+        SimpleNamespace(
+            snapshot=SimpleNamespace(commit_sha="b" * 40, registry=target_registry),
+            registry=target_registry,
+        ),
     )
     opened: list[tuple[str, str]] = []
 

@@ -1,6 +1,14 @@
 name: Publish Python package
 needs: [release-gate, pypi]
-if: ${{ always() && needs.release-gate.result == 'success' && needs.pypi.result == 'success' && needs.release-gate.outputs.gated-sha != '' && needs.release-gate.outputs.checkpoint-digest != '' && needs.release-gate.outputs.verified-envelope-digest != '' }}
+if: >-
+  ${{
+    always()
+    && needs.release-gate.result == 'success'
+    && needs.pypi.result == 'success'
+    && needs.release-gate.outputs.gated-sha != ''
+    && needs.release-gate.outputs.checkpoint-digest != ''
+    && needs.release-gate.outputs.verified-envelope-digest != ''
+  }}
 runs-on: ubuntu-latest
 environment: pypi
 concurrency:

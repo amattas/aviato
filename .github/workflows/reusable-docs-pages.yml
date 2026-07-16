@@ -135,7 +135,11 @@ jobs:
           reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
           key_id="$(jq -r .key_id "${envelope}")"
           [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
-          public_key="$(gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end")"
+          public_key="$(
+            gh api --paginate --slurp -H 'Cache-Control: no-cache' \
+              "users/${reviewer}/ssh_signing_keys?per_page=100" \
+              --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end"
+          )"
           authority_dir="$(mktemp -d)"
           printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
           jq -cS .checkpoint "${envelope}" > "${authority_dir}/message"
@@ -477,7 +481,11 @@ jobs:
           reviewer="$(jq -r .checkpoint.reviewer "${envelope}")"
           key_id="$(jq -r .key_id "${envelope}")"
           [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
-          public_key="$(gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end")"
+          public_key="$(
+            gh api --paginate --slurp -H 'Cache-Control: no-cache' \
+              "users/${reviewer}/ssh_signing_keys?per_page=100" \
+              --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end"
+          )"
           authority_dir="$(mktemp -d)"
           printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
           jq -cS .checkpoint "${envelope}" > "${authority_dir}/message"

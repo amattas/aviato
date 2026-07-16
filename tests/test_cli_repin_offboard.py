@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import shutil
 import subprocess
 from pathlib import Path
@@ -91,7 +92,7 @@ def test_repin_target_gate_skip_requires_structure_and_bootstrap_declaration(
 ) -> None:
     _library_shape(tmp_path)
     declaration = Declaration(profile="python-library", version="0", bootstrap=bootstrap)
-    args = SimpleNamespace(allow_unresolved_pin=False, override_version_pin=False)
+    args = argparse.Namespace(allow_unresolved_pin=False, override_version_pin=False)
 
     error = cli._gate_repin_target(tmp_path, "9.0.0", args, declaration)
 

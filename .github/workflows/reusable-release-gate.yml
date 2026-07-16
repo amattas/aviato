@@ -166,9 +166,11 @@ jobs:
                   raise SystemExit("checkpoint reviewer signature verification failed")
           PY
           actual="$(shasum -a 256 "${document}" | awk '{print $1}')"
-          echo "checkpoint-run-id=${CHECKPOINT_RUN_ID}" >> "${GITHUB_OUTPUT}"
-          echo "checkpoint-digest=${CHECKPOINT_DIGEST}" >> "${GITHUB_OUTPUT}"
-          echo "verified-envelope-digest=${actual}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "checkpoint-run-id=${CHECKPOINT_RUN_ID}"
+            echo "checkpoint-digest=${CHECKPOINT_DIGEST}"
+            echo "verified-envelope-digest=${actual}"
+          } >> "${GITHUB_OUTPUT}"
       - name: Checkout consumer repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:

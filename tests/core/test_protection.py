@@ -493,12 +493,16 @@ def test_ready_receipt_is_built_from_final_readback_and_requires_durable_persist
         nonlocal state
         state = api.plan_with_operation_converged(state, operation.identity)
 
+    def persist(canonical: bytes) -> Any:
+        persisted.append(canonical)
+        return _persistence_evidence()
+
     result = api.execute_protection_plan(
         plan,
         confirmation=plan.plan_id,
         recompute=lambda: state,
         write=write,
-        persist_receipt=lambda canonical: (persisted.append(canonical), _persistence_evidence())[1],
+        persist_receipt=persist,
     )
     assert result.receipt.ready
     assert result.receipt.final_fingerprint == api.protection_state_fingerprint(state)
@@ -592,11 +596,16 @@ def test_receipt_envelope_ssh_signs_and_verifies_exact_canonical_receipt_bytes()
     api = _api()
     receipt = api.receipt_for_plan(_plan(), status="ready", persistence_status="attached")
     seen: list[bytes] = []
+
+    def sign(message: bytes) -> bytes:
+        seen.append(message)
+        return b"signature"
+
     envelope = api.sign_protection_receipt(
         receipt.canonical_bytes,
         principal="alice",
         key_id="key-1",
-        signer=lambda message: (seen.append(message), b"signature")[1],
+        signer=sign,
     )
     verified = api.verify_protection_receipt_envelope(
         envelope,

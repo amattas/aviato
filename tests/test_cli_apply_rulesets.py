@@ -11,6 +11,7 @@ from aviato.core.declaration import Declaration
 from aviato.core.errors import AviatoError
 from aviato.core.ports import RepositoryIdentity, RulesetApplyResult
 from aviato.github import GitHubAPIError
+from aviato.github_platform import GitHubPlatform
 from aviato.paths import POLICY_DATA_ROOT
 
 pytestmark = pytest.mark.usefixtures("task3_pinned_context")
@@ -24,8 +25,8 @@ def _patch_apply(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
         calls.append({"slug": slug})
         return RepositoryIdentity(17 + len(calls), f"R_{len(calls)}", slug, "main")
 
-    monkeypatch.setattr(cli.GitHubPlatform, "repository_identity", identity)
-    monkeypatch.setattr(cli.GitHubPlatform, "read_rulesets", lambda _self, _slug: [])
+    monkeypatch.setattr(GitHubPlatform, "repository_identity", identity)
+    monkeypatch.setattr(GitHubPlatform, "read_rulesets", lambda _self, _slug: [])
     return calls
 
 
@@ -103,7 +104,7 @@ def test_apply_rulesets_authority_expiry_at_write_is_clean_fail_closed(
 ) -> None:
     _patch_apply(monkeypatch)
     monkeypatch.setattr(
-        cli.GitHubPlatform,
+        GitHubPlatform,
         "repository_identity",
         lambda _self, slug: RepositoryIdentity(17, "R_17", slug, "main"),
     )
@@ -117,7 +118,7 @@ def test_apply_rulesets_authority_expiry_at_write_is_clean_fail_closed(
         lambda _root: (_ for _ in ()).throw(AviatoError("live privileged review expired")),
     )
     monkeypatch.setattr(
-        cli.GitHubPlatform,
+        GitHubPlatform,
         "apply_planned_ruleset",
         lambda *_args, **_kwargs: writes.append("write"),
     )

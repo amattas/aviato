@@ -127,10 +127,19 @@ def test_audit_undeclared_repository_uses_explicit_snapshot_policy(
     snapshot = SimpleNamespace(policy_root=policy_root)
     opened: list[tuple[Path, str]] = []
     policies: list[object] = []
+
+    def open_new_context(root: Path, pin: str) -> SimpleNamespace:
+        opened.append((root, pin))
+        return snapshot
+
+    def record_policy(_repos: object, *, root: Path, policy: object) -> list[AuditRow]:
+        policies.append(policy)
+        return []
+
     monkeypatch.setattr(
         cli,
         "_open_new_context",
-        lambda root, pin: opened.append((root, pin)) or snapshot,
+        open_new_context,
     )
     monkeypatch.setattr(
         cli,
@@ -141,7 +150,7 @@ def test_audit_undeclared_repository_uses_explicit_snapshot_policy(
     monkeypatch.setattr(
         cli,
         "audit_repos",
-        lambda repos, *, root, policy: policies.append(policy) or [],
+        record_policy,
     )
 
     assert main(["audit", "--repo", str(tmp_path), "--pin", "1"]) == 0

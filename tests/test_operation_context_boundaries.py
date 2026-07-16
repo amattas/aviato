@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 from aviato.cli import main
+from aviato.core.inventory import ManagedInventory, render_managed_inventory
 from aviato.core.registry import Registry
 
 CONSUMER_MODULES = (
@@ -114,7 +115,8 @@ def test_unresolved_pin_escape_hatch_is_rejected_before_any_boundary(
         "_open_published_snapshot",
         "resolve_profile",
         "materialize_items",
-        "_dump_consumer_declaration",
+        "plan_transition",
+        "execute_transition",
     ):
         monkeypatch.setattr("aviato.cli." + name, crossed)
 
@@ -152,7 +154,7 @@ def _snapshot_tree(tmp_path: Path) -> Path:
         ("resolve", ["drift-report", "{repo}"], True),
         ("resolve", ["bump-version", "1.2.3", "{repo}"], True),
         ("resolve", ["reconcile", "{repo}", "issue"], True),
-        ("profile-checks", ["apply-rulesets", "owner/repo", "--declaration", "{decl}"], True),
+        ("profile-checks", ["apply-rulesets", "owner/consumer", "--declaration", "{decl}"], True),
         ("profile-checks", ["render-rulesets", "--pin", "1", "--profile", "python-library"], False),
         ("audit-policy", ["audit", "--repo", "{repo}"], True),
         ("lint-policy", ["lint-actions", "{repo}"], True),
@@ -180,14 +182,27 @@ def test_every_pin_bearing_command_uses_the_fetched_snapshot_not_installed_data(
         "variables:\n  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",
     )
+    if mode == "materialize":
+        inventory = ManagedInventory(
+            schema_version=1,
+            profile="python-library",
+            profile_identity="aviato-profile/python-library/v1",
+            pin="1",
+            snapshot_commit="a" * 40,
+            entries={},
+        )
+        (repo / ".github/aviato.managed.yml").write_text(
+            render_managed_inventory(inventory),
+            encoding="utf-8",
+        )
 
     opened: list[str] = []
 
-    def open_consumer(_root: Path, _decl: object):
+    def open_consumer(_root: Path, _decl: object) -> SimpleNamespace:
         opened.append("consumer")
         return snapshot
 
-    def open_published(*_args: object):
+    def open_published(*_args: object) -> SimpleNamespace:
         opened.append("published")
         return snapshot
 
@@ -217,7 +232,7 @@ def test_every_pin_bearing_command_uses_the_fetched_snapshot_not_installed_data(
         assert kwargs["policy_root"] == snapshot.policy_root
         raise ContextConsumed
 
-    def fake_run(command: list[str], **_kwargs: object):
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if command[:3] == ["gh", "repo", "clone"]:
             clone = Path(command[-1])
             clone.mkdir(parents=True)

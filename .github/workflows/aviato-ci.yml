@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=f9e57e7caadffa68701bb3e2942a5956ad4adba1e8fd06d0a5622b3955bd9b51 inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
+# aviato:managed profile=aviato-library version=0 hash=f91670c7dd42df2521b6381dd6dabfe0eed6ac810f5994fab572924eb49ad052 inputs=76bd944abbcf93c5fc7686f5fdcf3b001c230442c29d97d4a07c86f5d0cc7232
 name: Aviato Python Library
 'on':
   pull_request:
@@ -90,9 +90,9 @@ jobs:
     needs:
       - release-gate
       - pypi
-    if: ${{ always() && needs.release-gate.result == 'success' && needs.pypi.result
-      == 'success' && needs.release-gate.outputs.gated-sha != '' && needs.release-gate.outputs.checkpoint-digest
-      != '' && needs.release-gate.outputs.verified-envelope-digest != '' }}
+    if: "${{\n  always()\n  && needs.release-gate.result == 'success'\n  && needs.pypi.result\
+      \ == 'success'\n  && needs.release-gate.outputs.gated-sha != ''\n  && needs.release-gate.outputs.checkpoint-digest\
+      \ != ''\n  && needs.release-gate.outputs.verified-envelope-digest != ''\n}}"
     runs-on: ubuntu-latest
     environment: pypi
     concurrency:

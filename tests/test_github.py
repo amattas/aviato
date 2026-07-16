@@ -11,7 +11,7 @@ import pytest
 
 from aviato import github
 from aviato.command import CommandError
-from aviato.core.ports import RepositoryIdentity
+from aviato.core.ports import GitRefNamespace, RepositoryIdentity
 from aviato.core.protection import ResponseLostError
 from aviato.rulesets import render_all_rulesets
 
@@ -142,10 +142,10 @@ def test_auth_rate_limit_timeout_server_and_malformed_reads_are_errors(
         raise AssertionError(f"unexpected GitHub API read: {endpoint}")
 
     monkeypatch.setattr(github, "run", fake_run)
-    monkeypatch.setattr(github.time, "sleep", lambda _: None)
+    monkeypatch.setattr("aviato.github.time.sleep", lambda _: None)
 
     identity = github.repository_identity("o/r")
-    outcome = github.read_git_ref(identity, github.GitRefNamespace.TAGS, "v1")
+    outcome = github.read_git_ref(identity, GitRefNamespace.TAGS, "v1")
 
     assert outcome.status.value == "error"
     assert outcome.error
@@ -159,7 +159,7 @@ def test_git_object_launch_failure_is_a_typed_error(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(github, "run", unavailable)
 
-    outcome = github.read_git_ref(identity, github.GitRefNamespace.TAGS, "v1")
+    outcome = github.read_git_ref(identity, GitRefNamespace.TAGS, "v1")
 
     assert outcome.status.value == "error"
     assert outcome.error and "could not execute" in outcome.error
@@ -197,11 +197,12 @@ def test_invalid_repository_slug_is_rejected_before_api_call(
     slug: str,
 ) -> None:
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        github,
-        "run",
-        lambda command, **_kwargs: calls.append(command) or subprocess.CompletedProcess(command, 0, "{}", ""),
-    )
+
+    def recording_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    monkeypatch.setattr(github, "run", recording_run)
 
     with pytest.raises(ValueError, match="OWNER/REPO"):
         github.repository_identity(slug)
@@ -245,7 +246,7 @@ def test_dot_leading_repository_segment_preserves_correlated_api_reads(
     monkeypatch.setattr(github, "run", fake_run)
 
     identity = github.repository_identity(slug)
-    outcome = github.read_git_ref(identity, github.GitRefNamespace.HEADS, identity.default_branch)
+    outcome = github.read_git_ref(identity, GitRefNamespace.HEADS, identity.default_branch)
 
     assert identity.full_name == slug
     assert outcome.endpoint == ref_endpoint
@@ -278,23 +279,24 @@ def test_invalid_git_ref_name_is_rejected_before_api_call(
 ) -> None:
     identity = RepositoryIdentity(database_id=17, node_id="R_test", full_name="o/r", default_branch="main")
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        github,
-        "run",
-        lambda command, **_kwargs: calls.append(command) or subprocess.CompletedProcess(command, 0, "{}", ""),
-    )
+
+    def recording_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    monkeypatch.setattr(github, "run", recording_run)
 
     with pytest.raises(ValueError, match="Git ref"):
-        github.read_git_ref(identity, github.GitRefNamespace.HEADS, ref_name)
+        github.read_git_ref(identity, GitRefNamespace.HEADS, ref_name)
 
     assert calls == []
 
 
-@pytest.mark.parametrize("namespace", [github.GitRefNamespace.HEADS, github.GitRefNamespace.TAGS])
+@pytest.mark.parametrize("namespace", [GitRefNamespace.HEADS, GitRefNamespace.TAGS])
 @pytest.mark.parametrize(("ref_name", "encoded_name"), [("@", "%40"), ("-leading", "-leading")])
 def test_fully_qualified_api_refs_preserve_valid_at_and_leading_hyphen_names(
     monkeypatch: pytest.MonkeyPatch,
-    namespace: github.GitRefNamespace,
+    namespace: GitRefNamespace,
     ref_name: str,
     encoded_name: str,
 ) -> None:
@@ -338,7 +340,7 @@ def test_valid_nested_ref_uses_typed_namespace_and_encoded_correlated_endpoint(
 
     monkeypatch.setattr(github, "run", fake_run)
 
-    outcome = github.read_git_ref(identity, github.GitRefNamespace.HEADS, "release/2026/#v1")
+    outcome = github.read_git_ref(identity, GitRefNamespace.HEADS, "release/2026/#v1")
 
     assert outcome.status.value == "found"
     assert calls == [["gh", "api", endpoint]]
@@ -347,11 +349,12 @@ def test_valid_nested_ref_uses_typed_namespace_and_encoded_correlated_endpoint(
 def test_annotated_tag_reader_rejects_non_sha_before_api_call(monkeypatch: pytest.MonkeyPatch) -> None:
     identity = RepositoryIdentity(database_id=17, node_id="R_test", full_name="o/r", default_branch="main")
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        github,
-        "run",
-        lambda command, **_kwargs: calls.append(command) or subprocess.CompletedProcess(command, 0, "{}", ""),
-    )
+
+    def recording_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    monkeypatch.setattr(github, "run", recording_run)
 
     with pytest.raises(ValueError, match="SHA"):
         github.read_annotated_tag(identity, "not-a-sha")
@@ -496,7 +499,7 @@ def test_terminal_http_status_controls_not_found_classification(
         lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, "", stderr),
     )
 
-    outcome = github.read_git_ref(identity, github.GitRefNamespace.TAGS, "v1")
+    outcome = github.read_git_ref(identity, GitRefNamespace.TAGS, "v1")
 
     assert outcome.status.value == expected_status
     assert bool(outcome.error) is (expected_status == "error")

@@ -2,16 +2,43 @@ from __future__ import annotations
 
 import importlib
 import subprocess
+from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
 from aviato.core.declaration import Declaration
 from aviato.core.errors import AviatoError
+from aviato.core.operation_context import OperationContext
 
 
-def _operation_context():
-    return importlib.import_module("aviato.core.operation_context")
+class _OperationContextModule(Protocol):
+    def canonical_repository_root(self, target: Path) -> Path: ...
+
+    def _tree_digest(self, root: Path) -> str: ...
+
+    def bootstrap_operation_context(
+        self,
+        target: Path,
+        declaration: Declaration,
+        *,
+        tool_version: str,
+    ) -> AbstractContextManager[OperationContext]: ...
+
+    def operation_context(
+        self,
+        target: Path,
+        declaration: Declaration | None,
+        *,
+        repository: str,
+        pin: str | None = None,
+        tool_version: str,
+    ) -> AbstractContextManager[OperationContext]: ...
+
+
+def _operation_context() -> _OperationContextModule:
+    return cast(_OperationContextModule, importlib.import_module("aviato.core.operation_context"))
 
 
 def _git(root: Path, *args: str) -> str:

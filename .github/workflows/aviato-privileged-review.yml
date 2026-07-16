@@ -187,7 +187,9 @@ jobs:
           DIGEST_OUTPUT: ${{ runner.temp }}/aviato-privileged-review-consumed.sha256
         run: |
           set -euo pipefail
-          python -c 'import hashlib, pathlib, sys; source=pathlib.Path(sys.argv[1]); pathlib.Path(sys.argv[2]).write_text("sha256:" + hashlib.sha256(source.read_bytes()).hexdigest() + "\n", encoding="ascii")' "$REVIEW_OUTPUT" "$DIGEST_OUTPUT"
+          python -c \
+            'import hashlib, pathlib, sys; source=pathlib.Path(sys.argv[1]); pathlib.Path(sys.argv[2]).write_text("sha256:" + hashlib.sha256(source.read_bytes()).hexdigest() + "\n", encoding="ascii")' \
+            "$REVIEW_OUTPUT" "$DIGEST_OUTPUT"
 
       - name: Upload the live-verified package input
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

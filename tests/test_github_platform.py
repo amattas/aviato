@@ -1319,16 +1319,23 @@ def test_open_worktree_proposal_real_remote_includes_inventory_and_deletions(
     inventory.parent.mkdir()
     inventory.write_text("inventory receipt\n", encoding="utf-8")
 
-    def real_git_fake_gh(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def real_git_fake_gh(
+        command: Sequence[str],
+        *,
+        cwd: str | Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         if command[0] == "git":
             return subprocess.run(
-                command,
-                cwd=kwargs.get("cwd"),
-                check=bool(kwargs.get("check", True)),
+                list(command),
+                cwd=str(cwd) if cwd is not None else None,
+                check=check,
                 text=True,
                 capture_output=True,
+                timeout=timeout,
             )
-        return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(list(command), 0, "", "")
 
     monkeypatch.setattr(github, "default_branch", lambda _repo: "main")
     monkeypatch.setattr(github, "run", real_git_fake_gh)

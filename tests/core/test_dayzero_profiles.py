@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 import yaml
 
@@ -600,9 +602,11 @@ def test_default_branch_templates_into_caller_triggers(registry: Registry) -> No
     # follow — otherwise CI/release gating would silently never fire on their branch.
     from aviato.core.onboarding import resolved_artifacts
 
-    def ci_doc(variables: dict[str, str]) -> dict[str, object]:
+    def ci_doc(variables: dict[str, str]) -> dict[str, Any]:
         arts = resolved_artifacts(registry, "python-library", variables, pin="1", docs=False)
-        return yaml.safe_load(next(a.body for a in arts if a.output == ".github/workflows/aviato-ci.yml"))
+        loaded = yaml.safe_load(next(a.body for a in arts if a.output == ".github/workflows/aviato-ci.yml"))
+        assert isinstance(loaded, dict)
+        return cast(dict[str, Any], loaded)
 
     base = {"distribution-name": "d", "import-name": "pkg"}
     default = ci_doc(base)

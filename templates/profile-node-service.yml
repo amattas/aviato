@@ -65,10 +65,10 @@ jobs:
       - release
       - release-gate
       - security
-    if: ${{ always() && needs.release-gate.result == 'success' && needs.security.result
-      == 'success' && needs.release-gate.outputs.gated-sha != '' && needs.release-gate.outputs.checkpoint-digest
-      != '' && needs.release-gate.outputs.verified-envelope-digest != '' && (github.ref_type
-      == 'tag' || needs.release.outputs.released == 'true') }}
+    if: "${{\n  always()\n  && needs.release-gate.result == 'success'\n  && needs.security.result\
+      \ == 'success'\n  && needs.release-gate.outputs.gated-sha != ''\n  && needs.release-gate.outputs.checkpoint-digest\
+      \ != ''\n  && needs.release-gate.outputs.verified-envelope-digest != ''\n  &&\
+      \ (github.ref_type == 'tag' || needs.release.outputs.released == 'true')\n}}"
     uses: amattas/aviato/.github/workflows/reusable-docker-ghcr.yml@EXAMPLE_PIN
     permissions:
       actions: read

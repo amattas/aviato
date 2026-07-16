@@ -125,10 +125,15 @@ def test_consumer_and_module_boundaries_do_not_reintroduce_direct_joins() -> Non
     ]
     assert len(load_calls) == 1
     assert "_consumer_declaration_target" in ast.unparse(load_calls[0])
-    dump_calls = [
+    transition_calls = [
         call
         for call in ast.walk(cli_tree)
-        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "dump_declaration"
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "plan_transition"
     ]
-    assert len(dump_calls) == 1
-    assert ast.unparse(dump_calls[0]).endswith("DECLARATION_RELATIVE_PATH)")
+    assert transition_calls
+    for call in transition_calls:
+        declaration_bytes = [keyword.value for keyword in call.keywords if keyword.arg == "declaration_bytes"]
+        assert len(declaration_bytes) == 1
+        rendered = ast.unparse(declaration_bytes[0])
+        assert rendered.startswith("declaration_to_yaml(")
+        assert rendered.endswith(".encode('utf-8')")

@@ -396,7 +396,11 @@ jobs:
           [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
           gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "([flatten[] | select((.id|tostring) == \"${key_id}\")] | length) == 1" | grep -qx true
           [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/environments/${ENV_NAME}" --jq .can_admins_bypass)" = "false" ]
-          public_key="$(gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end")"
+          public_key="$(
+            gh api --paginate --slurp -H 'Cache-Control: no-cache' \
+              "users/${reviewer}/ssh_signing_keys?per_page=100" \
+              --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end"
+          )"
           authority_dir="$(mktemp -d)"
           printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
           jq -cS .checkpoint "${envelope}" > "${authority_dir}/message"

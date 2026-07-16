@@ -4,14 +4,17 @@ import io
 import json
 import subprocess
 import tarfile
-from collections.abc import Sequence
+import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
 
+import aviato.github as github
 import aviato.library_source as library_source
 from aviato.command import CommandError
 from aviato.core.errors import AviatoError
+from aviato.core.ports import RepositoryIdentity
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
 MOVED_SHA = "89abcdef0123456789abcdef0123456789abcdef"
@@ -122,13 +125,13 @@ def _fake_run(monkeypatch: pytest.MonkeyPatch, archive_bytes: bytes, *, annotate
 
     monkeypatch.setattr(library_source, "run", fake, raising=False)
     monkeypatch.setattr(library_source, "run_to_path", fake_download, raising=False)
-    monkeypatch.setattr(library_source.github, "run", fake)
+    monkeypatch.setattr(github, "run", fake)
     return calls
 
 
 def _install_api(
     monkeypatch: pytest.MonkeyPatch,
-    responses: dict[str, subprocess.CompletedProcess[str] | list[subprocess.CompletedProcess[str]]],
+    responses: Mapping[str, subprocess.CompletedProcess[str] | list[subprocess.CompletedProcess[str]]],
     *,
     archives: dict[str, bytes] | None = None,
 ) -> list[str]:
@@ -165,7 +168,7 @@ def _install_api(
 
     monkeypatch.setattr(library_source, "run", fake, raising=False)
     monkeypatch.setattr(library_source, "run_to_path", fake_download, raising=False)
-    monkeypatch.setattr(library_source.github, "run", fake)
+    monkeypatch.setattr(github, "run", fake)
     return calls
 
 
@@ -297,7 +300,7 @@ def test_repository_identity_launch_failure_is_mapped_to_aviato_error(monkeypatc
     def unavailable(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
         raise CommandError(["gh", "api", f"repos/{REPOSITORY}"], 127, "could not execute 'gh'")
 
-    monkeypatch.setattr(library_source.github, "run", unavailable)
+    monkeypatch.setattr(github, "run", unavailable)
 
     with pytest.raises(AviatoError, match="establish access"):
         library_source.resolve_library_ref(REPOSITORY, "v1")
@@ -361,11 +364,12 @@ def test_invalid_requested_ref_is_rejected_before_any_api_call(
     pin: str,
 ) -> None:
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        library_source.github,
-        "run",
-        lambda command, **_kwargs: calls.append(command) or subprocess.CompletedProcess(command, 0, "{}", ""),
-    )
+
+    def recording_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    monkeypatch.setattr(github, "run", recording_run)
 
     with pytest.raises(AviatoError, match="ref|pin"):
         library_source.resolve_library_ref(REPOSITORY, pin)
@@ -420,7 +424,7 @@ def test_invalid_default_ref_is_rejected_before_git_api_call(monkeypatch: pytest
             return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
         raise AssertionError(f"unexpected GitHub API read: {command[2]}")
 
-    monkeypatch.setattr(library_source.github, "run", fake_run)
+    monkeypatch.setattr(github, "run", fake_run)
 
     with pytest.raises(AviatoError, match="default_branch|default branch|ref"):
         library_source.resolve_library_ref(REPOSITORY, "v1")
@@ -576,12 +580,12 @@ def test_archive_download_uses_supported_binary_stdout_and_preserves_bytes(
         observed_commands.append(command)
         stdout = kwargs["stdout"]
         assert hasattr(stdout, "write") and hasattr(stdout, "flush") and hasattr(stdout, "name")
-        stdout.write(archive_bytes)  # type: ignore[union-attr]
-        stdout.flush()  # type: ignore[union-attr]
-        observed_bytes.append(Path(stdout.name).read_bytes())  # type: ignore[union-attr]
+        stdout.write(archive_bytes)
+        stdout.flush()
+        observed_bytes.append(Path(stdout.name).read_bytes())
         return subprocess.CompletedProcess(command, 0, None, "")
 
-    monkeypatch.setattr(library_source.github, "run", fake_read)
+    monkeypatch.setattr(github, "run", fake_read)
     monkeypatch.setattr(subprocess, "run", fake_subprocess)
 
     with library_source.fetch_library_registry(REPOSITORY, "v1") as registry:
@@ -632,12 +636,12 @@ def test_archive_extraction_resolves_each_candidate_beneath_root(
     workdir.mkdir()
     outside.mkdir()
     _fake_run(monkeypatch, _archive(member="aviato/library/nested/escape.yaml"))
-    monkeypatch.setattr(library_source.tempfile, "mkdtemp", lambda **_kwargs: str(workdir))
+    monkeypatch.setattr(tempfile, "mkdtemp", lambda **_kwargs: str(workdir))
     original_members = library_source._safe_library_members
 
     def plant_parent_symlink(
         archive: tarfile.TarFile,
-        identity: library_source.RepositoryIdentity,
+        identity: RepositoryIdentity,
         sha: str,
     ) -> tuple[str, list[tarfile.TarInfo]]:
         result = original_members(archive, identity, sha)

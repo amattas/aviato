@@ -1560,7 +1560,7 @@ def test_app_store_trusted_archive_extractor_rejects_escape_types_and_overwrite(
     assert stat.S_IMODE((good_root / "App.xcarchive" / "Info.plist").stat().st_mode) == 0o644
     assert stat.S_IMODE((good_root / "App.xcarchive" / "Products/App").stat().st_mode) == 0o755
 
-    hostile = {
+    hostile: dict[str, list[tuple[str, bytes, int | None]]] = {
         "absolute": [("/usr/local/bin/aviato", b"owned", stat.S_IFREG | 0o755)],
         "traversal": [("App.xcarchive/../../../../../usr/local/bin/aviato", b"owned", stat.S_IFREG | 0o755)],
         "symlink": [("App.xcarchive/link", b"/usr/local/bin", stat.S_IFLNK | 0o777)],

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,9 +14,11 @@ from aviato.core.diagnosis import DiagnosisReport
 from aviato.core.errors import AviatoError
 from aviato.core.file_drift_flow import _PROPOSABLE, FileDriftOutcome
 from aviato.core.fleet import RepoScan
+from aviato.core.inventory import ManagedInventory, render_managed_inventory
+from aviato.core.onboarding import materialize_items
 from aviato.core.registry import Registry
 from aviato.core.scaffold import ScaffoldItem as _ScaffoldItem
-from aviato.core.scaffold import scaffold
+from aviato.core.scaffold import inventory_entry_for_item, scaffold
 from aviato.github_platform import GitHubPlatform
 from aviato.paths import MODULE_SOURCE_ROOT
 
@@ -25,7 +28,8 @@ pytestmark = pytest.mark.usefixtures("task3_pinned_context")
 ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 
 PYTHON_DECLARATION = (
-    "profile: python-library\nversion: v1\nvariables:\n  distribution-name: acme\n  import-name: acme\n"
+    "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
+    "version: v1\nvariables:\n  distribution-name: acme\n  import-name: acme\n"
 )
 
 
@@ -40,6 +44,101 @@ def _library_shape(root: Path) -> None:
     (root / "aviato/library/bundles").mkdir(parents=True)
     (root / "aviato/library/scaffold").mkdir(parents=True)
     (root / "aviato/library/policy.yml").write_text("library: {}\n", encoding="utf-8")
+
+
+def _write_valid_inventory(root: Path, *, pin: str = "v1") -> None:
+    items = materialize_items(
+        Registry(MODULE_SOURCE_ROOT),
+        "python-library",
+        {"distribution-name": "acme", "import-name": "acme"},
+        pin=pin,
+    )
+    inventory = ManagedInventory(
+        schema_version=1,
+        profile="python-library",
+        profile_identity="aviato-profile/python-library/v1",
+        pin=pin,
+        snapshot_commit="a" * 40,
+        entries={
+            item.output: inventory_entry_for_item(item, profile="python-library", version=pin)
+            for item in items
+            if not item.seed_once
+        },
+    )
+    (root / ".github/aviato.managed.yml").write_text(
+        render_managed_inventory(inventory),
+        encoding="utf-8",
+    )
+
+
+def test_file_remediation_inventory_accepts_repin_recorded_legacy_alias(tmp_path: Path) -> None:
+    consumer = tmp_path / "consumer"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github/aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    registry = Registry(MODULE_SOURCE_ROOT)
+    items = materialize_items(
+        registry,
+        "python-library",
+        {"distribution-name": "acme", "import-name": "acme"},
+        pin="v1",
+    )
+    entries = {
+        item.output: inventory_entry_for_item(item, profile="python-library", version="v1")
+        for item in items
+        if not item.seed_once
+    }
+    moved_path = sorted(entries)[0]
+    moved_entry = entries[moved_path]
+    entries[moved_path] = replace(
+        moved_entry,
+        legacy_aliases=tuple(sorted((*moved_entry.legacy_aliases, "retired/old-managed-location.yml"))),
+    )
+    inventory = ManagedInventory(
+        schema_version=1,
+        profile="python-library",
+        profile_identity="aviato-profile/python-library/v1",
+        pin="v1",
+        snapshot_commit="a" * 40,
+        entries=entries,
+    )
+    (consumer / ".github/aviato.managed.yml").write_text(
+        render_managed_inventory(inventory),
+        encoding="utf-8",
+    )
+
+    error = cli._file_remediation_inventory_error(
+        consumer,
+        cli._load_consumer_declaration(consumer),
+        registry,
+    )
+
+    assert error is None
+
+
+def test_file_remediation_inventory_requires_library_declared_legacy_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    consumer = tmp_path / "consumer"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github/aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    _write_valid_inventory(consumer)
+    registry = Registry(MODULE_SOURCE_ROOT)
+    items = materialize_items(
+        registry,
+        "python-library",
+        {"distribution-name": "acme", "import-name": "acme"},
+        pin="v1",
+    )
+    items[0] = replace(items[0], legacy_aliases=("library-declared-old-location.yml",))
+    monkeypatch.setattr(cli, "materialize_items", lambda *_args, **_kwargs: items)
+
+    error = cli._file_remediation_inventory_error(
+        consumer,
+        cli._load_consumer_declaration(consumer),
+        registry,
+    )
+
+    assert error == "managed inventory does not match the declaration's managed artifact receipts"
 
 
 def test_scan_prints_per_repo_lines(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -184,6 +283,7 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
     (consumer / ".editorconfig").write_text(
         f"# aviato:managed profile=python-library version=v1 hash=DEADBEEF\n{body}", encoding="utf-8"
     )
+    _write_valid_inventory(consumer)
     _git_init(consumer)
 
     monkeypatch.setattr(cli, "_version_pin_error", lambda *a, **k: None)  # not under test here
@@ -191,7 +291,15 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
 
     def fake_run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
         assert "clone" in cmd, f"scan --fix ran an unexpected command in/near the operator tree: {cmd}"
-        _git_init(Path(cmd[-1]))  # stand in for the clone
+        clone = Path(cmd[-1])
+        _git_init(clone)  # stand in for the clone
+        (clone / ".github").mkdir(exist_ok=True)
+        (clone / ".github/aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+        _write_valid_inventory(clone)
+        (clone / ".editorconfig").write_text(
+            f"# aviato:managed profile=python-library version=v1 hash=DEADBEEF\n{body}",
+            encoding="utf-8",
+        )
         return SimpleNamespace(stdout="", stderr="", returncode=0)
 
     captured: dict[str, str] = {}
@@ -204,19 +312,16 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
     monkeypatch.setattr(cli, "run_file_drift", fake_run_file_drift)
 
     rc = main(["scan", str(consumer), "--fix"])
-    assert rc == 1
-    assert captured == {}
+    assert rc == 0
+    assert captured["workdir"] != str(consumer)
 
 
-@pytest.mark.parametrize(("bootstrap", "expected"), [(False, False), (True, True)])
-def test_scan_fix_proposal_suppression_requires_structure_and_bootstrap_declaration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bootstrap: bool, expected: bool
+def test_scan_fix_requires_managed_inventory_for_undeclared_library_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     consumer = tmp_path / "consumer"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github/aviato.yaml").write_text(
-        PYTHON_DECLARATION + ("bootstrap: true\n" if bootstrap else ""), encoding="utf-8"
-    )
+    (consumer / ".github/aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
     _git_init(consumer)
     _library_shape(consumer)
     monkeypatch.setattr(cli, "remote_url", lambda _root: "https://github.com/o/r.git")
@@ -227,11 +332,16 @@ def test_scan_fix_proposal_suppression_requires_structure_and_bootstrap_declarat
         return SimpleNamespace(stdout="", stderr="", returncode=0)
 
     observed: list[bool] = []
+
+    def record_file_drift(_platform: object, **kwargs: object) -> FileDriftOutcome:
+        observed.append(bool(kwargs["is_bootstrap"]))
+        return FileDriftOutcome()
+
     monkeypatch.setattr(cli, "run", fake_run)
     monkeypatch.setattr(
         cli,
         "run_file_drift",
-        lambda _platform, **kwargs: observed.append(bool(kwargs["is_bootstrap"])) or FileDriftOutcome(),
+        record_file_drift,
     )
 
     with pytest.raises(AviatoError, match="repin"):
@@ -240,13 +350,87 @@ def test_scan_fix_proposal_suppression_requires_structure_and_bootstrap_declarat
     assert observed == []
 
 
-@pytest.mark.parametrize("clone_kind", ["non-git", "nested"])
-def test_scan_fix_rejects_noncanonical_clone_before_proposal_mutation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clone_kind: str
+def test_scan_fix_skips_structurally_authorized_bootstrap_without_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    consumer = tmp_path / "consumer"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github/aviato.yaml").write_text(PYTHON_DECLARATION + "bootstrap: true\n", encoding="utf-8")
+    _git_init(consumer)
+    _library_shape(consumer)
+    monkeypatch.setattr(cli, "remote_url", lambda _root: pytest.fail("bootstrap skip read a remote"))
+
+    outcome = cli._propose_file_drift(Registry(MODULE_SOURCE_ROOT), consumer, override_version_pin=True)
+
+    assert outcome == FileDriftOutcome()
+
+
+def test_scan_fix_rejects_fresh_clone_without_managed_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     consumer = tmp_path / "consumer"
     (consumer / ".github").mkdir(parents=True)
     (consumer / ".github/aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    _write_valid_inventory(consumer)
+    _git_init(consumer)
+    monkeypatch.setattr(cli, "remote_url", lambda _root: "https://github.com/o/r.git")
+    monkeypatch.setattr(cli, "diagnose", lambda *_args, **_kwargs: DiagnosisReport(statuses={"ruff.toml": "missing"}))
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        clone = Path(cmd[-1])
+        _git_init(clone)
+        (clone / ".github").mkdir(exist_ok=True)
+        (clone / ".github/aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli, "run_file_drift", lambda *_args, **_kwargs: pytest.fail("proposal mutated"))
+
+    with pytest.raises(AviatoError, match="predates the managed inventory"):
+        cli._propose_file_drift(Registry(MODULE_SOURCE_ROOT), consumer, override_version_pin=True)
+
+
+def test_scan_fix_rejects_fresh_clone_with_unexpected_repository_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    consumer = tmp_path / "consumer"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github/aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    _write_valid_inventory(consumer)
+    _git_init(consumer)
+
+    def fake_remote(root: Path) -> str:
+        return (
+            "https://github.com/o/r.git" if root.resolve() == consumer.resolve() else "https://github.com/o/other.git"
+        )
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        clone = Path(cmd[-1])
+        _git_init(clone)
+        (clone / ".github").mkdir(exist_ok=True)
+        (clone / ".github/aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+        _write_valid_inventory(clone)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(cli, "remote_url", fake_remote)
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.setattr(cli, "run_file_drift", lambda *_args, **_kwargs: pytest.fail("proposal mutated"))
+
+    with pytest.raises(AviatoError, match="repository identity"):
+        cli._propose_file_drift(Registry(MODULE_SOURCE_ROOT), consumer, override_version_pin=True)
+
+
+@pytest.mark.parametrize(
+    ("clone_kind", "message"),
+    [("non-git", "not a Git repository"), ("nested", "repository root")],
+)
+def test_scan_fix_rejects_noncanonical_clone_before_proposal_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clone_kind: str, message: str
+) -> None:
+    consumer = tmp_path / "consumer"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github/aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    _write_valid_inventory(consumer)
     _git_init(consumer)
     monkeypatch.setattr(cli, "remote_url", lambda _root: "https://github.com/o/r.git")
     monkeypatch.setattr(cli, "diagnose", lambda *_args, **_kwargs: DiagnosisReport(statuses={"ruff.toml": "missing"}))
@@ -261,8 +445,24 @@ def test_scan_fix_rejects_noncanonical_clone_before_proposal_mutation(
     monkeypatch.setattr(cli, "run", fake_run)
     monkeypatch.setattr(cli, "run_file_drift", lambda *_args, **_kwargs: pytest.fail("proposal mutated"))
 
-    with pytest.raises(AviatoError, match="repin"):
+    with pytest.raises(AviatoError, match=message):
         cli._propose_file_drift(Registry(MODULE_SOURCE_ROOT), consumer, override_version_pin=True)
+
+
+def test_scan_fix_rejects_invalid_inventory_without_repin_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    consumer = tmp_path / "consumer"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github/aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    (consumer / ".github/aviato.managed.yml").write_text("not a valid inventory\n", encoding="utf-8")
+    _git_init(consumer)
+    monkeypatch.setattr(cli, "remote_url", lambda _root: pytest.fail("read remote before inventory gate"))
+
+    with pytest.raises(AviatoError, match="managed inventory is invalid:") as raised:
+        cli._propose_file_drift(Registry(MODULE_SOURCE_ROOT), consumer, override_version_pin=True)
+
+    assert "repin" not in str(raised.value)
 
 
 def test_scan_fix_blocks_incompatible_version_pin(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -387,8 +387,6 @@ jobs:
         id: select
         env:
           AVIATO_PRIVILEGED_REVIEW_TOKEN: ${{ steps.app-token.outputs.token }}
-          ARTIFACT_DIGEST: ${{ steps.select.outputs.artifact-digest }}
-          ARTIFACT_ID: ${{ steps.select.outputs.artifact-id }}
           GATED_SHA: ${{ inputs.gated-sha }}
           REVIEW_RUN_ID: ${{ inputs.approved-review-run-id }}
         run: |
@@ -413,6 +411,8 @@ jobs:
         id: build
         env:
           AVIATO_PRIVILEGED_REVIEW_TOKEN: ${{ steps.app-token.outputs.token }}
+          ARTIFACT_DIGEST: ${{ steps.select.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.select.outputs.artifact-id }}
           GATED_SHA: ${{ inputs.gated-sha }}
           REVIEW_RUN_ID: ${{ inputs.approved-review-run-id }}
         run: |

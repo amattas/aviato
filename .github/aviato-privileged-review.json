@@ -3,7 +3,7 @@
   "activation_request_id": "123e4567-e89b-42d3-a456-426614174000",
   "approvals": [],
   "author_database_id": null,
-  "candidate_manifest_sha256": "147e074a04b9130d72a3ab0bc64083ee915b9cc4c71a760449742f03c61ea979",
+  "candidate_manifest_sha256": "b4d1e2f8691eebae6a8b3ccdafd4cc210d1d41612bc3ae3623cc356c504ce758",
   "codeowners_sha256": "590e649318ca86ffa28b6cea62ebfa534b854799314e055bb6d6dbfed4bf991f",
   "lifecycle": "pending",
   "manual_prerequisites": [

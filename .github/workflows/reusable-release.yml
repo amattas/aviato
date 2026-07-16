@@ -332,7 +332,19 @@ jobs:
           intake_path=".github/workflows/aviato-protection-checkpoint.yml"
           intake_blob="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/contents/${intake_path}?ref=${default_branch}" --jq .sha)"
           runs="$(gh api --paginate --slurp -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/actions/workflows/aviato-protection-checkpoint.yml/runs?event=workflow_dispatch&branch=${default_branch}&status=success&per_page=100")"
-          mapfile -t run_ids < <(jq -r --arg branch "${default_branch}" --arg sha "${MERGED_SHA}" '.[]?.workflow_runs[]? | select(.path == ".github/workflows/aviato-protection-checkpoint.yml" and .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and .head_branch == $branch and .head_sha == $sha) | .id' <<<"${runs}")
+          mapfile -t run_ids < <(
+            jq -r \
+              --arg branch "${default_branch}" \
+              --arg sha "${MERGED_SHA}" \
+              '.[]?.workflow_runs[]? | select(
+                .path == ".github/workflows/aviato-protection-checkpoint.yml"
+                and .event == "workflow_dispatch"
+                and .status == "completed"
+                and .conclusion == "success"
+                and .head_branch == $branch
+                and .head_sha == $sha
+              ) | .id' <<<"${runs}"
+          )
           matches=()
           rm -rf "${RUNNER_TEMP}/promotion-checkpoints"
           mkdir -p "${RUNNER_TEMP}/promotion-checkpoints"
@@ -344,7 +356,26 @@ jobs:
             [ -f "${candidate}" ] || continue
             [ "$(shasum -a 256 "${candidate}" | awk '{print $1}')" = "${CHECKPOINT_DIGEST}" ] || continue
             gh attestation verify "${candidate}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || continue
-            jq -e --arg repo "${GITHUB_REPOSITORY}" --arg tag "${NEXT}" --arg sha "${MERGED_SHA}" --arg actor "${INTENDED_ACTOR}" --arg path "${intake_path}" --arg blob "${intake_blob}" --arg ref "refs/heads/${default_branch}" '.checkpoint.repository == $repo and .checkpoint.tag == $tag and .checkpoint.sha == $sha and .checkpoint.intended_actor == $actor and .checkpoint.reviewer != $actor and .checkpoint.workflow_path == $path and .checkpoint.workflow_blob_sha == $blob and .checkpoint.workflow_ref == $ref and (.checkpoint.expires_at - .checkpoint.issued_at) <= 900 and .checkpoint.issued_at <= (now + 30) and .checkpoint.expires_at > now' "${candidate}" >/dev/null || continue
+            jq -e \
+              --arg repo "${GITHUB_REPOSITORY}" \
+              --arg tag "${NEXT}" \
+              --arg sha "${MERGED_SHA}" \
+              --arg actor "${INTENDED_ACTOR}" \
+              --arg path "${intake_path}" \
+              --arg blob "${intake_blob}" \
+              --arg ref "refs/heads/${default_branch}" '
+                .checkpoint.repository == $repo
+                and .checkpoint.tag == $tag
+                and .checkpoint.sha == $sha
+                and .checkpoint.intended_actor == $actor
+                and .checkpoint.reviewer != $actor
+                and .checkpoint.workflow_path == $path
+                and .checkpoint.workflow_blob_sha == $blob
+                and .checkpoint.workflow_ref == $ref
+                and (.checkpoint.expires_at - .checkpoint.issued_at) <= 900
+                and .checkpoint.issued_at <= (now + 30)
+                and .checkpoint.expires_at > now
+              ' "${candidate}" >/dev/null || continue
             matches+=("${run_id}:${candidate}")
           done
           [ "${#matches[@]}" -eq 1 ] || { echo "::error::promotion requires exactly one current attested checkpoint; found ${#matches[@]}"; exit 1; }
@@ -645,7 +676,11 @@ jobs:
           reviewer="$(jq -r .checkpoint.reviewer "${checkpoint}")"
           key_id="$(jq -r .key_id "${checkpoint}")"
           [ "$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/collaborators/${reviewer}/permission" --jq .permission)" = "admin" ]
-          public_key="$(gh api --paginate --slurp -H 'Cache-Control: no-cache' "users/${reviewer}/ssh_signing_keys?per_page=100" --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end")"
+          public_key="$(
+            gh api --paginate --slurp -H 'Cache-Control: no-cache' \
+              "users/${reviewer}/ssh_signing_keys?per_page=100" \
+              --jq "[flatten[] | select((.id|tostring) == \"${key_id}\")] | if length == 1 then .[0].key else error(\"signing key must be unique\") end"
+          )"
           [ -n "${public_key}" ]
           authority_dir="$(mktemp -d)"
           printf '%s %s\n' "${reviewer}" "${public_key}" > "${authority_dir}/allowed"
@@ -706,7 +741,18 @@ jobs:
           }
           workflow_blob="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/contents/.github/workflows/aviato-protection-checkpoint.yml?ref=${default_branch}" --jq .sha)"
           [ "${workflow_blob}" = "$(jq -r .checkpoint.workflow_blob_sha "${checkpoint}")" ] || { echo "::error::trusted default-branch checkpoint workflow blob changed"; exit 1; }
-          ci_run="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/actions/workflows/aviato-ci.yml/runs?head_sha=${MERGED_SHA}&event=push&per_page=20" --jq '[.workflow_runs[] | select(.head_sha == "'"${MERGED_SHA}"'" and .status == "completed" and .conclusion == "success")] | sort_by(.run_attempt) | last // empty')"
+          ci_run="$(
+            gh api -H 'Cache-Control: no-cache' \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/aviato-ci.yml/runs?head_sha=${MERGED_SHA}&event=push&per_page=20" \
+              --jq "[
+                .workflow_runs[]
+                | select(
+                  .head_sha == \"${MERGED_SHA}\"
+                  and .status == \"completed\"
+                  and .conclusion == \"success\"
+                )
+              ] | sort_by(.run_attempt) | last // empty"
+          )"
           [ -n "${ci_run}" ] || { echo "::error::exact merged SHA has no successful CI workflow"; exit 1; }
           effective_rules="$(gh api -H 'Cache-Control: no-cache' "repos/${GITHUB_REPOSITORY}/rules/branches/${default_branch}")"
           jq -e 'any(.[]?; .type == "pull_request") and any(.[]?; .type == "required_status_checks")' <<<"${effective_rules}" >/dev/null || { echo "::error::fresh effective default-branch protection is incomplete"; exit 1; }

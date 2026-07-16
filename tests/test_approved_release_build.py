@@ -9,7 +9,7 @@ import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -29,7 +29,11 @@ def _workflow() -> dict[str, Any]:
 
 
 def _on(workflow: dict[str, Any]) -> dict[str, Any]:
-    return workflow.get("on", workflow.get(True))
+    loaded = workflow.get("on")
+    if loaded is None:
+        loaded = cast(dict[object, Any], workflow).get(True)
+    assert isinstance(loaded, dict)
+    return cast(dict[str, Any], loaded)
 
 
 def _rendered_caller() -> dict[str, Any]:
@@ -114,7 +118,7 @@ def test_selected_verify_run_and_artifact_are_unique_terminal_and_exact_sha(monk
     from aviato.plugins import approved_release
 
     run = _run()
-    artifacts = {"total_count": 1, "artifacts": [_artifact()]}
+    artifacts: dict[str, Any] = {"total_count": 1, "artifacts": [_artifact()]}
 
     def rest(path: str, *, token: str) -> object:
         assert token == "app-token"

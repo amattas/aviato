@@ -452,15 +452,17 @@ def test_ready_delete_rechecks_receipt_authorization_and_uses_no_stale_operation
     def verify(_candidate: object, _binding: object) -> bool:
         return authorized
 
-    kwargs = {
-        "desired": [],
-        "live": [_live(desired=prior_payload)],
-        "prior_inventory": inventory,
-        "prior_desired_payloads": [prior_payload],
-        "deletion_receipt": {"receipt": 1},
-        "receipt_verifier": verify,
-    }
-    plan = _plan(**kwargs)
+    def build_plan() -> Any:
+        return _plan(
+            desired=[],
+            live=[_live(desired=prior_payload)],
+            prior_inventory=inventory,
+            prior_desired_payloads=[prior_payload],
+            deletion_receipt={"receipt": 1},
+            receipt_verifier=verify,
+        )
+
+    plan = build_plan()
     authorized = False
     deletes: list[str] = []
 
@@ -468,7 +470,7 @@ def test_ready_delete_rechecks_receipt_authorization_and_uses_no_stale_operation
         api.execute_ruleset_plan(
             plan,
             confirmation=plan.plan_id,
-            recompute=lambda: _plan(**kwargs),
+            recompute=build_plan,
             upsert=lambda _operation: pytest.fail("no upsert expected"),
             delete=lambda operation: deletes.append(operation.identity.name),
         )

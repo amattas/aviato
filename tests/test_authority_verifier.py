@@ -6,6 +6,7 @@ import importlib
 import inspect
 import ssl
 import urllib.error
+from email.message import Message
 from typing import Any
 
 import pytest
@@ -210,11 +211,13 @@ def test_github_reader_denies_redirect_without_forwarding_authorization(monkeypa
     class RedirectingOpener:
         def open(self, request: Any, timeout: int) -> Any:
             requests.append(request)
+            headers = Message()
+            headers["Location"] = "https://attacker.invalid/steal"
             raise urllib.error.HTTPError(
                 request.full_url,
                 302,
                 "redirect denied",
-                {"Location": "https://attacker.invalid/steal"},
+                headers,
                 None,
             )
 

@@ -9,6 +9,7 @@ import pytest
 
 import aviato.cli as cli
 from aviato.cli import main
+from aviato.core.declaration import Declaration
 from aviato.core.errors import AviatoError
 from aviato.core.registry import Registry
 from aviato.core.transition import (
@@ -61,7 +62,7 @@ def test_legacy_sync_without_identity_requires_repin_without_backfill(
     declaration.write_text(declaration.read_text().replace("profile-identity: aviato-profile/python-library/v1\n", ""))
     fetched: list[str] = []
 
-    def fake_context(_root: Path, declaration: object) -> object:
+    def fake_context(_root: Path, declaration: Declaration) -> object:
         fetched.append(declaration.version)
         return SimpleNamespace(registry=Registry(MODULE_SOURCE_ROOT), policy_root=MODULE_SOURCE_ROOT)
 
@@ -234,7 +235,11 @@ def test_post_merge_sync_is_idempotent_with_no_stale_workflow(
     }
     assert after == before
     workflows = sorted(path.name for path in (tmp_path / ".github/workflows").glob("*.yml"))
-    assert workflows == ["aviato-ci.yml", "aviato-drift.yml"]
+    assert workflows == [
+        "aviato-ci.yml",
+        "aviato-drift.yml",
+        "aviato-protection-checkpoint.yml",
+    ]
 
 
 @pytest.mark.parametrize("command", ["onboard", "sync", "repin", "offboard"])
