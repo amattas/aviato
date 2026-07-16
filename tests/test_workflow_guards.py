@@ -1224,7 +1224,11 @@ def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
     }
     steps = resolver["steps"]
     canonicalize_index = next(i for i, step in enumerate(steps) if step.get("id") == "canonicalize")
-    checkout_index = next(i for i, step in enumerate(steps) if step.get("uses") == "actions/checkout@v4")
+    # Match any checkout major: this guard is about ref/SHA binding, and a
+    # hardcoded pin turns every checkout version bump into a spurious failure.
+    checkout_index = next(
+        i for i, step in enumerate(steps) if str(step.get("uses", "")).startswith("actions/checkout@")
+    )
     assert canonicalize_index < checkout_index, "bare tags must be canonicalized before checkout resolves them"
     canonicalize_script = steps[canonicalize_index]["run"]
     assert 'canonical_ref="refs/tags/${REQUESTED_REF}"' in canonicalize_script
@@ -1236,7 +1240,9 @@ def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
     canonical_ref = "${{ needs.resolve-target.outputs.canonical-ref }}"
     analyzed_sha = "${{ needs.resolve-target.outputs.analyzed-sha }}"
     for job_name in ("codeql", "dependency-review", "dependency-scan", "secret-scan"):
-        checkout = next(step for step in jobs[job_name]["steps"] if step.get("uses") == "actions/checkout@v4")
+        checkout = next(
+            step for step in jobs[job_name]["steps"] if str(step.get("uses", "")).startswith("actions/checkout@")
+        )
         assert checkout["with"]["ref"] == analyzed_sha, job_name
 
     analyze = next(step for step in jobs["codeql"]["steps"] if step.get("uses") == "github/codeql-action/analyze@v4")
