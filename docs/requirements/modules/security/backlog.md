@@ -8,6 +8,7 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 - [live verification] Use canary PR #59 to prove the applied ruleset blocks the critical CodeQL alert, then record the durable run/alert evidence and clean up the canary at the authorized checkpoint. — trace: SEC-010
 - [live rollout] Enable Dependabot security updates and run `aviato doctor` now that ruleset convergence is verified. — trace: SEC-010
+- [process] Enable repository auto-merge (`allow_auto_merge`) through the managed settings baseline so dependabot PRs converge unattended under the strict up-to-date required-checks policy (2026-07-16: eight open dependabot PRs were unmergeable individually and had to be folded into one PR, #75; each merge re-queues the next rebase+CI cycle, which auto-merge would drain without operator babysitting). Standing bypass actors and recurring admin merges stay off the table per the settled solo-maintainer liveness decision below. — source: 2026-07-16 dependabot triage · aviato/library/bundles/settings/baseline.yaml
 
 
 ## Settled — do not reopen
