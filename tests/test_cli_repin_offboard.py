@@ -182,8 +182,7 @@ def test_profile_migration_carries_old_and_new_snapshots_for_retirement(
         pin="0",
         items=(old,),
         declaration_bytes=(
-            b"profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
-            b"version: 0\nvariables: {}\n"
+            b"profile: python-library\nprofile-identity: aviato-profile/python-library/v1\nversion: 0\nvariables: {}\n"
         ),
         baseline_existing_seeds=True,
         allow_fresh_seed_initialization=True,
@@ -198,9 +197,7 @@ def test_profile_migration_carries_old_and_new_snapshots_for_retirement(
     profile = SimpleNamespace(identity="aviato-profile/python-library/v1")
     source_registry = SimpleNamespace(profile=lambda _name: profile)
     source_snapshot = SimpleNamespace(commit_sha="a" * 40, registry=source_registry)
-    current_context = SimpleNamespace(
-        snapshot=SimpleNamespace(commit_sha="b" * 40, registry=source_registry)
-    )
+    current_context = SimpleNamespace(snapshot=SimpleNamespace(commit_sha="b" * 40, registry=source_registry))
     opened: list[tuple[str, str]] = []
 
     def open_recorded(commit_sha: str, *, requested_pin: str) -> object:

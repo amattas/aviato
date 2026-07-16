@@ -861,9 +861,8 @@ def test_live_collector_reconstructs_complete_app_pr_review_ruleset_transcript(
         }
     ).encode()
     candidate_anchor_sha256 = hashlib.sha256(candidate_anchor).hexdigest()
-    next(item for item in protected if item["path"] == "/.github/aviato-privileged-review.json")["sha256"] = (
-        candidate_anchor_sha256
-    )
+    candidate_anchor_item = next(item for item in protected if item["path"] == "/.github/aviato-privileged-review.json")
+    candidate_anchor_item["sha256"] = candidate_anchor_sha256
     evidence["activation_request"]["anchor_sha256"] = candidate_anchor_sha256
     evidence["pull_request"]["protected_tree_root"] = _digest(protected)
     transcript: list[str] = []
@@ -907,13 +906,10 @@ def test_live_collector_reconstructs_complete_app_pr_review_ruleset_transcript(
             body = current_codeowners_override[-1] if "f" * 40 in path and current_codeowners_override else codeowners
             return content(body, "1" * 40)
         if path.startswith("/repos/amattas/aviato/contents/.github/aviato-privileged-review.json"):
-            body = (
-                base_anchor_override[-1]
-                if "a" * 40 in path and base_anchor_override
-                else base_anchor
-                if "a" * 40 in path
-                else candidate_anchor
-            )
+            if "a" * 40 in path:
+                body = base_anchor_override[-1] if base_anchor_override else base_anchor
+            else:
+                body = candidate_anchor
             return content(body, "9" * 40)
         if path.startswith("/repos/amattas/aviato/contents/.github/workflows/aviato-privileged-review.yml"):
             return content(workflow_body, "e" * 40)

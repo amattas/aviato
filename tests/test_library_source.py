@@ -58,9 +58,7 @@ def _archive(
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w:gz") as archive:
         info = tarfile.TarInfo(member if member.startswith("/") else f"{root}/{member}")
-        body = (
-            f"name: profile\nidentity: {identity}\nworkflows: wf\nscaffold: sc\nsettings: set\n".encode()
-        )
+        body = f"name: profile\nidentity: {identity}\nworkflows: wf\nscaffold: sc\nsettings: set\n".encode()
         if kind == "symlink":
             info.type = tarfile.SYMTYPE
             info.linkname = "/tmp/escape"
@@ -74,9 +72,7 @@ def _archive(
             and member != "aviato/library/policy.yml"
         ):
             rendered_policy = (
-                f"library:\n  repository: {policy_repository}\n".encode()
-                if policy_body == b"default"
-                else policy_body
+                f"library:\n  repository: {policy_repository}\n".encode() if policy_body == b"default" else policy_body
             )
             policy = tarfile.TarInfo(f"{root}/aviato/library/policy.yml")
             policy.size = len(rendered_policy)
@@ -391,9 +387,7 @@ def test_valid_api_ref_names_resolve_through_correlated_tag_and_branch_endpoints
     responses: dict[str, subprocess.CompletedProcess[str] | list[subprocess.CompletedProcess[str]]] = {
         **_accessible_repository_responses(),
         tag_endpoint: (
-            _ref_response(tag_endpoint, "commit", SHA)
-            if expected_kind == "tag"
-            else _not_found(tag_endpoint)
+            _ref_response(tag_endpoint, "commit", SHA) if expected_kind == "tag" else _not_found(tag_endpoint)
         ),
     }
     if expected_kind == "branch":
@@ -652,8 +646,9 @@ def test_archive_extraction_resolves_each_candidate_beneath_root(
 
     monkeypatch.setattr(library_source, "_safe_library_members", plant_parent_symlink)
 
-    with pytest.raises(AviatoError, match="contain|extract|outside"), library_source.fetch_library_registry(
-        REPOSITORY, "1"
+    with (
+        pytest.raises(AviatoError, match="contain|extract|outside"),
+        library_source.fetch_library_registry(REPOSITORY, "1"),
     ):
         pass
 
@@ -746,9 +741,7 @@ def test_fetch_library_snapshot_at_commit_never_reresolves_floating_pin(
 ) -> None:
     calls = _fake_run(monkeypatch, _archive())
 
-    with library_source.fetch_library_snapshot_at_commit(
-        REPOSITORY, SHA, requested_pin="moving-branch"
-    ) as snapshot:
+    with library_source.fetch_library_snapshot_at_commit(REPOSITORY, SHA, requested_pin="moving-branch") as snapshot:
         assert snapshot.requested_pin == "moving-branch"
         assert snapshot.commit_sha == SHA
         assert snapshot.resolved_ref_kind == "commit"

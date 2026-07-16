@@ -70,8 +70,7 @@ def plan_offboarding_transition(
     if inventory_read.status == "invalid":
         raise AviatoError(f"managed inventory is invalid: {inventory_read.reason}")
     if inventory_read.inventory is not None and (
-        inventory_read.inventory.profile != profile
-        or inventory_read.inventory.profile_identity != declaration_identity
+        inventory_read.inventory.profile != profile or inventory_read.inventory.profile_identity != declaration_identity
     ):
         raise AviatoError("managed inventory profile identity does not match the declaration being offboarded")
     sidecar = read_sidecar(root)

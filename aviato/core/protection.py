@@ -557,9 +557,11 @@ def verify_protection_recheck(
 
 def plan_with_operation_converged(plan: ProtectionPlan, identity: str) -> ProtectionPlan:
     operations = tuple(
-        replace(item, action="noop", before=item.desired, before_fingerprint=item.desired_fingerprint)
-        if item.identity == identity
-        else item
+        (
+            replace(item, action="noop", before=item.desired, before_fingerprint=item.desired_fingerprint)
+            if item.identity == identity
+            else item
+        )
         for item in plan.operations
     )
     return replace(plan, operations=operations)

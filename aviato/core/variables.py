@@ -60,9 +60,7 @@ def _validate_source_keys(
 
     known_names = {spec.name for spec in specs}
     unknown_by_source = {
-        source_name: sorted(set(source) - known_names)
-        for source_name, source in sources
-        if set(source) - known_names
+        source_name: sorted(set(source) - known_names) for source_name, source in sources if set(source) - known_names
     }
     if unknown_by_source:
         details = "; ".join(

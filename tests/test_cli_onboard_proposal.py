@@ -34,9 +34,7 @@ def test_existing_seed_proposal_preserves_and_enumerates_seed_once_files(
 
     captured: dict[str, object] = {}
 
-    def fake_proposal(
-        self: GitHubPlatform, repo: str, branch: str, title: str, body: str
-    ) -> str:
+    def fake_proposal(self: GitHubPlatform, repo: str, branch: str, title: str, body: str) -> str:
         captured.update(
             repo=repo,
             branch=branch,
@@ -171,9 +169,7 @@ def test_local_and_proposal_onboarding_execute_the_same_transition(
     assert proposal == local
 
 
-def test_proposal_includes_clean_obsolete_deletions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_proposal_includes_clean_obsolete_deletions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source = tmp_path / "source"
     source.mkdir()
     subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
@@ -406,9 +402,7 @@ def test_legacy_reonboard_open_pr_requires_repin_even_with_equal_identity(
             )
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    def fake_proposal(
-        self: GitHubPlatform, repo: str, branch: str, title: str, body: str
-    ) -> str:
+    def fake_proposal(self: GitHubPlatform, repo: str, branch: str, title: str, body: str) -> str:
         captured.update(body=body)
         return branch
 
@@ -438,9 +432,7 @@ def test_onboard_open_pr_profile_migration_requires_flag_and_renders_requested_p
             )
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    def fake_proposal(
-        self: GitHubPlatform, repo: str, branch: str, title: str, body: str
-    ) -> str:
+    def fake_proposal(self: GitHubPlatform, repo: str, branch: str, title: str, body: str) -> str:
         captured.update(body=body)
         return branch
 

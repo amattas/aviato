@@ -112,9 +112,7 @@ def test_render_json_roundtrips() -> None:
     assert data[0]["force_push_blocked"] == "no"
 
 
-def test_audit_undeclared_repository_requires_explicit_pin(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_audit_undeclared_repository_requires_explicit_pin(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _git_init(tmp_path)
 
     assert main(["audit", "--repo", str(tmp_path)]) == 2

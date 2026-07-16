@@ -92,8 +92,7 @@ def resolve_library_ref(repository: str, pin: str) -> ResolvedLibraryRef:
             raise AviatoError(f"annotated tag cycle while resolving Library pin {pin!r}")
         if peel_depth >= MAX_ANNOTATED_TAG_PEEL_DEPTH:
             raise AviatoError(
-                f"annotated tag peel depth exceeds {MAX_ANNOTATED_TAG_PEEL_DEPTH} "
-                f"while resolving Library pin {pin!r}"
+                f"annotated tag peel depth exceeds {MAX_ANNOTATED_TAG_PEEL_DEPTH} while resolving Library pin {pin!r}"
             )
         seen.add(sha)
         peel_depth += 1

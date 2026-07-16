@@ -125,9 +125,7 @@ def _subset_match(desired: Any, live: Any) -> bool:
     return bool(desired == live)
 
 
-def ruleset_content_drift(
-    desired: dict[str, Any], live: dict[str, Any], *, default_branch: str = "main"
-) -> bool:
+def ruleset_content_drift(desired: dict[str, Any], live: dict[str, Any], *, default_branch: str = "main") -> bool:
     """True if a live ruleset has drifted from the rendered desired payload (§5.6).
 
     Catches the security-relevant divergences: a DISABLED/evaluate ruleset (``enforcement`` no
