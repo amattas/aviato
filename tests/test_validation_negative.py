@@ -263,6 +263,7 @@ def test_branch_ruleset_approval_literal_drift_is_detected(repo_copy: Path) -> N
     [
         ".github/workflows/reusable-docker-ghcr.yml",
         "starter/docs-site/docs.yml",  # the starter kit's hand-copied comparator joins the battery
+        ".github/workflows/docs.yml",  # Aviato's own copy of the starter docs caller
     ],
 )
 def test_monotonic_alias_inline_drift_is_detected(repo_copy: Path, rel_path: str) -> None:

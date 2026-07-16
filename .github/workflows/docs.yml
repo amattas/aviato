@@ -1,15 +1,13 @@
-# Docs — Zensical + mike (versioned), published to the gh-pages branch.
+# Docs — Aviato's own copy of the starter docs caller (starter/docs-site/docs.yml),
+# publishing docs/ as a versioned Zensical site onto the gh-pages branch.
 #   push to main        → deploys the "dev" version
 #   tag push X.Y.Z      → deploys "X.Y.Z" (latest moves only for the highest release)
 #   workflow_dispatch   → deploys an explicit version (one-time seeding/fixups)
-# mike stores every built version on the gh-pages branch; GitHub Pages serves
-# that branch directly (Pages source = Deploy from a branch → gh-pages), so no
-# artifact upload/deploy steps are needed here.
-# Copy to: .github/workflows/docs.yml ; zensical.toml sits at the repo root,
-# requirements.txt → requirements-docs.txt at the repo root, site source in docs/.
-#
-# CUSTOMIZE:
-#  - the PYTHON API DOCS block for Python repos (pydoc-markdown)
+# Aviato's release flow tags with GITHUB_TOKEN, which does not trigger tag
+# workflows — publish a release version here via workflow_dispatch instead.
+# Pages source = Deploy from a branch → gh-pages (classic mike setup).
+# Deviation from the master: pins install straight from the generator-owned
+# starter/docs-site/requirements.txt instead of a copied requirements-docs.txt.
 name: Docs
 
 on:
@@ -74,14 +72,7 @@ jobs:
           python-version: "3.12"
       - name: Install docs toolchain (exact pins)
         if: ${{ steps.release.outputs.publish == 'true' }}
-        run: python -m pip install --quiet -r requirements-docs.txt
-      # PYTHON API DOCS (optional): generate an API reference from docstrings.
-      # - name: Generate API reference
-      #   if: ${{ steps.release.outputs.publish == 'true' }}
-      #   run: |
-      #     python -m pip install --quiet -e . "pydoc-markdown==4.8.2"
-      #     mkdir -p docs/api
-      #     pydoc-markdown -I src -p PACKAGE > docs/api/reference.md
+        run: python -m pip install --quiet -r starter/docs-site/requirements.txt
       - name: Deploy version with mike
         if: ${{ steps.release.outputs.publish == 'true' }}
         env:

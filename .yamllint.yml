@@ -9,6 +9,7 @@ ignore: |
   _wheelout/**
   node_modules/**
   **/node_modules/**
+  .worktrees/**
 
 rules:
   braces: disable

@@ -69,7 +69,10 @@ Docs-enabled profiles scaffold a Zensical `website/` with an exact-pinned
 `requirements.txt` (zensical + the mike fork, §11.3), Zensical's built-in
 search, Mermaid rendering, and sitemap configuration. This is a consumer
 capability: Aviato's own bootstrap declaration sets `docs: false` and carries no
-`website/`, self-docs caller, or seed sidecar.
+`website/`, self-docs caller, or seed sidecar. Aviato's own documentation site is
+instead published starter-kit style (`starter/docs-site/`): a root `zensical.toml`
+renders `docs/`, and `.github/workflows/docs.yml` pushes mike-versioned builds to
+the `gh-pages` branch, which Pages serves directly.
 
 ### Caller Templates
 

@@ -397,36 +397,35 @@ def test_rendered_consumer_docs_caller_defaults_pages_off_and_grants_only_call_u
     }
 
 
-def test_starter_docs_deploys_exact_branch_artifact_after_push() -> None:
-    starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
-    assert starter["permissions"] == {}
-    assert starter["concurrency"]["cancel-in-progress"] is False
-    assert "${{ github.repository }}" in starter["concurrency"]["group"]
-    assert starter["jobs"]["build"]["permissions"] == {"contents": "read", "pages": "read"}
-    assert starter["jobs"]["push"]["permissions"] == {"contents": "write"}
-    deploy = starter["jobs"]["deploy"]
-    assert set(deploy["needs"]) == {"build", "push"}
-    assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
-    assert all("run" not in step for step in deploy["steps"])
-    body = (REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8")
-    assert 'git archive "refs/heads/${DOCS_BRANCH}"' in body
-    assert "refusing escaping symlink" in body
-    assert "actions/upload-pages-artifact@" in body
+# Both the starter master and Aviato's own copy of it share one contract.
+_DOCS_SITE_WORKFLOWS = ["starter/docs-site/docs.yml", ".github/workflows/docs.yml"]
 
 
-def test_starter_invalid_tag_skips_every_publish_stage(tmp_path: Path) -> None:
-    starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
-    build = starter["jobs"]["build"]
-    assert build["outputs"]["publish"] == "${{ steps.release.outputs.publish }}"
-    steps = build["steps"]
+@pytest.mark.parametrize("rel_path", _DOCS_SITE_WORKFLOWS)
+def test_docs_site_single_job_pushes_versioned_branch_only(rel_path: str) -> None:
+    body = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
+    wf = yaml.safe_load(body)
+    assert wf["permissions"] == {}
+    assert wf["concurrency"]["cancel-in-progress"] is False
+    assert "${{ github.repository }}" in wf["concurrency"]["group"]
+    # Classic mike setup: one job pushes versions to the docs branch and Pages
+    # serves that branch directly — no artifact upload/deploy jobs, and the
+    # branch-writing job is the only privilege holder.
+    assert set(wf["jobs"]) == {"docs"}
+    assert wf["jobs"]["docs"]["permissions"] == {"contents": "write"}
+    assert 'mike deploy --push --branch "${DOCS_BRANCH}"' in body
+    assert "upload-pages-artifact" not in body
+    assert "deploy-pages" not in body
+
+
+@pytest.mark.parametrize("rel_path", _DOCS_SITE_WORKFLOWS)
+def test_docs_site_invalid_tag_skips_every_publish_step(rel_path: str, tmp_path: Path) -> None:
+    starter = yaml.safe_load((REPO_ROOT / rel_path).read_text(encoding="utf-8"))
+    steps = starter["jobs"]["docs"]["steps"]
     release_index = next(i for i, step in enumerate(steps) if step.get("id") == "release")
     release = steps[release_index]
     for step in steps[release_index + 1 :]:
         assert "steps.release.outputs.publish == 'true'" in str(step.get("if", "")), step
-    assert "needs.build.outputs.publish == 'true'" in str(starter["jobs"]["push"]["if"])
-    deploy_if = str(starter["jobs"]["deploy"]["if"])
-    assert "needs.build.outputs.publish == 'true'" in deploy_if
-    assert "needs.push.result == 'success'" in deploy_if
 
     output = tmp_path / "github-output"
     env = os.environ | {
@@ -439,18 +438,29 @@ def test_starter_invalid_tag_skips_every_publish_stage(tmp_path: Path) -> None:
     assert output.read_text(encoding="utf-8").splitlines() == ["publish=false"]
 
 
+@pytest.mark.parametrize("rel_path", _DOCS_SITE_WORKFLOWS)
 @pytest.mark.parametrize(
-    ("ref_type", "ref_name", "expected"),
-    [("tag", "1.2.3", ["publish=true", "tag=1.2.3"]), ("branch", "main", ["publish=true", "tag="])],
+    ("ref_type", "ref_name", "input_version", "expected"),
+    [
+        ("tag", "1.2.3", "", ["publish=true", "tag=1.2.3"]),
+        ("branch", "main", "", ["publish=true", "tag="]),
+        # workflow_dispatch seeding: an explicit version input publishes like a tag …
+        ("branch", "main", "1.2.3", ["publish=true", "tag=1.2.3"]),
+        # … and a malformed one skips every publish step, same as a bad tag.
+        ("branch", "main", "not-a-version", ["publish=false"]),
+    ],
 )
-def test_starter_valid_refs_publish(ref_type: str, ref_name: str, expected: list[str], tmp_path: Path) -> None:
-    starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
-    release = next(step for step in starter["jobs"]["build"]["steps"] if step.get("id") == "release")
+def test_docs_site_valid_refs_publish(
+    rel_path: str, ref_type: str, ref_name: str, input_version: str, expected: list[str], tmp_path: Path
+) -> None:
+    starter = yaml.safe_load((REPO_ROOT / rel_path).read_text(encoding="utf-8"))
+    release = next(step for step in starter["jobs"]["docs"]["steps"] if step.get("id") == "release")
     output = tmp_path / "github-output"
     env = os.environ | {
         "GITHUB_OUTPUT": str(output),
         "GITHUB_REF_TYPE": ref_type,
         "GITHUB_REF_NAME": ref_name,
+        "INPUT_VERSION": input_version,
     }
     result = subprocess.run(["bash", "-c", release["run"]], env=env, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
@@ -617,6 +627,8 @@ def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
     credentialed_push_jobs = {
         ("reusable-release.yml", "release"),
         ("reusable-docs-pages.yml", "push"),
+        # Aviato's own starter-style docs caller: mike pushes gh-pages from its checkout.
+        ("docs.yml", "docs"),
     }
     for path in sorted(WORKFLOWS.glob("*.yml")):
         wf = _load(path.name)

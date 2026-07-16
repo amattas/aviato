@@ -16,7 +16,7 @@ first; the release workflow refuses a tag that doesn't match.
 | Python app/tool (no PyPI) | `python-app/` same three files | same destinations |
 | Node service | `node-service/ci.yml`, `release.yml`, `dependabot.yml`, `npmrc` | same destinations; `npmrc` → `.npmrc` at repo root |
 | Container service | `container-service/release.yml` **plus** the `ci.yml`+`dependabot.yml` for the repo's language | `.github/workflows/release.yml` |
-| Docs site (Zensical) | `docs-site/docs.yml` → `.github/workflows/docs.yml`; `zensical.toml`, `requirements.txt`, `docs/` → `website/` | full site scaffold — see below |
+| Docs site (Zensical) | `docs-site/docs.yml` → `.github/workflows/docs.yml`; `zensical.toml` → repo root; `requirements.txt` → `requirements-docs.txt` at repo root; `docs/` → `docs/` | full site scaffold — see below |
 | Swift app | `swift-app/ci.yml`, `dependabot.yml` | same destinations |
 
 Every workflow has a `# CUSTOMIZE` comment block at the top listing the lines
@@ -30,18 +30,22 @@ toolchain. Versioning is via `mike`, deployed onto the `gh-pages` branch — the
 `latest` alias lives at the root, `dev` deploys from every push to `main`, and
 each release tag additionally deploys its exact version (`mike` moves `latest`
 only when the tag is the highest release; older tags land under their own
-version path without touching `latest`). Fill the ALL-CAPS placeholders in
-`zensical.toml` (`PROJECT`/`OWNER`/`REPO`), and gitignore `website/site` (the
-local build output dir). Python repos: uncomment the pydoc-markdown block in
-`docs.yml` for docstring-generated API docs.
+version path without touching `latest`). The site lives at the repo root:
+`zensical.toml` next to `pyproject.toml`/`package.json`, content in `docs/`.
+Fill the ALL-CAPS placeholders in `zensical.toml` (`PROJECT`/`OWNER`/`REPO`),
+and gitignore `site/` (the local build output dir). One-time: repo Settings →
+Pages → Source: Deploy from a branch → `gh-pages`. Python repos: uncomment the
+pydoc-markdown block in `docs.yml` for docstring-generated API docs.
 
 ### Migrating a Docusaurus docs site
 
-1. Delete `website/{package.json,package-lock.json,docusaurus.config.js,sidebars.js,.npmrc,src}`.
-2. Keep `website/docs/`.
-3. Add `zensical.toml` + `requirements.txt` from this kit.
-4. Swap in the new `docs.yml`.
-5. Delete `versioned_docs/`, `versioned_sidebars/`, `versions.json` — version
+1. Move `website/docs/` to `docs/` at the repo root, then delete `website/`
+   (`package.json`, `package-lock.json`, `docusaurus.config.js`, `sidebars.js`,
+   `.npmrc`, `src`, …).
+2. Add `zensical.toml` (repo root) + `requirements.txt` (→ `requirements-docs.txt`)
+   from this kit.
+3. Swap in the new `docs.yml`.
+4. Delete `versioned_docs/`, `versioned_sidebars/`, `versions.json` — version
    history now lives on the `gh-pages` branch via `mike`, not in the source tree.
 6. Set Pages source to **GitHub Actions** (Settings → Pages) so the workflow can
    deploy the exact versioned branch artifact after its branch push succeeds.
