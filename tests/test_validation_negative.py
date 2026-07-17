@@ -77,8 +77,11 @@ def test_status_bridge_context_drift_is_detected(repo_copy: Path) -> None:
 def test_project_version_drift_from_runtime_metadata_is_detected(repo_copy: Path) -> None:
     pyproject = repo_copy / "pyproject.toml"
     text = pyproject.read_text(encoding="utf-8")
-    drifted = text.replace('version = "0.3.0"', 'version = "9.9.9"', 1)
-    assert drifted != text, "fixture did not contain the expected project version"
+    # Match the current version rather than hardcoding it: a hardcoded literal turns
+    # every release version-bump PR into a spurious failure of this test.
+    version_line = re.search(r'^version = "[^"]+"$', text, flags=re.MULTILINE)
+    assert version_line is not None, "fixture did not contain a project version"
+    drifted = text.replace(version_line.group(0), 'version = "9.9.9"', 1)
     pyproject.write_text(drifted, encoding="utf-8")
 
     errors = validate(repo_copy)

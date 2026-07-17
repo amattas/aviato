@@ -45,7 +45,7 @@ jobs:
             echo "::error::Tag '${TAG}' is not X.Y.Z (optionally -alphaN/-betaN)"
             exit 1
           fi
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Build image (${{ matrix.arch }})
@@ -59,14 +59,14 @@ jobs:
           echo "IMAGE=${image}" >> "${GITHUB_ENV}"
           docker build -t "${image}:${TAG}-${ARCH}" .
       - name: Scan the built image (gate on HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.33.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}:${{ github.ref_name }}-${{ matrix.arch }}
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
       - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v3
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -85,7 +85,7 @@ jobs:
       packages: write # push the manifest + latest tag
     steps:
       - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v3
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

@@ -26,7 +26,7 @@ dev = [
   "black==26.5.1",
   "build==1.5.0",
   "mypy==2.3.0",
-  "pytest==9.0.3",
+  "pytest==9.1.1",
   "pytest-cov==7.1.0",
   "ruff==0.15.22",
   # CI-failure fix: mypy --strict needs the PyYAML stubs in the SAME env (they were
@@ -37,7 +37,7 @@ dev = [
   # 3.12 runners don't ship setuptools by default. Mirrors [build-system]'s floor
   # (same constraint, not a gate tool whose drift changes lint outcomes).
   "setuptools>=69",
-  "yamllint==1.35.1",
+  "yamllint==1.38.0",
 ]
 
 [project.scripts]

@@ -54,7 +54,7 @@ jobs:
       gated-sha: ${{ steps.resolve-gated-sha.outputs.gated-sha }}
     steps:
       - name: Checkout consumer repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 0
