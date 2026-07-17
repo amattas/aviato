@@ -68,6 +68,18 @@ RELEASE_WORKFLOWS = [
 ]
 
 
+def _policy_version_to_pep440(version: str) -> str:
+    """Map a policy-form version (X.Y.Z or X.Y.Z-alphaN/-betaN, §policy tag_pattern) to the
+    PEP 440 canonical form installed metadata reports (alpha->aN, beta->bN) — the same
+    transform the consumer publish workflow applies to release tags. Final releases pass
+    through unchanged, so this is a no-op outside §11.6 dev-suffixed versions."""
+    return re.sub(
+        r"-(alpha|beta)([0-9]+)$",
+        lambda m: {"alpha": "a", "beta": "b"}[m.group(1)] + m.group(2),
+        version,
+    )
+
+
 def _check_project_version_parity(root: Path, errors: list[str]) -> None:
     pyproject = root / "pyproject.toml"
     try:
@@ -88,7 +100,9 @@ def _check_project_version_parity(root: Path, errors: list[str]) -> None:
 
     from . import __version__
 
-    if project_version != runtime_metadata_version:
+    # Compare in PEP 440 canonical form: pyproject carries the policy form (which may be a
+    # §11.6 dev-suffixed X.Y.Z-alphaN), while installed metadata is always normalized (aN).
+    if _policy_version_to_pep440(project_version) != runtime_metadata_version:
         errors.append(
             f"project version {project_version!r} differs from runtime distribution metadata "
             f"{runtime_metadata_version!r}"
