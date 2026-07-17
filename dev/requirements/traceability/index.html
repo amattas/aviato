@@ -4145,7 +4145,7 @@ remain outstanding; those are never implied by a local test.</p>
 <td><a href="../../specifications/modules/security/scanning/">security baseline</a></td>
 <td><a href="../../../.github/workflows/reusable-security-baseline.yml">workflow</a></td>
 <td><a href="../../../tests/test_workflow_guards.py">tests</a> · <a href="https://github.com/amattas/aviato/pull/59">canary PR</a></td>
-<td>Final ruleset proof remains in the <a href="../modules/security/backlog/">security backlog</a>.</td>
+<td>Ruleset proof verified live 2026-07-17: with the canary branch up to date (head <code>9ca7c17</code>) and every ordinary check green, <a href="https://github.com/amattas/aviato/pull/59">PR #59</a> reported <code>mergeStateStatus: BLOCKED</code> / <code>mergeable: MERGEABLE</code> — blocked solely by the failing <a href="https://github.com/amattas/aviato/actions/runs/29584268693/job/87897259161">security gate job</a> plus the active <code>code_scanning</code> ruleset rule (id 17482301, CodeQL <code>security_alerts_threshold: high_or_higher</code>) against critical <a href="https://github.com/amattas/aviato/security/code-scanning/23">alert #23</a> (<code>py/code-injection</code>). Canary closed and branch deleted at the authorized cleanup checkpoint; the PR-merge-ref-only alert remains in GitHub's <code>state: null</code> limbo by design (no monitored branch ever carried it). Owning backlog: <a href="../modules/security/backlog/">security backlog</a>.</td>
 </tr>
 <tr>
 <td>REQ-DOC-001</td>
