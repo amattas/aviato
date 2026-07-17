@@ -6,14 +6,22 @@ from collections.abc import Sequence
 from .errors import CompatibilityError
 
 _EXACT_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+# §11.6/§2.6: the running Library itself may be a dev-suffixed verification build, and its
+# version reaches compatibility checks in policy form (X.Y.Z-alphaN, from version sources/tags) or
+# PEP 440 canonical form (X.Y.ZaN, from installed metadata). Compatibility compares on the
+# core triple; the suffix carries no compatibility meaning (ordering lives in versioning.py).
+_EXACT_PRERELEASE_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(?:alpha|beta)\d+|[ab]\d+)$")
 _MAJOR_RE = re.compile(r"^v?(\d+)$")
 
 Version = tuple[int, int, int]
 
 
 def parse_version(value: str) -> Version:
-    """Parse an exact ``X.Y.Z`` version into a comparable tuple (a legacy ``v`` prefix is tolerated)."""
-    match = _EXACT_RE.match(value.strip())
+    """Parse an exact ``X.Y.Z`` version into a comparable tuple (a legacy ``v`` prefix is
+    tolerated, as is a §11.6 pre-release suffix in policy or PEP 440 form — the suffix is
+    dropped; compatibility is a core-triple concern)."""
+    stripped = value.strip()
+    match = _EXACT_RE.match(stripped) or _EXACT_PRERELEASE_RE.match(stripped)
     if not match:
         raise CompatibilityError(f"not an exact version: {value!r}")
     return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
@@ -21,7 +29,7 @@ def parse_version(value: str) -> Version:
 
 def _pinned_major(pinned: str) -> int:
     pinned = pinned.strip()
-    exact = _EXACT_RE.match(pinned)
+    exact = _EXACT_RE.match(pinned) or _EXACT_PRERELEASE_RE.match(pinned)
     if exact:
         return int(exact.group(1))
     major = _MAJOR_RE.match(pinned)

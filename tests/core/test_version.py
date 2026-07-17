@@ -36,6 +36,29 @@ def test_parse_tolerates_leading_v() -> None:
     assert parse_version("1.2.3") == (1, 2, 3)
 
 
+@pytest.mark.parametrize(
+    "prerelease_form",
+    [
+        # §11.6/§2.6: the running Library may BE a dev-suffixed build; its version arrives in
+        # policy form from pyproject or PEP 440 canonical form from installed metadata, and
+        # compatibility compares on the core triple either way (discovered live: a 0.4.1a2
+        # install failed every CLI compatibility gate with rc 2).
+        "0.4.1-alpha2",
+        "0.4.1a2",
+        "0.4.1-beta10",
+        "0.4.1b10",
+    ],
+)
+def test_parse_tolerates_prerelease_suffix_in_both_forms(prerelease_form: str) -> None:
+    assert parse_version(prerelease_form) == (0, 4, 1)
+
+
+@pytest.mark.parametrize("malformed", ["0.4.1rc1", "0.4.1a", "0.4.1-alpha", "0.4.1-gamma2"])
+def test_parse_rejects_unknown_suffix_forms(malformed: str) -> None:
+    with pytest.raises(CompatibilityError):
+        parse_version(malformed)
+
+
 def test_is_known_version_pin() -> None:
     assert is_known_version_pin("1.2.3") is True
     assert is_known_version_pin("v1.2.3") is True
