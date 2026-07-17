@@ -1,0 +1,107 @@
+# Docs — Aviato's own copy of the starter docs caller (starter/docs-site/docs.yml),
+# publishing docs/ as a versioned Zensical site onto the gh-pages branch.
+#   push to main        → deploys the "dev" version
+#   tag push X.Y.Z      → deploys "X.Y.Z" (latest moves only for the highest release)
+#   workflow_dispatch   → deploys an explicit version (one-time seeding/fixups)
+# Aviato's release flow tags with GITHUB_TOKEN, which does not trigger tag
+# workflows — publish a release version here via workflow_dispatch instead.
+# Pages source = Deploy from a branch → gh-pages (classic mike setup).
+# Deviation from the master: pins install straight from the generator-owned
+# starter/docs-site/requirements.txt instead of a copied requirements-docs.txt.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    tags: ["[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to deploy (e.g. 1.0.1); latest moves only if it is the highest release. Empty = dev."
+        required: false
+        default: ""
+
+permissions: {}
+
+env:
+  DOCS_BRANCH: gh-pages
+
+concurrency:
+  group: pages-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # mike commits versions to the gh-pages branch
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # mike deploy --push writes the gh-pages branch from this checkout, so
+          # this job deliberately keeps the token (it is the only privilege holder).
+          persist-credentials: true
+          fetch-depth: 0 # mike needs the gh-pages branch; the monotonic guard needs every tag
+          fetch-tags: true
+      - name: Validate publish ref
+        id: release
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          publish=true
+          tag=""
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [ -n "${INPUT_VERSION:-}" ]; then
+            tag="${INPUT_VERSION}"
+          fi
+          if [ -n "${tag}" ] && [[ ! "${tag}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$ ]]; then
+            echo "::warning::not a policy release tag (${tag}); skipping every docs publish stage"
+            publish=false
+            tag=""
+          fi
+          echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
+          if [ "${publish}" = "true" ]; then
+            echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          fi
+      - uses: actions/setup-python@v6
+        if: ${{ steps.release.outputs.publish == 'true' }}
+        with:
+          python-version: "3.12"
+      - name: Install docs toolchain (exact pins)
+        if: ${{ steps.release.outputs.publish == 'true' }}
+        run: python -m pip install --quiet -r starter/docs-site/requirements.txt
+      - name: Deploy version with mike
+        if: ${{ steps.release.outputs.publish == 'true' }}
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "${TAG}" ]; then
+            mike deploy --push --branch "${DOCS_BRANCH}" dev
+            exit 0
+          fi
+          # §8.14 monotonic guard: this comparator is held to parity with core by validation.
+          cat > /tmp/highest.py <<'PY'
+          import sys, re
+          rel = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(\d+))?$")
+          rank = {None: 2, "beta": 1, "alpha": 0}
+          def key(t):
+              m = rel.match(t.strip())
+              return (int(m[1]), int(m[2]), int(m[3]), rank[m[4]], int(m[5] or 0)) if m else None
+          cand = sys.argv[1]; ck = key(cand)
+          keys = [k for k in map(key, sys.stdin) if k]
+          print("true" if ck and max(keys + [ck]) == ck else "false")
+          PY
+          HIGHEST="$(git tag --list | python3 /tmp/highest.py "${TAG}")"
+          if [ "${HIGHEST}" = "true" ]; then
+            mike deploy --push --branch "${DOCS_BRANCH}" --update-aliases "${TAG}" latest
+            mike set-default --push --branch "${DOCS_BRANCH}" latest
+          else
+            echo "::warning::${TAG} is not the highest release; not moving latest."
+            mike deploy --push --branch "${DOCS_BRANCH}" "${TAG}"
+          fi

@@ -31,7 +31,7 @@ def test_docs_toolchain_source_has_all_exact_pins() -> None:
     }
 
 
-def test_docs_pin_sync_declares_exactly_three_outputs_and_detects_all_drift(tmp_path: Path) -> None:
+def test_docs_pin_sync_declares_exactly_two_consumer_outputs_and_detects_all_drift(tmp_path: Path) -> None:
     sync = _load_script("sync-docs-toolchain-pins.py")
     root = tmp_path / "repo"
     (root / "aviato/library").mkdir(parents=True)
@@ -40,7 +40,6 @@ def test_docs_pin_sync_declares_exactly_three_outputs_and_detects_all_drift(tmp_
     )
     outputs = sync.render_outputs(root)
     assert list(outputs) == [
-        Path("website/requirements.txt"),
         Path("starter/docs-site/requirements.txt"),
         Path("aviato/library/scaffold/files/docs-requirements.txt.txt"),
     ]
@@ -51,6 +50,17 @@ def test_docs_pin_sync_declares_exactly_three_outputs_and_detects_all_drift(tmp_
 
     assert sync.sync(root, check=True) == list(outputs)
     assert all((root / path).read_text(encoding="utf-8").endswith("# drift\n") for path in outputs)
+
+
+def test_library_has_no_self_docs_site_but_consumer_docs_assets_remain() -> None:
+    declaration = yaml.safe_load((REPO_ROOT / ".github/aviato.yaml").read_text(encoding="utf-8"))
+    assert declaration["docs"] is False
+    assert "serve-pages" not in declaration.get("variables", {})
+    assert not (REPO_ROOT / "website").exists()
+    assert not (REPO_ROOT / ".github/workflows/aviato-docs.yml").exists()
+    assert not (REPO_ROOT / ".github/aviato.seed.json").exists()
+    assert (REPO_ROOT / "starter/docs-site/docs.yml").is_file()
+    assert (REPO_ROOT / "aviato/library/scaffold/files/wf-docs-python-library.yml").is_file()
 
 
 def test_docs_pin_sync_rejects_floating_source_pin(tmp_path: Path) -> None:

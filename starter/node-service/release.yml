@@ -28,7 +28,7 @@ jobs:
             echo "::error::Tag '${TAG}' is not X.Y.Z (optionally -alphaN/-betaN)"
             exit 1
           fi
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Create the GitHub release

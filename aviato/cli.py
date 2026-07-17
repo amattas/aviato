@@ -5,6 +5,7 @@ import atexit
 import contextlib
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -66,6 +67,11 @@ DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
 # data, like the markers above.
 DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
 DECLARATION_RELATIVE_PATH = ".github/aviato.yaml"
+
+
+def _declaration_ruleset_command(repo: str, declaration_path: str | Path) -> str:
+    """Render copyable ruleset guidance that preserves declaration overrides."""
+    return f"aviato apply-rulesets {shlex.quote(repo)} --apply --declaration {shlex.quote(str(declaration_path))}"
 
 
 def _library_repository(policy: dict[str, Any] | None = None) -> str:
@@ -421,9 +427,9 @@ def _drifted_rulesets(
     R9-21 (cycle 9, fixed cycle 11): ``extra_status_checks`` is the consumer's **override-resolved**
     required status checks (from ``resolved.settings``), NOT the base profile's. Using the base
     profile here reported phantom drift for a consumer that removed a pipeline via overrides, and the
-    suggested `apply-rulesets --profile` remediation would re-add a required check whose workflow no
-    longer runs (unmergeable PRs). CX#1: ``required_approvals`` is the resolved ``required_reviews``
-    override, flowed in for the same reason (ruleset + classic-protection agree on the count).
+    non-declaration remediation path would re-add a required check whose workflow no longer runs
+    (unmergeable PRs). CX#1: ``required_approvals`` is the resolved ``required_reviews`` override,
+    flowed in for the same reason (ruleset + classic-protection agree on the count).
     """
     from .rulesets import drifted_ruleset_names, render_all_rulesets
 
@@ -744,8 +750,8 @@ def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: Resol
         )
     print(
         "next: review the changes, then apply protections with "
-        f"`aviato apply-rulesets OWNER/REPO --apply --profile {args.profile}` "
-        "(--profile injects the profile's language verify check into the ruleset)."
+        f"`{_declaration_ruleset_command('OWNER/REPO', declaration_path)}` "
+        "(--declaration preserves the profile checks and repository-specific overrides)."
     )
     return 0
 
@@ -844,9 +850,11 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
     print(f"opened onboarding proposal for {slug} on branch {branch} ({len(files)} files).")
     for p in untouched:
         print(f"untouched (left for the operator): {p}")
+    checkout = "/path/to/checkout"
     print(
-        "next: review + merge the PR, then apply protections "
-        f"(`aviato complete-protection` or `aviato apply-rulesets OWNER/REPO --apply --profile {args.profile}`)."
+        "next: review + merge the PR, then from a checkout containing the declaration run both "
+        f"`aviato complete-protection {checkout}` and "
+        f"`{_declaration_ruleset_command(slug, f'{checkout}/{DECLARATION_RELATIVE_PATH}')}`."
     )
     return 0
 
@@ -945,8 +953,12 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     else:
         print("protected deployment environments: none")
 
-    print("next command:")
-    print(f"aviato apply-rulesets {args.target} --apply --profile {args.profile}")
+    guidance_repo = args.target if is_owner_repo_slug(args.target) else "OWNER/REPO"
+    guidance_declaration: str | Path = (
+        f"/path/to/checkout/{DECLARATION_RELATIVE_PATH}" if is_owner_repo_slug(args.target) else decl_path
+    )
+    print("next command after onboarding writes or updates the declaration:")
+    print(_declaration_ruleset_command(guidance_repo, guidance_declaration))
     return 0
 
 
@@ -2019,7 +2031,6 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
                 desired_settings=_desired_settings(resolved),
                 issue_key=SETTINGS_DRIFT_ISSUE_KEY,
                 drifted_rulesets=drifted_rulesets,
-                profile=declaration.profile,
                 # C12-3: the issue-body remediation points at apply-rulesets --declaration so the
                 # restored ruleset honours this consumer's overrides (the standard consumer path).
                 declaration_path=".github/aviato.yaml",
@@ -2280,7 +2291,8 @@ def build_parser() -> argparse.ArgumentParser:
     apply_source = apply.add_mutually_exclusive_group()
     apply_source.add_argument(
         "--profile",
-        help="Inject the profile's language verify status checks (e.g. ci / Python CI) into the branch ruleset.",
+        help="Base-profile input for a repository without a declaration. Once .github/aviato.yaml "
+        "exists, use --declaration so repository-specific overrides are preserved.",
     )
     apply_source.add_argument(
         "--declaration",

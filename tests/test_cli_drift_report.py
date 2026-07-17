@@ -137,7 +137,7 @@ def test_drift_report_reports_content_drifted_ruleset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # §5.6 (H-1): a CONTENT-drifted ruleset (same name, weakened) — not just a missing one — is
-    # detected end-to-end and surfaced with the --profile remediation guidance.
+    # detected end-to-end and surfaced with declaration-aware remediation guidance.
     import copy
 
     from aviato.cli import _profile_status_checks

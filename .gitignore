@@ -8,10 +8,8 @@ dist/
 .venv/
 .aviato/
 _wheelout/
-# Self-docs site dependencies/output (the docs SOURCES under website/ are committed).
-node_modules/
-website/site/
 starter/docs-site/site/
+/site/
 catalog.md
 repos-*.txt
 

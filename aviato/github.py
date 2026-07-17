@@ -220,9 +220,10 @@ def repo_security_settings(slug: str) -> dict[str, Any]:
     return sa if isinstance(sa, dict) else {}
 
 
-# Canonical PR merge-method toggle keys (top-level booleans on GET/PATCH /repos/{owner}/{repo}).
+# Canonical repo-level PR toggle keys (top-level booleans on GET/PATCH /repos/{owner}/{repo}).
+# allow_auto_merge rides along: same GET/PATCH shape as the merge-method toggles (§5.6/§5.7).
 # github_platform derives _REPOSITORY_SETTING_KEYS from this tuple — one copy, no drift.
-MERGE_METHOD_KEYS = ("allow_merge_commit", "allow_squash_merge", "allow_rebase_merge")
+MERGE_METHOD_KEYS = ("allow_merge_commit", "allow_squash_merge", "allow_rebase_merge", "allow_auto_merge")
 
 
 def repo_merge_methods(slug: str) -> dict[str, Any]:
@@ -367,13 +368,27 @@ def _unsupported_tag_metadata_rule(stderr: str) -> bool:
         return False
 
     rejection = r"(?:not\s+(?:a\s+)?(?:valid|supported|permitted)|an?\s+unsupported|unsupported|invalid)"
-    tag = r'["\']?tag_name_pattern["\']?'
+    tag = r'(?<![\w])["\']?tag_name_pattern["\']?(?![\w])'
     repository_rule_type = r"repository\s+rule\s+type"
+    rejection_predicate = rf"(?:is\s+)?{rejection}\b"
+    # The rejection must directly predicate tag_name_pattern. Bounded wildcards here can
+    # accidentally correlate a positive mention of this rule with a different rule's rejection
+    # later in the same error entry, authorizing an unrelated degraded retry.
     exact_type_rejections = (
-        re.compile(rf"{tag}[^\n;]{{0,80}}{rejection}[^\n;]{{0,40}}{repository_rule_type}", re.IGNORECASE),
-        re.compile(rf"{repository_rule_type}[^\n;]{{0,80}}{tag}[^\n;]{{0,40}}{rejection}", re.IGNORECASE),
+        re.compile(
+            rf"(?:rule\s+type\s+)?{tag}\s+{rejection_predicate}\s+{repository_rule_type}\b",
+            re.IGNORECASE,
+        ),
+        re.compile(rf"{repository_rule_type}\s+{tag}\s+{rejection_predicate}", re.IGNORECASE),
     )
-    path_rejection = re.compile(rf"rules/\d+/type\b[^\n;]{{0,80}}{tag}[^\n;]{{0,50}}{rejection}", re.IGNORECASE)
+    path_rejection = re.compile(
+        rf"rules/\d+/type\b[\s,:=-]*{tag}\s+{rejection_predicate}\s+(?:value|{repository_rule_type})\b",
+        re.IGNORECASE,
+    )
+    exact_string_rejection = re.compile(
+        r'\s*invalid\s+rule\s+["\']tag_name_pattern["\']\s*:\s*',
+        re.IGNORECASE,
+    )
 
     def text_entry_matches(entry: str) -> bool:
         return bool(path_rejection.search(entry) or any(pattern.search(entry) for pattern in exact_type_rejections))
@@ -389,6 +404,10 @@ def _unsupported_tag_metadata_rule(stderr: str) -> bool:
             parsed = None
         if isinstance(parsed, dict) and isinstance(parsed.get("errors"), list):
             for error in parsed["errors"]:
+                if isinstance(error, str):
+                    if exact_string_rejection.fullmatch(error):
+                        return True
+                    continue
                 if not isinstance(error, dict):
                     continue
                 field = error.get("field")
@@ -441,7 +460,8 @@ def _submit_ruleset(endpoint: str, method: str, payload: dict[str, Any]) -> None
         if payload_path is not None:
             payload_path.unlink(missing_ok=True)
     if result.returncode != 0:
-        raise GitHubAPIError(endpoint, result.returncode, result.stderr)
+        error = "\n".join(part for part in (result.stderr.strip(), result.stdout.strip()) if part)
+        raise GitHubAPIError(endpoint, result.returncode, error)
 
 
 def upsert_ruleset(slug: str, payload: dict[str, Any], *, apply: bool) -> RulesetApplyResult:

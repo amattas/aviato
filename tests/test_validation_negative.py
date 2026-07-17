@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -76,8 +77,11 @@ def test_status_bridge_context_drift_is_detected(repo_copy: Path) -> None:
 def test_project_version_drift_from_runtime_metadata_is_detected(repo_copy: Path) -> None:
     pyproject = repo_copy / "pyproject.toml"
     text = pyproject.read_text(encoding="utf-8")
-    drifted = text.replace('version = "0.3.0"', 'version = "9.9.9"', 1)
-    assert drifted != text, "fixture did not contain the expected project version"
+    # Match the current version rather than hardcoding it: a hardcoded literal turns
+    # every release version-bump PR into a spurious failure of this test.
+    version_line = re.search(r'^version = "[^"]+"$', text, flags=re.MULTILINE)
+    assert version_line is not None, "fixture did not contain a project version"
+    drifted = text.replace(version_line.group(0), 'version = "9.9.9"', 1)
     pyproject.write_text(drifted, encoding="utf-8")
 
     errors = validate(repo_copy)
@@ -197,14 +201,14 @@ def test_library_bootstrap_profile_mismatch_is_detected(repo_copy: Path) -> None
     assert any("missing Library bootstrap managed artifact" in e for e in errors)
 
 
-def test_library_seed_sidecar_exactly_matches_resolved_seed_outputs(repo_copy: Path) -> None:
+def test_library_without_seed_outputs_rejects_obsolete_sidecar(repo_copy: Path) -> None:
     sidecar = repo_copy / ".github" / "aviato.seed.json"
     stale_hash = "0" * 64
     sidecar.write_text(f'{{"website/docusaurus.config.js": "{stale_hash}"}}\n', encoding="utf-8")
 
     errors = validate(repo_copy)
 
-    assert any("Library seed sidecar" in error and "website/zensical.toml" in error for error in errors)
+    assert any("Library seed sidecar" in error and "no seed outputs" in error for error in errors)
 
 
 def test_static_ruleset_pattern_drift_is_detected(repo_copy: Path) -> None:
@@ -263,6 +267,7 @@ def test_branch_ruleset_approval_literal_drift_is_detected(repo_copy: Path) -> N
     [
         ".github/workflows/reusable-docker-ghcr.yml",
         "starter/docs-site/docs.yml",  # the starter kit's hand-copied comparator joins the battery
+        ".github/workflows/docs.yml",  # Aviato's own copy of the starter docs caller
     ],
 )
 def test_monotonic_alias_inline_drift_is_detected(repo_copy: Path, rel_path: str) -> None:
@@ -448,16 +453,6 @@ def test_docs_caller_workflow_run_name_drift_is_detected(repo_copy: Path) -> Non
     assert any("finding 40" in e for e in validate(repo_copy))
 
 
-def test_rendered_library_docs_caller_name_drift_is_detected(repo_copy: Path) -> None:
-    ci = repo_copy / ".github/workflows/aviato-ci.yml"
-    text = ci.read_text(encoding="utf-8")
-    ci.write_text(text.replace("name: Aviato Python Library\n", "name: Renamed Library CI\n", 1), encoding="utf-8")
-
-    errors = validate(repo_copy)
-
-    assert any(".github/workflows/aviato-docs.yml" in e and "Renamed Library CI" in e for e in errors)
-
-
 def test_missing_docs_name_parity_source_is_an_error(repo_copy: Path) -> None:
     missing = repo_copy / "aviato/library/scaffold/files/wf-python-library.yml"
     missing.unlink()
@@ -491,11 +486,16 @@ def test_monotonic_alias_timeout_is_one_actionable_error(repo_copy: Path, monkey
 def test_root_pyproject_floating_dev_extra_is_detected(repo_copy: Path) -> None:
     manifest = repo_copy / "pyproject.toml"
     text = manifest.read_text(encoding="utf-8")
-    manifest.write_text(text.replace('"ruff==0.15.16"', '"ruff>=0.15.16"'), encoding="utf-8")
+    # Pin-agnostic: derive the current exact ruff pin so dependabot bumps don't
+    # silently turn the replacement into a no-op and break the fixture.
+    pinned = re.search(r'"ruff==([0-9][0-9.]*)"', text)
+    assert pinned is not None, "pyproject dev extra must carry an exact ruff pin"
+    floating = f'"ruff>={pinned[1]}"'
+    manifest.write_text(text.replace(pinned[0], floating), encoding="utf-8")
 
     errors = validate(repo_copy)
 
-    assert any("pyproject.toml" in e and "ruff>=0.15.16" in e and "exact version" in e for e in errors)
+    assert any("pyproject.toml" in e and f"ruff>={pinned[1]}" in e and "exact version" in e for e in errors)
 
 
 def test_library_slug_copy_drift_is_detected(repo_copy: Path) -> None:
@@ -620,3 +620,50 @@ def test_docs_toolchain_pin_drift_is_flagged(repo_copy: Path) -> None:
     target.write_text(drifted)
     errors = validate(repo_copy)
     assert any("docs toolchain pins differ" in e for e in errors), errors
+
+
+def test_seed_dev_pin_drift_from_library_pyproject_is_flagged(repo_copy: Path) -> None:
+    # §11.3 guard (a): seeds must track the Library's own gate toolchain pins.
+    target = repo_copy / "aviato" / "library" / "scaffold" / "files" / "requirements-dev.txt.txt"
+    text = target.read_text(encoding="utf-8")
+    drifted = re.sub(r"^mypy==[0-9.]+$", "mypy==1.0.0", text, count=1, flags=re.MULTILINE)
+    assert drifted != text, "fixture did not contain a mypy pin"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("differs from the Library's own pyproject.toml" in e and "mypy" in e for e in errors), errors
+
+
+def test_starter_action_pin_drift_from_root_workflows_is_flagged(repo_copy: Path) -> None:
+    # §11.3 guard (b): starter masters must pin the same digests as the root workflows.
+    target = repo_copy / "starter" / "container-service" / "release.yml"
+    text = target.read_text(encoding="utf-8")
+    drifted = text.replace(
+        "docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0",
+        "docker/login-action@" + "0" * 40,
+    )
+    assert drifted != text, "fixture did not contain the expected login-action digest"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("docker/login-action" in e and ".github/workflows pins" in e for e in errors), errors
+
+
+def test_trivy_cli_version_drift_from_policy_is_flagged(repo_copy: Path) -> None:
+    # §11.3 guard (c): the setup-trivy version input must match policy.yml's tools.trivy_version.
+    target = repo_copy / ".github" / "workflows" / "reusable-docker-ghcr.yml"
+    text = target.read_text(encoding="utf-8")
+    drifted = text.replace("version: v0.72.0", "version: v0.55.0", 1)
+    assert drifted != text, "fixture did not contain the expected Trivy CLI version input"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("Trivy CLI version" in e for e in errors), errors
+
+
+def test_node_seed_devdep_drift_between_variants_is_flagged(repo_copy: Path) -> None:
+    # §11.3 guard (d): the ts/js seed manifests must agree on shared devDependency ranges.
+    target = repo_copy / "aviato" / "library" / "scaffold" / "files" / "package.json.js.txt"
+    text = target.read_text(encoding="utf-8")
+    drifted = text.replace('"eslint": "^10.0.0"', '"eslint": "^9.0.0"', 1)
+    assert drifted != text, "fixture did not contain the expected eslint range"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("node seed devDependencies differ" in e and "eslint" in e for e in errors), errors

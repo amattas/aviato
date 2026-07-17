@@ -47,6 +47,20 @@ def _rendered_python_library_workflow() -> JsonDict:
     return loaded
 
 
+def _rendered_python_library_docs_workflow() -> JsonDict:
+    artifacts = resolved_artifacts(
+        Registry(MODULE_SOURCE_ROOT),
+        "python-library",
+        _TEMPLATE_EXAMPLE_VARS["python-library"],
+        pin="1",
+        docs=True,
+    )
+    body = next(a.body for a in artifacts if a.output == ".github/workflows/aviato-docs.yml")
+    loaded = yaml.safe_load(body)
+    assert isinstance(loaded, dict)
+    return loaded
+
+
 def test_serializing_workflows_declare_per_repo_concurrency() -> None:
     # review #4/#26: the scheduled drift run, the release run, and the deploy publishes must
     # SERIALIZE per repo (queue, never cancel) so concurrent runs can't race a force-push / alias
@@ -353,7 +367,7 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
         {
             "name": "Deploy GitHub Pages",
             "id": "deployment",
-            "uses": "actions/deploy-pages@v4",
+            "uses": "actions/deploy-pages@v5",
         }
     ], "the privileged deploy job must execute no consumer commands"
 
@@ -372,10 +386,10 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
     assert wf["concurrency"]["cancel-in-progress"] is False
 
 
-def test_rendered_library_docs_caller_enables_pages_and_grants_only_call_union() -> None:
-    caller = _load("aviato-docs.yml")
+def test_rendered_consumer_docs_caller_defaults_pages_off_and_grants_only_call_union() -> None:
+    caller = _rendered_python_library_docs_workflow()
     docs = caller["jobs"]["docs"]
-    assert docs["with"]["serve-pages"] is True
+    assert docs["with"]["serve-pages"] is False
     assert docs["permissions"] == {
         "contents": "write",
         "pages": "write",
@@ -383,36 +397,35 @@ def test_rendered_library_docs_caller_enables_pages_and_grants_only_call_union()
     }
 
 
-def test_starter_docs_deploys_exact_branch_artifact_after_push() -> None:
-    starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
-    assert starter["permissions"] == {}
-    assert starter["concurrency"]["cancel-in-progress"] is False
-    assert "${{ github.repository }}" in starter["concurrency"]["group"]
-    assert starter["jobs"]["build"]["permissions"] == {"contents": "read", "pages": "read"}
-    assert starter["jobs"]["push"]["permissions"] == {"contents": "write"}
-    deploy = starter["jobs"]["deploy"]
-    assert set(deploy["needs"]) == {"build", "push"}
-    assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
-    assert all("run" not in step for step in deploy["steps"])
-    body = (REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8")
-    assert 'git archive "refs/heads/${DOCS_BRANCH}"' in body
-    assert "refusing escaping symlink" in body
-    assert "actions/upload-pages-artifact@" in body
+# Both the starter master and Aviato's own copy of it share one contract.
+_DOCS_SITE_WORKFLOWS = ["starter/docs-site/docs.yml", ".github/workflows/docs.yml"]
 
 
-def test_starter_invalid_tag_skips_every_publish_stage(tmp_path: Path) -> None:
-    starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
-    build = starter["jobs"]["build"]
-    assert build["outputs"]["publish"] == "${{ steps.release.outputs.publish }}"
-    steps = build["steps"]
+@pytest.mark.parametrize("rel_path", _DOCS_SITE_WORKFLOWS)
+def test_docs_site_single_job_pushes_versioned_branch_only(rel_path: str) -> None:
+    body = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
+    wf = yaml.safe_load(body)
+    assert wf["permissions"] == {}
+    assert wf["concurrency"]["cancel-in-progress"] is False
+    assert "${{ github.repository }}" in wf["concurrency"]["group"]
+    # Classic mike setup: one job pushes versions to the docs branch and Pages
+    # serves that branch directly — no artifact upload/deploy jobs, and the
+    # branch-writing job is the only privilege holder.
+    assert set(wf["jobs"]) == {"docs"}
+    assert wf["jobs"]["docs"]["permissions"] == {"contents": "write"}
+    assert 'mike deploy --push --branch "${DOCS_BRANCH}"' in body
+    assert "upload-pages-artifact" not in body
+    assert "deploy-pages" not in body
+
+
+@pytest.mark.parametrize("rel_path", _DOCS_SITE_WORKFLOWS)
+def test_docs_site_invalid_tag_skips_every_publish_step(rel_path: str, tmp_path: Path) -> None:
+    starter = yaml.safe_load((REPO_ROOT / rel_path).read_text(encoding="utf-8"))
+    steps = starter["jobs"]["docs"]["steps"]
     release_index = next(i for i, step in enumerate(steps) if step.get("id") == "release")
     release = steps[release_index]
     for step in steps[release_index + 1 :]:
         assert "steps.release.outputs.publish == 'true'" in str(step.get("if", "")), step
-    assert "needs.build.outputs.publish == 'true'" in str(starter["jobs"]["push"]["if"])
-    deploy_if = str(starter["jobs"]["deploy"]["if"])
-    assert "needs.build.outputs.publish == 'true'" in deploy_if
-    assert "needs.push.result == 'success'" in deploy_if
 
     output = tmp_path / "github-output"
     env = os.environ | {
@@ -425,18 +438,29 @@ def test_starter_invalid_tag_skips_every_publish_stage(tmp_path: Path) -> None:
     assert output.read_text(encoding="utf-8").splitlines() == ["publish=false"]
 
 
+@pytest.mark.parametrize("rel_path", _DOCS_SITE_WORKFLOWS)
 @pytest.mark.parametrize(
-    ("ref_type", "ref_name", "expected"),
-    [("tag", "1.2.3", ["publish=true", "tag=1.2.3"]), ("branch", "main", ["publish=true", "tag="])],
+    ("ref_type", "ref_name", "input_version", "expected"),
+    [
+        ("tag", "1.2.3", "", ["publish=true", "tag=1.2.3"]),
+        ("branch", "main", "", ["publish=true", "tag="]),
+        # workflow_dispatch seeding: an explicit version input publishes like a tag …
+        ("branch", "main", "1.2.3", ["publish=true", "tag=1.2.3"]),
+        # … and a malformed one skips every publish step, same as a bad tag.
+        ("branch", "main", "not-a-version", ["publish=false"]),
+    ],
 )
-def test_starter_valid_refs_publish(ref_type: str, ref_name: str, expected: list[str], tmp_path: Path) -> None:
-    starter = yaml.safe_load((REPO_ROOT / "starter" / "docs-site" / "docs.yml").read_text(encoding="utf-8"))
-    release = next(step for step in starter["jobs"]["build"]["steps"] if step.get("id") == "release")
+def test_docs_site_valid_refs_publish(
+    rel_path: str, ref_type: str, ref_name: str, input_version: str, expected: list[str], tmp_path: Path
+) -> None:
+    starter = yaml.safe_load((REPO_ROOT / rel_path).read_text(encoding="utf-8"))
+    release = next(step for step in starter["jobs"]["docs"]["steps"] if step.get("id") == "release")
     output = tmp_path / "github-output"
     env = os.environ | {
         "GITHUB_OUTPUT": str(output),
         "GITHUB_REF_TYPE": ref_type,
         "GITHUB_REF_NAME": ref_name,
+        "INPUT_VERSION": input_version,
     }
     result = subprocess.run(["bash", "-c", release["run"]], env=env, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
@@ -469,7 +493,7 @@ def test_pypi_reusable_only_builds_vetted_artifact_and_local_caller_publishes() 
     caller_body = (SCAFFOLD_FILES / "wf-python-library.yml").read_text(encoding="utf-8")
     assert "consumer-publisher-present: true" in caller_body
     assert "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b" in caller_body
-    assert "actions/download-artifact@v7" in caller_body
+    assert "actions/download-artifact@v8" in caller_body
     assert "environment: pypi" in caller_body
     assert "id-token: write" in caller_body and "attestations: write" in caller_body
     caller = _rendered_python_library_workflow()
@@ -603,6 +627,8 @@ def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
     credentialed_push_jobs = {
         ("reusable-release.yml", "release"),
         ("reusable-docs-pages.yml", "push"),
+        # Aviato's own starter-style docs caller: mike pushes gh-pages from its checkout.
+        ("docs.yml", "docs"),
     }
     for path in sorted(WORKFLOWS.glob("*.yml")):
         wf = _load(path.name)
@@ -1198,7 +1224,11 @@ def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
     }
     steps = resolver["steps"]
     canonicalize_index = next(i for i, step in enumerate(steps) if step.get("id") == "canonicalize")
-    checkout_index = next(i for i, step in enumerate(steps) if step.get("uses") == "actions/checkout@v4")
+    # Match any checkout major: this guard is about ref/SHA binding, and a
+    # hardcoded pin turns every checkout version bump into a spurious failure.
+    checkout_index = next(
+        i for i, step in enumerate(steps) if str(step.get("uses", "")).startswith("actions/checkout@")
+    )
     assert canonicalize_index < checkout_index, "bare tags must be canonicalized before checkout resolves them"
     canonicalize_script = steps[canonicalize_index]["run"]
     assert 'canonical_ref="refs/tags/${REQUESTED_REF}"' in canonicalize_script
@@ -1210,7 +1240,9 @@ def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
     canonical_ref = "${{ needs.resolve-target.outputs.canonical-ref }}"
     analyzed_sha = "${{ needs.resolve-target.outputs.analyzed-sha }}"
     for job_name in ("codeql", "dependency-review", "dependency-scan", "secret-scan"):
-        checkout = next(step for step in jobs[job_name]["steps"] if step.get("uses") == "actions/checkout@v4")
+        checkout = next(
+            step for step in jobs[job_name]["steps"] if str(step.get("uses", "")).startswith("actions/checkout@")
+        )
         assert checkout["with"]["ref"] == analyzed_sha, job_name
 
     analyze = next(step for step in jobs["codeql"]["steps"] if step.get("uses") == "github/codeql-action/analyze@v4")
@@ -1236,11 +1268,6 @@ def test_security_ref_and_sarif_evidence_share_one_resolved_target() -> None:
 
 def test_docs_security_ref_uses_full_tag_and_release_gate_sha() -> None:
     """Out-of-band docs scans must use the exact target already accepted by the release gate."""
-    local_security = _load("aviato-docs.yml")["jobs"]["security"]
-    assert "release-gate" in local_security["needs"]
-    assert local_security["with"]["ref"] == "refs/tags/${{ needs.resolve.outputs.tag }}"
-    assert local_security["with"]["sha"] == "${{ needs.release-gate.outputs.gated-sha }}"
-
     for caller in sorted(SCAFFOLD_FILES.glob("wf-docs-*.yml")):
         body = caller.read_text(encoding="utf-8")
         security_block = body[body.index("\n  security:") : body.index("\n  docs:")]

@@ -20,6 +20,12 @@ release:
 
 branch:
   required_approvals_default: 1
+
+tools:
+  # §11.3: single source of truth for the Trivy CLI version the GHCR publish workflow installs
+  # (aquasecurity/setup-trivy `version:` input). Bump here; validation binds the workflow copy.
+  trivy_version: "v0.72.0"
+
 # R4-10: the ruleset `name` literals live in the ruleset JSON templates (their single source of
 # truth); the previously-duplicated `rulesets.*_name` policy keys were never read by the renderer
 # or settings, so they were a drift hazard and have been removed.

@@ -92,7 +92,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
     steps:
       - name: Checkout consumer repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           # C12-W2: build from the IMMUTABLE gated commit, not the mutable tag.
@@ -313,13 +313,16 @@ jobs:
 
       - name: Configure GitHub Pages
         if: ${{ inputs.serve-pages }}
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Upload GitHub Pages artifact
         if: ${{ inputs.serve-pages }}
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: /tmp/aviato-pages-site
+          # v4+ excludes dotfiles by default; keep v3 semantics so a built site's
+          # dotfiles (e.g. .nojekyll) are never silently dropped from the artifact.
+          include-hidden-files: true
 
   # C12-W4: the ONLY job with contents:write. Runs no consumer code — it verifies the
   # bundle and fast-forward-pushes the docs branch. Enabling Pages to SERVE this branch
@@ -332,7 +335,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: true
           fetch-depth: 1
@@ -376,4 +379,4 @@ jobs:
     steps:
       - name: Deploy GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

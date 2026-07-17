@@ -9,7 +9,7 @@ variables:
   # the Library now runs the gate it mandates for consumers.
   - {name: run-typecheck, type: string, required: false, default: "true"}
   - {name: typecheck-command, type: string, required: false, default: "python -m mypy --strict aviato tests"}
-  # Self-docs: the API-reference emit command targets the import package.
+  # Used only when the optional docs capability is enabled for this profile.
   - {name: import-name, type: string}
   # seeds the zensical.toml site metadata (seed-once; unset leaves the placeholder)
   - {name: owner, type: string, required: false}

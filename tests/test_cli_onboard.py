@@ -58,9 +58,11 @@ def test_onboard_lists_composed_pipelines_and_variables(capsys: pytest.CaptureFi
     assert "security-baseline" in out  # always-on baseline
     assert "pypi-publish" in out  # python-library deploy
     assert "distribution-name" in out  # required variable
-    # The apply-rulesets guidance must carry --profile so the operator applies the
-    # profile's language verify check (not just the weaker common ruleset).
-    assert "--profile python-library" in out
+    # A fresh preview has no declaration yet, so it must sequence declaration creation
+    # before the override-aware ruleset command instead of recommending --profile.
+    assert "after onboarding writes or updates the declaration" in out
+    assert ("aviato apply-rulesets owner/repo --apply --declaration /path/to/checkout/.github/aviato.yaml") in out
+    assert "apply-rulesets owner/repo --apply --profile" not in out
 
 
 def test_onboard_unknown_profile_fails(capsys: pytest.CaptureFixture[str]) -> None:

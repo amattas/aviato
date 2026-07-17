@@ -1,11 +1,14 @@
-# Docs — Zensical + mike, versioned onto the gh-pages branch and served by Pages Actions.
-# main push  -> `mike deploy dev`             (rolling dev docs)
-# tag push   -> `mike deploy X.Y.Z latest`    (latest moves only for the highest release)
-# Copy to: .github/workflows/docs.yml ; site source lives in website/.
-# One-time: repo Settings → Pages → Source: GitHub Actions.
+# Docs — Zensical + mike (versioned), published to the gh-pages branch.
+#   push to main        → deploys the "dev" version
+#   tag push X.Y.Z      → deploys "X.Y.Z" (latest moves only for the highest release)
+#   workflow_dispatch   → deploys an explicit version (one-time seeding/fixups)
+# mike stores every built version on the gh-pages branch; GitHub Pages serves
+# that branch directly (Pages source = Deploy from a branch → gh-pages), so no
+# artifact upload/deploy steps are needed here.
+# Copy to: .github/workflows/docs.yml ; zensical.toml sits at the repo root,
+# requirements.txt → requirements-docs.txt at the repo root, site source in docs/.
 #
 # CUSTOMIZE:
-#  - DOCS_DIR if the Zensical site doesn't live in website/
 #  - the PYTHON API DOCS block for Python repos (pydoc-markdown)
 name: Docs
 
@@ -14,45 +17,52 @@ on:
     branches: [main]
     tags: ["[0-9]*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to deploy (e.g. 1.0.1); latest moves only if it is the highest release. Empty = dev."
+        required: false
+        default: ""
 
 permissions: {}
 
 env:
-  DOCS_DIR: website
   DOCS_BRANCH: gh-pages
 
 concurrency:
-  group: pages-latest-${{ github.repository }}
+  group: pages-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  docs:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pages: read
-    outputs:
-      publish: ${{ steps.release.outputs.publish }}
+      contents: write # mike commits versions to the gh-pages branch
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
-          persist-credentials: false
-          fetch-depth: 0
+          # mike deploy --push writes the gh-pages branch from this checkout, so
+          # this job deliberately keeps the token (it is the only privilege holder).
+          persist-credentials: true
+          fetch-depth: 0 # mike needs the gh-pages branch; the monotonic guard needs every tag
           fetch-tags: true
       - name: Validate publish ref
         id: release
         shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
           publish=true
           tag=""
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             tag="${GITHUB_REF_NAME}"
-            if [[ ! "${tag}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$ ]]; then
-              echo "::warning::not a policy release tag (${tag}); skipping every docs publish stage"
-              publish=false
-              tag=""
-            fi
+          elif [ -n "${INPUT_VERSION:-}" ]; then
+            tag="${INPUT_VERSION}"
+          fi
+          if [ -n "${tag}" ] && [[ ! "${tag}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta)[0-9]+)?$ ]]; then
+            echo "::warning::not a policy release tag (${tag}); skipping every docs publish stage"
+            publish=false
+            tag=""
           fi
           echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
           if [ "${publish}" = "true" ]; then
@@ -64,43 +74,28 @@ jobs:
           python-version: "3.12"
       - name: Install docs toolchain (exact pins)
         if: ${{ steps.release.outputs.publish == 'true' }}
-        run: python -m pip install --quiet -r "${DOCS_DIR}/requirements.txt"
-      - name: Fetch existing docs branch
-        if: ${{ steps.release.outputs.publish == 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          set +e
-          git ls-remote --exit-code --heads "${remote}" "refs/heads/${DOCS_BRANCH}" >/dev/null
-          status=$?
-          set -e
-          if [ "${status}" -eq 0 ]; then
-            git fetch "${remote}" "+refs/heads/${DOCS_BRANCH}:refs/heads/${DOCS_BRANCH}"
-          elif [ "${status}" -eq 2 ]; then
-            echo "No existing ${DOCS_BRANCH} branch (first docs deploy)."
-          else
-            echo "::error::could not query origin for ${DOCS_BRANCH} (exit ${status}); refusing an orphan branch."
-            exit 1
-          fi
+        run: python -m pip install --quiet -r requirements-docs.txt
       # PYTHON API DOCS (optional): generate an API reference from docstrings.
       # - name: Generate API reference
+      #   if: ${{ steps.release.outputs.publish == 'true' }}
       #   run: |
       #     python -m pip install --quiet -e . "pydoc-markdown==4.8.2"
-      #     mkdir -p ${DOCS_DIR}/docs/api
-      #     pydoc-markdown -I src -p PACKAGE > ${DOCS_DIR}/docs/api/reference.md
-      - name: Build versioned docs branch
+      #     mkdir -p docs/api
+      #     pydoc-markdown -I src -p PACKAGE > docs/api/reference.md
+      - name: Deploy version with mike
         if: ${{ steps.release.outputs.publish == 'true' }}
-        working-directory: ${{ env.DOCS_DIR }}
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            TAG="${{ steps.release.outputs.tag }}"
-            # §8.14 monotonic guard: this comparator is held to parity with core by validation.
-            cat > /tmp/highest.py <<'PY'
+          if [ -z "${TAG}" ]; then
+            mike deploy --push --branch "${DOCS_BRANCH}" dev
+            exit 0
+          fi
+          # §8.14 monotonic guard: this comparator is held to parity with core by validation.
+          cat > /tmp/highest.py <<'PY'
           import sys, re
           rel = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(\d+))?$")
           rank = {None: 2, "beta": 1, "alpha": 0}
@@ -111,98 +106,11 @@ jobs:
           keys = [k for k in map(key, sys.stdin) if k]
           print("true" if ck and max(keys + [ck]) == ck else "false")
           PY
-            HIGHEST="$(git tag --list | python3 /tmp/highest.py "${TAG}")"
-            if [ "${HIGHEST}" = "true" ]; then
-              mike deploy --branch "${DOCS_BRANCH}" --update-aliases "${TAG}" latest
-              mike set-default --branch "${DOCS_BRANCH}" latest
-            else
-              echo "::warning::${TAG} is not the highest release; not moving latest."
-              mike deploy --branch "${DOCS_BRANCH}" "${TAG}"
-            fi
+          HIGHEST="$(git tag --list | python3 /tmp/highest.py "${TAG}")"
+          if [ "${HIGHEST}" = "true" ]; then
+            mike deploy --push --branch "${DOCS_BRANCH}" --update-aliases "${TAG}" latest
+            mike set-default --push --branch "${DOCS_BRANCH}" latest
           else
-            mike deploy --branch "${DOCS_BRANCH}" dev
+            echo "::warning::${TAG} is not the highest release; not moving latest."
+            mike deploy --push --branch "${DOCS_BRANCH}" "${TAG}"
           fi
-      - name: Bundle docs branch
-        if: ${{ steps.release.outputs.publish == 'true' }}
-        run: git bundle create /tmp/docs.bundle "refs/heads/${DOCS_BRANCH}"
-      - uses: actions/upload-artifact@v7
-        if: ${{ steps.release.outputs.publish == 'true' }}
-        with:
-          name: starter-docs-branch
-          path: /tmp/docs.bundle
-          retention-days: 1
-          if-no-files-found: error
-      - name: Materialize exact docs branch tree
-        if: ${{ steps.release.outputs.publish == 'true' }}
-        env:
-          PAGES_ROOT: /tmp/aviato-pages-site
-        run: |
-          set -euo pipefail
-          rm -rf "${PAGES_ROOT}"
-          mkdir -p "${PAGES_ROOT}"
-          git archive "refs/heads/${DOCS_BRANCH}" | tar -x -C "${PAGES_ROOT}"
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ["PAGES_ROOT"]).resolve()
-          for path in root.rglob("*"):
-              if not path.is_symlink():
-                  continue
-              try:
-                  (path.parent / os.readlink(path)).resolve(strict=False).relative_to(root)
-              except (OSError, RuntimeError, ValueError):
-                  raise SystemExit(f"refusing escaping symlink in Pages tree: {path.relative_to(root)}")
-          PY
-      - uses: actions/configure-pages@v5
-        if: ${{ steps.release.outputs.publish == 'true' }}
-      - uses: actions/upload-pages-artifact@v3
-        if: ${{ steps.release.outputs.publish == 'true' }}
-        with:
-          path: /tmp/aviato-pages-site
-
-  push:
-    needs: build
-    if: ${{ needs.build.outputs.publish == 'true' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: true
-          fetch-depth: 1
-      - uses: actions/download-artifact@v8
-        with:
-          name: starter-docs-branch
-          path: /tmp
-      - name: Verify and fast-forward push
-        run: |
-          set -euo pipefail
-          git bundle verify /tmp/docs.bundle
-          git fetch /tmp/docs.bundle "refs/heads/${DOCS_BRANCH}:refs/remotes/bundle/${DOCS_BRANCH}"
-          if git fetch origin "+refs/heads/${DOCS_BRANCH}:refs/remotes/origin/${DOCS_BRANCH}" 2>/dev/null; then
-            git merge-base --is-ancestor "refs/remotes/origin/${DOCS_BRANCH}" "refs/remotes/bundle/${DOCS_BRANCH}" || {
-              echo "::error::docs bundle is not a fast-forward"; exit 1;
-            }
-          fi
-          git push origin "refs/remotes/bundle/${DOCS_BRANCH}:refs/heads/${DOCS_BRANCH}"
-
-  deploy:
-    needs: [build, push]
-    if: >-
-      ${{ always()
-      && needs.build.outputs.publish == 'true'
-      && needs.build.result == 'success'
-      && needs.push.result == 'success' }}
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4

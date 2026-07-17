@@ -38,7 +38,7 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       release: ${{ steps.tag.outputs.release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # finding 6: resolve only reads local tags after checkout — never persist
           # the job token into .git/config.

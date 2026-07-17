@@ -10,7 +10,7 @@ on:
       actionlint-version:
         required: false
         type: string
-        default: "1.7.4"
+        default: "1.7.12"
       actionlint-sha256:
         description: >-
           SHA256 of actionlint_<version>_linux_amd64.tar.gz. The download is verified
@@ -18,13 +18,13 @@ on:
           the version.
         required: false
         type: string
-        default: "fc0a6886bbb9a23a39eeec4b176193cadb54ddbe77cdbb19b637933919545395"
+        default: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
       yamllint-version:
         description: Exact yamllint version to install (§11.3 — a package index has no
           commit digest, so an exact version is the strongest reproducible pin here).
         required: false
         type: string
-        default: "1.35.1"
+        default: "1.38.0"
       aviato-ref:
         description: >-
           Pinned Aviato Library ref (version X.Y.Z, a prerelease, or floating major N) to install
@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 

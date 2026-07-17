@@ -8,7 +8,7 @@ Per-target backlogs live under `pypi/`, `ghcr/`, `docs-site/`, and `apple/`.
 
 ## Open
 
-- (none)
+- [external verification] Complete common deployment plug-in definition-of-done and manual rollback/yank proof after target-specific gates pass. — trace: §11.6, §13.5, SEC-005
 
 ## Settled — do not reopen
 

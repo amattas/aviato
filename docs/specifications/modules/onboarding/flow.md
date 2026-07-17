@@ -37,6 +37,21 @@ only for intentional offline/test scaffolds and must be named as such.
 **Guards:** never change an already-declared profile to a different one without
 an explicit migrate override; enumerate files left untouched (seed-once,
 unmanaged) in the proposal.
+**Solo-maintainer review exception (normative):**
+Full protection resolves its required-review count from the profile plus the
+consumer declaration. The profile default remains one approval. A repository
+may declare `overrides.settings.default_branch.required_reviews` as
+`required_reviews: 0` only while it has no independent eligible reviewer and
+the sole eligible reviewer cannot approve their own proposal. This is a
+liveness exception, not bypass authority: the pull-request, required-check,
+CodeQL, review-thread, stale-review, deletion, non-fast-forward,
+active-enforcement, and no-bypass protections remain unchanged. Remove the
+override before or in the same settings change that makes another reviewer
+eligible, restoring the profile default of one approval without an unprotected
+interval. All onboarding completion guidance uses
+`--declaration .github/aviato.yaml`, never `--profile`, so the apply path
+preserves these repository-specific settings. Fresh previews sequence writing
+or merging the declaration before that command.
 For `python-library`, the managed CI caller includes the consumer-local `pypi`
 environment job required by PyPI Trusted Publishing. Register that exact caller
 path and environment with PyPI/TestPyPI after onboarding. The reusable build
@@ -56,6 +71,13 @@ as **DEGRADED**; deletion and non-fast-forward protections, conditions,
 enforcement, and the no-bypass posture remain intact. No other API, authentication,
 network, malformed-response, or validation failure is downgraded. A later failure
 does not roll back earlier successful mutations, which are reported as they occur.
+The correlated response may be a structured type-error object or a whole-entry
+string inside `errors`. The observed literal was
+`Invalid rule 'tag_name_pattern':`; the accepted whole-entry grammar is
+`^\s*invalid\s+rule\s+["']tag_name_pattern["']\s*:\s*$`. Matching is
+case-insensitive, accepts either single or double quotes, and permits
+surrounding whitespace, including terminal whitespace after the colon. Matching
+examines one error entry at a time and never combines entries.
 
 ```mermaid
 flowchart TD

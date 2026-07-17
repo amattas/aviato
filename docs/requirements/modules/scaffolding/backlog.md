@@ -6,11 +6,8 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- (none)
+- [external verification] The 2026-07-16 seed refresh moved the node devDependency majors (eslint/@eslint/js ^10, eslint-plugin-security ^4, vitest/@vitest/coverage-v8 ^4, typescript ^7 — the native compiler); the seeded flat `eslint.config.mjs` and tsconfig were verified compatible on paper only. On the first fresh node scaffold, run `npm install && npm run lint && npm run typecheck && npm test` to prove the seeded config actually works on the new majors. — source: 2026-07-16 dependency-matrix audit · aviato/library/scaffold/files/package.json.ts.txt
 
-## Resolved by 2026-07-12 hardening plan
-
-- Onboarding derives the LICENSE owner, and validation enforces required scaffold-constant/pin source presence and parity.
 
 ## Settled — do not reopen
 

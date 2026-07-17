@@ -123,7 +123,7 @@ def writeback_variables(specs: Sequence[VariableSpec], resolved: Mapping[str, An
     *declared* ``secret: true`` (here, and in the render path's secret-name filter).
     It does NOT content-inspect values: a token pasted into a plain ``string``
     variable or into ``overrides`` persists undetected. That residual is within the
-    consumer's own trust boundary and is documented (SECURITY.md) rather than
+    consumer's own trust boundary and is documented in the threat model rather than
     heuristically guessed at.
     """
     # §8.15: refuse to persist a secret that actually carries a VALUE. resolve_variables

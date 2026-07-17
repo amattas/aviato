@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=080d7ea6f20cf2b2b220d3471c519ac155ab6690b603320c5e8f6f17c3973bb2 inputs=c87eec0cc6164b4a0fb591c6236ef87133960db010cc737ecb6d7c9680304085
+# aviato:managed profile=aviato-library version=0 hash=ae4547a82dfe7fa0b3e5820a7c2bada1c203780d3228961692fb8b032fa3648c inputs=307e43b687a78cf99b23e701676ea5cb05fffc648763d97e0fe72226a435e556
 name: Aviato Python Library
 
 on:
@@ -143,7 +143,7 @@ jobs:
       attestations: write
     steps:
       - name: Download vetted build artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.pypi.outputs.artifact-name }}
           path: .

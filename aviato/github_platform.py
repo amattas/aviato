@@ -1025,8 +1025,10 @@ class GitHubPlatform:
                 raise UnmodeledProtectionError(
                     f"refusing to PUT classic branch protection on {repo}@{branch}: its branch "
                     f"protection is enforced by a ruleset, which this settings reconcile cannot "
-                    f"write. Reconcile the ruleset with `aviato apply-rulesets {repo}` for {drifted}, "
-                    f"then re-run."
+                    f"write. From the consumer repository root, review `aviato apply-rulesets "
+                    f"{repo} --declaration .github/aviato.yaml`, then apply it with "
+                    f"`aviato apply-rulesets {repo} --declaration .github/aviato.yaml --apply` "
+                    f"for {drifted} before re-running."
                 )
         else:
             api_payload = to_branch_protection_payload(payload)

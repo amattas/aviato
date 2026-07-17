@@ -275,8 +275,13 @@ def test_apply_settings_fails_closed_when_ruleset_owns_protection_and_desired_di
     )
     calls: list[list[str]] = []
     monkeypatch.setattr(github, "run", _record_run(calls))
-    with pytest.raises(UnmodeledProtectionError):
+    with pytest.raises(UnmodeledProtectionError) as exc_info:
         GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "required_reviews": 2})
+    guidance = str(exc_info.value)
+    assert "from the consumer repository root" in guidance.lower()
+    assert "`aviato apply-rulesets o/r --declaration .github/aviato.yaml`" in guidance
+    assert "`aviato apply-rulesets o/r --declaration .github/aviato.yaml --apply`" in guidance
+    assert "apply-rulesets o/r --profile" not in guidance
     assert not any("PUT" in c for c in calls), "must not write the wrong (classic) surface"
 
 
@@ -741,12 +746,14 @@ def test_map_repository_settings_from_live() -> None:
     repo = {
         "allow_merge_commit": True,
         "allow_squash_merge": False,
+        "allow_auto_merge": True,
         # allow_rebase_merge absent → omitted (never a false destructive), like map_security_settings
         "unrelated": 1,
     }
     assert map_repository_settings(repo) == {
         "allow_merge_commit": True,
         "allow_squash_merge": False,
+        "allow_auto_merge": True,
     }
 
 
@@ -754,8 +761,8 @@ def test_to_repository_payload_subset_and_shape() -> None:
     from aviato.github_platform import to_repository_payload
 
     # Only keys present in the desired dict appear in the PATCH body, mapped 1:1 to top-level booleans.
-    payload = to_repository_payload({"allow_merge_commit": True, "allow_squash_merge": False})
-    assert payload == {"allow_merge_commit": True, "allow_squash_merge": False}
+    payload = to_repository_payload({"allow_merge_commit": True, "allow_auto_merge": True})
+    assert payload == {"allow_merge_commit": True, "allow_auto_merge": True}
     assert "allow_rebase_merge" not in payload
     assert to_repository_payload({}) == {}
 
@@ -1079,12 +1086,18 @@ def test_read_settings_includes_merge_methods(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         github,
         "repo_merge_methods",
-        lambda repo: {"allow_merge_commit": False, "allow_squash_merge": True, "allow_rebase_merge": True},
+        lambda repo: {
+            "allow_merge_commit": False,
+            "allow_squash_merge": True,
+            "allow_rebase_merge": True,
+            "allow_auto_merge": False,
+        },
     )
     settings = GitHubPlatform().read_settings("o/r")
     assert settings["allow_merge_commit"] is False
     assert settings["allow_squash_merge"] is True
     assert settings["allow_rebase_merge"] is True
+    assert settings["allow_auto_merge"] is False
 
 
 def test_read_settings_composes_gh_responses(monkeypatch: pytest.MonkeyPatch) -> None:

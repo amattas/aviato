@@ -16,7 +16,7 @@ first; the release workflow refuses a tag that doesn't match.
 | Python app/tool (no PyPI) | `python-app/` same three files | same destinations |
 | Node service | `node-service/ci.yml`, `release.yml`, `dependabot.yml`, `npmrc` | same destinations; `npmrc` → `.npmrc` at repo root |
 | Container service | `container-service/release.yml` **plus** the `ci.yml`+`dependabot.yml` for the repo's language | `.github/workflows/release.yml` |
-| Docs site (Zensical) | `docs-site/docs.yml` → `.github/workflows/docs.yml`; `zensical.toml`, `requirements.txt`, `docs/` → `website/` | full site scaffold — see below |
+| Docs site (Zensical) | `docs-site/docs.yml` → `.github/workflows/docs.yml`; `zensical.toml` → repo root; `requirements.txt` → `requirements-docs.txt` at repo root; `docs/` → `docs/` | full site scaffold — see below |
 | Swift app | `swift-app/ci.yml`, `dependabot.yml` | same destinations |
 
 Every workflow has a `# CUSTOMIZE` comment block at the top listing the lines
@@ -30,31 +30,51 @@ toolchain. Versioning is via `mike`, deployed onto the `gh-pages` branch — the
 `latest` alias lives at the root, `dev` deploys from every push to `main`, and
 each release tag additionally deploys its exact version (`mike` moves `latest`
 only when the tag is the highest release; older tags land under their own
-version path without touching `latest`). Fill the ALL-CAPS placeholders in
-`zensical.toml` (`PROJECT`/`OWNER`/`REPO`), and gitignore `website/site` (the
-local build output dir). Python repos: uncomment the pydoc-markdown block in
-`docs.yml` for docstring-generated API docs.
+version path without touching `latest`). The site lives at the repo root:
+`zensical.toml` next to `pyproject.toml`/`package.json`, content in `docs/`.
+Fill the ALL-CAPS placeholders in `zensical.toml` (`PROJECT`/`OWNER`/`REPO`),
+and gitignore `site/` (the local build output dir). One-time: repo Settings →
+Pages → Source: Deploy from a branch → `gh-pages`. Python repos: uncomment the
+pydoc-markdown block in `docs.yml` for docstring-generated API docs.
 
 ### Migrating a Docusaurus docs site
 
-1. Delete `website/{package.json,package-lock.json,docusaurus.config.js,sidebars.js,.npmrc,src}`.
-2. Keep `website/docs/`.
-3. Add `zensical.toml` + `requirements.txt` from this kit.
-4. Swap in the new `docs.yml`.
-5. Delete `versioned_docs/`, `versioned_sidebars/`, `versions.json` — version
+1. Move `website/docs/` to `docs/` at the repo root, then delete `website/`
+   (`package.json`, `package-lock.json`, `docusaurus.config.js`, `sidebars.js`,
+   `.npmrc`, `src`, …).
+2. Add `zensical.toml` (repo root) + `requirements.txt` (→ `requirements-docs.txt`)
+   from this kit.
+3. Swap in the new `docs.yml`.
+4. Delete `versioned_docs/`, `versioned_sidebars/`, `versions.json` — version
    history now lives on the `gh-pages` branch via `mike`, not in the source tree.
-6. Set Pages source to **GitHub Actions** (Settings → Pages) so the workflow can
-   deploy the exact versioned branch artifact after its branch push succeeds.
-7. Then run once, from `website/`, to seed `gh-pages` with the existing
+5. Set Pages source to **Deploy from a branch → `gh-pages`** (Settings → Pages)
+   so Pages serves the versioned branch mike maintains.
+6. Then run once, from the repo root, to seed `gh-pages` with the existing
    history: `mike deploy --push <current-release> latest && mike set-default
    --push latest && mike deploy --push dev`.
 
-### Agent skill (any repo)
+### Agent guidance and repo-local skills (any repo)
 
-`skills/docs-structure/` → copy to `.claude/skills/docs-structure/` (Claude
-Code) and reference it from `AGENTS.md` for other agentic coders. It defines
-the `docs/` tree convention: per-module requirements with per-module
-`backlog.md`, architecture docs, and Mermaid-only diagrams in markdown.
+Copy the governance pack once when adopting the starter:
+
+| Starter master | Consumer destination | Update behavior |
+|---|---|---|
+| `starter/CLAUDE.md` | `CLAUDE.md` | Create when missing; otherwise merge only the marked managed block |
+| `starter/AGENTS.md` | `AGENTS.md` | Create when missing; otherwise merge only the marked managed block |
+| `starter/skills/<name>/` | `.claude/skills/<name>/` | Replace the whole managed skill directory after drift review |
+| `starter/docs/requirements/traceability.md` | `docs/requirements/traceability.md` | Seed-once; maintain content, never replace it with the blank template |
+
+The managed skills are `docs-structure`, `traceability`,
+`docs-reconciliation`, and `test-consolidation`. Claude Code discovers the
+canonical `.claude/skills/` copies; `AGENTS.md` directs Codex and other agents
+to read the same files, avoiding duplicated skill bodies.
+
+On an update, preserve every unknown/project-local skill. If a managed skill
+has local modifications, stop for an operator decision: accept the canonical
+replacement or fork the customization under a different skill name. Never
+line-merge a skill. Existing agent files keep all project-specific content
+outside `aviato:documentation-governance` markers; replace only that managed
+block. Living documentation and the traceability matrix remain seed-once.
 
 ## One-time setup per repo (clicks + one script, no automation)
 

@@ -45,6 +45,8 @@ def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureF
     # managed file scaffolded with marker (bare pin); seed-once LICENSE written without marker
     assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library version=0")
     assert "wrote .github/aviato.yaml" in out
+    assert f"aviato apply-rulesets OWNER/REPO --apply --declaration {tmp_path / '.github' / 'aviato.yaml'}" in out
+    assert "apply-rulesets OWNER/REPO --apply --profile" not in out
 
 
 @pytest.mark.parametrize("sidecar_body", ["{}\n", "{ corrupt"])

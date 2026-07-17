@@ -35,7 +35,10 @@ the complete desired payload remains the comparison baseline, so both doctor and
 settings drift report the missing metadata restriction until the platform can
 accept it. Capability degradation never becomes an implicit policy exception.
 **Ruleset remediation is the operator-direct `apply-rulesets` path, NOT the §5.7 consent gate**
-(see §5.7) — so the report directs the operator to `apply-rulesets … --apply --profile <p>`.
+(see §5.7) — so the report directs the operator to
+`apply-rulesets … --apply --declaration .github/aviato.yaml`. The declaration-aware form is
+mandatory once a declaration exists so remediation preserves repository-specific checks and
+settings overrides instead of silently restoring profile defaults.
 **additive vs destructive (normative):** a change is **destructive** if it
 removes, weakens, or replaces an existing protection or any operator-relied-upon
 value (e.g. lowering a required-review count, removing a required check,
