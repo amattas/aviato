@@ -281,7 +281,10 @@ jobs:
           local = {
               path.name: hashlib.sha256(path.read_bytes()).hexdigest()
               for path in sorted(dist.iterdir())
-              if path.is_file()
+              # Distributions only: pypa/gh-action-pypi-publish >= 1.14 writes
+              # *.publish.attestation sidecars into dist/ during upload, and the
+              # simple index never lists sidecars (live 0.4.0 false-negative).
+              if path.is_file() and path.name.endswith((".whl", ".tar.gz"))
           }
           if not local:
               raise SystemExit("no local distribution artifacts to confirm")
