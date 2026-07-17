@@ -645,3 +645,14 @@ def test_starter_action_pin_drift_from_root_workflows_is_flagged(repo_copy: Path
     target.write_text(drifted, encoding="utf-8")
     errors = validate(repo_copy)
     assert any("docker/login-action" in e and ".github/workflows pins" in e for e in errors), errors
+
+
+def test_trivy_cli_version_drift_from_policy_is_flagged(repo_copy: Path) -> None:
+    # §11.3 guard (c): the setup-trivy version input must match policy.yml's tools.trivy_version.
+    target = repo_copy / ".github" / "workflows" / "reusable-docker-ghcr.yml"
+    text = target.read_text(encoding="utf-8")
+    drifted = text.replace("version: v0.72.0", "version: v0.55.0", 1)
+    assert drifted != text, "fixture did not contain the expected Trivy CLI version input"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("Trivy CLI version" in e for e in errors), errors

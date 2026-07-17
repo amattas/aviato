@@ -996,6 +996,28 @@ def _permission_set(block: object) -> set[str]:
     return {f"{key}: {value}" for key, value in block.items()}
 
 
+def _check_trivy_pin_parity(root: Path, policy: dict[str, Any], errors: list[str]) -> None:
+    """§11.3: the GHCR workflow's setup-trivy `version:` input must equal policy.yml's
+    tools.trivy_version — the only tool version installed via an action INPUT rather than a
+    pinned uses:/pip literal, so no other check sees it (2026-07-16 audit)."""
+    expected = str(policy.get("tools", {}).get("trivy_version", ""))
+    if not expected:
+        errors.append("policy.yml is missing tools.trivy_version (§11.3)")
+        return
+    wf = root / ".github" / "workflows" / "reusable-docker-ghcr.yml"
+    match = re.search(
+        r"uses:\s*aquasecurity/setup-trivy@[0-9a-f]{40}[^\n]*\n\s+with:\n\s+version:\s*(\S+)",
+        wf.read_text(encoding="utf-8"),
+    )
+    if match is None:
+        errors.append(f"{wf.relative_to(root)}: no setup-trivy version input found to bind (§11.3)")
+    elif match.group(1) != expected:
+        errors.append(
+            f"{wf.relative_to(root)}: Trivy CLI version {match.group(1)!r} differs from "
+            f"policy.yml tools.trivy_version {expected!r} (§11.3)"
+        )
+
+
 def _check_pypi_privilege_split(root: Path, errors: list[str]) -> None:
     """Keep PyPI build and trusted-publisher privileges bound to their workflow identities."""
     manifest = load_yaml(root / "aviato" / "library" / "pipelines.yaml")
@@ -1059,6 +1081,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
 
     _check_policy_examples(policy, errors)
     _check_release_pattern_drift(root, data_root, policy, errors)
+    _check_trivy_pin_parity(root, policy, errors)
     _check_workflow_yaml(root, errors)
     _check_template_references(root, repository, errors)
     _check_release_workflow_contract(root, repository, errors)
