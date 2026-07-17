@@ -582,6 +582,10 @@ def test_pypi_publisher_uses_pep691_hash_confirmation_without_package_execution(
     assert "urllib.request" in run
     assert "hashlib.sha256" in run
     assert "files" in run and "filename" in run and "hashes" in run
+    # pypa/gh-action-pypi-publish >= 1.14 drops *.publish.attestation sidecars into dist/
+    # during upload; confirmation must hash only real distributions or it false-negatives
+    # against the simple index, which never lists sidecars (live 0.4.0 publish failure).
+    assert 'path.name.endswith((".whl", ".tar.gz"))' in run
     assert "EXPECTED_VERSION" in confirm["env"]
     assert "DISTRIBUTION_NAME" in confirm["env"]
 

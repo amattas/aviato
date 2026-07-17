@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=ae4547a82dfe7fa0b3e5820a7c2bada1c203780d3228961692fb8b032fa3648c inputs=307e43b687a78cf99b23e701676ea5cb05fffc648763d97e0fe72226a435e556
+# aviato:managed profile=aviato-library version=0 hash=79fa096f2cb0d56ebaf093bd7b901da31b5b4c3a7a6391c7e9b23a51e5658f39 inputs=307e43b687a78cf99b23e701676ea5cb05fffc648763d97e0fe72226a435e556
 name: Aviato Python Library
 
 on:
@@ -282,7 +282,10 @@ jobs:
           local = {
               path.name: hashlib.sha256(path.read_bytes()).hexdigest()
               for path in sorted(dist.iterdir())
-              if path.is_file()
+              # Distributions only: pypa/gh-action-pypi-publish >= 1.14 writes
+              # *.publish.attestation sidecars into dist/ during upload, and the
+              # simple index never lists sidecars (live 0.4.0 false-negative).
+              if path.is_file() and path.name.endswith((".whl", ".tar.gz"))
           }
           if not local:
               raise SystemExit("no local distribution artifacts to confirm")
