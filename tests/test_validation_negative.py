@@ -620,3 +620,14 @@ def test_docs_toolchain_pin_drift_is_flagged(repo_copy: Path) -> None:
     target.write_text(drifted)
     errors = validate(repo_copy)
     assert any("docs toolchain pins differ" in e for e in errors), errors
+
+
+def test_seed_dev_pin_drift_from_library_pyproject_is_flagged(repo_copy: Path) -> None:
+    # §11.3 guard (a): seeds must track the Library's own gate toolchain pins.
+    target = repo_copy / "aviato" / "library" / "scaffold" / "files" / "requirements-dev.txt.txt"
+    text = target.read_text(encoding="utf-8")
+    drifted = re.sub(r"^mypy==[0-9.]+$", "mypy==1.0.0", text, count=1, flags=re.MULTILINE)
+    assert drifted != text, "fixture did not contain a mypy pin"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("differs from the Library's own pyproject.toml" in e and "mypy" in e for e in errors), errors

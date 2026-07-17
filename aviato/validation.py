@@ -514,6 +514,35 @@ def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
                     )
 
 
+def _check_seed_dev_pin_parity(root: Path, errors: list[str]) -> None:
+    """§11.3: scaffold seed dev-tool pins must equal the Library's own pyproject [dev] pins.
+
+    The seeds are what new consumers start on; letting them float independently is how they
+    ended up a full mypy major stale (2026-07-16 audit). Only tools present in BOTH places
+    are compared — seeds intentionally omit Library-only tools (black, yamllint, ...).
+    """
+    canonical: dict[str, str] = {}
+    with (root / "pyproject.toml").open("rb") as handle:
+        for entry in tomllib.load(handle)["project"]["optional-dependencies"]["dev"]:
+            name, _, version = entry.partition("==")
+            if version:
+                canonical[name.lower()] = version
+    pin_re = re.compile(r'^\s*"?([A-Za-z0-9._-]+)==([0-9][0-9A-Za-z.]*)"?,?\s*$')
+    for rel in ("pyproject.toml.txt", "requirements-dev.txt.txt"):
+        seed = root / "aviato" / "library" / "scaffold" / "files" / rel
+        for line in seed.read_text(encoding="utf-8").splitlines():
+            match = pin_re.match(line)
+            if match is None:
+                continue
+            name, version = match.group(1).lower(), match.group(2)
+            expected = canonical.get(name)
+            if expected is not None and version != expected:
+                errors.append(
+                    f"aviato/library/scaffold/files/{rel}: {name} pin {version!r} differs from the "
+                    f"Library's own pyproject.toml pin {expected!r} (§11.3)"
+                )
+
+
 def _check_baseline_settings_keys(root: Path, errors: list[str]) -> None:
     """Every baseline default-branch/security key must be one the apply path can WRITE (§5.1).
 
@@ -1016,6 +1045,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_docs_caller_name_parity(root, errors)
     _check_library_repository_copies(root, policy, repository, errors)
     _check_scaffold_constant_parity(root, errors)
+    _check_seed_dev_pin_parity(root, errors)
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
     _check_action_pins(root, repository, errors)
     _check_template_scaffold_parity(root, errors)
