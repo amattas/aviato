@@ -631,3 +631,17 @@ def test_seed_dev_pin_drift_from_library_pyproject_is_flagged(repo_copy: Path) -
     target.write_text(drifted, encoding="utf-8")
     errors = validate(repo_copy)
     assert any("differs from the Library's own pyproject.toml" in e and "mypy" in e for e in errors), errors
+
+
+def test_starter_action_pin_drift_from_root_workflows_is_flagged(repo_copy: Path) -> None:
+    # §11.3 guard (b): starter masters must pin the same digests as the root workflows.
+    target = repo_copy / "starter" / "container-service" / "release.yml"
+    text = target.read_text(encoding="utf-8")
+    drifted = text.replace(
+        "docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0",
+        "docker/login-action@" + "0" * 40,
+    )
+    assert drifted != text, "fixture did not contain the expected login-action digest"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("docker/login-action" in e and ".github/workflows pins" in e for e in errors), errors

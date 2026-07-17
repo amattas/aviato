@@ -543,6 +543,28 @@ def _check_seed_dev_pin_parity(root: Path, errors: list[str]) -> None:
                 )
 
 
+_HASH_PIN_USES_RE = re.compile(r"uses:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/[^@\s]+)?@([0-9a-f]{40})\b")
+
+
+def _check_starter_action_pin_parity(root: Path, errors: list[str]) -> None:
+    """§11.3: a third-party action hash-pinned in starter/** must carry the same digest as the
+    root workflows' pin for that action. starter/ is outside dependabot and lint-actions reach
+    (2026-07-16 audit found a v3-commented v4 digest there); parity to the root pins — which ARE
+    dependabot-bumped — is the drift guard."""
+    canonical: dict[str, set[str]] = {}
+    for wf in sorted((root / ".github" / "workflows").glob("*.yml")):
+        for action, sha in _HASH_PIN_USES_RE.findall(wf.read_text(encoding="utf-8")):
+            canonical.setdefault(action, set()).add(sha)
+    for starter_file in sorted((root / "starter").rglob("*.yml")):
+        for action, sha in _HASH_PIN_USES_RE.findall(starter_file.read_text(encoding="utf-8")):
+            expected = canonical.get(action)
+            if expected and sha not in expected:
+                errors.append(
+                    f"{starter_file.relative_to(root)}: {action} pinned to {sha} but "
+                    f".github/workflows pins {sorted(expected)} (§11.3)"
+                )
+
+
 def _check_baseline_settings_keys(root: Path, errors: list[str]) -> None:
     """Every baseline default-branch/security key must be one the apply path can WRITE (§5.1).
 
@@ -1046,6 +1068,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_library_repository_copies(root, policy, repository, errors)
     _check_scaffold_constant_parity(root, errors)
     _check_seed_dev_pin_parity(root, errors)
+    _check_starter_action_pin_parity(root, errors)
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
     _check_action_pins(root, repository, errors)
     _check_template_scaffold_parity(root, errors)
