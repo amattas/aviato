@@ -3437,6 +3437,7 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 <h2 id="open">Open<a class="headerlink" href="#open" title="Permanent link">&para;</a></h2>
 <ul>
 <li>[external verification] Publish a disposable multi-architecture image and verify scanned-byte digest identity, SBOM/provenance, and monotonic aliases in GHCR. — trace: §13.2, SEC-005</li>
+<li>[external verification] The Trivy CLI pin jumped v0.55.0 → v0.72.0 (2026-07-16 dependency-matrix audit); a changelog scan of 0.56–0.72 found no SARIF/severity/exit-code breaking changes, but the scan gate + SARIF upload have not run live on the new version — confirm both on the first disposable-image run above. — source: 2026-07-16 dependency-matrix audit · .github/workflows/reusable-docker-ghcr.yml:186</li>
 </ul>
 <h2 id="settled-do-not-reopen">Settled — do not reopen<a class="headerlink" href="#settled-do-not-reopen" title="Permanent link">&para;</a></h2>
 <ul>

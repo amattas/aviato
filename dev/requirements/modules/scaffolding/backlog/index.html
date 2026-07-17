@@ -3396,7 +3396,7 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 <code>[severity] summary — source · file:line pointer</code>.</p>
 <h2 id="open">Open<a class="headerlink" href="#open" title="Permanent link">&para;</a></h2>
 <ul>
-<li>(none)</li>
+<li>[external verification] The 2026-07-16 seed refresh moved the node devDependency majors (eslint/@eslint/js ^10, eslint-plugin-security ^4, vitest/@vitest/coverage-v8 ^4, typescript ^7 — the native compiler); the seeded flat <code>eslint.config.mjs</code> and tsconfig were verified compatible on paper only. On the first fresh node scaffold, run <code>npm install &amp;&amp; npm run lint &amp;&amp; npm run typecheck &amp;&amp; npm test</code> to prove the seeded config actually works on the new majors. — source: 2026-07-16 dependency-matrix audit · aviato/library/scaffold/files/package.json.ts.txt</li>
 </ul>
 <h2 id="settled-do-not-reopen">Settled — do not reopen<a class="headerlink" href="#settled-do-not-reopen" title="Permanent link">&para;</a></h2>
 <ul>
