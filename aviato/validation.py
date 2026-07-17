@@ -1018,6 +1018,23 @@ def _check_trivy_pin_parity(root: Path, policy: dict[str, Any], errors: list[str
         )
 
 
+def _check_node_seed_devdep_parity(root: Path, errors: list[str]) -> None:
+    """§11.3: the two node seed manifests must agree on every shared devDependency range —
+    they are each other's only comparison source (same pattern as the python-version
+    all-copies-agree leg of _check_scaffold_constant_parity)."""
+    scaffold_dir = root / "aviato" / "library" / "scaffold" / "files"
+    deps: dict[str, dict[str, str]] = {}
+    for rel in ("package.json.ts.txt", "package.json.js.txt"):
+        deps[rel] = json.loads((scaffold_dir / rel).read_text(encoding="utf-8")).get("devDependencies", {})
+    ts, js = deps["package.json.ts.txt"], deps["package.json.js.txt"]
+    for pkg in sorted(set(ts) & set(js)):
+        if ts[pkg] != js[pkg]:
+            errors.append(
+                f"node seed devDependencies differ for {pkg!r}: package.json.ts.txt={ts[pkg]!r} "
+                f"vs package.json.js.txt={js[pkg]!r} (§11.3)"
+            )
+
+
 def _check_pypi_privilege_split(root: Path, errors: list[str]) -> None:
     """Keep PyPI build and trusted-publisher privileges bound to their workflow identities."""
     manifest = load_yaml(root / "aviato" / "library" / "pipelines.yaml")
@@ -1092,6 +1109,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_scaffold_constant_parity(root, errors)
     _check_seed_dev_pin_parity(root, errors)
     _check_starter_action_pin_parity(root, errors)
+    _check_node_seed_devdep_parity(root, errors)
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
     _check_action_pins(root, repository, errors)
     _check_template_scaffold_parity(root, errors)

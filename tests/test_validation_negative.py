@@ -656,3 +656,14 @@ def test_trivy_cli_version_drift_from_policy_is_flagged(repo_copy: Path) -> None
     target.write_text(drifted, encoding="utf-8")
     errors = validate(repo_copy)
     assert any("Trivy CLI version" in e for e in errors), errors
+
+
+def test_node_seed_devdep_drift_between_variants_is_flagged(repo_copy: Path) -> None:
+    # §11.3 guard (d): the ts/js seed manifests must agree on shared devDependency ranges.
+    target = repo_copy / "aviato" / "library" / "scaffold" / "files" / "package.json.js.txt"
+    text = target.read_text(encoding="utf-8")
+    drifted = text.replace('"eslint": "^10.0.0"', '"eslint": "^9.0.0"', 1)
+    assert drifted != text, "fixture did not contain the expected eslint range"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("node seed devDependencies differ" in e and "eslint" in e for e in errors), errors
