@@ -220,9 +220,10 @@ def repo_security_settings(slug: str) -> dict[str, Any]:
     return sa if isinstance(sa, dict) else {}
 
 
-# Canonical PR merge-method toggle keys (top-level booleans on GET/PATCH /repos/{owner}/{repo}).
+# Canonical repo-level PR toggle keys (top-level booleans on GET/PATCH /repos/{owner}/{repo}).
+# allow_auto_merge rides along: same GET/PATCH shape as the merge-method toggles (§5.6/§5.7).
 # github_platform derives _REPOSITORY_SETTING_KEYS from this tuple — one copy, no drift.
-MERGE_METHOD_KEYS = ("allow_merge_commit", "allow_squash_merge", "allow_rebase_merge")
+MERGE_METHOD_KEYS = ("allow_merge_commit", "allow_squash_merge", "allow_rebase_merge", "allow_auto_merge")
 
 
 def repo_merge_methods(slug: str) -> dict[str, Any]:

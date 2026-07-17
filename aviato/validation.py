@@ -514,6 +514,57 @@ def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
                     )
 
 
+def _check_seed_dev_pin_parity(root: Path, errors: list[str]) -> None:
+    """§11.3: scaffold seed dev-tool pins must equal the Library's own pyproject [dev] pins.
+
+    The seeds are what new consumers start on; letting them float independently is how they
+    ended up a full mypy major stale (2026-07-16 audit). Only tools present in BOTH places
+    are compared — seeds intentionally omit Library-only tools (black, yamllint, ...).
+    """
+    canonical: dict[str, str] = {}
+    with (root / "pyproject.toml").open("rb") as handle:
+        for entry in tomllib.load(handle)["project"]["optional-dependencies"]["dev"]:
+            name, _, version = entry.partition("==")
+            if version:
+                canonical[name.lower()] = version
+    pin_re = re.compile(r'^\s*"?([A-Za-z0-9._-]+)==([0-9][0-9A-Za-z.]*)"?,?\s*$')
+    for rel in ("pyproject.toml.txt", "requirements-dev.txt.txt"):
+        seed = root / "aviato" / "library" / "scaffold" / "files" / rel
+        for line in seed.read_text(encoding="utf-8").splitlines():
+            match = pin_re.match(line)
+            if match is None:
+                continue
+            name, version = match.group(1).lower(), match.group(2)
+            expected = canonical.get(name)
+            if expected is not None and version != expected:
+                errors.append(
+                    f"aviato/library/scaffold/files/{rel}: {name} pin {version!r} differs from the "
+                    f"Library's own pyproject.toml pin {expected!r} (§11.3)"
+                )
+
+
+_HASH_PIN_USES_RE = re.compile(r"uses:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/[^@\s]+)?@([0-9a-f]{40})\b")
+
+
+def _check_starter_action_pin_parity(root: Path, errors: list[str]) -> None:
+    """§11.3: a third-party action hash-pinned in starter/** must carry the same digest as the
+    root workflows' pin for that action. starter/ is outside dependabot and lint-actions reach
+    (2026-07-16 audit found a v3-commented v4 digest there); parity to the root pins — which ARE
+    dependabot-bumped — is the drift guard."""
+    canonical: dict[str, set[str]] = {}
+    for wf in sorted((root / ".github" / "workflows").glob("*.yml")):
+        for action, sha in _HASH_PIN_USES_RE.findall(wf.read_text(encoding="utf-8")):
+            canonical.setdefault(action, set()).add(sha)
+    for starter_file in sorted((root / "starter").rglob("*.yml")):
+        for action, sha in _HASH_PIN_USES_RE.findall(starter_file.read_text(encoding="utf-8")):
+            expected = canonical.get(action)
+            if expected and sha not in expected:
+                errors.append(
+                    f"{starter_file.relative_to(root)}: {action} pinned to {sha} but "
+                    f".github/workflows pins {sorted(expected)} (§11.3)"
+                )
+
+
 def _check_baseline_settings_keys(root: Path, errors: list[str]) -> None:
     """Every baseline default-branch/security key must be one the apply path can WRITE (§5.1).
 
@@ -945,6 +996,45 @@ def _permission_set(block: object) -> set[str]:
     return {f"{key}: {value}" for key, value in block.items()}
 
 
+def _check_trivy_pin_parity(root: Path, policy: dict[str, Any], errors: list[str]) -> None:
+    """§11.3: the GHCR workflow's setup-trivy `version:` input must equal policy.yml's
+    tools.trivy_version — the only tool version installed via an action INPUT rather than a
+    pinned uses:/pip literal, so no other check sees it (2026-07-16 audit)."""
+    expected = str(policy.get("tools", {}).get("trivy_version", ""))
+    if not expected:
+        errors.append("policy.yml is missing tools.trivy_version (§11.3)")
+        return
+    wf = root / ".github" / "workflows" / "reusable-docker-ghcr.yml"
+    match = re.search(
+        r"uses:\s*aquasecurity/setup-trivy@[0-9a-f]{40}[^\n]*\n\s+with:\n\s+version:\s*(\S+)",
+        wf.read_text(encoding="utf-8"),
+    )
+    if match is None:
+        errors.append(f"{wf.relative_to(root)}: no setup-trivy version input found to bind (§11.3)")
+    elif match.group(1) != expected:
+        errors.append(
+            f"{wf.relative_to(root)}: Trivy CLI version {match.group(1)!r} differs from "
+            f"policy.yml tools.trivy_version {expected!r} (§11.3)"
+        )
+
+
+def _check_node_seed_devdep_parity(root: Path, errors: list[str]) -> None:
+    """§11.3: the two node seed manifests must agree on every shared devDependency range —
+    they are each other's only comparison source (same pattern as the python-version
+    all-copies-agree leg of _check_scaffold_constant_parity)."""
+    scaffold_dir = root / "aviato" / "library" / "scaffold" / "files"
+    deps: dict[str, dict[str, str]] = {}
+    for rel in ("package.json.ts.txt", "package.json.js.txt"):
+        deps[rel] = json.loads((scaffold_dir / rel).read_text(encoding="utf-8")).get("devDependencies", {})
+    ts, js = deps["package.json.ts.txt"], deps["package.json.js.txt"]
+    for pkg in sorted(set(ts) & set(js)):
+        if ts[pkg] != js[pkg]:
+            errors.append(
+                f"node seed devDependencies differ for {pkg!r}: package.json.ts.txt={ts[pkg]!r} "
+                f"vs package.json.js.txt={js[pkg]!r} (§11.3)"
+            )
+
+
 def _check_pypi_privilege_split(root: Path, errors: list[str]) -> None:
     """Keep PyPI build and trusted-publisher privileges bound to their workflow identities."""
     manifest = load_yaml(root / "aviato" / "library" / "pipelines.yaml")
@@ -1008,6 +1098,7 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
 
     _check_policy_examples(policy, errors)
     _check_release_pattern_drift(root, data_root, policy, errors)
+    _check_trivy_pin_parity(root, policy, errors)
     _check_workflow_yaml(root, errors)
     _check_template_references(root, repository, errors)
     _check_release_workflow_contract(root, repository, errors)
@@ -1016,6 +1107,9 @@ def validate(root: Path = REPO_ROOT) -> list[str]:
     _check_docs_caller_name_parity(root, errors)
     _check_library_repository_copies(root, policy, repository, errors)
     _check_scaffold_constant_parity(root, errors)
+    _check_seed_dev_pin_parity(root, errors)
+    _check_starter_action_pin_parity(root, errors)
+    _check_node_seed_devdep_parity(root, errors)
     _check_core_agnosticism(root / "aviato" / "core", root / DENYLIST_FILE.relative_to(REPO_ROOT), errors)
     _check_action_pins(root, repository, errors)
     _check_template_scaffold_parity(root, errors)

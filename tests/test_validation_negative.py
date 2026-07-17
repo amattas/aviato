@@ -620,3 +620,50 @@ def test_docs_toolchain_pin_drift_is_flagged(repo_copy: Path) -> None:
     target.write_text(drifted)
     errors = validate(repo_copy)
     assert any("docs toolchain pins differ" in e for e in errors), errors
+
+
+def test_seed_dev_pin_drift_from_library_pyproject_is_flagged(repo_copy: Path) -> None:
+    # §11.3 guard (a): seeds must track the Library's own gate toolchain pins.
+    target = repo_copy / "aviato" / "library" / "scaffold" / "files" / "requirements-dev.txt.txt"
+    text = target.read_text(encoding="utf-8")
+    drifted = re.sub(r"^mypy==[0-9.]+$", "mypy==1.0.0", text, count=1, flags=re.MULTILINE)
+    assert drifted != text, "fixture did not contain a mypy pin"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("differs from the Library's own pyproject.toml" in e and "mypy" in e for e in errors), errors
+
+
+def test_starter_action_pin_drift_from_root_workflows_is_flagged(repo_copy: Path) -> None:
+    # §11.3 guard (b): starter masters must pin the same digests as the root workflows.
+    target = repo_copy / "starter" / "container-service" / "release.yml"
+    text = target.read_text(encoding="utf-8")
+    drifted = text.replace(
+        "docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0",
+        "docker/login-action@" + "0" * 40,
+    )
+    assert drifted != text, "fixture did not contain the expected login-action digest"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("docker/login-action" in e and ".github/workflows pins" in e for e in errors), errors
+
+
+def test_trivy_cli_version_drift_from_policy_is_flagged(repo_copy: Path) -> None:
+    # §11.3 guard (c): the setup-trivy version input must match policy.yml's tools.trivy_version.
+    target = repo_copy / ".github" / "workflows" / "reusable-docker-ghcr.yml"
+    text = target.read_text(encoding="utf-8")
+    drifted = text.replace("version: v0.72.0", "version: v0.55.0", 1)
+    assert drifted != text, "fixture did not contain the expected Trivy CLI version input"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("Trivy CLI version" in e for e in errors), errors
+
+
+def test_node_seed_devdep_drift_between_variants_is_flagged(repo_copy: Path) -> None:
+    # §11.3 guard (d): the ts/js seed manifests must agree on shared devDependency ranges.
+    target = repo_copy / "aviato" / "library" / "scaffold" / "files" / "package.json.js.txt"
+    text = target.read_text(encoding="utf-8")
+    drifted = text.replace('"eslint": "^10.0.0"', '"eslint": "^9.0.0"', 1)
+    assert drifted != text, "fixture did not contain the expected eslint range"
+    target.write_text(drifted, encoding="utf-8")
+    errors = validate(repo_copy)
+    assert any("node seed devDependencies differ" in e and "eslint" in e for e in errors), errors
