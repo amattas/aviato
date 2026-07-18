@@ -9,6 +9,7 @@ from aviato.core.ports import Issue
 from aviato.core.reconcile_flow import run_reconcile
 from aviato.core.settings_drift_flow import diff_identity
 from aviato.core.settingsdrift import classify_settings
+from aviato.github_platform import to_security_payload
 
 from .fakeplatform import FakePlatform
 
@@ -280,8 +281,15 @@ def test_non_human_consent_refused_no_mutation() -> None:
 def test_apply_audit_reports_skipped_unavailable_security_toggle() -> None:
     # R5-4: when the binding surfaces-and-skips a §17 toggle (feature unavailable on the repo),
     # the §5.7 audit comment must say so — not overstate a clean apply. The operator needs to know
-    # the requested security setting did NOT land.
-    desired = {"required_reviews": 2, "secret_scanning": True}
+    # the requested security setting did NOT land. The binding reports the skips in their REAL
+    # platform-API shape (to_security_payload names), so exercise that shape — a fake using the
+    # desired-key names would hide the F2 mislabeling (push_protection/dependabot are not desired keys).
+    desired = {
+        "required_reviews": 2,
+        "secret_scanning": True,
+        "secret_push_protection": True,
+        "dependency_scanning": True,
+    }
     live = {"required_reviews": 1}
     diff_id = _current_diff_id(desired, live)
     issue = Issue(
@@ -293,7 +301,9 @@ def test_apply_audit_reports_skipped_unavailable_security_toggle() -> None:
         consent_role_lookup_ok=True,
     )
     platform = FakePlatform(settings=dict(live), issues={"k": issue})
-    platform.skipped_on_apply = ["secret_scanning"]
+    # The actual strings to_security_payload produces for those desired toggles (API keys), not the
+    # flat desired keys — two of the three are NOT desired keys, which is exactly the F2 trap.
+    platform.skipped_on_apply = sorted(to_security_payload(desired))
     run_reconcile(
         platform,
         repo="o/r",
@@ -307,7 +317,9 @@ def test_apply_audit_reports_skipped_unavailable_security_toggle() -> None:
     audit = next(args[2] for name, args in platform.calls if name == "comment_issue")
     assert isinstance(audit, str)
     assert "Applied diff" in audit
-    assert "SKIPPED unavailable" in audit and "secret_scanning" in audit
+    # All three API-keyed skips land under the §17 SKIPPED header — none mislabeled as a mutation note.
+    assert f"SKIPPED unavailable: {sorted(to_security_payload(desired))}" in audit
+    assert "secret_scanning_push_protection" in audit and "dependabot_security_updates" in audit
 
 
 def test_apply_audit_records_free_text_mutation_note_not_as_skipped() -> None:
@@ -327,7 +339,7 @@ def test_apply_audit_records_free_text_mutation_note_not_as_skipped() -> None:
     )
     note = "cleared conflicting classic PR-review protection on main: the branch ruleset owns §5.7 enforcement"
     platform = FakePlatform(settings=dict(live), issues={"k": issue})
-    platform.skipped_on_apply = [note]
+    platform.notes_on_apply = [note]
     run_reconcile(
         platform,
         repo="o/r",

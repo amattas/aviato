@@ -1737,7 +1737,7 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
 
     desired = _desired_settings(resolved)
     try:
-        apply_messages = GitHubPlatform().apply_settings(slug, desired)
+        apply_result = GitHubPlatform().apply_settings(slug, desired)
     except UnmodeledProtectionError as exc:
         # The live protection surface carries something this reconcile cannot safely write
         # (unmodeled classic protection, or ruleset-owned branch protection). Fail closed with
@@ -1748,20 +1748,18 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
         print(f"error applying protection: {exc}", file=sys.stderr)
         return 1
     print(f"applied full protection to {slug} (idempotent, §5.2 complete-protection).")
-    # apply_settings returns two message kinds: bare desired-key names it surfaced-and-SKIPPED (a §17
-    # feature unavailable) and free-text NOTES about extra mutations it performed (e.g. clearing stale
-    # classic PR-review protection a ruleset now owns). Partition on desired-key membership so a note
-    # is never printed under the misleading "§17 toggle SKIPPED" header.
-    skipped = [m for m in apply_messages if m in desired]
-    notes = [m for m in apply_messages if m not in desired]
-    for note in sorted(notes):
+    # apply_settings returns two STRUCTURALLY DISTINCT channels: ``notes`` — free-text notes about
+    # extra mutations it performed (e.g. clearing stale classic PR-review protection a ruleset now
+    # owns) — and ``skipped`` — desired toggles surfaced-and-SKIPPED because a §17 feature was
+    # unavailable. Rendered by channel so a note is never printed under the misleading SKIPPED header.
+    for note in sorted(apply_result.notes):
         print(f"NOTE: {note}", file=sys.stderr)
-    if skipped:
+    if apply_result.skipped:
         # R2-4-3: a requested §17 toggle was surfaced-and-skipped (feature unavailable). Branch
         # protection landed; do not let the success line imply the security toggle did too.
         print(
             f"NOTE: security toggle(s) SKIPPED (unavailable on the repo — enable per §17, then "
-            f"re-run): {sorted(skipped)}",
+            f"re-run): {sorted(apply_result.skipped)}",
             file=sys.stderr,
         )
     return 0

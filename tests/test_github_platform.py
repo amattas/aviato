@@ -12,7 +12,7 @@ from aviato import github
 from aviato.command import CommandError
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from aviato.core.errors import PathConfinementError
-from aviato.core.ports import Platform
+from aviato.core.ports import Platform, SettingsApplyResult
 from aviato.github_platform import (
     GitHubPlatform,
     UnmodeledProtectionError,
@@ -299,41 +299,51 @@ def test_apply_settings_skips_classic_put_when_ruleset_already_matches(monkeypat
     assert any("PATCH" in c for c in calls), "security toggle (separate surface) must still apply"
 
 
+_PR_RULE = [{"type": "pull_request", "parameters": {"required_approving_review_count": 0}}]
+_STATUS_RULE = [{"type": "required_status_checks", "parameters": {"required_status_checks": []}}]
+_STALE_CLASSIC = {"required_pull_request_reviews": {"required_approving_review_count": 1}}
+
+
 @pytest.mark.parametrize(
-    "classic_protection, expect_clear",
+    "rules, classic_protection, desired, expect_clear",
     [
-        # A modeled ruleset owns §5.7 enforcement AND a stale classic required_pull_request_reviews
-        # block still exists → its review count silently outranks the consented, ruleset-owned desired
-        # state (live proof). apply must DELETE ONLY that sub-resource and report the mutation.
-        ({"required_pull_request_reviews": {"required_approving_review_count": 1}}, True),
-        # No classic PR-review block present → nothing conflicting to clear, so no DELETE.
-        ({}, False),
+        # A pull_request RULE owns §5.7 review enforcement (count 0, matches desired) AND a stale classic
+        # required_pull_request_reviews block still exists. The rule carries the consented count, so the
+        # classic block is strictly REDUNDANT dual-control (live proof). apply must DELETE ONLY that
+        # sub-resource and report the mutation.
+        (_PR_RULE, _STALE_CLASSIC, {"requires_pull_request": True, "required_reviews": 0}, True),
+        # A pull_request rule owns, no classic PR-review block present → nothing conflicting to clear.
+        (_PR_RULE, {}, {"requires_pull_request": True, "required_reviews": 0}, False),
+        # F1: a MODELED but NON-pull_request rule (required_status_checks) owns status checks while NO
+        # pull_request rule exists — the supported MIXED shape. map_branch_settings then reads
+        # required_reviews from this very classic block, so it is the AUTHORITATIVE review source;
+        # deleting it would silently DROP review enforcement. Desired matches live (reviews=1) so the
+        # guarded path is reached — the clear must NOT fire.
+        (_STATUS_RULE, _STALE_CLASSIC, {"requires_pull_request": True, "required_reviews": 1}, False),
     ],
 )
 def test_apply_settings_clears_conflicting_classic_pr_review_when_ruleset_owns(
-    monkeypatch: pytest.MonkeyPatch, classic_protection: dict[str, Any], expect_clear: bool
+    monkeypatch: pytest.MonkeyPatch,
+    rules: list[dict[str, Any]],
+    classic_protection: dict[str, Any],
+    desired: dict[str, Any],
+    expect_clear: bool,
 ) -> None:
     monkeypatch.setattr(github, "default_branch", lambda repo: "main")
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: dict(classic_protection))
-    # A pull_request rule (count 0) owns the branch and matches desired required_reviews:0 → no modeled
-    # drift, so the guarded early-return path runs (where the stale classic block must be cleared).
-    monkeypatch.setattr(
-        github,
-        "active_branch_rules",
-        lambda repo, branch: [{"type": "pull_request", "parameters": {"required_approving_review_count": 0}}],
-    )
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [dict(r) for r in rules])
     calls: list[list[str]] = []
     monkeypatch.setattr(github, "run", _record_run(calls))
-    messages = GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "required_reviews": 0})
+    result = GitHubPlatform().apply_settings("o/r", desired)
     endpoint = "repos/o/r/branches/main/protection/required_pull_request_reviews"
     deletes = [c for c in calls if "DELETE" in c and endpoint in c]
     notice = "cleared conflicting classic PR-review protection on main"
     if expect_clear:
         assert len(deletes) == 1, "must DELETE exactly the classic PR-review sub-resource"
-        assert any(notice in m for m in messages), "must report the cleared-protection mutation"
+        assert any(notice in m for m in result.notes), "must report the cleared-protection mutation"
     else:
-        assert not deletes, "no classic PR-review block → no DELETE"
-        assert not any(notice in m for m in messages)
+        assert not deletes, "no pull_request rule / no classic block → no DELETE"
+        assert not any(notice in m for m in result.notes)
 
 
 def test_apply_settings_tolerates_unavailable_security_feature(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -353,8 +363,8 @@ def test_apply_settings_tolerates_unavailable_security_feature(monkeypatch: pyte
     monkeypatch.setattr(github, "run", fake_run)
     # Must NOT raise despite the security PATCH failing as unavailable, but must REPORT the skipped
     # toggle (R5-4) so the §5.7 audit doesn't overstate a clean apply.
-    skipped = GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "secret_scanning": True})
-    assert skipped == ["secret_scanning"]
+    result = GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "secret_scanning": True})
+    assert result.skipped == ("secret_scanning",) and result.notes == ()
 
 
 def test_apply_settings_reraises_non_feature_security_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -644,8 +654,8 @@ def test_apply_settings_tolerates_present_but_null_status_check_payload(monkeypa
     )
     monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
     monkeypatch.setattr(github, "run", lambda cmd, **__: subprocess.CompletedProcess(cmd, 0, "", ""))
-    # Must not raise on the null payload; returns the (empty) skipped-toggle list.
-    assert GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True}) == []
+    # Must not raise on the null payload; returns an empty result (nothing skipped, no notes).
+    assert GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True}) == SettingsApplyResult()
 
 
 def test_to_branch_protection_payload_sets_required_checks() -> None:

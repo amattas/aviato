@@ -22,7 +22,7 @@ from . import github
 from .command import CommandError
 from .core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from .core.pathguard import confined_target
-from .core.ports import Issue
+from .core.ports import Issue, SettingsApplyResult
 from .core.scaffold import atomic_write
 from .core.settingsdrift import CONSENT_ID_HEX_LEN
 
@@ -945,7 +945,7 @@ class GitHubPlatform:
 
     def apply_settings(
         self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
-    ) -> list[str]:
+    ) -> SettingsApplyResult:
         # ``payload`` is the flat desired default-branch state; translate it to the
         # branch-protection API shape before the PUT (§2.9). The PUT replaces
         # protection wholesale, so FAIL CLOSED if the live branch carries protections
@@ -1063,16 +1063,26 @@ class GitHubPlatform:
                     f"for {drifted} before re-running."
                 )
             # The ruleset owns §5.7 enforcement for this branch and the modeled state matches desired
-            # (no drift above). A classic ``required_pull_request_reviews`` block that still exists is
-            # STALE DUAL-CONTROL: its review count silently outranks the consented, ruleset-owned
-            # desired state (root cause from the live proofs). Clear ONLY that sub-resource — never the
-            # whole-branch classic protection, since other classic fields (e.g. force-push/deletion
-            # blocks) may be intentionally layered, and the unmodeled guards above already fail closed
-            # on any protection this reconcile does not model. The DELETE is fail-loud (``github.run``
-            # raises on a non-2xx), so a failure surfaces to the caller rather than being swallowed
-            # (§2.7). Report the mutation so the §5.7 audit records it; behavior is identical for both
-            # consented callers (reconcile, complete-protection) — no caller-specific flag.
-            if live.get("required_pull_request_reviews"):
+            # (no drift above). A classic ``required_pull_request_reviews`` block that still exists may
+            # be STALE DUAL-CONTROL — but ONLY when a ``pull_request`` RULE actually owns review
+            # enforcement. In the supported MIXED shape (a ruleset does status checks / non-fast-forward
+            # but carries NO ``pull_request`` rule), ``map_branch_settings`` reads ``required_reviews``
+            # from this very classic block (see the ``else`` branch at its ``pr_rule is None`` path), so
+            # the classic block is the AUTHORITATIVE review source; deleting it would silently DROP review
+            # enforcement (F1). So gate the clear on an actual ``pull_request`` rule, not merely any
+            # modeled rule type. INVARIANT under that gate: a ``pull_request`` rule already carries the
+            # consented, desired review count, so the classic block it shadows is strictly REDUNDANT —
+            # clearing it changes nothing about effective enforcement, only removes the dead dual-control
+            # surface. That is why a post-hoc §5.7 NOTE is sufficient and no pre-consent diff line is owed:
+            # the operator consented to the ruleset-owned review count, and the clear cannot alter it.
+            # Clear ONLY that sub-resource — never the whole-branch classic protection, since other classic
+            # fields (e.g. force-push/deletion blocks) may be intentionally layered, and the unmodeled
+            # guards above already fail closed on any protection this reconcile does not model. The DELETE
+            # is fail-loud (``github.run`` raises on a non-2xx), so a failure surfaces to the caller rather
+            # than being swallowed (§2.7). Report the mutation so the §5.7 audit records it; behavior is
+            # identical for both consented callers (reconcile, complete-protection) — no caller-specific flag.
+            ruleset_owns_reviews = any(rule.get("type") == "pull_request" for rule in rules)
+            if ruleset_owns_reviews and live.get("required_pull_request_reviews"):
                 github.run(
                     [
                         "gh",
@@ -1112,6 +1122,7 @@ class GitHubPlatform:
         # and continue; the branch protection (the safety-critical part) already applied.
         # Diagnosis (§5.4) separately probes/surfaces feature availability.
         security_payload = to_security_payload(payload)
+        skipped: tuple[str, ...] = ()
         if security_payload:
             try:
                 self._gh_input(["--method", "PATCH", f"repos/{repo}"], {"security_and_analysis": security_payload})
@@ -1123,12 +1134,14 @@ class GitHubPlatform:
                         file=sys.stderr,
                     )
                     # R5-4: the whole security PATCH is skipped (one request for all toggles), so the
-                    # desired security keys were NOT applied. Return them so the §5.7 audit reports a
-                    # PARTIAL apply rather than overstating a clean one — branch protection still landed.
-                    # Carry any mutation NOTES (e.g. cleared classic PR-review) alongside them.
-                    return sorted(security_payload) + messages
-                raise
-        return messages
+                    # desired security keys were NOT applied. Return them in the SKIPPED channel so the
+                    # §5.7 audit reports a PARTIAL apply rather than overstating a clean one — branch
+                    # protection still landed. These are the platform-API toggle names the PATCH would
+                    # have carried (see to_security_payload), kept distinct from the mutation NOTES.
+                    skipped = tuple(sorted(security_payload))
+                else:
+                    raise
+        return SettingsApplyResult(skipped=skipped, notes=tuple(messages))
 
     def create_repo(self, repo: str, *, private: bool) -> None:
         # §5.2 provision-new: create the repository initialized with a README so the
