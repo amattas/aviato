@@ -310,6 +310,40 @@ def test_apply_audit_reports_skipped_unavailable_security_toggle() -> None:
     assert "SKIPPED unavailable" in audit and "secret_scanning" in audit
 
 
+def test_apply_audit_records_free_text_mutation_note_not_as_skipped() -> None:
+    # §5.7: the binding can return a free-text NOTE about an extra mutation it performed outside the
+    # diff (e.g. clearing a stale classic PR-review block a ruleset now owns). It is NOT a desired key,
+    # so the audit must record it verbatim as an applied change — never mislabel it "SKIPPED unavailable".
+    desired = {"required_reviews": 2}
+    live = {"required_reviews": 1}
+    diff_id = _current_diff_id(desired, live)
+    issue = Issue(
+        key="k",
+        open=True,
+        consent_diff_id=diff_id,
+        consent_actor_type=ACTOR_HUMAN,
+        consent_role=ROLE_PRIVILEGED,
+        consent_role_lookup_ok=True,
+    )
+    note = "cleared conflicting classic PR-review protection on main: the branch ruleset owns §5.7 enforcement"
+    platform = FakePlatform(settings=dict(live), issues={"k": issue})
+    platform.skipped_on_apply = [note]
+    run_reconcile(
+        platform,
+        repo="o/r",
+        issue_key="k",
+        desired_settings=desired,
+        pin="v1",
+        tool_version="1.0.0",
+        recorded_version="1.0.0",
+        confirmed_diff_id=diff_id,
+    )
+    audit = next(args[2] for name, args in platform.calls if name == "comment_issue")
+    assert isinstance(audit, str)
+    assert note in audit, "the mutation note must appear verbatim in the §5.7 audit trail"
+    assert "SKIPPED unavailable" not in audit, "an applied mutation must not be reported as a skipped toggle"
+
+
 def test_apply_reads_consent_again_and_aborts_if_revoked_before_apply() -> None:
     # C12-R3-1 (§5.7/§2.8): a consent label revoked BETWEEN the entry read and the apply must abort,
     # never apply on stale authorization. The flow re-reads the issue immediately before the write.

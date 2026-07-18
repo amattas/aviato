@@ -1737,7 +1737,7 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
 
     desired = _desired_settings(resolved)
     try:
-        skipped = GitHubPlatform().apply_settings(slug, desired)
+        apply_messages = GitHubPlatform().apply_settings(slug, desired)
     except UnmodeledProtectionError as exc:
         # The live protection surface carries something this reconcile cannot safely write
         # (unmodeled classic protection, or ruleset-owned branch protection). Fail closed with
@@ -1748,6 +1748,14 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
         print(f"error applying protection: {exc}", file=sys.stderr)
         return 1
     print(f"applied full protection to {slug} (idempotent, §5.2 complete-protection).")
+    # apply_settings returns two message kinds: bare desired-key names it surfaced-and-SKIPPED (a §17
+    # feature unavailable) and free-text NOTES about extra mutations it performed (e.g. clearing stale
+    # classic PR-review protection a ruleset now owns). Partition on desired-key membership so a note
+    # is never printed under the misleading "§17 toggle SKIPPED" header.
+    skipped = [m for m in apply_messages if m in desired]
+    notes = [m for m in apply_messages if m not in desired]
+    for note in sorted(notes):
+        print(f"NOTE: {note}", file=sys.stderr)
     if skipped:
         # R2-4-3: a requested §17 toggle was surfaced-and-skipped (feature unavailable). Branch
         # protection landed; do not let the success line imply the security toggle did too.

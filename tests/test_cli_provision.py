@@ -62,9 +62,15 @@ def _consumer(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_complete_protection_applies_full_desired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_complete_protection_applies_full_desired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     root = _consumer(tmp_path)
-    platform = _FakePlatform()
+    # The repo starts with a conflicting classic PR-review block that a ruleset now owns, so
+    # apply_settings clears it and reports the mutation as a free-text NOTE (not a bare desired key).
+    # complete-protection must surface that note to the operator, NOT under the §17-SKIPPED header.
+    clear_note = "cleared conflicting classic PR-review protection on main: the branch ruleset owns §5.7 enforcement"
+    platform = _FakePlatform(skipped=[clear_note])
     monkeypatch.setattr(cli, "remote_url", lambda r: "git@github.com:o/r.git")
     monkeypatch.setattr(cli, "normalize_slug", lambda remote: "o/r")
     monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: platform)
@@ -74,6 +80,9 @@ def test_complete_protection_applies_full_desired(tmp_path: Path, monkeypatch: p
     assert platform.applied and platform.applied[0][0] == "o/r"
     # Full desired state carries the always-on protections (e.g. PR requirement).
     assert platform.applied[0][1].get("requires_pull_request") is True
+    err = capsys.readouterr().err
+    assert clear_note in err, "the clear must be surfaced to the operator through the CLI path"
+    assert "SKIPPED" not in err, "an applied clear must not be reported as a §17 toggle SKIPPED"
 
 
 def test_complete_protection_reports_skipped_unavailable_toggle(

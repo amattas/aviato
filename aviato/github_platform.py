@@ -970,6 +970,10 @@ class GitHubPlatform:
             raise github.GitHubAPIError(
                 f"repos/{repo}", 0, "could not resolve default branch; refusing to apply settings"
             )
+        # Operator-facing NOTES about mutations this apply performed that are NOT part of the desired
+        # diff (e.g. clearing stale classic PR-review protection a ruleset now owns). Returned alongside
+        # any surfaced-and-skipped §17 toggles so both consented callers record them (§5.7 audit).
+        messages: list[str] = []
         live = github.classic_branch_protection(repo, branch)
         # The wholesale PUT carries only the modeled fields (PR reviews, status checks, force/
         # delete, conversation resolution). Any OTHER classic protection enabled live — push
@@ -1058,6 +1062,30 @@ class GitHubPlatform:
                     f"`aviato apply-rulesets {repo} --declaration .github/aviato.yaml --apply` "
                     f"for {drifted} before re-running."
                 )
+            # The ruleset owns §5.7 enforcement for this branch and the modeled state matches desired
+            # (no drift above). A classic ``required_pull_request_reviews`` block that still exists is
+            # STALE DUAL-CONTROL: its review count silently outranks the consented, ruleset-owned
+            # desired state (root cause from the live proofs). Clear ONLY that sub-resource — never the
+            # whole-branch classic protection, since other classic fields (e.g. force-push/deletion
+            # blocks) may be intentionally layered, and the unmodeled guards above already fail closed
+            # on any protection this reconcile does not model. The DELETE is fail-loud (``github.run``
+            # raises on a non-2xx), so a failure surfaces to the caller rather than being swallowed
+            # (§2.7). Report the mutation so the §5.7 audit records it; behavior is identical for both
+            # consented callers (reconcile, complete-protection) — no caller-specific flag.
+            if live.get("required_pull_request_reviews"):
+                github.run(
+                    [
+                        "gh",
+                        "api",
+                        "--method",
+                        "DELETE",
+                        f"repos/{repo}/branches/{branch}/protection/required_pull_request_reviews",
+                    ]
+                )
+                messages.append(
+                    f"cleared conflicting classic PR-review protection on {branch}: "
+                    "the branch ruleset owns §5.7 enforcement"
+                )
         else:
             api_payload = to_branch_protection_payload(payload)
             self._gh_input(["--method", "PUT", f"repos/{repo}/branches/{branch}/protection"], api_payload)
@@ -1097,9 +1125,10 @@ class GitHubPlatform:
                     # R5-4: the whole security PATCH is skipped (one request for all toggles), so the
                     # desired security keys were NOT applied. Return them so the §5.7 audit reports a
                     # PARTIAL apply rather than overstating a clean one — branch protection still landed.
-                    return sorted(security_payload)
+                    # Carry any mutation NOTES (e.g. cleared classic PR-review) alongside them.
+                    return sorted(security_payload) + messages
                 raise
-        return []
+        return messages
 
     def create_repo(self, repo: str, *, private: bool) -> None:
         # §5.2 provision-new: create the repository initialized with a README so the

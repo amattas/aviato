@@ -299,6 +299,43 @@ def test_apply_settings_skips_classic_put_when_ruleset_already_matches(monkeypat
     assert any("PATCH" in c for c in calls), "security toggle (separate surface) must still apply"
 
 
+@pytest.mark.parametrize(
+    "classic_protection, expect_clear",
+    [
+        # A modeled ruleset owns §5.7 enforcement AND a stale classic required_pull_request_reviews
+        # block still exists → its review count silently outranks the consented, ruleset-owned desired
+        # state (live proof). apply must DELETE ONLY that sub-resource and report the mutation.
+        ({"required_pull_request_reviews": {"required_approving_review_count": 1}}, True),
+        # No classic PR-review block present → nothing conflicting to clear, so no DELETE.
+        ({}, False),
+    ],
+)
+def test_apply_settings_clears_conflicting_classic_pr_review_when_ruleset_owns(
+    monkeypatch: pytest.MonkeyPatch, classic_protection: dict[str, Any], expect_clear: bool
+) -> None:
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: dict(classic_protection))
+    # A pull_request rule (count 0) owns the branch and matches desired required_reviews:0 → no modeled
+    # drift, so the guarded early-return path runs (where the stale classic block must be cleared).
+    monkeypatch.setattr(
+        github,
+        "active_branch_rules",
+        lambda repo, branch: [{"type": "pull_request", "parameters": {"required_approving_review_count": 0}}],
+    )
+    calls: list[list[str]] = []
+    monkeypatch.setattr(github, "run", _record_run(calls))
+    messages = GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "required_reviews": 0})
+    endpoint = "repos/o/r/branches/main/protection/required_pull_request_reviews"
+    deletes = [c for c in calls if "DELETE" in c and endpoint in c]
+    notice = "cleared conflicting classic PR-review protection on main"
+    if expect_clear:
+        assert len(deletes) == 1, "must DELETE exactly the classic PR-review sub-resource"
+        assert any(notice in m for m in messages), "must report the cleared-protection mutation"
+    else:
+        assert not deletes, "no classic PR-review block → no DELETE"
+        assert not any(notice in m for m in messages)
+
+
 def test_apply_settings_tolerates_unavailable_security_feature(monkeypatch: pytest.MonkeyPatch) -> None:
     # §17: a security feature unavailable on the repo (e.g. secret scanning on a private
     # repo without Advanced Security) is an adoption warning, not an apply failure — the
