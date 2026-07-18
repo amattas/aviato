@@ -105,7 +105,8 @@ jobs:
       id-token: write
     uses: {{ aviato-workflow-prefix }}reusable-docs-pages.yml{{ aviato-workflow-suffix }}
     with:
-      working-directory: website
+      working-directory: "."
+      docs-requirements: requirements-docs.txt
       release-tag: ${{ needs.resolve.outputs.tag }}
       gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
       serve-pages: {{ serve-pages }}
@@ -114,5 +115,5 @@ jobs:
         # §12.1 Python API reference (docstrings -> markdown) into the docs source tree.
         # §11.3: pin the pip-installed doc tool to an exact version (no floating latest).
         python3 -m pip install --quiet -e . "pydoc-markdown==4.8.2"
-        mkdir -p website/docs/api
-        pydoc-markdown -I . -p "{{ import-name }}" > website/docs/api/reference.md
+        mkdir -p docs/api
+        pydoc-markdown -I . -p "{{ import-name }}" > docs/api/reference.md

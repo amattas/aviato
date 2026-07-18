@@ -378,7 +378,7 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
     assert "git archive" in body
     assert "symlink" in body.lower()
     # Regression (§13.3 live-proof finding): `git archive` with no explicit pathspec,
-    # run from the job's docs working-directory (e.g. "website" for python-library),
+    # run from the job's docs working-directory (root "." since the root-layout docs move),
     # implicitly scopes the archive to that subdirectory WITHIN the target tree-ish.
     # docs-branch is an orphan branch with a flat layout that has no such subdirectory,
     # so this silently produced an EMPTY Pages artifact for any non-root docs layout —
@@ -397,6 +397,11 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
 def test_rendered_consumer_docs_caller_defaults_pages_off_and_grants_only_call_union() -> None:
     caller = _rendered_python_library_docs_workflow()
     docs = caller["jobs"]["docs"]
+    # Root-layout docs (commit 8758059): zensical.toml + docs/ live at the repo root, so the
+    # docs job runs from "." and points the toolchain install at requirements-docs.txt (the
+    # reusable default is requirements.txt, so the caller must pass the new name explicitly).
+    assert docs["with"]["working-directory"] == "."
+    assert docs["with"]["docs-requirements"] == "requirements-docs.txt"
     assert docs["with"]["serve-pages"] is False
     assert docs["permissions"] == {
         "contents": "write",

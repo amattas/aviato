@@ -25,6 +25,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["{{ import-name }}*"]
 
 # §12.1 test+coverage config (finding 48): measure-only coverage by default —

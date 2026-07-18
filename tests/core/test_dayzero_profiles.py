@@ -280,9 +280,9 @@ def test_docs_opt_in_scaffolds_zensical_site() -> None:
     outputs_on = {i.output for i in items_on}
 
     expected = {
-        "website/zensical.toml",
-        "website/docs/index.md",
-        "website/requirements.txt",
+        "zensical.toml",
+        "docs/index.md",
+        "requirements-docs.txt",
     }
     assert expected <= outputs_on
     assert not (expected & outputs_off)  # none scaffolded without the opt-in
@@ -292,12 +292,12 @@ def test_docs_opt_in_scaffolds_zensical_site() -> None:
         for o in outputs_on
     )
 
-    config = next(i for i in items_on if i.output == "website/zensical.toml")
+    config = next(i for i in items_on if i.output == "zensical.toml")
     assert "[project]" in config.body
     assert 'site_name = "{{ project-name }}"' in config.body  # seed-once keeps the placeholder
     assert 'provider = "mike"' in config.body  # multi-version docs via mike
 
-    reqs = next(i for i in items_on if i.output == "website/requirements.txt")
+    reqs = next(i for i in items_on if i.output == "requirements-docs.txt")
     assert "zensical==0.0.50" in reqs.body
     assert "mike @ git+https://github.com/squidfunk/mike.git@" in reqs.body
 
@@ -325,6 +325,9 @@ def test_python_profile_scaffolds_pyproject_manifest() -> None:
     assert "[tool.coverage.run]" in item.body
     assert 'source = ["acme"]' in item.body
     assert 'name = "acme"' in item.body  # lenient render filled the package name
+    # src-layout packaging: the seeded package lives under src/ so a stray root package dir
+    # cannot shadow the installed distribution under pytest-from-root (live pydmp adoption).
+    assert 'where = ["src"]' in item.body
 
 
 def test_node_typescript_manifest_has_tsc_and_engines() -> None:

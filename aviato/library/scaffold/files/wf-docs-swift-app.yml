@@ -106,7 +106,8 @@ jobs:
       id-token: write
     uses: {{ aviato-workflow-prefix }}reusable-docs-pages.yml{{ aviato-workflow-suffix }}
     with:
-      working-directory: website
+      working-directory: "."
+      docs-requirements: requirements-docs.txt
       release-tag: ${{ needs.resolve.outputs.tag }}
       gated-sha: ${{ needs.release-gate.outputs.gated-sha }}
       serve-pages: {{ serve-pages }}

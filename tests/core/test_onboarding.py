@@ -249,8 +249,8 @@ def test_output_path_escaping_variable_is_refused(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("profile", "variables", "expected_seeds"),
     [
-        ("python-library", PYTHON_VARIABLES, ("acme/__init__.py", "tests/test_package.py")),
-        ("python-component", PYTHON_VARIABLES, ("acme/__init__.py", "tests/test_package.py")),
+        ("python-library", PYTHON_VARIABLES, ("src/acme/__init__.py", "tests/test_package.py")),
+        ("python-component", PYTHON_VARIABLES, ("src/acme/__init__.py", "tests/test_package.py")),
         ("python-service", {}, ("main.py", "tests/test_main.py", "requirements.txt")),
     ],
 )

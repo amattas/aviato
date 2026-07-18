@@ -93,12 +93,16 @@ def test_malformed_var_on_plan_path_is_clean_error_not_traceback(capsys: pytest.
 
 def test_onboard_plan_hides_docs_artifacts_unless_opted_in(capsys: pytest.CaptureFixture[str]) -> None:
     # §6.1: the plan must list the EXACT artifacts that would be written. With docs off
-    # (the default) the docs caller workflow and website artifacts must not appear.
+    # (the default) the docs caller workflow and root-layout docs artifacts must not appear.
     rc = main(["onboard", "owner/repo", "--profile", "python-library"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "aviato-docs.yml" not in out
-    assert "website/" not in out
+    # All three docs seeds must be hidden when docs is off (the old website/ prefix
+    # covered them in one assertion; root layout needs each named).
+    assert "zensical.toml" not in out
+    assert "docs/index.md" not in out
+    assert "requirements-docs.txt" not in out
 
     # With --docs the docs-gated artifacts appear.
     rc = main(["onboard", "owner/repo", "--profile", "python-library", "--docs"])

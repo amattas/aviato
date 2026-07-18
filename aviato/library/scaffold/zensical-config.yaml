@@ -1,5 +1,5 @@
 name: zensical-config
-output_path: website/zensical.toml
+output_path: zensical.toml
 source: files/zensical.toml.txt
 comment: "#"
 seed_once: true

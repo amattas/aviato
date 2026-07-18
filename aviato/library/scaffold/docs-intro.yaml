@@ -1,5 +1,5 @@
 name: docs-intro
-output_path: website/docs/index.md
+output_path: docs/index.md
 source: files/docs-intro.md.txt
 seed_once: true
 when:

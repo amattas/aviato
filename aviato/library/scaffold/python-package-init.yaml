@@ -1,6 +1,6 @@
 name: python-package-init
 # Seed-once package initializer: a fresh repo's importable package so `mypy --strict`
 # has a .py file and pytest can import it (§13.3 green-first-CI). Developer-owned after seeding.
-output_path: "{{ import-name }}/__init__.py"
+output_path: "src/{{ import-name }}/__init__.py"
 source: files/package-init.py.txt
 seed_once: true
