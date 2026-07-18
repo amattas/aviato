@@ -325,6 +325,9 @@ def test_python_profile_scaffolds_pyproject_manifest() -> None:
     assert "[tool.coverage.run]" in item.body
     assert 'source = ["acme"]' in item.body
     assert 'name = "acme"' in item.body  # lenient render filled the package name
+    # src-layout packaging: the seeded package lives under src/ so a stray root package dir
+    # cannot shadow the installed distribution under pytest-from-root (live pydmp adoption).
+    assert 'where = ["src"]' in item.body
 
 
 def test_node_typescript_manifest_has_tsc_and_engines() -> None:
