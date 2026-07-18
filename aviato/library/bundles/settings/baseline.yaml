@@ -42,3 +42,9 @@ settings:
     allow_squash_merge: true
     allow_rebase_merge: true
     allow_auto_merge: true
+  # GitHub Actions workflow permissions (PUT /repos/{owner}/{repo}/actions/permissions/workflow).
+  # The release automation opens its own release PRs; fresh repos ship with this OFF, which
+  # broke release-PR creation on every new consumer (2026-07-18 live proofs) — managed as
+  # desired state so provisioning sets it and §5.6/§5.7 catch a repo that flips it back.
+  actions:
+    can_approve_pull_request_reviews: true

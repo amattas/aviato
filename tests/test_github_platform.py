@@ -767,6 +767,23 @@ def test_to_repository_payload_subset_and_shape() -> None:
     assert to_repository_payload({}) == {}
 
 
+def test_map_actions_settings_from_live() -> None:
+    from aviato.github_platform import map_actions_settings
+
+    # Live Actions workflow-permissions dict: the modeled key plus an unrelated field GitHub
+    # returns on the same endpoint. Only the modeled key is mapped (never a false destructive).
+    perms = {"can_approve_pull_request_reviews": True, "default_workflow_permissions": "read"}
+    assert map_actions_settings(perms) == {"can_approve_pull_request_reviews": True}
+
+
+def test_to_actions_payload_subset_and_shape() -> None:
+    from aviato.github_platform import to_actions_payload
+
+    # Only keys present in the desired dict appear in the PUT body, mapped 1:1 to top-level booleans.
+    assert to_actions_payload({"can_approve_pull_request_reviews": True}) == {"can_approve_pull_request_reviews": True}
+    assert to_actions_payload({}) == {}
+
+
 class _OptionalJSON(Protocol):
     def __call__(self, endpoint: str, *, default: object = None) -> object | None: ...
 
@@ -1112,10 +1129,14 @@ def test_read_settings_composes_gh_responses(monkeypatch: pytest.MonkeyPatch) ->
     # (which fails in CI with no GH_TOKEN); this test must stay fully hermetic.
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
     monkeypatch.setattr(github, "repo_merge_methods", lambda repo: {})
+    monkeypatch.setattr(
+        github, "actions_workflow_permissions", lambda repo: {"can_approve_pull_request_reviews": False}
+    )
 
     settings = GitHubPlatform().read_settings("o/r")
     # flat shape (matches the desired default_branch map the CLI passes)
     assert settings["required_reviews"] == 1
+    assert settings["can_approve_pull_request_reviews"] is False
     assert "default_branch" not in settings
 
 
@@ -1294,6 +1315,25 @@ def test_apply_settings_issues_put_with_payload(monkeypatch: pytest.MonkeyPatch)
     assert isinstance(reviews, dict)
     assert reviews["required_approving_review_count"] == 2
     assert payload["allow_force_pushes"] is False
+
+
+def test_apply_settings_puts_actions_workflow_permission(monkeypatch: pytest.MonkeyPatch) -> None:
+    # §5.6/§2.9: a desired can_approve_pull_request_reviews toggle is applied via a plain fail-loud
+    # PUT to the distinct Actions workflow-permissions endpoint (no §17 feature gating).
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    issued: list[tuple[list[str], dict[str, object]]] = []
+    monkeypatch.setattr(GitHubPlatform, "_gh_input", lambda self, args, payload: issued.append((args, payload)))
+    monkeypatch.setattr(github, "run", lambda *a, **k: None)
+    GitHubPlatform().apply_settings("o/r", {"can_approve_pull_request_reviews": True})
+    workflow_puts = [
+        (args, payload)
+        for args, payload in issued
+        if "PUT" in args and "repos/o/r/actions/permissions/workflow" in args
+    ]
+    assert len(workflow_puts) == 1
+    assert workflow_puts[0][1] == {"can_approve_pull_request_reviews": True}
 
 
 def test_read_settings_raises_settings_read_error_on_admin_scope_failure(monkeypatch: pytest.MonkeyPatch) -> None:

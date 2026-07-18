@@ -387,6 +387,7 @@ def _desired_settings(resolved: ResolvedSet) -> dict[str, Any]:
         **resolved.settings.get("default_branch", {}),
         **resolved.settings.get("security", {}),
         **resolved.settings.get("repository", {}),
+        **resolved.settings.get("actions", {}),
     }
     return {key: value for key, value in flat.items() if key in RECONCILABLE_SETTING_KEYS}
 

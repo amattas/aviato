@@ -428,12 +428,39 @@ def to_repository_payload(desired: dict[str, Any]) -> dict[str, Any]:
     return {key: bool(desired[key]) for key in _REPOSITORY_SETTING_KEYS if key in desired}
 
 
+# The flat Actions workflow-permissions keys this binding reconciles. A distinct endpoint from the
+# repo toggles: GET/PUT /repos/{owner}/{repo}/actions/permissions/workflow, with the flat desired key
+# used 1:1 in the PUT body. Combined into RECONCILABLE_SETTING_KEYS below. The key tuple is canonical
+# in github.ACTIONS_PERMISSION_KEYS (the read helper uses the same one) — a single copy, no drift.
+_ACTIONS_SETTING_KEYS = github.ACTIONS_PERMISSION_KEYS
+
+
+def map_actions_settings(perms: dict[str, Any]) -> dict[str, Any]:
+    """Map the live Actions workflow-permissions fields to the flat actions settings.
+
+    Only the toggles GitHub actually reports are returned; an undeterminable one is omitted
+    (so it shows as additive "to enable", never a false destructive) — mirroring
+    :func:`map_repository_settings`.
+    """
+    return {key: bool(perms[key]) for key in _ACTIONS_SETTING_KEYS if key in perms}
+
+
+def to_actions_payload(desired: dict[str, Any]) -> dict[str, Any]:
+    """Build a ``PUT /repos/{owner}/{repo}/actions/permissions/workflow`` body from the flat
+    desired settings (§2.9); only keys present in ``desired`` are included (subset behavior,
+    mirroring :func:`to_repository_payload`)."""
+    return {key: bool(desired[key]) for key in _ACTIONS_SETTING_KEYS if key in desired}
+
+
 # Every flat desired key the apply path can actually write (branch protection + repo security +
-# repo merge methods). A desired key outside this set is unreconcilable: filtered out before the
-# diff so a typo can't masquerade as never-converging "drift", and asserted against the baseline by
-# `aviato validate`.
+# repo merge methods + Actions workflow permissions). A desired key outside this set is
+# unreconcilable: filtered out before the diff so a typo can't masquerade as never-converging
+# "drift", and asserted against the baseline by `aviato validate`.
 RECONCILABLE_SETTING_KEYS = (
-    frozenset(_BRANCH_PROTECTION_KEYS) | frozenset(_SECURITY_SETTING_KEYS) | frozenset(_REPOSITORY_SETTING_KEYS)
+    frozenset(_BRANCH_PROTECTION_KEYS)
+    | frozenset(_SECURITY_SETTING_KEYS)
+    | frozenset(_REPOSITORY_SETTING_KEYS)
+    | frozenset(_ACTIONS_SETTING_KEYS)
 )
 
 
@@ -499,12 +526,13 @@ class GitHubPlatform:
                 protection = github.classic_branch_protection(repo, branch)
                 security = map_security_settings(github.repo_security_settings(repo))
                 repository = map_repository_settings(github.repo_merge_methods(repo))
+                actions = map_actions_settings(github.actions_workflow_permissions(repo))
         except github.GitHubAPIError as exc:
             raise github.SettingsReadError(exc.endpoint, exc.returncode, exc.stderr) from exc
         # Flat merge: branch-protection fields + repo security toggles + repo PR merge-method
-        # toggles, matching the flat desired map the CLI passes (so security and merge-method
-        # drift are visible, §5.6/§2.13/§2.9).
-        return {**map_branch_settings(rules, protection), **security, **repository}
+        # toggles + Actions workflow permissions, matching the flat desired map the CLI passes (so
+        # security, merge-method, and workflow-permission drift are visible, §5.6/§2.13/§2.9).
+        return {**map_branch_settings(rules, protection), **security, **repository, **actions}
 
     def read_rulesets(self, repo: str) -> list[dict[str, Any]]:
         """Full live ruleset payloads (incl. rules), for §5.6 presence + CONTENT drift (read-only).
@@ -1041,6 +1069,13 @@ class GitHubPlatform:
         repository_payload = to_repository_payload(payload)
         if repository_payload:
             self._gh_input(["--method", "PATCH", f"repos/{repo}"], repository_payload)
+
+        # Apply the Actions workflow-permissions toggles (§2.9) when present in the desired set.
+        # A distinct endpoint (PUT actions/permissions/workflow) with no §17 feature gating, so a
+        # plain fail-loud PUT like the repository PATCH — never the security block's tolerant path.
+        actions_payload = to_actions_payload(payload)
+        if actions_payload:
+            self._gh_input(["--method", "PUT", f"repos/{repo}/actions/permissions/workflow"], actions_payload)
 
         # Apply the repo-level security toggles (§2.13) when present in the desired set.
         # These are §17 operator-prerequisite features that can be UNAVAILABLE (e.g.
