@@ -200,6 +200,73 @@ def test_template_applies_canonicalizes_booleans() -> None:
     assert template_applies(t2, {"docs": True}) is True
 
 
+def _library_with_probe(tmp_path: Path) -> Path:
+    """Copy the module-source tree and inject a scaffold descriptor whose output
+    path carries a template variable, so the output_path templating can be
+    exercised generically (no dependency on any committed profile's data)."""
+    library = tmp_path / "library"
+    shutil.copytree(MODULE_SOURCE_ROOT, library)
+    (library / "scaffold" / "probe-init.yaml").write_text(
+        'name: probe-init\noutput_path: "{{ import-name }}/_probe.py"\nsource: files/VERSION.txt\nseed_once: true\n',
+        encoding="utf-8",
+    )
+    bundle = library / "bundles" / "scaffold" / "python-library-sc.yaml"
+    bundle.write_text(bundle.read_text(encoding="utf-8").replace("add:\n", "add:\n  - probe-init\n"), encoding="utf-8")
+    return library
+
+
+def test_output_path_renders_template_variables(tmp_path: Path) -> None:
+    outputs = {
+        i.output
+        for i in materialize_items(
+            Registry(_library_with_probe(tmp_path)),
+            "python-library",
+            {"distribution-name": "acme", "import-name": "pkg"},
+            pin="0",
+        )
+    }
+    assert "pkg/_probe.py" in outputs  # {{ import-name }} resolved in the output path
+
+
+def test_output_path_escaping_variable_is_refused(tmp_path: Path) -> None:
+    from aviato.core.errors import PathConfinementError
+    from aviato.core.scaffold import scaffold
+
+    items = materialize_items(
+        Registry(_library_with_probe(tmp_path)),
+        "python-library",
+        {"distribution-name": "acme", "import-name": "../escape"},
+        pin="0",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    # The escaping value survives strict render (the variable IS present); the write
+    # path's pathguard confinement is the layer that refuses the escaping output.
+    with pytest.raises(PathConfinementError):
+        scaffold(repo, items, profile="python-library", version="v1")
+
+
+@pytest.mark.parametrize(
+    ("profile", "variables", "expected_seeds"),
+    [
+        ("python-library", PYTHON_VARIABLES, ("acme/__init__.py", "tests/test_package.py")),
+        ("python-component", PYTHON_VARIABLES, ("acme/__init__.py", "tests/test_package.py")),
+        ("python-service", {}, ("main.py", "tests/test_main.py", "requirements.txt")),
+    ],
+)
+def test_python_profiles_seed_package_skeleton(
+    profile: str, variables: dict[str, str], expected_seeds: tuple[str, ...]
+) -> None:
+    # A fresh repo's first CI must be green (§13.3): every python profile seeds a
+    # package/entrypoint + a starter test so pytest collects something. Library/
+    # component seed a templated import-name package; the packaging-free service
+    # seeds a root-level main.py + tests/test_main.py + requirements.txt (§13.2).
+    by_output = {i.output: i for i in materialize_items(Registry(MODULE_SOURCE_ROOT), profile, variables, pin="0")}
+    for seed in expected_seeds:
+        assert seed in by_output, f"{profile} is missing seeded {seed}"
+        assert by_output[seed].seed_once is True, f"{seed} must be seed-once (developer-owned)"
+
+
 def test_materialize_builds_scaffold_items_from_resolved_set() -> None:
     reg = Registry(MODULE_SOURCE_ROOT)
     items = materialize_items(reg, "python-library", variables=PYTHON_VARIABLES, pin="0")
