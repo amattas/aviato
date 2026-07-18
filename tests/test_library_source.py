@@ -54,12 +54,17 @@ def _fake_run(monkeypatch: pytest.MonkeyPatch, archive_bytes: bytes, *, annotate
             )
         if endpoint.endswith("/git/tags/" + "a" * 40):
             return subprocess.CompletedProcess(command, 0, json.dumps({"object": {"type": "commit", "sha": SHA}}), "")
-        if "/tarball/" in endpoint:
-            Path(command[command.index("--output") + 1]).write_bytes(archive_bytes)
-            return subprocess.CompletedProcess(command, 0, "", "")
         return subprocess.CompletedProcess(command, 1, "", "not found")
 
+    def fake_download(repository: str, sha: str, archive_path: Path) -> tuple[int, str]:
+        # Mirrors the REAL interface: gh api streams the tarball to stdout (it has no
+        # --output flag — the old fake faked a flag gh rejects, hiding the live failure).
+        calls.append(["gh", "api", f"repos/{repository}/tarball/{sha}"])
+        archive_path.write_bytes(archive_bytes)
+        return (0, "")
+
     monkeypatch.setattr(library_source, "run", fake)
+    monkeypatch.setattr(library_source, "_download_archive", fake_download)
     return calls
 
 

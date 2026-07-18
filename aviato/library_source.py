@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
 import tarfile
 import tempfile
 from collections.abc import Iterator
@@ -83,6 +84,20 @@ def _safe_library_members(archive: tarfile.TarFile, sha: str) -> tuple[str, list
     return root, selected
 
 
+def _download_archive(repository: str, sha: str, archive_path: Path) -> tuple[int, str]:
+    """Stream the commit tarball to ``archive_path``. ``gh api`` writes the response body to
+    stdout and has no ``--output`` flag (discovered on the first live remote repin, §5.12) —
+    the bytes are binary, so this bypasses the text-mode ``run`` helper deliberately."""
+    with archive_path.open("wb") as handle:
+        proc = subprocess.run(
+            ["gh", "api", f"repos/{repository}/tarball/{sha}"],
+            stdout=handle,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    return proc.returncode, proc.stderr.decode("utf-8", "replace")
+
+
 @contextmanager
 def fetch_library_registry(repository: str, pin: str) -> Iterator[Registry]:
     """Yield the exact published Library registry for ``pin``, then remove all fetched bytes."""
@@ -90,9 +105,9 @@ def fetch_library_registry(repository: str, pin: str) -> Iterator[Registry]:
     workdir = Path(tempfile.mkdtemp(prefix="aviato-library-"))
     try:
         archive_path = workdir / "library.tar.gz"
-        result = run(["gh", "api", f"repos/{repository}/tarball/{sha}", "--output", str(archive_path)], check=False)
-        if result.returncode != 0:
-            raise AviatoError(f"could not download Library archive for resolved commit {sha}: {result.stderr.strip()}")
+        returncode, stderr = _download_archive(repository, sha, archive_path)
+        if returncode != 0:
+            raise AviatoError(f"could not download Library archive for resolved commit {sha}: {stderr.strip()}")
         extract_root = workdir / "extracted"
         extract_root.mkdir()
         try:
