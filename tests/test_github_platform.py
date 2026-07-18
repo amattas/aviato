@@ -1135,6 +1135,7 @@ def test_read_settings_includes_security(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {"secret_scanning": {"status": "enabled"}})
     monkeypatch.setattr(github, "repo_merge_methods", lambda repo: {})
+    monkeypatch.setattr(github, "actions_workflow_permissions", lambda repo: {})
     settings = GitHubPlatform().read_settings("o/r")
     assert settings["secret_scanning"] is True
     assert "requires_pull_request" in settings  # branch fields still present
@@ -1157,6 +1158,7 @@ def test_read_settings_includes_merge_methods(monkeypatch: pytest.MonkeyPatch) -
             "allow_auto_merge": False,
         },
     )
+    monkeypatch.setattr(github, "actions_workflow_permissions", lambda repo: {})
     settings = GitHubPlatform().read_settings("o/r")
     assert settings["allow_merge_commit"] is False
     assert settings["allow_squash_merge"] is True
