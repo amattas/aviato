@@ -663,7 +663,9 @@ def _resolve_onboard_declaration(
 
 def _onboard_write(args: argparse.Namespace, registry: Registry, resolved: ResolvedSet) -> int:
     """Adopt a local repository (§5.2): resolve variables, write the declaration, scaffold."""
-    target = Path(args.target)
+    # Resolve like every sibling command: a relative CLI path (`aviato onboard .`) must not
+    # crash relative_to() against the absolute artifact paths (live pydmp adoption, 2026-07-18).
+    target = Path(args.target).resolve()
     if not target.is_dir():
         print(f"--write requires a local repository path; {args.target!r} is not a directory", file=sys.stderr)
         return 2
@@ -869,7 +871,7 @@ def cmd_onboard(args: argparse.Namespace) -> int:
     # declaration with no docs artifacts). Apply it to the resolved set + plan here for a LOCAL
     # target; the --open-pr path reads the existing from its clone and uses declaration.docs.
     if not args.docs:
-        target_root = Path(args.target)
+        target_root = Path(args.target).resolve()
         decl_path = _consumer_declaration_target(target_root, operation="inspect declaration")
         if decl_path.is_file():
             with contextlib.suppress(AviatoError):

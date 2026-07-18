@@ -15,11 +15,19 @@ def _git_init_clean(path: Path) -> None:
     # An empty repo with no changes is a clean working tree.
 
 
-def test_onboard_write_adopts_local_repo(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("relative", [False, True])
+def test_onboard_write_adopts_local_repo(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, relative: bool
+) -> None:
+    # relative=True regression: the first live adoption ran `aviato onboard . --write` and
+    # crashed in the success message — declaration_path.relative_to(".") mixes an absolute
+    # path with the raw CLI arg (every sibling command resolves args.path first).
+    if relative:
+        monkeypatch.chdir(tmp_path)
     rc = main(
         [
             "onboard",
-            str(tmp_path),
+            "." if relative else str(tmp_path),
             "--profile",
             "python-library",
             "--write",
