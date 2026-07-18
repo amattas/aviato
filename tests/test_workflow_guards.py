@@ -378,7 +378,7 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
     assert "git archive" in body
     assert "symlink" in body.lower()
     # Regression (§13.3 live-proof finding): `git archive` with no explicit pathspec,
-    # run from the job's docs working-directory (e.g. "website" for python-library),
+    # run from the job's docs working-directory (root "." since the root-layout docs move),
     # implicitly scopes the archive to that subdirectory WITHIN the target tree-ish.
     # docs-branch is an orphan branch with a flat layout that has no such subdirectory,
     # so this silently produced an EMPTY Pages artifact for any non-root docs layout —
