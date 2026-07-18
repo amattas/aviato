@@ -377,6 +377,14 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
     assert "refs/heads/${DOCS_BRANCH}" in body
     assert "git archive" in body
     assert "symlink" in body.lower()
+    # Regression (§13.3 live-proof finding): `git archive` with no explicit pathspec,
+    # run from the job's docs working-directory (e.g. "website" for python-library),
+    # implicitly scopes the archive to that subdirectory WITHIN the target tree-ish.
+    # docs-branch is an orphan branch with a flat layout that has no such subdirectory,
+    # so this silently produced an EMPTY Pages artifact for any non-root docs layout —
+    # no error, no non-zero exit, every job reports green. Always archive from the
+    # repository root regardless of the job's working-directory default.
+    assert 'git -C "${GITHUB_WORKSPACE}" archive "refs/heads/${DOCS_BRANCH}"' in body
     configure = next(step for step in steps if str(step.get("uses", "")).startswith("actions/configure-pages@"))
     upload = next(step for step in steps if str(step.get("uses", "")).startswith("actions/upload-pages-artifact@"))
     assert "inputs.serve-pages" in str(configure["if"])
@@ -617,10 +625,29 @@ def test_ghcr_publishes_only_scanned_digests() -> None:
     body = (WORKFLOWS / "reusable-docker-ghcr.yml").read_text(encoding="utf-8")
     assert "docker/build-push-action" not in body, "scan-then-rebuild reintroduced (C12-W3)"
     assert '--output "type=oci,dest=oci/${slug}.tar"' in body, "build must emit a local OCI archive"
-    assert '--input "oci/${slug}.tar"' in body, "trivy must scan the archive, not a rebuilt image"
     assert "skopeo copy --digestfile" in body, "push must promote the archive bytes"
     assert '"${pushed_digest}" != "${local_digest}"' in body, "pushed==scanned digest assert missing"
     assert body.index("trivy image") < body.index("skopeo copy"), "scan must precede push"
+
+    # Trivy >=0.72 (aquasecurity/setup-trivy pinned to v0.72.0) can no longer auto-detect
+    # a buildx `type=oci,dest=...` archive passed directly via `--input` (it neither parses
+    # as a docker-save tar nor as an OCI layout dir) — extract the archive bytes to a real
+    # OCI layout DIRECTORY first and point every trivy invocation at that directory instead.
+    extract_cmd = 'tar -xf "oci/${slug}.tar" -C "oci/${slug}.layout"'
+    assert extract_cmd in body, "must extract the buildx OCI archive to a layout dir (Trivy >=0.72)"
+    assert '--input "oci/${slug}.tar"' not in body, "trivy must not be pointed at the raw tar (Trivy >=0.72 regression)"
+    trivy_input_count = body.count('--input "oci/${slug}.layout"')
+    assert trivy_input_count == 3, f"all 3 trivy calls must use the layout dir, got {trivy_input_count}"
+
+    extract_index = body.index(extract_cmd)
+    build_index = body.index('--output "type=oci,dest=oci/${slug}.tar"')
+    first_trivy_index = body.index('--input "oci/${slug}.layout"')
+    assert build_index < extract_index < first_trivy_index, "buildx writes the tar, then extract, then trivy scans"
+
+    # skopeo must still promote the UNTOUCHED tar (not the extracted layout dir) — the
+    # extraction is scan-input-only plumbing and must not affect C12-W3 byte identity.
+    assert "skopeo inspect --format '{{.Digest}}' \"oci-archive:oci/${slug}.tar\"" in body
+    assert 'skopeo copy --digestfile "oci/${slug}.pushed" \\\n              "oci-archive:oci/${slug}.tar"' in body
 
 
 def test_non_pushing_checkouts_do_not_persist_credentials() -> None:

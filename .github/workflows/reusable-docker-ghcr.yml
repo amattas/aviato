@@ -226,19 +226,29 @@ jobs:
               "${label_args[@]}" \
               --output "type=oci,dest=oci/${slug}.tar" \
               -f "${DOCKERFILE}" "${CONTEXT}" || exit 1
+            # Trivy >=0.72 (aquasecurity/setup-trivy pinned to v0.72.0 below) broke
+            # auto-detection of a buildx `type=oci,dest=...` archive passed directly via
+            # `--input`: it neither parses as a docker-save tar (no manifest.json inside)
+            # nor as an OCI layout dir (it stat()s <path>/index.json, which requires <path>
+            # to already be a directory). Extract the archive bytes to a real OCI layout
+            # DIRECTORY and scan THAT — the extraction is scan-input plumbing only; skopeo
+            # below still promotes the untouched "oci/${slug}.tar" bytes, so C12-W3 pushed
+            # == scanned digest identity is unaffected by this step.
+            rm -rf "oci/${slug}.layout" && mkdir -p "oci/${slug}.layout"
+            tar -xf "oci/${slug}.tar" -C "oci/${slug}.layout"
             # §2.13 report/gate split: REPORT all severities to the Security surface (SARIF, no
             # severity filter so medium/low are reported too), then GATE the publish on
             # high/critical. A single --severity HIGH,CRITICAL run would drop medium/low from
             # the SARIF entirely — §2.13 requires medium/low reported (without blocking).
-            trivy image --ignore-unfixed --input "oci/${slug}.tar" \
+            trivy image --ignore-unfixed --input "oci/${slug}.layout" \
               --format sarif --output "trivy-sarif/${slug}.sarif" || exit 1
             # §11.7: per-platform SBOM of the exact scanned bytes (uploaded as an artifact).
-            trivy image --input "oci/${slug}.tar" \
+            trivy image --input "oci/${slug}.layout" \
               --format cyclonedx --output "oci/${slug}.sbom.cdx.json" || exit 1
             # Accumulate the gate (don't abort), so a high/critical on an early platform doesn't
             # skip scanning/reporting later platforms (§2.13 medium/low reporting completeness).
             if ! trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
-              --format table --input "oci/${slug}.tar"; then
+              --format table --input "oci/${slug}.layout"; then
               gate_failed=1
             fi
             echo "::endgroup::"

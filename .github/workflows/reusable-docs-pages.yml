@@ -295,7 +295,15 @@ jobs:
           set -euo pipefail
           rm -rf "${PAGES_ROOT}"
           mkdir -p "${PAGES_ROOT}"
-          git archive "refs/heads/${DOCS_BRANCH}" | tar -x -C "${PAGES_ROOT}"
+          # `git archive` with no explicit pathspec, invoked from a subdirectory of the
+          # checkout (this job's working-directory may be e.g. "website" per profile),
+          # implicitly restricts the archive to that subdirectory WITHIN the target
+          # tree-ish. docs-branch is an orphan branch with a flat layout (version dirs,
+          # `latest`, `versions.json` at the top level) that has no such subdirectory,
+          # so archiving from a subdirectory silently produces an EMPTY archive — no
+          # error, no non-zero exit. Always archive from the repository root so the
+          # full docs-branch tree is materialized regardless of the docs layout.
+          git -C "${GITHUB_WORKSPACE}" archive "refs/heads/${DOCS_BRANCH}" | tar -x -C "${PAGES_ROOT}"
           python3 - <<'PY'
           import os
           from pathlib import Path
