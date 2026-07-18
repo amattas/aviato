@@ -1,0 +1,6 @@
+name: python-test-skeleton
+# Seed-once starter test so pytest collects at least one test on a fresh repo (§13.3).
+# Developer-owned after seeding.
+output_path: tests/test_package.py
+source: files/test_package.py.txt
+seed_once: true

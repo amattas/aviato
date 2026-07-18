@@ -1,0 +1,9 @@
+"""Service entrypoint — replace with the real service (the developer owns this file)."""
+
+
+def main() -> None:
+    print("service skeleton")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,6 @@
+name: python-requirements
+# Seed-once runtime requirements file the service CI and Dockerfile install from (§13.2).
+# Consumer-owned after seeding.
+output_path: requirements.txt
+source: files/requirements.txt.txt
+seed_once: true

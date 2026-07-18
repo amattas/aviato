@@ -3,6 +3,9 @@ name: python-component-sc
 # to the language scaffold, so a consumer actually receives them (§15).
 extends: python-sc
 add:
+  # Seed-once package skeleton so a fresh repo's first CI is green (§13.3).
+  - python-package-init
+  - python-test-skeleton
   - wf-ci-python-component
   - wf-drift
   - wf-docs-python-component

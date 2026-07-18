@@ -12,7 +12,7 @@ from aviato import github
 from aviato.command import CommandError
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from aviato.core.errors import PathConfinementError
-from aviato.core.ports import Platform
+from aviato.core.ports import Platform, SettingsApplyResult
 from aviato.github_platform import (
     GitHubPlatform,
     UnmodeledProtectionError,
@@ -299,6 +299,53 @@ def test_apply_settings_skips_classic_put_when_ruleset_already_matches(monkeypat
     assert any("PATCH" in c for c in calls), "security toggle (separate surface) must still apply"
 
 
+_PR_RULE = [{"type": "pull_request", "parameters": {"required_approving_review_count": 0}}]
+_STATUS_RULE = [{"type": "required_status_checks", "parameters": {"required_status_checks": []}}]
+_STALE_CLASSIC = {"required_pull_request_reviews": {"required_approving_review_count": 1}}
+
+
+@pytest.mark.parametrize(
+    "rules, classic_protection, desired, expect_clear",
+    [
+        # A pull_request RULE owns §5.7 review enforcement (count 0, matches desired) AND a stale classic
+        # required_pull_request_reviews block still exists. The rule carries the consented count, so the
+        # classic block is strictly REDUNDANT dual-control (live proof). apply must DELETE ONLY that
+        # sub-resource and report the mutation.
+        (_PR_RULE, _STALE_CLASSIC, {"requires_pull_request": True, "required_reviews": 0}, True),
+        # A pull_request rule owns, no classic PR-review block present → nothing conflicting to clear.
+        (_PR_RULE, {}, {"requires_pull_request": True, "required_reviews": 0}, False),
+        # F1: a MODELED but NON-pull_request rule (required_status_checks) owns status checks while NO
+        # pull_request rule exists — the supported MIXED shape. map_branch_settings then reads
+        # required_reviews from this very classic block, so it is the AUTHORITATIVE review source;
+        # deleting it would silently DROP review enforcement. Desired matches live (reviews=1) so the
+        # guarded path is reached — the clear must NOT fire.
+        (_STATUS_RULE, _STALE_CLASSIC, {"requires_pull_request": True, "required_reviews": 1}, False),
+    ],
+)
+def test_apply_settings_clears_conflicting_classic_pr_review_when_ruleset_owns(
+    monkeypatch: pytest.MonkeyPatch,
+    rules: list[dict[str, Any]],
+    classic_protection: dict[str, Any],
+    desired: dict[str, Any],
+    expect_clear: bool,
+) -> None:
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: dict(classic_protection))
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [dict(r) for r in rules])
+    calls: list[list[str]] = []
+    monkeypatch.setattr(github, "run", _record_run(calls))
+    result = GitHubPlatform().apply_settings("o/r", desired)
+    endpoint = "repos/o/r/branches/main/protection/required_pull_request_reviews"
+    deletes = [c for c in calls if "DELETE" in c and endpoint in c]
+    notice = "cleared conflicting classic PR-review protection on main"
+    if expect_clear:
+        assert len(deletes) == 1, "must DELETE exactly the classic PR-review sub-resource"
+        assert any(notice in m for m in result.notes), "must report the cleared-protection mutation"
+    else:
+        assert not deletes, "no pull_request rule / no classic block → no DELETE"
+        assert not any(notice in m for m in result.notes)
+
+
 def test_apply_settings_tolerates_unavailable_security_feature(monkeypatch: pytest.MonkeyPatch) -> None:
     # §17: a security feature unavailable on the repo (e.g. secret scanning on a private
     # repo without Advanced Security) is an adoption warning, not an apply failure — the
@@ -316,8 +363,8 @@ def test_apply_settings_tolerates_unavailable_security_feature(monkeypatch: pyte
     monkeypatch.setattr(github, "run", fake_run)
     # Must NOT raise despite the security PATCH failing as unavailable, but must REPORT the skipped
     # toggle (R5-4) so the §5.7 audit doesn't overstate a clean apply.
-    skipped = GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "secret_scanning": True})
-    assert skipped == ["secret_scanning"]
+    result = GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "secret_scanning": True})
+    assert result.skipped == ("secret_scanning",) and result.notes == ()
 
 
 def test_apply_settings_reraises_non_feature_security_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -607,8 +654,8 @@ def test_apply_settings_tolerates_present_but_null_status_check_payload(monkeypa
     )
     monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
     monkeypatch.setattr(github, "run", lambda cmd, **__: subprocess.CompletedProcess(cmd, 0, "", ""))
-    # Must not raise on the null payload; returns the (empty) skipped-toggle list.
-    assert GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True}) == []
+    # Must not raise on the null payload; returns an empty result (nothing skipped, no notes).
+    assert GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True}) == SettingsApplyResult()
 
 
 def test_to_branch_protection_payload_sets_required_checks() -> None:
@@ -765,6 +812,23 @@ def test_to_repository_payload_subset_and_shape() -> None:
     assert payload == {"allow_merge_commit": True, "allow_auto_merge": True}
     assert "allow_rebase_merge" not in payload
     assert to_repository_payload({}) == {}
+
+
+def test_map_actions_settings_from_live() -> None:
+    from aviato.github_platform import map_actions_settings
+
+    # Live Actions workflow-permissions dict: the modeled key plus an unrelated field GitHub
+    # returns on the same endpoint. Only the modeled key is mapped (never a false destructive).
+    perms = {"can_approve_pull_request_reviews": True, "default_workflow_permissions": "read"}
+    assert map_actions_settings(perms) == {"can_approve_pull_request_reviews": True}
+
+
+def test_to_actions_payload_subset_and_shape() -> None:
+    from aviato.github_platform import to_actions_payload
+
+    # Only keys present in the desired dict appear in the PUT body, mapped 1:1 to top-level booleans.
+    assert to_actions_payload({"can_approve_pull_request_reviews": True}) == {"can_approve_pull_request_reviews": True}
+    assert to_actions_payload({}) == {}
 
 
 class _OptionalJSON(Protocol):
@@ -1071,6 +1135,7 @@ def test_read_settings_includes_security(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {"secret_scanning": {"status": "enabled"}})
     monkeypatch.setattr(github, "repo_merge_methods", lambda repo: {})
+    monkeypatch.setattr(github, "actions_workflow_permissions", lambda repo: {})
     settings = GitHubPlatform().read_settings("o/r")
     assert settings["secret_scanning"] is True
     assert "requires_pull_request" in settings  # branch fields still present
@@ -1093,6 +1158,7 @@ def test_read_settings_includes_merge_methods(monkeypatch: pytest.MonkeyPatch) -
             "allow_auto_merge": False,
         },
     )
+    monkeypatch.setattr(github, "actions_workflow_permissions", lambda repo: {})
     settings = GitHubPlatform().read_settings("o/r")
     assert settings["allow_merge_commit"] is False
     assert settings["allow_squash_merge"] is True
@@ -1112,10 +1178,14 @@ def test_read_settings_composes_gh_responses(monkeypatch: pytest.MonkeyPatch) ->
     # (which fails in CI with no GH_TOKEN); this test must stay fully hermetic.
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
     monkeypatch.setattr(github, "repo_merge_methods", lambda repo: {})
+    monkeypatch.setattr(
+        github, "actions_workflow_permissions", lambda repo: {"can_approve_pull_request_reviews": False}
+    )
 
     settings = GitHubPlatform().read_settings("o/r")
     # flat shape (matches the desired default_branch map the CLI passes)
     assert settings["required_reviews"] == 1
+    assert settings["can_approve_pull_request_reviews"] is False
     assert "default_branch" not in settings
 
 
@@ -1294,6 +1364,25 @@ def test_apply_settings_issues_put_with_payload(monkeypatch: pytest.MonkeyPatch)
     assert isinstance(reviews, dict)
     assert reviews["required_approving_review_count"] == 2
     assert payload["allow_force_pushes"] is False
+
+
+def test_apply_settings_puts_actions_workflow_permission(monkeypatch: pytest.MonkeyPatch) -> None:
+    # §5.6/§2.9: a desired can_approve_pull_request_reviews toggle is applied via a plain fail-loud
+    # PUT to the distinct Actions workflow-permissions endpoint (no §17 feature gating).
+    monkeypatch.setattr(github, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(github, "active_branch_rules", lambda repo, branch: [])
+    monkeypatch.setattr(github, "classic_branch_protection", lambda repo, branch: {})
+    issued: list[tuple[list[str], dict[str, object]]] = []
+    monkeypatch.setattr(GitHubPlatform, "_gh_input", lambda self, args, payload: issued.append((args, payload)))
+    monkeypatch.setattr(github, "run", lambda *a, **k: None)
+    GitHubPlatform().apply_settings("o/r", {"can_approve_pull_request_reviews": True})
+    workflow_puts = [
+        (args, payload)
+        for args, payload in issued
+        if "PUT" in args and "repos/o/r/actions/permissions/workflow" in args
+    ]
+    assert len(workflow_puts) == 1
+    assert workflow_puts[0][1] == {"can_approve_pull_request_reviews": True}
 
 
 def test_read_settings_raises_settings_read_error_on_admin_scope_failure(monkeypatch: pytest.MonkeyPatch) -> None:

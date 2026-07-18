@@ -117,7 +117,7 @@ def run_reconcile(
         try:
             # Pass the decision-time live snapshot so the binding can fail closed if the modeled
             # branch state drifted since the diff/consent were computed (§2.8/§5.7, review #14).
-            skipped = platform.apply_settings(repo, desired_settings, expected_live=live)
+            apply_result = platform.apply_settings(repo, desired_settings, expected_live=live)
         except Exception as exc:
             # §5.7 audit: an apply that throws mid-flight may have PARTIALLY landed, so it
             # must leave a record on the issue, then propagate (fail-closed) — never vanish
@@ -129,11 +129,20 @@ def run_reconcile(
         # removals), not the additive-only write subset (outcome.payload) — a removed key is
         # the most sensitive change and must appear in the audit trail (§5.7).
         audit = f"Applied diff {current_diff_id} (changes: {outcome.changes})"
+        # The binding returns two STRUCTURALLY DISTINCT channels (§5.7): ``skipped`` — desired toggles
+        # surfaced-and-SKIPPED because a §17 feature was unavailable — and ``notes`` — free-text notes
+        # about extra mutations it performed outside the diff (e.g. clearing stale classic PR-review
+        # protection a ruleset now owns). They are labeled by channel, never by a lossy string heuristic
+        # (which mislabeled API-keyed skip names as mutation notes and vice versa).
         # R5-4: if the binding surfaced-and-skipped a §17 toggle (feature unavailable), the audit
         # must say so rather than overstate a clean apply — the operator needs to know a requested
         # security setting did NOT land (enable it per §17, then re-reconcile).
-        if skipped:
-            audit += f"; SKIPPED unavailable: {sorted(skipped)}"
+        if apply_result.skipped:
+            audit += f"; SKIPPED unavailable: {sorted(apply_result.skipped)}"
+        # An extra mutation (e.g. a cleared conflicting classic PR-review block) is the most sensitive
+        # kind of change — it must appear verbatim in the §5.7 audit trail, never be dropped.
+        for note in sorted(apply_result.notes):
+            audit += f"; {note}"
     else:
         audit = f"{outcome.action}: {outcome.reason}"
 

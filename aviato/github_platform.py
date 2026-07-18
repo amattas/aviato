@@ -22,7 +22,7 @@ from . import github
 from .command import CommandError
 from .core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from .core.pathguard import confined_target
-from .core.ports import Issue
+from .core.ports import Issue, SettingsApplyResult
 from .core.scaffold import atomic_write
 from .core.settingsdrift import CONSENT_ID_HEX_LEN
 
@@ -428,12 +428,39 @@ def to_repository_payload(desired: dict[str, Any]) -> dict[str, Any]:
     return {key: bool(desired[key]) for key in _REPOSITORY_SETTING_KEYS if key in desired}
 
 
+# The flat Actions workflow-permissions keys this binding reconciles. A distinct endpoint from the
+# repo toggles: GET/PUT /repos/{owner}/{repo}/actions/permissions/workflow, with the flat desired key
+# used 1:1 in the PUT body. Combined into RECONCILABLE_SETTING_KEYS below. The key tuple is canonical
+# in github.ACTIONS_PERMISSION_KEYS (the read helper uses the same one) — a single copy, no drift.
+_ACTIONS_SETTING_KEYS = github.ACTIONS_PERMISSION_KEYS
+
+
+def map_actions_settings(perms: dict[str, Any]) -> dict[str, Any]:
+    """Map the live Actions workflow-permissions fields to the flat actions settings.
+
+    Only the toggles GitHub actually reports are returned; an undeterminable one is omitted
+    (so it shows as additive "to enable", never a false destructive) — mirroring
+    :func:`map_repository_settings`.
+    """
+    return {key: bool(perms[key]) for key in _ACTIONS_SETTING_KEYS if key in perms}
+
+
+def to_actions_payload(desired: dict[str, Any]) -> dict[str, Any]:
+    """Build a ``PUT /repos/{owner}/{repo}/actions/permissions/workflow`` body from the flat
+    desired settings (§2.9); only keys present in ``desired`` are included (subset behavior,
+    mirroring :func:`to_repository_payload`)."""
+    return {key: bool(desired[key]) for key in _ACTIONS_SETTING_KEYS if key in desired}
+
+
 # Every flat desired key the apply path can actually write (branch protection + repo security +
-# repo merge methods). A desired key outside this set is unreconcilable: filtered out before the
-# diff so a typo can't masquerade as never-converging "drift", and asserted against the baseline by
-# `aviato validate`.
+# repo merge methods + Actions workflow permissions). A desired key outside this set is
+# unreconcilable: filtered out before the diff so a typo can't masquerade as never-converging
+# "drift", and asserted against the baseline by `aviato validate`.
 RECONCILABLE_SETTING_KEYS = (
-    frozenset(_BRANCH_PROTECTION_KEYS) | frozenset(_SECURITY_SETTING_KEYS) | frozenset(_REPOSITORY_SETTING_KEYS)
+    frozenset(_BRANCH_PROTECTION_KEYS)
+    | frozenset(_SECURITY_SETTING_KEYS)
+    | frozenset(_REPOSITORY_SETTING_KEYS)
+    | frozenset(_ACTIONS_SETTING_KEYS)
 )
 
 
@@ -499,12 +526,13 @@ class GitHubPlatform:
                 protection = github.classic_branch_protection(repo, branch)
                 security = map_security_settings(github.repo_security_settings(repo))
                 repository = map_repository_settings(github.repo_merge_methods(repo))
+                actions = map_actions_settings(github.actions_workflow_permissions(repo))
         except github.GitHubAPIError as exc:
             raise github.SettingsReadError(exc.endpoint, exc.returncode, exc.stderr) from exc
         # Flat merge: branch-protection fields + repo security toggles + repo PR merge-method
-        # toggles, matching the flat desired map the CLI passes (so security and merge-method
-        # drift are visible, §5.6/§2.13/§2.9).
-        return {**map_branch_settings(rules, protection), **security, **repository}
+        # toggles + Actions workflow permissions, matching the flat desired map the CLI passes (so
+        # security, merge-method, and workflow-permission drift are visible, §5.6/§2.13/§2.9).
+        return {**map_branch_settings(rules, protection), **security, **repository, **actions}
 
     def read_rulesets(self, repo: str) -> list[dict[str, Any]]:
         """Full live ruleset payloads (incl. rules), for §5.6 presence + CONTENT drift (read-only).
@@ -917,7 +945,7 @@ class GitHubPlatform:
 
     def apply_settings(
         self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
-    ) -> list[str]:
+    ) -> SettingsApplyResult:
         # ``payload`` is the flat desired default-branch state; translate it to the
         # branch-protection API shape before the PUT (§2.9). The PUT replaces
         # protection wholesale, so FAIL CLOSED if the live branch carries protections
@@ -942,6 +970,10 @@ class GitHubPlatform:
             raise github.GitHubAPIError(
                 f"repos/{repo}", 0, "could not resolve default branch; refusing to apply settings"
             )
+        # Operator-facing NOTES about mutations this apply performed that are NOT part of the desired
+        # diff (e.g. clearing stale classic PR-review protection a ruleset now owns). Returned alongside
+        # any surfaced-and-skipped §17 toggles so both consented callers record them (§5.7 audit).
+        messages: list[str] = []
         live = github.classic_branch_protection(repo, branch)
         # The wholesale PUT carries only the modeled fields (PR reviews, status checks, force/
         # delete, conversation resolution). Any OTHER classic protection enabled live — push
@@ -1030,6 +1062,40 @@ class GitHubPlatform:
                     f"`aviato apply-rulesets {repo} --declaration .github/aviato.yaml --apply` "
                     f"for {drifted} before re-running."
                 )
+            # The ruleset owns §5.7 enforcement for this branch and the modeled state matches desired
+            # (no drift above). A classic ``required_pull_request_reviews`` block that still exists may
+            # be STALE DUAL-CONTROL — but ONLY when a ``pull_request`` RULE actually owns review
+            # enforcement. In the supported MIXED shape (a ruleset does status checks / non-fast-forward
+            # but carries NO ``pull_request`` rule), ``map_branch_settings`` reads ``required_reviews``
+            # from this very classic block (see the ``else`` branch at its ``pr_rule is None`` path), so
+            # the classic block is the AUTHORITATIVE review source; deleting it would silently DROP review
+            # enforcement (F1). So gate the clear on an actual ``pull_request`` rule, not merely any
+            # modeled rule type. INVARIANT under that gate: a ``pull_request`` rule already carries the
+            # consented, desired review count, so the classic block it shadows is strictly REDUNDANT —
+            # clearing it changes nothing about effective enforcement, only removes the dead dual-control
+            # surface. That is why a post-hoc §5.7 NOTE is sufficient and no pre-consent diff line is owed:
+            # the operator consented to the ruleset-owned review count, and the clear cannot alter it.
+            # Clear ONLY that sub-resource — never the whole-branch classic protection, since other classic
+            # fields (e.g. force-push/deletion blocks) may be intentionally layered, and the unmodeled
+            # guards above already fail closed on any protection this reconcile does not model. The DELETE
+            # is fail-loud (``github.run`` raises on a non-2xx), so a failure surfaces to the caller rather
+            # than being swallowed (§2.7). Report the mutation so the §5.7 audit records it; behavior is
+            # identical for both consented callers (reconcile, complete-protection) — no caller-specific flag.
+            ruleset_owns_reviews = any(rule.get("type") == "pull_request" for rule in rules)
+            if ruleset_owns_reviews and live.get("required_pull_request_reviews"):
+                github.run(
+                    [
+                        "gh",
+                        "api",
+                        "--method",
+                        "DELETE",
+                        f"repos/{repo}/branches/{branch}/protection/required_pull_request_reviews",
+                    ]
+                )
+                messages.append(
+                    f"cleared conflicting classic PR-review protection on {branch}: "
+                    "the branch ruleset owns §5.7 enforcement"
+                )
         else:
             api_payload = to_branch_protection_payload(payload)
             self._gh_input(["--method", "PUT", f"repos/{repo}/branches/{branch}/protection"], api_payload)
@@ -1042,6 +1108,13 @@ class GitHubPlatform:
         if repository_payload:
             self._gh_input(["--method", "PATCH", f"repos/{repo}"], repository_payload)
 
+        # Apply the Actions workflow-permissions toggles (§2.9) when present in the desired set.
+        # A distinct endpoint (PUT actions/permissions/workflow) with no §17 feature gating, so a
+        # plain fail-loud PUT like the repository PATCH — never the security block's tolerant path.
+        actions_payload = to_actions_payload(payload)
+        if actions_payload:
+            self._gh_input(["--method", "PUT", f"repos/{repo}/actions/permissions/workflow"], actions_payload)
+
         # Apply the repo-level security toggles (§2.13) when present in the desired set.
         # These are §17 operator-prerequisite features that can be UNAVAILABLE (e.g.
         # secret scanning on a private repo without Advanced Security). An "not
@@ -1049,6 +1122,7 @@ class GitHubPlatform:
         # and continue; the branch protection (the safety-critical part) already applied.
         # Diagnosis (§5.4) separately probes/surfaces feature availability.
         security_payload = to_security_payload(payload)
+        skipped: tuple[str, ...] = ()
         if security_payload:
             try:
                 self._gh_input(["--method", "PATCH", f"repos/{repo}"], {"security_and_analysis": security_payload})
@@ -1060,11 +1134,14 @@ class GitHubPlatform:
                         file=sys.stderr,
                     )
                     # R5-4: the whole security PATCH is skipped (one request for all toggles), so the
-                    # desired security keys were NOT applied. Return them so the §5.7 audit reports a
-                    # PARTIAL apply rather than overstating a clean one — branch protection still landed.
-                    return sorted(security_payload)
-                raise
-        return []
+                    # desired security keys were NOT applied. Return them in the SKIPPED channel so the
+                    # §5.7 audit reports a PARTIAL apply rather than overstating a clean one — branch
+                    # protection still landed. These are the platform-API toggle names the PATCH would
+                    # have carried (see to_security_payload), kept distinct from the mutation NOTES.
+                    skipped = tuple(sorted(security_payload))
+                else:
+                    raise
+        return SettingsApplyResult(skipped=skipped, notes=tuple(messages))
 
     def create_repo(self, repo: str, *, private: bool) -> None:
         # §5.2 provision-new: create the repository initialized with a README so the

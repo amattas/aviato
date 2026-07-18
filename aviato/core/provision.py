@@ -81,8 +81,9 @@ def provision_repo(
         outcome.scaffolded = True
         # R2-1-PROV: the full-protection apply can surface-and-skip an unavailable §17 toggle;
         # capture it so the caller reports a partial apply instead of overstating clean success.
-        # (The minimal apply carries no security keys, so its skipped set is always empty.)
-        outcome.skipped_security = platform.apply_settings(repo, desired)
+        # (The minimal apply carries no security keys, so its skipped set is always empty; a fresh
+        # repo has no pre-existing protection, so the ``.notes`` clear channel never fires here.)
+        outcome.skipped_security = list(platform.apply_settings(repo, desired).skipped)
     except Exception as exc:  # noqa: BLE001 - §8.7 boundary: a post-create failure must surface
         # the exposed/partial state + recovery op, never crash or half-apply. The outcome flags
         # record exactly how far provisioning got (minimal_applied / scaffolded).

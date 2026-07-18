@@ -1,0 +1,7 @@
+"""Seed-once starter test — replace with real tests (the developer owns this file)."""
+
+import {{ import-name }}
+
+
+def test_package_imports() -> None:
+    assert {{ import-name }}.__doc__ is not None

@@ -28,6 +28,27 @@ class RulesetApplyResult:
     degraded_rules: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class SettingsApplyResult:
+    """Outcome of one settings apply (§5.7), split into two operator-facing channels.
+
+    ``skipped`` names desired toggles the binding surfaced-and-SKIPPED because the
+    prerequisite feature was unavailable on the repo (the safety-critical branch
+    protection still landed) — the §5.7 audit must report these so it does not
+    overstate a clean apply. ``notes`` are free-text notes about extra mutations the
+    apply performed OUTSIDE the reviewed diff (e.g. clearing a stale conflicting
+    PR-review block a ruleset now owns).
+
+    The two are SEPARATE channels precisely because a string cannot be classified
+    after the fact: a skipped-toggle key and a mutation note are structurally
+    distinct outcomes, and collapsing them into one list forces a lossy heuristic
+    that mislabels one as the other in the audit trail. Field names are
+    platform-neutral (§9b)."""
+
+    skipped: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
+
+
 @runtime_checkable
 class Platform(Protocol):
     """The §2.14 hosting-platform binding interface.
@@ -54,13 +75,14 @@ class Platform(Protocol):
 
     def apply_settings(
         self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
-    ) -> list[str]:
-        """Apply the desired settings; return the names of any desired toggles that were SKIPPED.
+    ) -> SettingsApplyResult:
+        """Apply the desired settings; return the skipped-toggle keys and any mutation notes.
 
         R5-4: a §17 security toggle (e.g. secret scanning) can be unavailable on the repo, in which
         case it is surfaced-and-skipped rather than failing the whole apply (the safety-critical
-        branch protection still lands). The skipped keys are returned so the §5.7 audit does not
-        overstate a clean apply. An empty list means everything in the desired set was applied.
+        branch protection still lands). Those keys come back in ``SettingsApplyResult.skipped`` so
+        the §5.7 audit does not overstate a clean apply; extra mutations performed outside the diff
+        come back in ``.notes``. An empty result means the full desired set applied with no extras.
         """
         ...
 

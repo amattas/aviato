@@ -8,7 +8,7 @@ import pytest
 
 from aviato import cli
 from aviato.core.diagnosis import diagnose
-from aviato.core.ports import Issue, Platform
+from aviato.core.ports import Issue, Platform, SettingsApplyResult
 from aviato.core.registry import Registry
 from aviato.paths import MODULE_SOURCE_ROOT
 
@@ -64,9 +64,9 @@ class FakePlatform:
 
     def apply_settings(
         self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
-    ) -> list[str]:
+    ) -> SettingsApplyResult:
         self.calls.append(("apply_settings", (repo, payload, expected_live)))
-        return []
+        return SettingsApplyResult()
 
     def create_repo(self, repo: str, *, private: bool) -> None:
         self.calls.append(("create_repo", (repo, private)))

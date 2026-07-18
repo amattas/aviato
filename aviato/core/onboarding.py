@@ -187,8 +187,14 @@ def resolved_artifacts(
         # Seed-once starter files are rendered once (leniently — the developer owns
         # and completes them); managed files are re-rendered strictly every sync.
         rendered = render(body, render_vars, strict=not template.seed_once)
+        # Render the output path with the same strict templating as a managed body so a
+        # descriptor can declare a variable-bearing path (e.g. "{{ import-name }}/__init__.py").
+        # A path can never carry an unfilled placeholder, so this render is always strict — an
+        # undefined variable fails loudly. The write path's pathguard (confined_target) is what
+        # refuses any resolved result that would escape the repo root (§5.3 scaffold write).
+        output_path = render(template.output_path, render_vars, strict=True)
         artifacts.append(
-            ResolvedArtifact(template.output_path, rendered, template.comment or "#", template.seed_once, input_hash)
+            ResolvedArtifact(output_path, rendered, template.comment or "#", template.seed_once, input_hash)
         )
     return artifacts
 

@@ -1,0 +1,6 @@
+name: python-service-test
+# Seed-once starter test for the service so pytest collects a test on a fresh repo (§13.3).
+# Developer-owned after seeding.
+output_path: tests/test_main.py
+source: files/service-test.py.txt
+seed_once: true

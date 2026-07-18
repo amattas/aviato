@@ -1,0 +1,6 @@
+name: python-service-main
+# Seed-once root-level entrypoint for the packaging-free container service (§13.2): gives a
+# fresh repo an importable .py file so pytest/mypy have something. Developer-owned after seeding.
+output_path: main.py
+source: files/service-main.py.txt
+seed_once: true

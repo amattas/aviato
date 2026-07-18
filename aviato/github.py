@@ -236,6 +236,23 @@ def repo_merge_methods(slug: str) -> dict[str, Any]:
     return {key: repo[key] for key in MERGE_METHOD_KEYS if key in repo}
 
 
+# Canonical GitHub Actions workflow-permissions keys (GET/PUT /repos/{owner}/{repo}/actions/
+# permissions/workflow). can_approve_pull_request_reviews rides the same flat-key settings pipeline
+# (§5.6/§5.7) as the repo merge toggles, but against a distinct endpoint. github_platform derives
+# _ACTIONS_SETTING_KEYS from this tuple — one copy, no drift.
+ACTIONS_PERMISSION_KEYS = ("can_approve_pull_request_reviews",)
+
+
+def actions_workflow_permissions(slug: str) -> dict[str, Any]:
+    """Return the repo's Actions workflow-permissions toggles (``ACTIONS_PERMISSION_KEYS``)
+    from ``GET repos/{slug}/actions/permissions/workflow``, failing closed on an ambiguous
+    read (§2.7) — only keys GitHub actually reports are kept."""
+    perms = gh_json_optional(f"repos/{slug}/actions/permissions/workflow", default={})
+    if not isinstance(perms, dict):
+        return {}
+    return {key: perms[key] for key in ACTIONS_PERMISSION_KEYS if key in perms}
+
+
 def protected_environment_has_reviewers(slug: str, environment: str) -> bool | None:
     """True iff a GitHub Environment exists for ``slug`` with at least one required reviewer (§17).
 

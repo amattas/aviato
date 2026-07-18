@@ -597,13 +597,15 @@ def _check_baseline_settings_keys(root: Path, errors: list[str]) -> None:
         set(settings.get("default_branch", {}))
         | set(settings.get("security", {}))
         | set(settings.get("repository", {}))
+        | set(settings.get("actions", {}))
     )
     unknown = sorted(declared - set(RECONCILABLE_SETTING_KEYS))
     if unknown:
         errors.append(
             f"settings baseline declares unreconcilable key(s) {unknown}: the apply path "
-            f"(to_branch_protection_payload / to_security_payload) does not write them, so they "
-            f"would be phantom drift. Add them to the binding or remove the typo (§5.1)."
+            f"(to_branch_protection_payload / to_security_payload / to_repository_payload / "
+            f"to_actions_payload) does not write them, so they would be phantom drift. Add them "
+            f"to the binding or remove the typo (§5.1)."
         )
 
 

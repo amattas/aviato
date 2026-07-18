@@ -10,7 +10,7 @@ from aviato.cli import _desired_settings, main
 from aviato.command import CommandError
 from aviato.core.composition import resolve_profile
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
-from aviato.core.ports import Issue, Platform
+from aviato.core.ports import Issue, Platform, SettingsApplyResult
 from aviato.core.registry import Registry
 from aviato.core.settings_drift_flow import diff_identity
 from aviato.core.settingsdrift import classify_settings
@@ -33,9 +33,9 @@ class _FakePlatform:
 
     def apply_settings(
         self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
-    ) -> list[str]:
+    ) -> SettingsApplyResult:
         self.applied.append(payload)
-        return []
+        return SettingsApplyResult()
 
     def comment_issue(self, repo: str, key: str, body: str) -> None:
         pass
@@ -171,7 +171,7 @@ def test_reconcile_apply_write_failure_is_clean_failure_not_traceback(
     class FailingApplyPlatform(_FakePlatform):
         def apply_settings(
             self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
-        ) -> list[str]:
+        ) -> SettingsApplyResult:
             raise CommandError(["gh", "api", "--method", "PUT", "..."], 1, "protection PUT rejected")
 
     platform = FailingApplyPlatform(settings=live, issue=issue)

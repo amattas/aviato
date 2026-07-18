@@ -7,21 +7,23 @@ import pytest
 
 from aviato import __version__, cli
 from aviato.cli import main
-from aviato.core.ports import Issue, Platform
+from aviato.core.ports import Issue, Platform, SettingsApplyResult
 from aviato.core.provision import ProvisionOutcome
 
 
 class _FakePlatform:
-    def __init__(self, skipped: list[str] | None = None) -> None:
+    def __init__(self, skipped: list[str] | None = None, notes: list[str] | None = None) -> None:
         self.applied: list[tuple[str, dict[str, Any]]] = []
-        # R2-4-3: apply_settings now returns the §17 toggles it surfaced-and-skipped.
+        # R2-4-3: apply_settings reports §17 toggles it surfaced-and-skipped (skipped) and free-text
+        # notes about extra mutations it performed (notes) in SEPARATE channels.
         self.skipped = skipped or []
+        self.notes = notes or []
 
     def apply_settings(
         self, repo: str, payload: dict[str, Any], *, expected_live: dict[str, Any] | None = None
-    ) -> list[str]:
+    ) -> SettingsApplyResult:
         self.applied.append((repo, payload))
-        return list(self.skipped)
+        return SettingsApplyResult(skipped=tuple(self.skipped), notes=tuple(self.notes))
 
     def read_settings(self, repo: str) -> dict[str, Any]:
         return {}
@@ -62,9 +64,15 @@ def _consumer(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_complete_protection_applies_full_desired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_complete_protection_applies_full_desired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     root = _consumer(tmp_path)
-    platform = _FakePlatform()
+    # The repo starts with a conflicting classic PR-review block that a ruleset now owns, so
+    # apply_settings clears it and reports the mutation as a free-text NOTE (not a bare desired key).
+    # complete-protection must surface that note to the operator, NOT under the §17-SKIPPED header.
+    clear_note = "cleared conflicting classic PR-review protection on main: the branch ruleset owns §5.7 enforcement"
+    platform = _FakePlatform(notes=[clear_note])
     monkeypatch.setattr(cli, "remote_url", lambda r: "git@github.com:o/r.git")
     monkeypatch.setattr(cli, "normalize_slug", lambda remote: "o/r")
     monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: platform)
@@ -74,6 +82,9 @@ def test_complete_protection_applies_full_desired(tmp_path: Path, monkeypatch: p
     assert platform.applied and platform.applied[0][0] == "o/r"
     # Full desired state carries the always-on protections (e.g. PR requirement).
     assert platform.applied[0][1].get("requires_pull_request") is True
+    err = capsys.readouterr().err
+    assert clear_note in err, "the clear must be surfaced to the operator through the CLI path"
+    assert "SKIPPED" not in err, "an applied clear must not be reported as a §17 toggle SKIPPED"
 
 
 def test_complete_protection_reports_skipped_unavailable_toggle(
@@ -82,7 +93,10 @@ def test_complete_protection_reports_skipped_unavailable_toggle(
     # R2-4-3/R2-5-F1: when apply_settings surfaces-and-skips an unavailable §17 toggle, the CLI must
     # NOT claim a clean apply — it must name the skipped toggle and point at §17.
     root = _consumer(tmp_path)
-    platform = _FakePlatform(skipped=["secret_scanning"])
+    # The real platform-API toggle names (to_security_payload shape), not desired-key stand-ins — two
+    # of the three (push_protection/dependabot) are not desired keys, the F2 mislabeling trap.
+    skipped = ["dependabot_security_updates", "secret_scanning", "secret_scanning_push_protection"]
+    platform = _FakePlatform(skipped=skipped)
     monkeypatch.setattr(cli, "remote_url", lambda r: "git@github.com:o/r.git")
     monkeypatch.setattr(cli, "normalize_slug", lambda remote: "o/r")
     monkeypatch.setattr(cli, "GitHubPlatform", lambda *a, **k: platform)
@@ -90,7 +104,7 @@ def test_complete_protection_reports_skipped_unavailable_toggle(
     rc = main(["complete-protection", str(root)])
     assert rc == 0
     err = capsys.readouterr().err
-    assert "SKIPPED" in err and "secret_scanning" in err and "§17" in err
+    assert "SKIPPED" in err and "§17" in err and all(k in err for k in skipped)
 
 
 def test_complete_protection_missing_declaration_errors(tmp_path: Path) -> None:
