@@ -6,7 +6,7 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- [external verification] Multi-platform releases collide on the code-scanning SARIF category (both arch uploads use the auto category .github/workflows/aviato-ci.yml:docker), so only single-arch publishes complete; fix requires a per-platform category on the Trivy SARIF upload in reusable-docker-ghcr.yml. Blocks the container-fleet migration phase (G2 requires arm64). — source: 2026-07-18 §13.2 live proof
+- [external verification] Multi-platform SARIF category fix (per-arch `runs[0].automationDetails.id` stamp, PR #90, released in 0.4.2) has not yet run a real amd64+arm64 release — the first multi-arch consumer publish (container-fleet migration, G2) is its live verification. The underlying collision (all arch uploads shared the auto category) is fixed; only the live proof remains. — source: 2026-07-18 §13.2 live proof · .github/workflows/reusable-docker-ghcr.yml
 
 
 ## Settled — do not reopen
