@@ -397,6 +397,11 @@ def test_docs_pages_deploy_is_opt_in_and_consumes_exact_branch_artifact() -> Non
 def test_rendered_consumer_docs_caller_defaults_pages_off_and_grants_only_call_union() -> None:
     caller = _rendered_python_library_docs_workflow()
     docs = caller["jobs"]["docs"]
+    # Root-layout docs (commit 8758059): zensical.toml + docs/ live at the repo root, so the
+    # docs job runs from "." and points the toolchain install at requirements-docs.txt (the
+    # reusable default is requirements.txt, so the caller must pass the new name explicitly).
+    assert docs["with"]["working-directory"] == "."
+    assert docs["with"]["docs-requirements"] == "requirements-docs.txt"
     assert docs["with"]["serve-pages"] is False
     assert docs["permissions"] == {
         "contents": "write",

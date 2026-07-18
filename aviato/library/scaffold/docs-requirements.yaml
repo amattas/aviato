@@ -1,5 +1,5 @@
 name: docs-requirements
-output_path: website/requirements.txt
+output_path: requirements-docs.txt
 source: files/docs-requirements.txt.txt
 comment: "#"
 seed_once: false

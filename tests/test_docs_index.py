@@ -197,8 +197,8 @@ def test_active_hardening_plan_matches_current_rollout_state() -> None:
     forbidden = {
         ".github/aviato.seed.json",
         ".github/workflows/aviato-docs.yml",
-        "website/zensical.toml",
-        "website/requirements.txt",
+        "zensical.toml",
+        "requirements-docs.txt",
         "docs/requirements/modules/onboarding/flow.md",
         "docs/requirements/modules/security/scanning.md",
     }
