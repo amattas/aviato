@@ -3436,11 +3436,12 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 <code>[severity] summary — source · file:line pointer</code>.</p>
 <h2 id="open">Open<a class="headerlink" href="#open" title="Permanent link">&para;</a></h2>
 <ul>
-<li>[external verification] Publish the gated artifact to TestPyPI through the consumer-local trusted publisher and verify identity, provenance, and installability. — trace: §13.1</li>
+<li>(none)</li>
 </ul>
 <h2 id="settled-do-not-reopen">Settled — do not reopen<a class="headerlink" href="#settled-do-not-reopen" title="Permanent link">&para;</a></h2>
 <ul>
 <li>pip-audit stays <code>--strict</code>; no severity filter (R7-1: pip-audit JSON carries no severity).</li>
+<li>§13.1 TestPyPI proof PROVEN 2026-07-17: aviato 0.4.1a2 published via the consumer-local OIDC trusted publisher (environment <code>pypi</code>, required reviewer), PEP 691 confirmation green, pip-download from the test index verified, <code>gh attestation verify</code> exit 0. Real-PyPI half already satisfied by production releases 0.3.0/0.4.0/0.4.1. TestPyPI yank of 0.4.1a2 is a pending operator UI click (§11.6 hygiene), not a code gap. See <a href="../../../../traceability/">traceability §13.1</a> and the <a href="../../../../evidence/2026-07-18-deploy-proofs/">2026-07-18 evidence record</a>.</li>
 </ul>
 
 

@@ -3396,7 +3396,7 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 <code>[severity] summary — source · file:line pointer</code>.</p>
 <h2 id="open">Open<a class="headerlink" href="#open" title="Permanent link">&para;</a></h2>
 <ul>
-<li>(none)</li>
+<li>[process] Fresh repos have the GitHub Actions "can create and approve pull requests" permission OFF, which breaks the release automation's release-PR creation on every new consumer (worked around by operator-opened release PRs in both live proofs); model the toggle in provisioning/settings (PUT /repos/{owner}/{repo}/actions/permissions/workflow) or document it as an onboarding prerequisite. — source: 2026-07-18 live proofs</li>
 </ul>
 <h2 id="settled-do-not-reopen">Settled — do not reopen<a class="headerlink" href="#settled-do-not-reopen" title="Permanent link">&para;</a></h2>
 <ul>

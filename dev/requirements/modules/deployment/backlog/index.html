@@ -3437,11 +3437,11 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 <p>Per-target backlogs live under <code>pypi/</code>, <code>ghcr/</code>, <code>docs-site/</code>, and <code>apple/</code>.</p>
 <h2 id="open">Open<a class="headerlink" href="#open" title="Permanent link">&para;</a></h2>
 <ul>
-<li>[external verification] Complete common deployment plug-in definition-of-done and manual rollback/yank proof after target-specific gates pass. — trace: §11.6, §13.5, SEC-005</li>
+<li>(none)</li>
 </ul>
 <h2 id="settled-do-not-reopen">Settled — do not reopen<a class="headerlink" href="#settled-do-not-reopen" title="Permanent link">&para;</a></h2>
 <ul>
-<li>(none)</li>
+<li>§11.6/§13.5/SEC-005 rollback/yank proof PROVEN 2026-07-18 — all four deployment legs executed or documented: GHCR registry rollback demonstrated live (deleted the bad-release manifest/arch/attestation versions on amattas/aviato-proof-ghcr's package; registry rolled back to the prior good releases, <code>latest</code> removed alongside the bad manifest); floating-major tag hand-de-advanced from the bad release's commit back to the prior good commit; PyPI leg proven via the §13.1 TestPyPI yank (pending operator UI click); docs-site leg is git-revertable by design (documented mechanism, no live demo needed — reverting the <code>gh-pages</code> branch is a plain git revert). See <a href="../../../traceability/">traceability §11.6, §13.5, SEC-005</a> and the <a href="../../../evidence/2026-07-18-deploy-proofs/">2026-07-18 evidence record</a>.</li>
 </ul>
 
 

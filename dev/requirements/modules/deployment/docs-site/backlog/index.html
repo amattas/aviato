@@ -3437,12 +3437,12 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 <h2 id="open">Open<a class="headerlink" href="#open" title="Permanent link">&para;</a></h2>
 <ul>
 <li>[external watch] Replace the pinned mike bridge with Zensical-native versioning when that capability ships; until then <code>aviato/library/docs-toolchain.yaml</code> owns the immutable fork SHA and the sync script updates every generated copy. — spec 2026-07-11</li>
-<li>[external verification] Deploy a disposable consumer docs site through Pages Actions and verify the exact gated tree, version path, and <code>latest</code> alias; Aviato itself intentionally has no self-site. — trace: §13.3, SEC-005</li>
 </ul>
 <h2 id="settled-do-not-reopen">Settled — do not reopen<a class="headerlink" href="#settled-do-not-reopen" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Docs for ALL releases are kept — no pruning by default; <code>docs-retention</code> is an optional cap, default unlimited (#37, operator decision 2026-06-09).</li>
 <li>Zensical with built-in search is the only current docs baseline (operator decision 2026-07-11); prior Docusaurus and Algolia decisions are historical and superseded.</li>
+<li>§13.3 disposable-consumer Pages proof PROVEN 2026-07-17: branch DoD (version dir + <code>latest</code> symlink alias), served-site DoD (root/<code>latest</code>/versioned URLs 200, sitemap, search index, Mermaid rendering), and the §8.14 monotonic-alias DoD (minor release moves <code>latest</code>; old-line hand-tagged patch does not) all verified live on a disposable public repo, after fixing a real upstream bug (<code>reusable-docs-pages.yml</code> ran <code>git archive</code> under the docs working-directory instead of the repo root, silently producing an empty Pages artifact — fixed in aviato PR #85). See <a href="../../../../traceability/">traceability §13.3</a> and the <a href="../../../../evidence/2026-07-18-deploy-proofs/">2026-07-18 evidence record</a>.</li>
 </ul>
 
 
