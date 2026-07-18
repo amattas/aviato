@@ -242,6 +242,15 @@ jobs:
             # the SARIF entirely — §2.13 requires medium/low reported (without blocking).
             trivy image --ignore-unfixed --input "oci/${slug}.layout" \
               --format sarif --output "trivy-sarif/${slug}.sarif" || exit 1
+            # Per-arch code-scanning category: without one, every platform's SARIF shares the
+            # auto-derived category (workflow:job), and the single upload-sarif step rejects
+            # the second file for the same commit — a multi-platform release could never
+            # complete (live §13.2 proof finding, 2026-07-18). upload-sarif reads
+            # runs[].automationDetails.id as the category, so stamping it per platform keeps
+            # the one directory-upload step working for N architectures.
+            jq --arg cat "aviato-docker/${slug}" '.runs[0].automationDetails.id = $cat' \
+              "trivy-sarif/${slug}.sarif" > "trivy-sarif/${slug}.sarif.tmp"
+            mv "trivy-sarif/${slug}.sarif.tmp" "trivy-sarif/${slug}.sarif"
             # §11.7: per-platform SBOM of the exact scanned bytes (uploaded as an artifact).
             trivy image --input "oci/${slug}.layout" \
               --format cyclonedx --output "oci/${slug}.sbom.cdx.json" || exit 1

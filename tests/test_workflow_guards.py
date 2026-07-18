@@ -639,6 +639,15 @@ def test_ghcr_publishes_only_scanned_digests() -> None:
     trivy_input_count = body.count('--input "oci/${slug}.layout"')
     assert trivy_input_count == 3, f"all 3 trivy calls must use the layout dir, got {trivy_input_count}"
 
+    # Per-arch code-scanning categories: without a per-platform automationDetails.id stamp,
+    # every SARIF shares the auto category (workflow:job) and the single upload-sarif step
+    # rejects the second file for the same commit, so a multi-platform release can never
+    # complete (live §13.2 proof finding, 2026-07-18).
+    stamp = """jq --arg cat "aviato-docker/${slug}" '.runs[0].automationDetails.id = $cat'"""
+    assert stamp in body, "each platform SARIF must be stamped with a per-arch category"
+    sarif_index = body.index('--format sarif --output "trivy-sarif/${slug}.sarif"')
+    assert sarif_index < body.index(stamp), "the stamp must run after the SARIF is written"
+
     extract_index = body.index(extract_cmd)
     build_index = body.index('--output "type=oci,dest=oci/${slug}.tar"')
     first_trivy_index = body.index('--input "oci/${slug}.layout"')
