@@ -617,10 +617,34 @@ def test_ghcr_publishes_only_scanned_digests() -> None:
     body = (WORKFLOWS / "reusable-docker-ghcr.yml").read_text(encoding="utf-8")
     assert "docker/build-push-action" not in body, "scan-then-rebuild reintroduced (C12-W3)"
     assert '--output "type=oci,dest=oci/${slug}.tar"' in body, "build must emit a local OCI archive"
-    assert '--input "oci/${slug}.tar"' in body, "trivy must scan the archive, not a rebuilt image"
     assert "skopeo copy --digestfile" in body, "push must promote the archive bytes"
     assert '"${pushed_digest}" != "${local_digest}"' in body, "pushed==scanned digest assert missing"
     assert body.index("trivy image") < body.index("skopeo copy"), "scan must precede push"
+
+    # Trivy >=0.72 (aquasecurity/setup-trivy pinned to v0.72.0) can no longer auto-detect
+    # a buildx `type=oci,dest=...` archive passed directly via `--input` (it neither parses
+    # as a docker-save tar nor as an OCI layout dir) — extract the archive bytes to a real
+    # OCI layout DIRECTORY first and point every trivy invocation at that directory instead.
+    assert (
+        'tar -xf "oci/${slug}.tar" -C "oci/${slug}.layout"' in body
+    ), "must extract the buildx OCI archive to a layout directory for Trivy >=0.72"
+    assert '--input "oci/${slug}.tar"' not in body, "trivy must not be pointed at the raw tar (Trivy >=0.72 regression)"
+    trivy_input_count = body.count('--input "oci/${slug}.layout"')
+    assert (
+        trivy_input_count == 3
+    ), f"all three trivy invocations (SARIF/SBOM/gate) must use the layout dir, got {trivy_input_count}"
+
+    extract_index = body.index('tar -xf "oci/${slug}.tar" -C "oci/${slug}.layout"')
+    build_index = body.index('--output "type=oci,dest=oci/${slug}.tar"')
+    first_trivy_index = body.index('--input "oci/${slug}.layout"')
+    assert (
+        build_index < extract_index < first_trivy_index
+    ), "buildx must write the tar, then extract, before trivy scans"
+
+    # skopeo must still promote the UNTOUCHED tar (not the extracted layout dir) — the
+    # extraction is scan-input-only plumbing and must not affect C12-W3 byte identity.
+    assert "skopeo inspect --format '{{.Digest}}' \"oci-archive:oci/${slug}.tar\"" in body
+    assert 'skopeo copy --digestfile "oci/${slug}.pushed" \\\n              "oci-archive:oci/${slug}.tar"' in body
 
 
 def test_non_pushing_checkouts_do_not_persist_credentials() -> None:
