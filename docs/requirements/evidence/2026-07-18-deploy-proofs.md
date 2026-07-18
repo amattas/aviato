@@ -30,7 +30,7 @@ trusted publisher (environment `pypi`, required reviewer gate).
 | Real-PyPI half | Already satisfied — production releases 0.3.0/0.4.0/0.4.1 |
 
 The redirect variable `PYPI_REPOSITORY_URL` was set environment-scoped for the proof
-and **removed after**. TestPyPI yank of `0.4.1a2` is a pending operator UI click
+and **removed after**. TestPyPI yank of `0.4.1a2` executed by the operator 2026-07-18
 (§11.6 hygiene) — not a code gap, no automation path exists for it by design.
 
 ## §13.2 — GHCR (PROVEN, single-arch)
@@ -87,7 +87,7 @@ All four deployment legs closed:
 - **Floating-major tag** — hand-de-advanced tag `0` from the bad release's commit
   `076a0875` back to the prior good commit `03236f13`, proving the §13.5
   hand-de-advance mechanism live.
-- **PyPI** — the §13.1 TestPyPI yank of `0.4.1a2` (pending operator UI click).
+- **PyPI** — the §13.1 TestPyPI yank of `0.4.1a2`, executed by the operator 2026-07-18 (UI; PyPI exposes no yank API). All four §13.5 legs are now executed or mechanism-documented.
 - **Docs-site** — the `gh-pages` branch is a plain git-revertable ref (documented
   mechanism); no live demo needed, same conclusion as the branch-state proof in
   §13.3.
@@ -155,8 +155,7 @@ stdout instead).
 
 ## §11.6 cleanup state
 
-- TestPyPI yank of `aviato` 0.4.1a2: **pending** (operator UI click; no automation
-  path by design).
+- TestPyPI yank of `aviato` 0.4.1a2: **done** (operator UI, 2026-07-18; PyPI exposes no yank API by design).
 - Proof repos `amattas/aviato-proof-docs` and `amattas/aviato-proof-ghcr`: **deleted
   after this record lands** — nothing in this file depends on them remaining
   reachable.
