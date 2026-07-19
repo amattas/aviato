@@ -309,7 +309,12 @@ def test_materialize_renders_into_scaffold_then_writes(tmp_path: Path) -> None:
     items = materialize_items(reg, "python-library", variables=PYTHON_VARIABLES, pin="0")
     result = scaffold(tmp_path, items, profile="python-library", version="v1")
     assert ".editorconfig" in result.written
-    assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library")
+    ruff_config = (tmp_path / "ruff.toml").read_text()
+    assert ruff_config.startswith("# aviato:managed profile=python-library")
+    # The S (bandit) family is deliberately on for consumers, but assert IS the pytest
+    # mechanism — without this exemption a fresh adoption drowns in S101 (293 findings on
+    # the first live pydmp CI run, 2026-07-18).
+    assert '"tests/**" = ["S101"]' in ruff_config
     # LICENSE is seed-once (no marker)
     assert "aviato:managed" not in (tmp_path / "LICENSE").read_text()
 
