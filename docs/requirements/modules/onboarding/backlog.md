@@ -6,7 +6,7 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- (none)
+- [process] `onboard --write`/`sync` render artifacts from the INSTALLED tool's bundled library while `--pin` governs the callers' remote refs and the drift automation's render source — §2.6 sanctions same-major skew, but when scaffold bodies change between minors the skew silently manufactures phantom drift on every changed artifact (live: a 0.5.2 CLI onboarding pydmp with `--pin 0.5.0` wrote root-layout docs artifacts a 0.5.0-pinned drift run would flag wholesale). Minimum fix: warn loudly at write time when tool version != pin, naming the repin/re-pin-flag remedies; a fuller fix (render fresh onboards from the fetched pin registry, as §5.12 repin already does) trades away offline scaffolding and needs its own design pass. — source: 2026-07-18 pydmp adoption · aviato/cli.py (§2.6 check site has both versions in hand)
 
 
 ## Settled — do not reopen
