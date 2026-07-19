@@ -53,7 +53,7 @@ def test_docs_pin_sync_declares_exactly_two_consumer_outputs_and_detects_all_dri
 
 
 def test_library_has_no_self_docs_site_but_consumer_docs_assets_remain() -> None:
-    declaration = yaml.safe_load((REPO_ROOT / ".github/aviato.yaml").read_text(encoding="utf-8"))
+    declaration = yaml.safe_load((REPO_ROOT / ".github/aviato.yml").read_text(encoding="utf-8"))
     assert declaration["docs"] is False
     assert "serve-pages" not in declaration.get("variables", {})
     assert not (REPO_ROOT / "website").exists()

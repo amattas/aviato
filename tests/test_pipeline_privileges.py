@@ -145,7 +145,7 @@ def test_library_typecheck_covers_package_and_tests_in_source_and_bootstrap() ->
     expected = "python -m mypy --strict aviato tests"
     assert typecheck["default"] == expected
 
-    declaration = _mapping(yaml.safe_load((REPO_ROOT / ".github" / "aviato.yaml").read_text(encoding="utf-8")))
+    declaration = _mapping(yaml.safe_load((REPO_ROOT / ".github" / "aviato.yml").read_text(encoding="utf-8")))
     assert _mapping(declaration["variables"])["typecheck-command"] == expected
 
     caller = _load_workflow("aviato-ci.yml")

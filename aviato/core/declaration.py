@@ -13,7 +13,7 @@ from .version import is_known_version_pin
 
 @dataclass
 class Declaration:
-    """A Consumer's ``.github/aviato.yaml`` (§6.1) — the only Library↔Consumer interface."""
+    """A Consumer's ``.github/aviato.yml`` (§6.1) — the only Library↔Consumer interface."""
 
     profile: str
     version: str
@@ -129,7 +129,7 @@ def _canonical_version(value: str) -> str:
 
 
 def declaration_to_yaml(declaration: Declaration) -> str:
-    """Serialize a declaration to its ``.github/aviato.yaml`` text (§6.1)."""
+    """Serialize a declaration to its ``.github/aviato.yml`` text (§6.1)."""
     payload: dict[str, Any] = {
         "profile": declaration.profile,
         "version": _canonical_version(declaration.version),

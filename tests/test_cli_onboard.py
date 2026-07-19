@@ -61,7 +61,7 @@ def test_onboard_lists_composed_pipelines_and_variables(capsys: pytest.CaptureFi
     # A fresh preview has no declaration yet, so it must sequence declaration creation
     # before the override-aware ruleset command instead of recommending --profile.
     assert "after onboarding writes or updates the declaration" in out
-    assert ("aviato apply-rulesets owner/repo --apply --declaration /path/to/checkout/.github/aviato.yaml") in out
+    assert ("aviato apply-rulesets owner/repo --apply --declaration /path/to/checkout/.github/aviato.yml") in out
     assert "apply-rulesets owner/repo --apply --profile" not in out
 
 
@@ -190,7 +190,7 @@ def test_swift_reonboard_plan_uses_write_precedence_without_mutating_declaration
     }
     if saved_environment is not None:
         variables["environment-name"] = saved_environment
-    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration = tmp_path / ".github" / "aviato.yml"
     declaration.parent.mkdir(parents=True)
     declaration.write_text(
         yaml.safe_dump(
@@ -222,7 +222,7 @@ def test_reonboard_without_pin_preserves_existing(tmp_path: Path) -> None:
     # §5.12: onboarding is not a re-pin. A fresh adopt with a legacy ``v2.0.0`` is
     # canonicalized to bare on write (§6.1); re-onboarding without --pin must preserve it.
     assert _adopt(tmp_path, "--pin", "v2.0.0") == 0
-    decl = tmp_path / ".github" / "aviato.yaml"
+    decl = tmp_path / ".github" / "aviato.yml"
     assert yaml.safe_load(decl.read_text())["version"] == "2.0.0"
 
     assert _adopt(tmp_path) == 0  # no --pin
@@ -239,14 +239,14 @@ def test_reonboard_with_differing_pin_refused(tmp_path: Path, capsys: pytest.Cap
     assert rc != 0
     assert "repin" in err
     # The pin was NOT moved.
-    decl = tmp_path / ".github" / "aviato.yaml"
+    decl = tmp_path / ".github" / "aviato.yml"
     assert yaml.safe_load(decl.read_text())["version"] == "2.0.0"
 
 
 def test_reonboard_with_matching_pin_ok(tmp_path: Path) -> None:
     assert _adopt(tmp_path, "--pin", "2.0.0") == 0
     assert _adopt(tmp_path, "--pin", "v2.0.0") == 0  # legacy form, same pin → allowed
-    decl = tmp_path / ".github" / "aviato.yaml"
+    decl = tmp_path / ".github" / "aviato.yml"
     assert yaml.safe_load(decl.read_text())["version"] == "2.0.0"
 
 
@@ -254,7 +254,7 @@ def test_doctor_reports_clean_and_missing(tmp_path: Path, capsys: pytest.Capture
     # A consumer repo declaring python-library with one matching managed file present.
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text(
+    (github / "aviato.yml").write_text(
         "profile: python-library\nversion: v1\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",
     )
@@ -287,7 +287,7 @@ def test_doctor_rejects_bootstrap_declaration_in_non_library(
     # tmp_path repo has no aviato/library structure, so is_library(root) is False.
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text(
+    (github / "aviato.yml").write_text(
         "profile: python-library\nversion: v1\nbootstrap: true\nvariables:\n"
         "  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",

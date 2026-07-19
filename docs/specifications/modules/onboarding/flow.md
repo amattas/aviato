@@ -49,7 +49,7 @@ active-enforcement, and no-bypass protections remain unchanged. Remove the
 override before or in the same settings change that makes another reviewer
 eligible, restoring the profile default of one approval without an unprotected
 interval. All onboarding completion guidance uses
-`--declaration .github/aviato.yaml`, never `--profile`, so the apply path
+`--declaration .github/aviato.yml`, never `--profile`, so the apply path
 preserves these repository-specific settings. Fresh previews sequence writing
 or merging the declaration before that command.
 For `python-library`, the managed CI caller includes the consumer-local `pypi`

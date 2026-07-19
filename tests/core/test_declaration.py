@@ -14,7 +14,7 @@ def _write(path: Path, data: dict[str, object]) -> None:
 
 
 def test_loads_valid_declaration(tmp_path: Path) -> None:
-    path = tmp_path / "aviato.yaml"
+    path = tmp_path / "aviato.yml"
     _write(path, {"profile": "python-library", "version": "v1", "variables": {"dist": "x"}})
     decl = load_declaration(path)
     assert decl.profile == "python-library"
@@ -25,27 +25,27 @@ def test_loads_valid_declaration(tmp_path: Path) -> None:
 
 
 def test_docs_opt_in(tmp_path: Path) -> None:
-    path = tmp_path / "aviato.yaml"
+    path = tmp_path / "aviato.yml"
     _write(path, {"profile": "p", "version": "v1", "docs": True})
     assert load_declaration(path).docs is True
 
 
 def test_missing_profile_is_error(tmp_path: Path) -> None:
-    path = tmp_path / "aviato.yaml"
+    path = tmp_path / "aviato.yml"
     _write(path, {"version": "v1"})
     with pytest.raises(DeclarationError):
         load_declaration(path)
 
 
 def test_missing_version_is_error(tmp_path: Path) -> None:
-    path = tmp_path / "aviato.yaml"
+    path = tmp_path / "aviato.yml"
     _write(path, {"profile": "p"})
     with pytest.raises(DeclarationError):
         load_declaration(path)
 
 
 def test_non_mapping_is_error(tmp_path: Path) -> None:
-    path = tmp_path / "aviato.yaml"
+    path = tmp_path / "aviato.yml"
     path.write_text("- a\n- b\n", encoding="utf-8")
     with pytest.raises(DeclarationError):
         load_declaration(path)
@@ -60,21 +60,21 @@ def test_round_trip(tmp_path: Path) -> None:
         variables={"a": "b"},
         overrides={"settings": {}},
     )
-    path = tmp_path / "aviato.yaml"
-    dump_declaration(decl, tmp_path, "aviato.yaml")
+    path = tmp_path / "aviato.yml"
+    dump_declaration(decl, tmp_path, "aviato.yml")
     assert load_declaration(path) == decl
     assert yaml.safe_load(path.read_text())["profile-identity"] == "aviato-profile/p/v1"
 
 
 def test_profile_identity_is_optional_for_legacy_declarations(tmp_path: Path) -> None:
-    path = tmp_path / "aviato.yaml"
+    path = tmp_path / "aviato.yml"
     _write(path, {"profile": "p", "version": "2"})
     assert load_declaration(path).profile_identity is None
 
 
 @pytest.mark.parametrize("identity", ["", "   ", 3])
 def test_profile_identity_must_be_a_non_empty_string_when_present(tmp_path: Path, identity: object) -> None:
-    path = tmp_path / "aviato.yaml"
+    path = tmp_path / "aviato.yml"
     _write(path, {"profile": "p", "profile-identity": identity, "version": "2"})
     with pytest.raises(DeclarationError, match="profile-identity"):
         load_declaration(path)
@@ -83,7 +83,7 @@ def test_profile_identity_must_be_a_non_empty_string_when_present(tmp_path: Path
 def test_unquoted_float_version_is_rejected_not_silently_corrupted(tmp_path: Path) -> None:
     # review #3: `version: 1.10` (unquoted) is parsed by YAML as float 1.1 — a silent corruption
     # (1.10 != 1.1) that used to be str()'d and stamped into markers/refs. Must fail loud.
-    path = tmp_path / "aviato.yaml"
+    path = tmp_path / "aviato.yml"
     path.write_text("profile: p\nversion: 1.10\n", encoding="utf-8")
     with pytest.raises(DeclarationError) as exc:
         load_declaration(path)
@@ -102,7 +102,7 @@ def test_unquoted_float_version_is_rejected_not_silently_corrupted(tmp_path: Pat
 def test_malformed_yaml_raises_declaration_error_not_raw_yamlerror(tmp_path: Path) -> None:
     # R1-1: a corrupt declaration must raise DeclarationError (an AviatoError) so scan_fleet's
     # per-repo guard catches it, never a raw yaml.YAMLError that aborts the whole fleet scan (§5.11).
-    path = tmp_path / "aviato.yaml"
+    path = tmp_path / "aviato.yml"
     path.write_text("profile: p\nversion: '1'\nvariables: {a: [unclosed\n", encoding="utf-8")
     with pytest.raises(DeclarationError):
         load_declaration(path)
@@ -111,7 +111,7 @@ def test_malformed_yaml_raises_declaration_error_not_raw_yamlerror(tmp_path: Pat
 def test_unknown_top_level_key_is_rejected(tmp_path: Path) -> None:
     # R1-9/§6.1: a typo'd top-level key (e.g. `doc:` for `docs:`) must fail loud, not be silently
     # ignored (which would silently disable the intended feature).
-    path = tmp_path / "aviato.yaml"
+    path = tmp_path / "aviato.yml"
     path.write_text("profile: p\nversion: '1'\ndoc: true\n", encoding="utf-8")
     with pytest.raises(DeclarationError) as exc:
         load_declaration(path)
@@ -121,7 +121,7 @@ def test_unknown_top_level_key_is_rejected(tmp_path: Path) -> None:
 def test_boolean_fields_are_parsed_by_value_not_truthiness(tmp_path: Path) -> None:
     # CX#3: a QUOTED `docs: "false"` / `bootstrap: "false"` must load as False (bool("false") is
     # truthy — the bug), and a non-boolean must fail loud per §6.1's typed contract.
-    path = tmp_path / "aviato.yaml"
+    path = tmp_path / "aviato.yml"
     path.write_text('profile: p\nversion: 1\ndocs: "false"\nbootstrap: "false"\n', encoding="utf-8")
     decl = load_declaration(path)
     assert decl.docs is False and decl.bootstrap is False
@@ -138,7 +138,7 @@ def test_boolean_fields_are_parsed_by_value_not_truthiness(tmp_path: Path) -> No
 def test_non_mapping_variables_or_overrides_raise_declaration_error(tmp_path: Path) -> None:
     # review #13: a non-mapping `variables:`/`overrides:` must raise the module's DeclarationError
     # (which every caller catches), not a raw ValueError from dict() that escapes the contract.
-    path = tmp_path / "aviato.yaml"
+    path = tmp_path / "aviato.yml"
     for field_name in ("variables", "overrides"):
         path.write_text(f"profile: p\nversion: 1.0.0\n{field_name}: [a, b]\n", encoding="utf-8")
         with pytest.raises(DeclarationError) as exc:
@@ -152,8 +152,8 @@ def test_bootstrap_field_parses_round_trips_and_omitted_when_false(tmp_path: Pat
     from aviato.core.declaration import declaration_to_yaml
 
     lib = Declaration(profile="p", version="2", bootstrap=True)
-    path = tmp_path / "aviato.yaml"
-    dump_declaration(lib, tmp_path, "aviato.yaml")
+    path = tmp_path / "aviato.yml"
+    dump_declaration(lib, tmp_path, "aviato.yml")
     assert load_declaration(path) == lib  # round-trips bootstrap: true
     assert yaml.safe_load(path.read_text())["bootstrap"] is True
     # default-False declaration must NOT emit the key at all
@@ -177,14 +177,14 @@ def test_legacy_v_prefix_is_tolerated_on_read_but_never_emitted(tmp_path: Path) 
 
 
 def test_non_utf8_declaration_raises_declaration_error_not_raw_unicode(tmp_path: Path) -> None:
-    # R5-4-DECL: a non-UTF-8 aviato.yaml must map to DeclarationError (an AviatoError), not leak a
+    # R5-4-DECL: a non-UTF-8 aviato.yml must map to DeclarationError (an AviatoError), not leak a
     # raw UnicodeDecodeError past main()'s net / abort a fleet scan.
     import pytest
 
     from aviato.core.declaration import load_declaration
     from aviato.core.errors import DeclarationError
 
-    f = tmp_path / "aviato.yaml"
+    f = tmp_path / "aviato.yml"
     f.write_bytes(b"profile: python-library\nversion: \xff\xfe v1\n")
     with pytest.raises(DeclarationError, match="not valid UTF-8"):
         load_declaration(f)

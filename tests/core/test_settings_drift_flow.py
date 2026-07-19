@@ -91,7 +91,7 @@ def test_drifted_ruleset_is_reported_even_with_clean_settings() -> None:
     _, args = next(c for c in platform.calls if c[0] == "open_or_update_issue")
     body = args[3]
     assert isinstance(body, str)
-    assert "apply-rulesets o/r --apply --declaration .github/aviato.yaml" in body
+    assert "apply-rulesets o/r --apply --declaration .github/aviato.yml" in body
     assert "apply-rulesets o/r --apply --profile" not in body
     assert "Common: release tag format" in body
 

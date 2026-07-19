@@ -14,7 +14,7 @@ the two use different platform write surfaces (a wholesale branch-protection `PU
 upsert), and the dry-run-reviewed `apply-rulesets` is the sanctioned operator gate for them
 (the same way provisioning/`complete-protection` apply protection operator-direct, outside the
 consent-issue mechanism). §5.6 detects ruleset drift (presence + content) and directs the operator
-to `apply-rulesets … --apply --declaration .github/aviato.yaml`. The declaration-aware form is
+to `apply-rulesets … --apply --declaration .github/aviato.yml`. The declaration-aware form is
 mandatory once a declaration exists so repository-specific checks and settings overrides cannot
 be silently reset to profile defaults during remediation.
 **Steps:** fetch the issue; refuse if closed → confirm the consent record is

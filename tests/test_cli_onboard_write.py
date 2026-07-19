@@ -44,7 +44,7 @@ def test_onboard_write_adopts_local_repo(
     out = capsys.readouterr().out
     assert rc == 0
 
-    decl = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
+    decl = yaml.safe_load((tmp_path / ".github" / "aviato.yml").read_text())
     assert decl["profile"] == "python-library"
     # --pin v0 (legacy form) is canonicalized to bare on write; a leading v is never emitted (§6.1).
     assert decl["version"] == "0"
@@ -52,8 +52,8 @@ def test_onboard_write_adopts_local_repo(
 
     # managed file scaffolded with marker (bare pin); seed-once LICENSE written without marker
     assert (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed profile=python-library version=0")
-    assert "wrote .github/aviato.yaml" in out
-    assert f"aviato apply-rulesets OWNER/REPO --apply --declaration {tmp_path / '.github' / 'aviato.yaml'}" in out
+    assert "wrote .github/aviato.yml" in out
+    assert f"aviato apply-rulesets OWNER/REPO --apply --declaration {tmp_path / '.github' / 'aviato.yml'}" in out
     assert "apply-rulesets OWNER/REPO --apply --profile" not in out
 
 
@@ -88,7 +88,7 @@ def test_onboard_write_does_not_treat_lost_declaration_as_fresh(
     captured = capsys.readouterr()
     assert rc == 2
     assert "--rebaseline-seeds" in captured.err
-    assert not (github / "aviato.yaml").exists()
+    assert not (github / "aviato.yml").exists()
     assert not (tmp_path / "ruff.toml").exists()
     assert sidecar.read_text(encoding="utf-8") == sidecar_body
     assert (tmp_path / "LICENSE").read_text(encoding="utf-8") == "operator license\n"
@@ -113,11 +113,11 @@ def test_reonboard_preserves_docs_opt_in(tmp_path: Path) -> None:
         "import-name=acme",
     ]
     assert main(base + ["--docs"]) == 0
-    first = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
+    first = yaml.safe_load((tmp_path / ".github" / "aviato.yml").read_text())
     assert first["docs"] is True
     # Re-onboard WITHOUT --docs → docs must stay true (preserved like overrides).
     assert main(base) == 0
-    second = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
+    second = yaml.safe_load((tmp_path / ".github" / "aviato.yml").read_text())
     assert second["docs"] is True
     assert second["profile-identity"] == first["profile-identity"]
 
@@ -149,14 +149,14 @@ def test_reonboard_docs_true_also_scaffolds_docs_workflow(tmp_path: Path) -> Non
 
     rc = main(base)  # NO --docs on the re-onboard
     assert rc == 0
-    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["docs"] is True
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yml").read_text())["docs"] is True
     assert list((tmp_path / ".github" / "workflows").glob("*docs*")), "docs:true must scaffold the docs workflow"
 
 
 def test_onboard_write_fails_on_missing_required_var(tmp_path: Path) -> None:
     rc = main(["onboard", str(tmp_path), "--profile", "python-library", "--write", "--pin", "0"])
     assert rc == 2
-    assert not (tmp_path / ".github" / "aviato.yaml").exists()
+    assert not (tmp_path / ".github" / "aviato.yml").exists()
 
 
 def test_fresh_onboard_write_requires_explicit_pin(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -177,7 +177,7 @@ def test_fresh_onboard_write_requires_explicit_pin(tmp_path: Path, capsys: pytes
     err = capsys.readouterr().err
     assert rc == 2
     assert "--pin" in err
-    assert not (tmp_path / ".github" / "aviato.yaml").exists()
+    assert not (tmp_path / ".github" / "aviato.yml").exists()
 
 
 def test_fresh_onboard_write_refuses_unpublished_pin(
@@ -204,7 +204,7 @@ def test_fresh_onboard_write_refuses_unpublished_pin(
     assert rc == 2
     assert "does not resolve" in err
     assert "--allow-unresolved-pin" in err
-    assert not (tmp_path / ".github" / "aviato.yaml").exists()
+    assert not (tmp_path / ".github" / "aviato.yml").exists()
 
 
 def test_onboard_write_refuses_profile_change_without_migrate(
@@ -212,7 +212,7 @@ def test_onboard_write_refuses_profile_change_without_migrate(
 ) -> None:
     github = tmp_path / ".github"
     github.mkdir()
-    declaration = github / "aviato.yaml"
+    declaration = github / "aviato.yml"
     original = "profile: node-service\nprofile-identity: aviato-profile/node-service/v1\nversion: v0\n"
     declaration.write_text(original, encoding="utf-8")
     rc = main(
@@ -276,7 +276,7 @@ def test_onboard_write_explicit_profile_migration_persists_new_identity_and_arti
     )
 
     assert rc == 0
-    declaration = yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())
+    declaration = yaml.safe_load((tmp_path / ".github" / "aviato.yml").read_text())
     assert declaration["profile"] == "node-service"
     assert declaration["profile-identity"] == "aviato-profile/node-service/v1"
     assert (tmp_path / "eslint.config.mjs").exists()
@@ -435,7 +435,7 @@ def test_onboard_write_refuses_dirty_tree_without_override(tmp_path: Path) -> No
         ]
     )
     assert rc == 2
-    assert not (tmp_path / ".github" / "aviato.yaml").exists()
+    assert not (tmp_path / ".github" / "aviato.yml").exists()
 
 
 def test_onboard_write_adopts_clean_git_repo(tmp_path: Path) -> None:
@@ -457,7 +457,7 @@ def test_onboard_write_adopts_clean_git_repo(tmp_path: Path) -> None:
         ]
     )
     assert rc == 0
-    assert (tmp_path / ".github" / "aviato.yaml").exists()
+    assert (tmp_path / ".github" / "aviato.yml").exists()
 
 
 def test_onboard_without_write_only_prints_plan(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -465,14 +465,14 @@ def test_onboard_without_write_only_prints_plan(tmp_path: Path, capsys: pytest.C
     out = capsys.readouterr().out
     assert rc == 0
     assert "Onboarding plan" in out
-    assert not (tmp_path / ".github" / "aviato.yaml").exists()  # plan-only, no write
+    assert not (tmp_path / ".github" / "aviato.yml").exists()  # plan-only, no write
 
 
 @pytest.mark.parametrize("identity_line", ["", "profile-identity: aviato-profile/repurposed/v1\n"])
 def test_reonboard_write_refuses_legacy_or_mismatched_identity_without_mutation(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], identity_line: str
 ) -> None:
-    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration = tmp_path / ".github" / "aviato.yml"
     declaration.parent.mkdir()
     original = (
         "profile: python-library\n"

@@ -45,7 +45,7 @@ def test_apply_rulesets_aggregates_slugs_from_all_sources(
 
 def test_apply_rulesets_declaration_preserves_zero_approval_override(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _patch_apply(monkeypatch)
-    declaration = Path(__file__).resolve().parents[1] / ".github" / "aviato.yaml"
+    declaration = Path(__file__).resolve().parents[1] / ".github" / "aviato.yml"
 
     rc = cli.main(["apply-rulesets", "amattas/aviato", "--declaration", str(declaration)])
 

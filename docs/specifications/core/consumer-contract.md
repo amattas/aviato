@@ -7,7 +7,7 @@ surface, specified normatively below.
 
 ### 6.1 Declaration file
 
-- **Name & location:** a single file at `.github/aviato.yaml` in the Consumer (the
+- **Name & location:** a single file at `.github/aviato.yml` in the Consumer (the
   path is the GitHub binding's realization, §2.14; another platform binding could
   place it elsewhere).
 - **Format:** YAML.

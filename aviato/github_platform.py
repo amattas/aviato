@@ -1058,8 +1058,8 @@ class GitHubPlatform:
                     f"refusing to PUT classic branch protection on {repo}@{branch}: its branch "
                     f"protection is enforced by a ruleset, which this settings reconcile cannot "
                     f"write. From the consumer repository root, review `aviato apply-rulesets "
-                    f"{repo} --declaration .github/aviato.yaml`, then apply it with "
-                    f"`aviato apply-rulesets {repo} --declaration .github/aviato.yaml --apply` "
+                    f"{repo} --declaration .github/aviato.yml`, then apply it with "
+                    f"`aviato apply-rulesets {repo} --declaration .github/aviato.yml --apply` "
                     f"for {drifted} before re-running."
                 )
             # The ruleset owns §5.7 enforcement for this branch and the modeled state matches desired

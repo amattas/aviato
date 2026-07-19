@@ -48,7 +48,7 @@ REQUIRED_FILES = [
     ".github/workflows/reusable-security-baseline.yml",
     ".github/workflows/reusable-common-lint.yml",
     ".github/workflows/reusable-consumer-automation.yml",
-    ".github/aviato.yaml",
+    ".github/aviato.yml",
     ".github/workflows/aviato-ci.yml",
     ".github/workflows/aviato-drift.yml",
     "templates/profile-python-service.yml",
@@ -787,16 +787,16 @@ def _check_library_bootstrap(root: Path, repository: str, errors: list[str]) -> 
     from .core.registry import Registry
     from .core.scaffold import ScaffoldItem, read_sidecar, render_managed
 
-    declaration_path = root / ".github" / "aviato.yaml"
+    declaration_path = root / ".github" / "aviato.yml"
     if not declaration_path.exists():
         return  # absence is already reported by REQUIRED_FILES
     try:
         declaration = load_declaration(declaration_path)
     except Exception as exc:  # noqa: BLE001
-        errors.append(f".github/aviato.yaml is invalid: {exc}")
+        errors.append(f".github/aviato.yml is invalid: {exc}")
         return
     if not declaration.bootstrap:
-        errors.append(".github/aviato.yaml must declare bootstrap: true for the Library self-reference path (§5.10)")
+        errors.append(".github/aviato.yml must declare bootstrap: true for the Library self-reference path (§5.10)")
         return
 
     registry = Registry(root / "aviato" / "library")

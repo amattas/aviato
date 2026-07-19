@@ -24,7 +24,7 @@ def _record_keyword_arguments[**P, R](fn: Callable[P, R], calls: list[dict[str, 
 def _make_consumer(root: Path, *, scaffold_all: bool) -> None:
     github = root / ".github"
     github.mkdir(parents=True)
-    (github / "aviato.yaml").write_text(
+    (github / "aviato.yml").write_text(
         "profile: python-library\nversion: v1\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",
     )
@@ -47,7 +47,7 @@ def test_scan_no_false_drift_for_javascript_consumer(tmp_path: Path) -> None:
     root = tmp_path / "js"
     github = root / ".github"
     github.mkdir(parents=True)
-    (github / "aviato.yaml").write_text(
+    (github / "aviato.yml").write_text(
         "profile: node-service\nversion: v1\nvariables:\n  language-variant: javascript\n  project-name: x\n",
         encoding="utf-8",
     )
@@ -105,7 +105,7 @@ def test_scan_reports_malformed_declaration_as_error_not_crash(tmp_path: Path) -
     # whole fleet scan. The good repo alongside it must still be scanned.
     bad = tmp_path / "bad"
     (bad / ".github").mkdir(parents=True)
-    (bad / ".github" / "aviato.yaml").write_text("profile: p\nversion: '1'\nvariables: {a: [x\n", encoding="utf-8")
+    (bad / ".github" / "aviato.yml").write_text("profile: p\nversion: '1'\nvariables: {a: [x\n", encoding="utf-8")
     good = tmp_path / "good"
     good.mkdir()  # no declaration → its own benign error row
     scans = scan_fleet([bad, good], Registry(MODULE_SOURCE_ROOT))
@@ -116,7 +116,7 @@ def test_scan_reports_malformed_declaration_as_error_not_crash(tmp_path: Path) -
 def test_scan_contains_unserializable_variable_to_one_repository(tmp_path: Path) -> None:
     bad = tmp_path / "bad-variable"
     (bad / ".github").mkdir(parents=True)
-    (bad / ".github" / "aviato.yaml").write_text(
+    (bad / ".github" / "aviato.yml").write_text(
         "profile: python-library\n"
         "version: 1\n"
         "variables:\n"
@@ -171,13 +171,13 @@ def test_scan_unknown_archived_state_is_not_skipped(tmp_path: Path) -> None:
 
 
 def test_scan_degrades_on_non_utf8_declaration_and_dir_at_managed_path(tmp_path: Path) -> None:
-    # R5-5-FLEETDEGRADE/§5.11: a consumer with a non-UTF-8 `aviato.yaml`, or a DIRECTORY at a
+    # R5-5-FLEETDEGRADE/§5.11: a consumer with a non-UTF-8 `aviato.yml`, or a DIRECTORY at a
     # managed output path, must each be reported as that repo's error/drift — never abort the whole
     # sweep. (These bypass the AviatoError-only guard unless load_declaration catches UnicodeDecode
     # and diagnose catches OSError — R5-4-DECL / R5-3-DIAG-OS.)
     bad_enc = tmp_path / "badenc"
     (bad_enc / ".github").mkdir(parents=True)
-    (bad_enc / ".github" / "aviato.yaml").write_bytes(b"profile: python-library\nversion: \xff\xfe v1\n")
+    (bad_enc / ".github" / "aviato.yml").write_bytes(b"profile: python-library\nversion: \xff\xfe v1\n")
 
     dir_at_path = tmp_path / "dirpath"
     _make_consumer(dir_at_path, scaffold_all=True)
