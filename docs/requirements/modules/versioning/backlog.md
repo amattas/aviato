@@ -6,7 +6,7 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
-- (none)
+- [process] next-version maps a BREAKING CHANGE to a MAJOR bump even on the 0.x line, but the operator policy (decision 2026-07-19, first exercised on the aviato.yml rename) is to hold 0.x — breaking changes bump the MINOR until the operator deliberately promotes 1.0. Teach next-version 0.x semantics (or an explicit promote-to-1.0 switch); until then each 0.x breaking release needs the operator-cut override (close the automation's release PR, bump-version + hand-cut tag, as done for 0.6.0). — source: 2026-07-19 release #103 override · aviato/core/versioning.py
 
 
 ## Settled — do not reopen
