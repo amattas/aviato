@@ -60,7 +60,7 @@ def test_repin_dry_run_then_write(
 
     # _adopt() passed a legacy ``v0``; it must have been canonicalized to bare on write
     # (§6.1 — a leading ``v`` is tolerated on input but never emitted).
-    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "0"
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yml").read_text())["version"] == "0"
 
     # Dry run: reports the move (bare), does not change the declaration. A legacy
     # ``v1.0.0`` target is likewise canonicalized to bare.
@@ -68,13 +68,13 @@ def test_repin_dry_run_then_write(
     out = capsys.readouterr().out
     assert rc == 0
     assert "re-pin 0 -> 1.0.0" in out
-    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "0"
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yml").read_text())["version"] == "0"
 
     # Write: records the new pin (bare) and re-scaffolds the pin-bearing workflows with it.
     # The tool is 0.x and the target is major 1 — §2.6 requires the explicit override.
     rc = main(["repin", str(tmp_path), "v1.0.0", "--write", "--override-version-pin"])
     assert rc == 0
-    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "1.0.0"
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yml").read_text())["version"] == "1.0.0"
     ci = (tmp_path / ".github" / "workflows" / "aviato-ci.yml").read_text()
     assert "@1.0.0" in ci  # the pin in `uses:` refs moved (bare)
     assert "version=1.0.0" in ci  # marker updated where the body changed (bare)
@@ -87,7 +87,7 @@ def test_repin_dry_run_then_write(
 
 
 def test_repin_rejects_invalid_declared_enum_before_write(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    declaration_path = tmp_path / ".github" / "aviato.yaml"
+    declaration_path = tmp_path / ".github" / "aviato.yml"
     declaration_path.parent.mkdir()
     original = (
         "profile: node-service\nprofile-identity: aviato-profile/node-service/v1\nversion: v0\nvariables:\n"
@@ -124,7 +124,7 @@ def test_repin_dry_run_rejects_invalid_declaration_before_success(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    declaration_path = tmp_path / ".github" / "aviato.yaml"
+    declaration_path = tmp_path / ".github" / "aviato.yml"
     declaration_path.parent.mkdir()
     original = yaml.safe_dump(
         {
@@ -147,7 +147,7 @@ def test_repin_dry_run_rejects_invalid_declaration_before_success(
 
 
 def test_repin_dry_run_reports_orphaned_overrides_from_plan(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    declaration_path = tmp_path / ".github" / "aviato.yaml"
+    declaration_path = tmp_path / ".github" / "aviato.yml"
     declaration_path.parent.mkdir()
     declaration_path.write_text(
         "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\nversion: 0\nvariables:\n"
@@ -199,7 +199,7 @@ def test_repin_write_refuses_unpublished_target(
     err = capsys.readouterr().err
     assert rc == 2
     assert "does not resolve to a published" in err
-    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "0"
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yml").read_text())["version"] == "0"
 
 
 def test_repin_write_refuses_cross_major_without_override(
@@ -215,7 +215,7 @@ def test_repin_write_refuses_cross_major_without_override(
     err = capsys.readouterr().err
     assert rc == 2
     assert "version-pin mismatch" in err
-    assert yaml.safe_load((tmp_path / ".github" / "aviato.yaml").read_text())["version"] == "0"
+    assert yaml.safe_load((tmp_path / ".github" / "aviato.yml").read_text())["version"] == "0"
 
 
 def test_repin_write_unknown_seed_integrity_mutates_nothing(
@@ -251,7 +251,7 @@ def test_repin_open_pr_unknown_seed_integrity_opens_no_proposal(
         if cmd[:3] == ["gh", "repo", "clone"]:
             clone_path = Path(cmd[4])
             (clone_path / ".github").mkdir(parents=True)
-            (clone_path / ".github" / "aviato.yaml").write_text(original_declaration, encoding="utf-8")
+            (clone_path / ".github" / "aviato.yml").write_text(original_declaration, encoding="utf-8")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     def fake_proposal(*_args: object, **_kwargs: object) -> str:
@@ -270,13 +270,13 @@ def test_repin_open_pr_unknown_seed_integrity_opens_no_proposal(
     assert "--rebaseline-seeds" in captured.err
     assert proposal_called is False
     assert clone_path is not None
-    assert (clone_path / ".github" / "aviato.yaml").read_text(encoding="utf-8") == original_declaration
+    assert (clone_path / ".github" / "aviato.yml").read_text(encoding="utf-8") == original_declaration
 
 
 def test_legacy_sync_then_local_repin_materializes_distinct_target_registry(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration = tmp_path / ".github" / "aviato.yml"
     declaration.parent.mkdir()
     declaration.write_text(
         "profile: python-library\nversion: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
@@ -345,7 +345,7 @@ def test_repin_open_pr_reports_orphaned_overrides_before_blocking_summary(
         if cmd[:3] == ["gh", "repo", "clone"]:
             clone = Path(cmd[4])
             (clone / ".github").mkdir(parents=True)
-            (clone / ".github" / "aviato.yaml").write_text(
+            (clone / ".github" / "aviato.yml").write_text(
                 "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
                 "version: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n"
                 "overrides:\n  settings:\n    removed-setting: true\n",
@@ -372,12 +372,12 @@ def test_offboard_dry_run_then_write(tmp_path: Path, capsys: pytest.CaptureFixtu
     out = capsys.readouterr().out
     assert rc == 0
     assert "dry run" in out
-    assert (tmp_path / ".github" / "aviato.yaml").exists()
+    assert (tmp_path / ".github" / "aviato.yml").exists()
 
     # Write (strip markers): managed files become plain, declaration removed.
     rc = main(["offboard", str(tmp_path), "--write"])
     assert rc == 0
-    assert not (tmp_path / ".github" / "aviato.yaml").exists()
+    assert not (tmp_path / ".github" / "aviato.yml").exists()
     assert not (tmp_path / "ruff.toml").read_text().startswith("# aviato:managed")
 
 
@@ -396,7 +396,7 @@ def test_offboard_open_pr_opens_reviewable_removal_proposal(monkeypatch: pytest.
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
             (dest / ".github").mkdir(parents=True, exist_ok=True)
-            (dest / ".github" / "aviato.yaml").write_text(
+            (dest / ".github" / "aviato.yml").write_text(
                 "profile: python-library\nversion: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
                 encoding="utf-8",
             )
@@ -410,7 +410,7 @@ def test_offboard_open_pr_opens_reviewable_removal_proposal(monkeypatch: pytest.
     def fake_proposal(self: GitHubPlatform, repo: str, branch: str, title: str, body: str) -> str:
         captured.update(repo=repo, branch=branch, title=title, body=body)
         # the offboard mutations must have already been applied to the worktree
-        captured["declaration_gone"] = not (self.workdir / ".github" / "aviato.yaml").exists()
+        captured["declaration_gone"] = not (self.workdir / ".github" / "aviato.yml").exists()
         captured["marker_stripped"] = not (self.workdir / "ruff.toml").read_text().startswith("# aviato:managed")
         return branch
 

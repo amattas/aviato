@@ -194,7 +194,7 @@ commit convention that drives versioning, and the tag/ref mechanics of release a
 floating-major advancement — is defined as a **hosting-platform binding
 interface**, not as a core identifier. **GitHub is the sole day-zero binding;**
 another platform would supply its own binding without changing core logic. Where
-Part I states a GitHub literal — `.github/aviato.yaml` (§6.1); `security-events:
+Part I states a GitHub literal — `.github/aviato.yml` (§6.1); `security-events:
 write` + SARIF (§2.13); Conventional Commits + the tag/floating-ref mechanics
 (§5.9) — read it as "the GitHub binding's realization of an abstract capability."
 The §9 falsifiable-agnosticism check targets the core *code* (no import edge into

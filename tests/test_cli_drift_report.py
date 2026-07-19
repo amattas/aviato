@@ -81,7 +81,7 @@ _platform_contract: Platform = FakePlatform()
 def _consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text(
+    (github / "aviato.yml").write_text(
         "profile: python-library\nversion: v0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",
     )
@@ -92,7 +92,7 @@ def test_drift_report_rejects_invalid_declared_enum_before_proposal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     consumer = _consumer(tmp_path)
-    (consumer / ".github" / "aviato.yaml").write_text(
+    (consumer / ".github" / "aviato.yml").write_text(
         "profile: node-service\nversion: v0\nvariables:\n  project-name: sample\n  language-variant: ruby\n",
         encoding="utf-8",
     )
@@ -158,7 +158,7 @@ def test_drift_report_reports_content_drifted_ruleset(
     assert "Common: release tag format" in out
     # C12-3: the remediation now points at the override-aware `--declaration` form, so an apply does
     # not re-add a check the consumer removed via overrides.
-    assert "--declaration" in out and ".github/aviato.yaml" in out
+    assert "--declaration" in out and ".github/aviato.yml" in out
 
 
 def test_drift_report_file_only_skips_settings(

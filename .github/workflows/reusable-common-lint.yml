@@ -106,7 +106,7 @@ jobs:
               "aviato/library/bundles"
               "aviato/library/scaffold"
               "aviato/library/policy.yml"
-              ".github/aviato.yaml"
+              ".github/aviato.yml"
             )
             for anchor in "${required_anchors[@]}"; do
               if [ ! -e "${anchor}" ]; then
@@ -114,8 +114,8 @@ jobs:
                 exit 1
               fi
             done
-            if ! sed 's/#.*$//' .github/aviato.yaml | grep -Eiq '^[[:space:]]*bootstrap:[[:space:]]*true[[:space:]]*$'; then
-              echo "::error::local-install requires .github/aviato.yaml to declare bootstrap: true (§5.10)."
+            if ! sed 's/#.*$//' .github/aviato.yml | grep -Eiq '^[[:space:]]*bootstrap:[[:space:]]*true[[:space:]]*$'; then
+              echo "::error::local-install requires .github/aviato.yml to declare bootstrap: true (§5.10)."
               exit 1
             fi
             python -m pip install -e .

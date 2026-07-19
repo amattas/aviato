@@ -138,7 +138,7 @@ def test_current_requirements_do_not_retain_stale_normative_text() -> None:
     ]
     assert not hits, "stale normative text remains:\n" + "\n".join(hits)
 
-    declaration_aware_remediation = "apply-rulesets … --apply --declaration .github/aviato.yaml"
+    declaration_aware_remediation = "apply-rulesets … --apply --declaration .github/aviato.yml"
     for path in (
         ROOT / "docs/specifications/modules/drift/settings-drift.md",
         ROOT / "docs/specifications/modules/reconcile/flow.md",
@@ -218,7 +218,7 @@ def test_active_hardening_plan_matches_current_rollout_state() -> None:
 
 
 def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
-    declaration = yaml.safe_load((ROOT / ".github/aviato.yaml").read_text(encoding="utf-8"))
+    declaration = yaml.safe_load((ROOT / ".github/aviato.yml").read_text(encoding="utf-8"))
     assert declaration["overrides"]["settings"]["default_branch"] == {"required_reviews": 0}
 
     backlog = (ROOT / "docs/requirements/modules/security/backlog.md").read_text(encoding="utf-8")
@@ -231,7 +231,7 @@ def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
 
     sec007 = _matrix_rows()["SEC-007"]
     assert sec007[2] == "verified"
-    assert ".github/aviato.yaml" in sec007[4]
+    assert ".github/aviato.yml" in sec007[4]
     assert "rules/17482301" in sec007[5]
     assert "rules/17483804" in sec007[5]
     assert "pull/62" in sec007[5]
@@ -279,7 +279,7 @@ def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
         "non-fast-forward",
         "active-enforcement",
         "no-bypass",
-        "`--declaration .github/aviato.yaml`",
+        "`--declaration .github/aviato.yml`",
         "never `--profile`",
         "Fresh previews",
         "before or in the same settings change that makes another reviewer eligible",
@@ -288,7 +288,7 @@ def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
 
     infrastructure = (ROOT / "docs/architecture/infrastructure.md").read_text(encoding="utf-8")
     normalized_infrastructure = " ".join(infrastructure.split())
-    assert "mandatory once `.github/aviato.yaml` exists" in normalized_infrastructure
+    assert "mandatory once `.github/aviato.yml` exists" in normalized_infrastructure
 
 
 def test_onboarding_documents_complete_tag_rejection_string_entry_contract() -> None:

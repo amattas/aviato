@@ -17,7 +17,7 @@ ScaffoldItem = partial(_ScaffoldItem, input_hash="0" * 64)
 def _setup_consumer(root: Path) -> None:
     github = root / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
+    (github / "aviato.yml").write_text("profile: python-library\nversion: v1\n", encoding="utf-8")
     scaffold(root, [ScaffoldItem("ruff.toml", "line-length = 120\n", "#", False)], profile="p", version="v1")
 
 
@@ -43,7 +43,7 @@ def test_offboard_preflights_symlinked_workflow_leaf_before_mutation(tmp_path: P
     assert (tmp_path / "ruff.toml").read_bytes() == passive_before
     assert outside.read_bytes() == outside_before
     assert leaf.is_symlink()
-    assert (tmp_path / ".github" / "aviato.yaml").is_file()
+    assert (tmp_path / ".github" / "aviato.yml").is_file()
 
 
 def test_offboard_skips_non_utf8_file_instead_of_crashing(tmp_path: Path) -> None:
@@ -64,7 +64,7 @@ def test_keep_files_strips_markers_and_deletes_declaration(tmp_path: Path) -> No
     assert "line-length = 120" in text
     assert result.stripped == ["ruff.toml"]
     assert result.declaration_removed is True
-    assert not (tmp_path / ".github" / "aviato.yaml").exists()
+    assert not (tmp_path / ".github" / "aviato.yml").exists()
 
 
 def test_offboard_rechecks_static_targets_before_metadata_and_unlink(
@@ -74,7 +74,7 @@ def test_offboard_rechecks_static_targets_before_metadata_and_unlink(
 
     _setup_consumer(tmp_path)
     original_guard = confined_target
-    calls: dict[str, list[str]] = {".github/aviato.yaml": [], ".github/aviato.seed.json": []}
+    calls: dict[str, list[str]] = {".github/aviato.yml": [], ".github/aviato.seed.json": []}
 
     def tracking_guard(root: Path, relative: str, *, operation: str) -> Path:
         if relative in calls:
@@ -84,7 +84,7 @@ def test_offboard_rechecks_static_targets_before_metadata_and_unlink(
     monkeypatch.setattr(offboarding_module, "confined_target", tracking_guard)
     offboard(tmp_path, [], keep_files=True)
 
-    assert calls[".github/aviato.yaml"] == [
+    assert calls[".github/aviato.yml"] == [
         "preflight offboard declaration",
         "inspect offboard declaration",
         "delete offboard declaration",
@@ -148,7 +148,7 @@ def test_offboard_fails_closed_on_unmarked_automation_workflow(tmp_path: Path) -
     wf = tmp_path / ".github" / "workflows"
     wf.mkdir(parents=True)
     (wf / "aviato-ci.yml").write_text("name: ci\non: push\n", encoding="utf-8")  # no marker
-    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration = tmp_path / ".github" / "aviato.yml"
     declaration.write_text("profile: python-library\n", encoding="utf-8")
     with pytest.raises(AviatoError):
         offboard(tmp_path, [".github/workflows/aviato-ci.yml"], keep_files=False)

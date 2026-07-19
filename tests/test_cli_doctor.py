@@ -28,7 +28,7 @@ def test_doctor_probes_pages_only_for_docs_and_serve_pages(
     serve_pages: bool,
     expected_probe: bool,
 ) -> None:
-    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration = tmp_path / ".github" / "aviato.yml"
     declaration.parent.mkdir(parents=True)
     declaration.write_text(
         "\n".join(
@@ -97,7 +97,7 @@ def test_doctor_probes_swift_resolved_deployment_environment(
     ]
     if declared_environment is not None:
         variable_lines.append(f"  environment-name: {declared_environment}")
-    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration = tmp_path / ".github" / "aviato.yml"
     declaration.parent.mkdir(parents=True)
     declaration.write_text(
         "profile: swift-app\nversion: '0'\nvariables:\n" + "\n".join(variable_lines) + "\n",
@@ -136,7 +136,7 @@ def test_doctor_preserves_static_or_absent_deployment_environments(
     variables: dict[str, str],
     expected_environment: str | None,
 ) -> None:
-    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration = tmp_path / ".github" / "aviato.yml"
     declaration.parent.mkdir(parents=True)
     declaration.write_text(
         yaml.safe_dump({"profile": profile, "version": "0", "variables": variables}),
@@ -210,7 +210,7 @@ def test_doctor_reports_local_and_remote_drift_automation_health(
     expected_rc: int,
     remote_text: str,
 ) -> None:
-    declaration = tmp_path / ".github" / "aviato.yaml"
+    declaration = tmp_path / ".github" / "aviato.yml"
     declaration.parent.mkdir(parents=True)
     declaration.write_text(
         "profile: python-library\nversion: '0'\nvariables:\n  distribution-name: acme\n  import-name: acme\n",

@@ -1,7 +1,7 @@
-"""Seed-once starter test — replace with real tests (the developer owns this file)."""
+"""Package import smoke test (seed-once; the developer owns and extends this file)."""
 
 import {{ import-name }}
 
 
 def test_package_imports() -> None:
-    assert {{ import-name }}.__doc__ is not None
+    assert {{ import-name }}.__name__ == "{{ import-name }}"

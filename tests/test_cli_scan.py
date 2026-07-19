@@ -36,7 +36,7 @@ PYTHON_DECLARATION = (
 def test_scan_prints_per_repo_lines(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    (consumer / ".github" / "aviato.yml").write_text(PYTHON_DECLARATION, encoding="utf-8")
     plain = tmp_path / "plain"
     plain.mkdir()
 
@@ -56,7 +56,7 @@ def test_scan_rejects_invalid_declared_enum_before_fix_proposal(
 ) -> None:
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text(
+    (consumer / ".github" / "aviato.yml").write_text(
         "profile: node-service\nversion: v0\nvariables:\n  project-name: sample\n  language-variant: ruby\n",
         encoding="utf-8",
     )
@@ -74,13 +74,13 @@ def test_scan_fix_preserves_declaration_exit_when_later_proposal_fails(
 ) -> None:
     invalid = tmp_path / "invalid"
     (invalid / ".github").mkdir(parents=True)
-    (invalid / ".github" / "aviato.yaml").write_text(
+    (invalid / ".github" / "aviato.yml").write_text(
         "profile: node-service\nversion: v0\nvariables:\n  project-name: sample\n  language-variant: ruby\n",
         encoding="utf-8",
     )
     fixable = tmp_path / "fixable"
     (fixable / ".github").mkdir(parents=True)
-    (fixable / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    (fixable / ".github" / "aviato.yml").write_text(PYTHON_DECLARATION, encoding="utf-8")
 
     def fail_proposal(*args: object, **kwargs: object) -> object:
         raise AviatoError("proposal failed")
@@ -99,7 +99,7 @@ def test_scan_surfaces_seed_once_divergence(tmp_path: Path, capsys: pytest.Captu
     # review #2: the fleet sweep must surface §6.3 seed-once tamper/deletion (not only `doctor`).
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    (consumer / ".github" / "aviato.yml").write_text(PYTHON_DECLARATION, encoding="utf-8")
     # Seed LICENSE (records its hash in the report-only sidecar), then TAMPER it.
     license_item = [ScaffoldItem("LICENSE", "MIT v1\n", "#", seed_once=True)]
     scaffold(consumer, license_item, profile="python-library", version="v1")
@@ -145,7 +145,7 @@ def test_scan_fix_proposes_from_clone_not_operator_working_tree(
     # tree would clobber uncommitted work and race a second scan.
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    (consumer / ".github" / "aviato.yml").write_text(PYTHON_DECLARATION, encoding="utf-8")
     # Make .editorconfig mergeable-drift: correct body, stale marker hash → proposable via --fix.
     from aviato.core.composition import resolve_profile
     from aviato.core.registry import Registry
@@ -191,7 +191,7 @@ def test_scan_fix_blocks_incompatible_version_pin(tmp_path: Path, capsys: pytest
     # 0.x tool can never satisfy, and assert --fix reports the mismatch (and does not crash).
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text(
+    (consumer / ".github" / "aviato.yml").write_text(
         PYTHON_DECLARATION.replace("version: v1", "version: 2.0.0"), encoding="utf-8"
     )
     rc = main(["scan", str(consumer), "--fix"])
@@ -205,7 +205,7 @@ def test_scan_surfaces_missing_drift_automation(tmp_path: Path, capsys: pytest.C
     # scheduled drift caller must be flagged, not read as healthy at scale.
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    (consumer / ".github" / "aviato.yml").write_text(PYTHON_DECLARATION, encoding="utf-8")
 
     rc = main(["scan", str(consumer)])
     err = capsys.readouterr().err
@@ -220,7 +220,7 @@ def test_scan_audit_lists_open_drift_issues(
     # issues — ephemeral output, no stored inventory (§2.2).
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
-    (consumer / ".github" / "aviato.yaml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    (consumer / ".github" / "aviato.yml").write_text(PYTHON_DECLARATION, encoding="utf-8")
     monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:o/r.git")
     monkeypatch.setattr(
         cli,

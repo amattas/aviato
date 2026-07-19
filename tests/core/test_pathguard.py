@@ -39,10 +39,10 @@ def test_dump_declaration_rejects_symlinked_leaf(tmp_path: Path) -> None:
     outside = tmp_path.parent / f"{tmp_path.name}-declaration.yaml"
     original = b"profile: outside\nversion: '1'\n"
     outside.write_bytes(original)
-    (github / "aviato.yaml").symlink_to(outside)
+    (github / "aviato.yml").symlink_to(outside)
 
-    with pytest.raises(PathConfinementError, match=r"write declaration.*\.github/aviato\.yaml"):
-        dump_declaration(Declaration(profile="p", version="1"), tmp_path, ".github/aviato.yaml")
+    with pytest.raises(PathConfinementError, match=r"write declaration.*\.github/aviato\.yml"):
+        dump_declaration(Declaration(profile="p", version="1"), tmp_path, ".github/aviato.yml")
 
     assert outside.read_bytes() == original
 

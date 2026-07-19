@@ -5,7 +5,7 @@
 | Concern | Single source of truth |
 |---|---|
 | Desired conventions | The Library's profiles/bundles/modules at the pinned version |
-| A Consumer's chosen conventions | The Consumer's `.github/aviato.yaml` declaration (§6.1) |
+| A Consumer's chosen conventions | The Consumer's `.github/aviato.yml` declaration (§6.1) |
 | Whether a file is managed | The managed marker in the file (§6.2); seed-once files (§6.3) are operator-owned |
 | Live protected settings | The hosting platform (read at diagnosis/apply time) |
 | Consent to mutate settings | The tracking issue's authoritative event history (§6.4) |

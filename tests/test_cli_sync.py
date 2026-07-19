@@ -18,7 +18,7 @@ from aviato.paths import MODULE_SOURCE_ROOT
 def _consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text(
+    (github / "aviato.yml").write_text(
         "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\nversion: v0\nvariables:\n"
         "  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",
@@ -29,7 +29,7 @@ def _consumer(tmp_path: Path) -> Path:
 def _invalid_consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text(
+    (github / "aviato.yml").write_text(
         "profile: node-service\nprofile-identity: aviato-profile/node-service/v1\nversion: v0\nvariables:\n"
         "  project-name: sample\n  language-variant: ruby\n",
         encoding="utf-8",
@@ -50,7 +50,7 @@ def test_sync_backfills_legacy_identity_from_its_declared_pin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     consumer = _consumer(tmp_path)
-    declaration = consumer / ".github" / "aviato.yaml"
+    declaration = consumer / ".github" / "aviato.yml"
     declaration.write_text(declaration.read_text().replace("profile-identity: aviato-profile/python-library/v1\n", ""))
     fetched: list[str] = []
 
@@ -73,7 +73,7 @@ def test_legacy_sync_fetch_failure_or_identity_mismatch_mutates_nothing(
     failure: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     consumer = _consumer(tmp_path)
-    declaration = consumer / ".github" / "aviato.yaml"
+    declaration = consumer / ".github" / "aviato.yml"
     declaration.write_text(declaration.read_text().replace("profile-identity: aviato-profile/python-library/v1\n", ""))
     target = tmp_path / "target-library"
     shutil.copytree(MODULE_SOURCE_ROOT, target)
@@ -180,7 +180,7 @@ def test_fresh_onboard_write_baselines_preexisting_seed_before_writes(
     captured = capsys.readouterr()
     assert rc == 0
     assert "baselined LICENSE" in captured.out
-    assert captured.out.index("baselined LICENSE") < captured.out.index("wrote .github/aviato.yaml")
+    assert captured.out.index("baselined LICENSE") < captured.out.index("wrote .github/aviato.yml")
 
 
 @pytest.mark.parametrize("command", ["sync", "doctor"])

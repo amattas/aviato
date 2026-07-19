@@ -83,7 +83,7 @@ def scan_fleet(
         if not include_archived and archived_probe is not None and archived_probe(root) is True:
             scans.append(RepoScan(path=str(root), skipped_archived=True))
             continue
-        declaration_path = root / ".github" / "aviato.yaml"
+        declaration_path = root / ".github" / "aviato.yml"
         if not declaration_path.is_file():
             scans.append(RepoScan(path=str(root), error="no declaration"))
             continue

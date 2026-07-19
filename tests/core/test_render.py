@@ -30,3 +30,9 @@ def test_lenient_render_leaves_unknown_placeholders_intact() -> None:
     assert render("name {{ import-name }}, owner {{ owner }}", {"import-name": "acme"}, strict=False) == (
         "name acme, owner {{ owner }}"
     )
+
+
+def test_boolean_variables_render_as_yaml_lowercase() -> None:
+    # A YAML-bool declaration value (Python True) must render as "true", not Python's
+    # "True" — a rendered caller carried `serve-pages: True` on the first live adoption.
+    assert render("flag: {{ on }} {{ off }}", {"on": True, "off": False}) == "flag: true false"

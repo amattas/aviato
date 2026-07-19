@@ -277,7 +277,7 @@ def test_materialize_builds_scaffold_items_from_resolved_set() -> None:
 
 
 def test_yaml_date_scalar_materializes_with_deterministic_input_hash(tmp_path: Path) -> None:
-    declaration_path = tmp_path / "aviato.yaml"
+    declaration_path = tmp_path / "aviato.yml"
     declaration_path.write_text(
         "profile: python-library\nversion: 1\nvariables:\n  distribution-name: 2026-07-12\n  import-name: acme\n",
         encoding="utf-8",

@@ -57,8 +57,8 @@ def test_onboard_open_pr_builds_proposal(
     assert captured["repo"] == "acme-org/widget"
     assert captured["branch"] == "aviato/onboard-python-library"
     # the declaration and a managed (marker-stamped) artifact are in the proposal
-    assert ".github/aviato.yaml" in files
-    assert "profile: python-library" in files[".github/aviato.yaml"]
+    assert ".github/aviato.yml" in files
+    assert "profile: python-library" in files[".github/aviato.yml"]
     assert "ruff.toml" in files
     # --pin v0 (legacy) is canonicalized to a bare marker pin; a leading v is never emitted (§6.1).
     assert files["ruff.toml"].startswith("# aviato:managed profile=python-library version=0")
@@ -67,7 +67,7 @@ def test_onboard_open_pr_builds_proposal(
     assert "LICENSE" not in files
     assert "LICENSE" in cast(str, captured["body"])
     assert "aviato complete-protection /path/to/checkout" in out
-    assert ("aviato apply-rulesets acme-org/widget --apply --declaration /path/to/checkout/.github/aviato.yaml") in out
+    assert ("aviato apply-rulesets acme-org/widget --apply --declaration /path/to/checkout/.github/aviato.yml") in out
     assert "apply-rulesets acme-org/widget --apply --profile" not in out
 
 
@@ -127,7 +127,7 @@ def test_reonboard_open_pr_refuses_legacy_or_mismatched_identity_without_proposa
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
             (dest / ".github").mkdir(parents=True)
-            (dest / ".github" / "aviato.yaml").write_text(
+            (dest / ".github" / "aviato.yml").write_text(
                 "profile: python-library\n"
                 f"{identity_line}"
                 "version: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
@@ -172,7 +172,7 @@ def test_reonboard_open_pr_preserves_equal_profile_identity(monkeypatch: pytest.
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
             (dest / ".github").mkdir(parents=True)
-            (dest / ".github" / "aviato.yaml").write_text(
+            (dest / ".github" / "aviato.yml").write_text(
                 "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
                 "version: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
                 encoding="utf-8",
@@ -203,7 +203,7 @@ def test_reonboard_open_pr_preserves_equal_profile_identity(monkeypatch: pytest.
         == 0
     )
     files = cast(dict[str, str], captured["files"])
-    assert "profile-identity: aviato-profile/python-library/v1" in files[".github/aviato.yaml"]
+    assert "profile-identity: aviato-profile/python-library/v1" in files[".github/aviato.yml"]
 
 
 @pytest.mark.parametrize("allow_migrate", [False, True])
@@ -216,7 +216,7 @@ def test_onboard_open_pr_profile_migration_requires_flag_and_renders_requested_p
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
             (dest / ".github").mkdir(parents=True)
-            (dest / ".github" / "aviato.yaml").write_text(
+            (dest / ".github" / "aviato.yml").write_text(
                 "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
                 "version: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
                 encoding="utf-8",
@@ -257,7 +257,7 @@ def test_onboard_open_pr_profile_migration_requires_flag_and_renders_requested_p
         return
     assert rc == 0
     files = cast(dict[str, str], captured["files"])
-    declaration = files[".github/aviato.yaml"]
+    declaration = files[".github/aviato.yml"]
     assert "profile: node-service" in declaration
     assert "profile-identity: aviato-profile/node-service/v1" in declaration
     assert "eslint.config.mjs" in files
@@ -273,7 +273,7 @@ def test_onboard_open_pr_profile_migration_does_not_propose_over_protected_targe
         if cmd[:3] == ["gh", "repo", "clone"]:
             dest = Path(cmd[4])
             (dest / ".github").mkdir(parents=True)
-            (dest / ".github" / "aviato.yaml").write_text(
+            (dest / ".github" / "aviato.yml").write_text(
                 "profile: python-library\nprofile-identity: aviato-profile/python-library/v1\n"
                 "version: 0\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
                 encoding="utf-8",

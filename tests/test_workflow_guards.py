@@ -164,7 +164,7 @@ def test_local_install_is_limited_to_structural_library_bootstrap() -> None:
             "aviato/library/bundles",
             "aviato/library/scaffold",
             "aviato/library/policy.yml",
-            ".github/aviato.yaml",
+            ".github/aviato.yml",
         ):
             assert anchor in run, f"{name} local install guard missing {anchor}"
         assert "bootstrap: true" in run, f"{name} local install guard must require bootstrap:true"

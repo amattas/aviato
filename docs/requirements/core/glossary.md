@@ -18,7 +18,7 @@
   its version, read/written by the core release process (§3.3).
 - **Convention set** — the fully-resolved output of profile resolution (§5.1):
   pipelines, templates, settings, required variables, and version-source.
-- **Declaration file** — the Consumer's `.github/aviato.yaml` (§6.1); the only
+- **Declaration file** — the Consumer's `.github/aviato.yml` (§6.1); the only
   interface between Library and Consumer.
 - **Managed marker** — the in-file annotation (normative format, §6.2) recording a
   generated file's profile, version, and content-hash.

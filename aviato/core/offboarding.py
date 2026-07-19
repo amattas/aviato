@@ -71,7 +71,7 @@ def offboard(root: Path, managed_outputs: Sequence[str], *, keep_files: bool) ->
     preflight = {
         output: confined_target(root, output, operation="preflight offboard target") for output in managed_outputs
     }
-    declaration_output = ".github/aviato.yaml"
+    declaration_output = ".github/aviato.yml"
     sidecar_output = ".github/aviato.seed.json"
     preflight[declaration_output] = confined_target(
         root, declaration_output, operation="preflight offboard declaration"

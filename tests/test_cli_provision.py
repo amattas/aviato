@@ -56,7 +56,7 @@ _platform_contract: Platform = _FakePlatform()
 def _consumer(tmp_path: Path) -> Path:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "aviato.yaml").write_text(
+    (github / "aviato.yml").write_text(
         f"profile: python-library\nversion: {__version__}\nvariables:\n"
         "  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",

@@ -279,8 +279,8 @@ def test_apply_settings_fails_closed_when_ruleset_owns_protection_and_desired_di
         GitHubPlatform().apply_settings("o/r", {"requires_pull_request": True, "required_reviews": 2})
     guidance = str(exc_info.value)
     assert "from the consumer repository root" in guidance.lower()
-    assert "`aviato apply-rulesets o/r --declaration .github/aviato.yaml`" in guidance
-    assert "`aviato apply-rulesets o/r --declaration .github/aviato.yaml --apply`" in guidance
+    assert "`aviato apply-rulesets o/r --declaration .github/aviato.yml`" in guidance
+    assert "`aviato apply-rulesets o/r --declaration .github/aviato.yml --apply`" in guidance
     assert "apply-rulesets o/r --profile" not in guidance
     assert not any("PUT" in c for c in calls), "must not write the wrong (classic) surface"
 

@@ -66,7 +66,7 @@ DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
 # last scheduled-run conclusion). A Library artifact name — passed to the binding as
 # data, like the markers above.
 DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
-DECLARATION_RELATIVE_PATH = ".github/aviato.yaml"
+DECLARATION_RELATIVE_PATH = ".github/aviato.yml"
 
 
 def _declaration_ruleset_command(repo: str, declaration_path: str | Path) -> str:
@@ -201,7 +201,7 @@ def cmd_apply_rulesets(args: argparse.Namespace) -> int:
     try:
         if getattr(args, "declaration", None):
             supplied_declaration = Path(args.declaration)
-            if supplied_declaration.name != "aviato.yaml" or supplied_declaration.parent.name != ".github":
+            if supplied_declaration.name != "aviato.yml" or supplied_declaration.parent.name != ".github":
                 raise DeclarationError(
                     f"declaration must use the canonical {DECLARATION_RELATIVE_PATH} consumer path: "
                     f"{supplied_declaration}"
@@ -795,7 +795,7 @@ def _onboard_proposal(args: argparse.Namespace, registry: Registry, resolved: Re
     # Build the proposal file set: the declaration + managed (marker-stamped) bodies +
     # seed-once bodies for files that DON'T already exist. Existing seed-once / operator
     # files are left untouched and enumerated (§5.2).
-    files: dict[str, str] = {".github/aviato.yaml": declaration_to_yaml(declaration)}
+    files: dict[str, str] = {".github/aviato.yml": declaration_to_yaml(declaration)}
     untouched: list[str] = []
     managed_items: list[ScaffoldItem] = []
     # Use the RESOLVED declaration.docs (preserved from the clone's existing declaration), so the
@@ -1632,7 +1632,7 @@ def cmd_offboard(args: argparse.Namespace) -> int:
     for output in result.removed:
         print(f"removed: {output}")
     if result.declaration_removed:
-        print("removed .github/aviato.yaml")
+        print("removed .github/aviato.yml")
     if result.sidecar_removed:
         print("removed .github/aviato.seed.json")
     print(f"WARNING: {result.warning}")
@@ -2042,7 +2042,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
                 drifted_rulesets=drifted_rulesets,
                 # C12-3: the issue-body remediation points at apply-rulesets --declaration so the
                 # restored ruleset honours this consumer's overrides (the standard consumer path).
-                declaration_path=".github/aviato.yaml",
+                declaration_path=".github/aviato.yml",
             )
             print(f"settings drift: {settings_outcome.status} (destructive={settings_outcome.destructive})")
             if settings_outcome.drifted_rulesets:
@@ -2051,7 +2051,7 @@ def cmd_drift_report(args: argparse.Namespace) -> int:
                     # finding 26: the REPO-RELATIVE declaration path (the runner-local
                     # absolute path printed here before does not exist on the operator's
                     # machine; the issue body already used the relative form).
-                    f"--apply --declaration .github/aviato.yaml`): {list(settings_outcome.drifted_rulesets)}"
+                    f"--apply --declaration .github/aviato.yml`): {list(settings_outcome.drifted_rulesets)}"
                 )
         except SettingsReadError as exc:
             print(
@@ -2300,12 +2300,12 @@ def build_parser() -> argparse.ArgumentParser:
     apply_source = apply.add_mutually_exclusive_group()
     apply_source.add_argument(
         "--profile",
-        help="Base-profile input for a repository without a declaration. Once .github/aviato.yaml "
+        help="Base-profile input for a repository without a declaration. Once .github/aviato.yml "
         "exists, use --declaration so repository-specific overrides are preserved.",
     )
     apply_source.add_argument(
         "--declaration",
-        help="Path to a consumer .github/aviato.yaml: resolve status checks + approvals WITH its "
+        help="Path to a consumer .github/aviato.yml: resolve status checks + approvals WITH its "
         "overrides (C12-3), so a ruleset apply does not re-add a check the consumer removed.",
     )
     apply.set_defaults(func=cmd_apply_rulesets)
@@ -2332,7 +2332,7 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument(
         "--write",
         action="store_true",
-        help="Adopt a local repo: write .github/aviato.yaml and scaffold managed files.",
+        help="Adopt a local repo: write .github/aviato.yml and scaffold managed files.",
     )
     onboard.add_argument(
         "--pin",

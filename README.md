@@ -63,13 +63,13 @@ aviato audit --repo /Users/amattas/GitHub/example
 Dry-run the rulesets resolved from an adopted repository's declaration:
 
 ```bash
-aviato apply-rulesets amattas/example --declaration /path/to/example/.github/aviato.yaml
+aviato apply-rulesets amattas/example --declaration /path/to/example/.github/aviato.yml
 ```
 
 Apply the reviewed declaration-resolved rulesets:
 
 ```bash
-aviato apply-rulesets amattas/example --declaration /path/to/example/.github/aviato.yaml --apply
+aviato apply-rulesets amattas/example --declaration /path/to/example/.github/aviato.yml --apply
 ```
 
 For a solo-maintainer repository, persist the liveness exception in its
@@ -126,7 +126,7 @@ Consumer lifecycle commands (see `aviato <command> --help` for the full flags):
 
 ```bash
 aviato render-rulesets                       # print rendered ruleset JSON
-aviato apply-rulesets OWNER/REPO --declaration /path/.github/aviato.yaml --apply  # override-aware apply: resolves checks/approvals through the consumer's declared overrides (what settings-drift remediation recommends)
+aviato apply-rulesets OWNER/REPO --declaration /path/.github/aviato.yml --apply  # override-aware apply: resolves checks/approvals through the consumer's declared overrides (what settings-drift remediation recommends)
 aviato doctor /path/to/consumer              # classify managed artifacts + probe health
 aviato sync /path/to/consumer                # materialize managed artifacts incl. caller workflows
 aviato scan /path/a /path/b [--fix --audit]  # fleet diagnosis; --fix opens managed-file proposals, --audit surfaces open settings-drift tracking issues
@@ -163,7 +163,7 @@ the command reports a loud degraded posture while retaining tag deletion and
 non-fast-forward protection. Any unrelated API failure remains fatal.
 
 ```bash
-aviato apply-rulesets OWNER/REPO --apply --declaration /path/to/checkout/.github/aviato.yaml
+aviato apply-rulesets OWNER/REPO --apply --declaration /path/to/checkout/.github/aviato.yml
 gh api --paginate repos/OWNER/REPO/rulesets
 # The list endpoint is only a summary. Fetch every full live payload for amattas/aviato:
 for id in $(gh api --paginate repos/amattas/aviato/rulesets --jq '.[].id'); do
@@ -220,7 +220,7 @@ The legacy script names still work:
 
 ```bash
 ./scripts/audit-repos.sh .
-./scripts/apply-rulesets.sh --repo amattas/example --declaration /path/to/example/.github/aviato.yaml --apply
+./scripts/apply-rulesets.sh --repo amattas/example --declaration /path/to/example/.github/aviato.yml --apply
 ```
 
 ## Reusable Workflows
@@ -299,7 +299,7 @@ The docs publish workflow installs, versions, builds, and publishes the site
 on release refs;
 `docs-retention` defaults to 0, which keeps every released version's docs.
 
-The Library's own `.github/aviato.yaml` uses the internal `aviato-library`
+The Library's own `.github/aviato.yml` uses the internal `aviato-library`
 profile and `bootstrap: true`. `local-install: true` is valid only for this
 structural Library bootstrap path; reusable workflows fail before
 `pip install -e .` if a consumer tries to enable it.

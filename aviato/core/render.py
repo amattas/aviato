@@ -24,6 +24,12 @@ def render(body: str, variables: Mapping[str, Any], *, strict: bool = True) -> s
             if strict:
                 raise DeclarationError(f"template references undefined variable {name!r}")
             return match.group(0)
-        return str(variables[name])
+        value = variables[name]
+        if isinstance(value, bool):
+            # YAML/workflow booleans are lowercase; the default stringification leaks "True"
+            # into rendered callers, which reads as a wart even where YAML tolerates it
+            # (first live adoption review).
+            return "true" if value else "false"
+        return str(value)
 
     return _PLACEHOLDER.sub(_sub, body)

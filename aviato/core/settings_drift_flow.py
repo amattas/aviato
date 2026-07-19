@@ -67,7 +67,7 @@ def _render_issue_body(
         # so the restored ruleset resolves the consumer's OVERRIDES (the SAME status checks drift
         # used) and never re-adds a check the consumer removed. Default to the repository-root path
         # when a binding does not provide one; reverting to the base profile is unsafe.
-        declaration = declaration_path or ".github/aviato.yaml"
+        declaration = declaration_path or ".github/aviato.yml"
         apply_flag = f" --declaration {shlex.quote(declaration)}"
         lines += [
             "",

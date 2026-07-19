@@ -156,7 +156,7 @@ The Python CLI lives in `aviato/`.
 - `aviato apply-rulesets <owner/repo>` renders configured rulesets (dry-run by
   default; `--apply` mutates). Bare or `--profile` use is limited to the
   pre-declaration path. `--declaration <path>` is mandatory once
-  `.github/aviato.yaml` exists so status checks and approvals resolve through
+  `.github/aviato.yml` exists so status checks and approvals resolve through
   consumer overrides and an apply cannot restore profile defaults.
 - `aviato render-rulesets` renders the ruleset payloads after policy injection.
 - `aviato validate` validates this repository's policy infrastructure.
