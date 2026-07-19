@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aviato"
-version = "0.5.2"
+version = "0.5.3"
 description = "Reusable GitHub policy, CI, release, and onboarding conventions."
 license = "MIT"
 license-files = ["LICENSE"]
