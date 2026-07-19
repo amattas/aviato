@@ -1,4 +1,7 @@
 [mypy]
+# Pinned to the fleet Python floor (operator decision 2026-07-18) so results don't
+# drift with the runner's interpreter.
+python_version = 3.12
 strict = true
 warn_unused_configs = true
 warn_redundant_casts = true
