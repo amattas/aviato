@@ -6,6 +6,7 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 
 ## Open
 
+- [process] Consumers with GitHub's default-setup CodeQL enabled fail the security baseline cryptically (GitHub rejects advanced-configuration SARIF while default setup is on — live: pydmp PR #44's first run). The baseline OWNS CodeQL for consumers, so default setup must be `not-configured`: probe it in `aviato doctor`'s §17 remote prerequisites (GET /repos/{owner}/{repo}/code-scanning/default-setup) and document the disable step in the onboarding runbook (PATCH state=not-configured). — source: 2026-07-19 pydmp adoption · .github/workflows/reusable-security-baseline.yml
 - [process] `onboard --write`/`sync` render artifacts from the INSTALLED tool's bundled library while `--pin` governs the callers' remote refs and the drift automation's render source — §2.6 sanctions same-major skew, but when scaffold bodies change between minors the skew silently manufactures phantom drift on every changed artifact (live: a 0.5.2 CLI onboarding pydmp with `--pin 0.5.0` wrote root-layout docs artifacts a 0.5.0-pinned drift run would flag wholesale). Minimum fix: warn loudly at write time when tool version != pin, naming the repin/re-pin-flag remedies; a fuller fix (render fresh onboards from the fetched pin registry, as §5.12 repin already does) trades away offline scaffolding and needs its own design pass. — source: 2026-07-18 pydmp adoption · aviato/cli.py (§2.6 check site has both versions in hand)
 
 
