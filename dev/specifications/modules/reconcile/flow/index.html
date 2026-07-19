@@ -3373,7 +3373,7 @@ the two use different platform write surfaces (a wholesale branch-protection <co
 upsert), and the dry-run-reviewed <code>apply-rulesets</code> is the sanctioned operator gate for them
 (the same way provisioning/<code>complete-protection</code> apply protection operator-direct, outside the
 consent-issue mechanism). §5.6 detects ruleset drift (presence + content) and directs the operator
-to <code>apply-rulesets … --apply --declaration .github/aviato.yaml</code>. The declaration-aware form is
+to <code>apply-rulesets … --apply --declaration .github/aviato.yml</code>. The declaration-aware form is
 mandatory once a declaration exists so repository-specific checks and settings overrides cannot
 be silently reset to profile defaults during remediation.
 <strong>Steps:</strong> fetch the issue; refuse if closed → confirm the consent record is
