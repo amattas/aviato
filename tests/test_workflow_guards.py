@@ -505,7 +505,7 @@ def test_pypi_reusable_only_builds_vetted_artifact_and_local_caller_publishes() 
 
     caller_body = (SCAFFOLD_FILES / "wf-python-library.yml").read_text(encoding="utf-8")
     assert "consumer-publisher-present: true" in caller_body
-    assert "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b" in caller_body
+    assert "pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247" in caller_body
     assert "actions/download-artifact@v8" in caller_body
     assert "environment: pypi" in caller_body
     assert "id-token: write" in caller_body and "attestations: write" in caller_body

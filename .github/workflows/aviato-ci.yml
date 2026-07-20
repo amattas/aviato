@@ -1,4 +1,4 @@
-# aviato:managed profile=aviato-library version=0 hash=79fa096f2cb0d56ebaf093bd7b901da31b5b4c3a7a6391c7e9b23a51e5658f39 inputs=307e43b687a78cf99b23e701676ea5cb05fffc648763d97e0fe72226a435e556
+# aviato:managed profile=aviato-library version=0 hash=a5eed9bc1723b434142768e130f348493aee40aeb31e98d2310b6440805b8728 inputs=307e43b687a78cf99b23e701676ea5cb05fffc648763d97e0fe72226a435e556
 name: Aviato Python Library
 
 on:
@@ -241,13 +241,13 @@ jobs:
 
       - name: Publish distributions
         if: ${{ vars.PYPI_REPOSITORY_URL == '' }}
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1 (v1.14.1)
         with:
           packages-dir: dist
 
       - name: Publish distributions to alternate repository
         if: ${{ vars.PYPI_REPOSITORY_URL != '' }}
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1 (v1.14.1)
         with:
           packages-dir: dist
           repository-url: ${{ vars.PYPI_REPOSITORY_URL }}
