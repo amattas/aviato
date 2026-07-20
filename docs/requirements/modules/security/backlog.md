@@ -7,7 +7,7 @@ seeding time) and WORKFLOW-HARDENING-PLAN.md. Entry format:
 ## Open
 
 - [external watch] GitHub's API rejects the `tag_name_pattern` rule on this plan, so the release-tag-format ruleset applies without it and settings drift reads non-clean on that rule permanently (`aviato doctor`: `ruleset_protection_full: no`; apply-rulesets 2026-07-17 reported DEGRADED). Platform limitation (§17), not repo drift — re-check if the plan changes or GitHub ships the rule to this tier. — source: 2026-07-17 Phase-2 convergence
-- [external watch] `pypa/gh-action-pypi-publish` is digest-pinned to a commit on the mutable `release/v1` branch (comment says `release/v1`, digest = v1.14.0, in sync as of 2026-07-16); the pin goes silently stale the next time pypa advances that branch, so recheck it on every dependency audit rather than assuming the comment. — source: 2026-07-16 dependency-matrix audit · .github/workflows/aviato-ci.yml, aviato/library/scaffold/files/wf-python-library.yml
+- [external watch] `pypa/gh-action-pypi-publish` is digest-pinned to a commit on the mutable `release/v1` branch (comment says `release/v1`, digest = v1.14.1 as of 2026-07-20); the pin goes silently stale the next time pypa advances that branch, so recheck it on every dependency audit rather than assuming the comment. First live occurrence 2026-07-20: `release/v1` had advanced to v1.14.1 while the pin sat at v1.14.0 — caught during the pydmp-pilot workflow-version sweep, exactly as predicted. — source: 2026-07-16 dependency-matrix audit · .github/workflows/aviato-ci.yml, aviato/library/scaffold/files/wf-python-library.yml
 
 
 ## Settled — do not reopen
