@@ -5,10 +5,95 @@ import dataclasses
 import sys
 from typing import Any
 
+from .errors import CompatibilityError
 from .ports import Platform
-from .reconcile import ReconcileOutcome, ReconcileState, reconcile_decision
+from .reconcile import (
+    DeclarativeReconcileOutcome,
+    ReconcileOutcome,
+    ReconcilePlan,
+    ReconcileState,
+    build_reconcile_plan,
+    reconcile_decision,
+)
 from .settings_drift_flow import diff_identity
 from .settingsdrift import classify_settings
+from .version import is_compatible
+
+
+def plan_reconcile(
+    platform: Platform,
+    *,
+    repo: str,
+    desired_settings: dict[str, Any],
+    pin: str,
+    tool_version: str,
+    recorded_version: str,
+) -> ReconcilePlan:
+    return build_reconcile_plan(
+        desired_settings=desired_settings,
+        live_settings=platform.read_settings(repo),
+        pin=pin,
+        tool_version=tool_version,
+        recorded_version=recorded_version,
+    )
+
+
+def execute_reconcile(
+    platform: Platform,
+    *,
+    repo: str,
+    plan: ReconcilePlan,
+    override_version_pin: bool = False,
+) -> DeclarativeReconcileOutcome:
+    if plan.clean:
+        return DeclarativeReconcileOutcome("noop", "settings already match")
+
+    try:
+        compatible = is_compatible(
+            tool=plan.tool_version,
+            pinned=plan.pin,
+            recorded=plan.recorded_version,
+        )
+    except CompatibilityError:
+        compatible = False
+
+    if not compatible and not override_version_pin:
+        return DeclarativeReconcileOutcome(
+            "refuse",
+            "tool version does not satisfy the recorded compatibility contract",
+        )
+
+    final_live = platform.read_settings(repo)
+    final_plan = build_reconcile_plan(
+        desired_settings=plan.desired_settings,
+        live_settings=final_live,
+        pin=plan.pin,
+        tool_version=plan.tool_version,
+        recorded_version=plan.recorded_version,
+    )
+    if final_plan.diff_id != plan.diff_id:
+        return DeclarativeReconcileOutcome(
+            "abort",
+            "live settings changed after the plan was displayed; rerun reconcile",
+        )
+
+    result = platform.apply_settings(
+        repo,
+        plan.desired_settings,
+        expected_live=final_live,
+    )
+    if result.skipped:
+        return DeclarativeReconcileOutcome(
+            "degraded",
+            "supported settings were applied but some fields were skipped",
+            skipped=result.skipped,
+            notes=result.notes,
+        )
+    return DeclarativeReconcileOutcome(
+        "apply",
+        "current declaration applied",
+        notes=result.notes,
+    )
 
 
 def run_reconcile(
