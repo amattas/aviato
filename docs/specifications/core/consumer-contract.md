@@ -60,19 +60,22 @@ templates are **seed-once**: the scaffolder writes them only when **absent** and
 **never overwrites them**. Container build definitions are a separate
 operator-provided prerequisite: Aviato probes them but never seeds them. After
 seeding, the operator owns the seed-once files, and they are **excluded from drift
-*remediation*** (Aviato
-never regenerates or clobbers them). However, at seed time the scaffolder
-**records a content-hash for each seeded file in a report-only sidecar**;
-diagnosis (§5.4) compares the live file to that recorded hash and **reports**
-divergence — **report-only, never an overwrite** — so security-relevant seed-once
-files are not invisible to integrity checks. The
-sidecar is report-only, but its state is fail-closed: missing, malformed, duplicate-key,
-or invalid-hash content is **unknown integrity**, never silently interpreted as a
-clean baseline. After inspection, only the explicit operator command `aviato sync
-<path> --rebaseline-seeds` may replace the sidecar with hashes of the current
-resolved seed set. This gives tamper *visibility* without fighting the required
-operator edits that make these files operator-owned. (This replaces the earlier
-"no sidecar at all" stance, which left these files with zero integrity tracking.)
+*remediation*** (Aviato never regenerates or clobbers them).
+
+However, at seed time the scaffolder **records a content-hash for each seeded
+file in a report-only sidecar**; diagnosis (§5.4) compares the live file to
+that recorded hash and **reports** divergence — **report-only, never an
+overwrite** — so security-relevant seed-once files are not invisible to
+integrity checks. The sidecar is report-only, but its state is fail-closed:
+missing, malformed, duplicate-key, or invalid-hash content is **unknown
+integrity**, never silently interpreted as a clean baseline.
+
+After inspection, only the explicit operator command `aviato sync <path>
+--rebaseline-seeds` may replace the sidecar with hashes of the current
+resolved seed set. This gives tamper *visibility* without fighting the
+required operator edits that make these files operator-owned. (This replaces
+the earlier "no sidecar at all" stance, which left these files with zero
+integrity tracking.)
 
 ### 6.4 Consent record (normative)
 

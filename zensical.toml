@@ -18,6 +18,11 @@ site_dir = "site"
 # (docs/superpowers/ plans) out of the published sidebar.
 nav = [
   { "Overview" = "index.md" },
+  { "Guide" = [
+    { "Getting started" = "guide/getting-started.md" },
+    { "CLI reference" = "guide/cli.md" },
+    { "Releases and docs" = "guide/releases-and-docs.md" },
+  ] },
   { "Architecture" = [
     { "Overview" = "architecture/overview.md" },
     { "Data flow" = "architecture/data-flow.md" },
