@@ -17,3 +17,7 @@ flowchart TD
     F -- no --> D4["DENY"]
     F -- yes --> G["ALLOW"]
 ```
+
+## Settled decisions — do not reopen
+
+- Single-operator consent TOCTOU is ACCEPTED (153fdfa) — the diff-bound `--confirm` gate is deliberately scoped to a single trusted operator; not re-filed.

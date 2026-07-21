@@ -201,4 +201,9 @@ The §9 falsifiable-agnosticism check targets the core *code* (no import edge in
 the plug-in tree, no enumerated target identifier), not these binding values, and
 is unaffected by them.
 
+## Settled decisions — do not reopen
+
+- Agnostic core: new capabilities land as data/plugins, never as core edits that name a specific target (language/registry/tool). If a change seems to need editing `aviato/core/*.py` to add a target, the abstraction is wrong (§4.3, §9b selfcheck).
+- Secret rejection remains deterministic and type/name-based (§8.15). Content heuristics are intentionally out of scope: a plain variable is inside the consumer trust boundary, and heuristic token matching would create false assurance.
+
 ---

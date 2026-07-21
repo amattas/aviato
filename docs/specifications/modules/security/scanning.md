@@ -40,4 +40,12 @@ flowchart TD
     H["No heartbeat = broken (not clean) → §5.4 surfaces it"] -.-> HB
 ```
 
+## Settled decisions — do not reopen
+
+- Solo-maintainer branch liveness uses only the declaration-scoped `required_reviews: 0` exception while no independent eligible reviewer exists. Do not replace it with standing bypass actors or recurring admin merges; remove the override when another reviewer becomes eligible. — trace: SEC-007
+- §11.3 detector semantics are frozen: bashlex-AST taint, fail-closed, block-level verify. NO interpreter enumeration, any-word matching, order-aware verify, grep mirrors, or a second in-workflow checker (8d069f7, accf092, faaeb10, 66951ba, 9ccea23). The same impl runs in every consumer's CI via reusable-common-lint.yml — single implementation, no mirror to drift.
+- zizmor scope decision (#18): the gate covers `unpinned-uses`, `unpinned-images`, and `template-injection`; `dangerous-triggers` stays non-gating (recorded in `zizmor.yml`, `docs/security/threat-model.md`, and §11.3).
+- npm/Node hardening is only ever strengthened, never relaxed (S6).
+- SEC-010's live proofs (canary ruleset block, Dependabot security updates, auto-merge baseline) are DONE and their durable evidence lives in the traceability SEC-010 row — do not re-run the canary or re-litigate the rollout here; completed-work detail belongs in traceability, not this backlog.
+
 ---

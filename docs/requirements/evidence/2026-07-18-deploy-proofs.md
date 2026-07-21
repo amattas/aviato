@@ -7,13 +7,13 @@ session evidence lived in disposable proof repos (`amattas/aviato-proof-docs`,
 below is captured inline (dates, versions, digests, run outcomes), not as a link to
 those repos. Links to `amattas/aviato` PRs/releases are durable and kept as links.
 
-Owning backlogs: [PyPI](../modules/deployment/pypi/backlog.md) ·
-[GHCR](../modules/deployment/ghcr/backlog.md) ·
-[docs-site](../modules/deployment/docs-site/backlog.md) ·
-[deployment](../modules/deployment/backlog.md) ·
-[scaffolding](../modules/scaffolding/backlog.md) ·
-[onboarding](../modules/onboarding/backlog.md) ·
-[reconcile](../modules/reconcile/backlog.md).
+Owning modules (settled decisions): [PyPI](../../specifications/modules/deployment/pypi/requirements.md) ·
+[GHCR](../../specifications/modules/deployment/ghcr/requirements.md) ·
+[docs-site](../../specifications/modules/deployment/docs-site/requirements.md) ·
+[deployment](../modules/deployment/README.md) ·
+[scaffolding](../../specifications/modules/scaffolding/sync.md) ·
+[reconcile](../../specifications/modules/reconcile/consent.md).
+Open follow-ups from this phase are tracked as [GitHub issues labeled `backlog`](https://github.com/amattas/aviato/issues?q=is%3Aissue+label%3Abacklog).
 Traceability rows: [§13.1, §13.2, §13.3, §13.5](../traceability.md).
 
 ## §13.1 — TestPyPI (PROVEN)
@@ -107,15 +107,14 @@ All four deployment legs closed:
    repo (`GraphQL: GitHub Actions is not permitted to create or approve pull
    requests`); worked around in both proofs by the operator opening the release
    PR directly against the bot-pushed branch. **Not fixed — filed as a new
-   [onboarding backlog](../modules/onboarding/backlog.md) Open item.**
+   [open backlog issue](https://github.com/amattas/aviato/issues?q=is%3Aissue+label%3Abacklog) (onboarding).**
 3. **Classic branch-protection reconciliation gap** — `complete-protection`/
    `apply-rulesets --apply` correctly update a matching ruleset's
    `required_reviews` override but silently no-op a pre-existing, separately
    configured *classic* branch-protection review count that outranks it; GitHub
    enforces the strictest of the two, so the PR stayed blocked until patched
    directly (`PATCH .../protection/required_pull_request_reviews`). **Not fixed —
-   filed as a new [reconcile backlog](../modules/reconcile/backlog.md) Open
-   item.**
+   filed as a new [open backlog issue](https://github.com/amattas/aviato/issues?q=is%3Aissue+label%3Abacklog) (reconcile).**
 4. **Trivy v0.72.0 cannot open a buildx `type=oci` tarball** —
    `reusable-docker-ghcr.yml` built with `--output type=oci,dest=oci/${slug}.tar`
    and passed the bare tar path to `trivy image --input`; Trivy 0.72.0's
@@ -129,7 +128,7 @@ All four deployment legs closed:
    collected) until the operator adds source; also found a related onboarding
    substitution gap (`website/zensical.toml`'s `{{ project-name }}`/`{{ repo }}`
    placeholders left unsubstituted). **Not fixed — filed as a new
-   [scaffolding backlog](../modules/scaffolding/backlog.md) Open item.** The
+   [open backlog issue](https://github.com/amattas/aviato/issues?q=is%3Aissue+label%3Abacklog) (scaffolding).** The
    prerelease/dev-suffixed version handling this proof also exercised
    (`aviato` carrying a §11.6 dev-suffixed version for the alpha stage) **was
    fixed in [PR #84](https://github.com/amattas/aviato/pull/84)**; a related PEP
@@ -144,7 +143,7 @@ All four deployment legs closed:
    scanned clean before the upload step failed — the build/scan/digest machinery
    itself is multi-arch-correct; only the SARIF upload needs a per-platform
    `category`. **Not fixed — filed as a new
-   [GHCR backlog](../modules/deployment/ghcr/backlog.md) Open item**, noted as
+   [open backlog issue](https://github.com/amattas/aviato/issues?q=is%3Aissue+label%3Abacklog) (GHCR)**, noted as
    blocking the container-fleet migration's G2 (arm64) phase.
 
 Also landed this phase, discovered while repinning the proof repos through the

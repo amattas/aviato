@@ -146,13 +146,32 @@ def test_current_requirements_do_not_retain_stale_normative_text() -> None:
         assert declaration_aware_remediation in path.read_text(encoding="utf-8"), path
 
 
-def test_backlogs_contain_only_open_work_and_settled_decisions() -> None:
-    for path in sorted((ROOT / "docs/requirements").rglob("backlog.md")):
-        text = path.read_text(encoding="utf-8")
-        headings = set(re.findall(r"^## (.+)$", text, re.MULTILINE))
-        assert "Open" in headings, path
-        assert "Settled — do not reopen" in headings, path
-        assert not {heading for heading in headings if "Resolved" in heading or "Completed" in heading}, path
+SETTLED_DECISION_PAGES = (
+    "docs/requirements/core/principles.md",
+    "docs/requirements/modules/deployment/README.md",
+    "docs/specifications/modules/deployment/pypi/requirements.md",
+    "docs/specifications/modules/deployment/ghcr/requirements.md",
+    "docs/specifications/modules/deployment/docs-site/requirements.md",
+    "docs/specifications/modules/languages/python/requirements.md",
+    "docs/specifications/modules/reconcile/consent.md",
+    "docs/specifications/modules/scaffolding/sync.md",
+    "docs/specifications/modules/security/scanning.md",
+    "docs/specifications/modules/starter-kit/documentation-governance.md",
+    "docs/specifications/modules/versioning/release.md",
+)
+
+
+def test_requirements_tree_has_no_backlog_files() -> None:
+    stray = sorted(path.relative_to(ROOT) for path in (ROOT / "docs/requirements").rglob("backlog.md"))
+    assert stray == [], f"backlog.md files must not exist; found: {stray}"
+
+
+@pytest.mark.parametrize("rel", SETTLED_DECISION_PAGES)
+def test_settled_decision_pages_carry_the_settled_heading(rel: str) -> None:
+    path = ROOT / rel
+    assert path.is_file(), path
+    heading = re.compile(r"^## Settled decisions — do not reopen\b", re.MULTILINE)
+    assert heading.search(path.read_text(encoding="utf-8")), f"{rel}: missing settled-decisions heading"
 
 
 def test_completed_superpowers_artifacts_are_pruned_but_active_plan_remains() -> None:
@@ -221,10 +240,8 @@ def test_sec007_solo_maintainer_override_is_declared_and_documented() -> None:
     declaration = yaml.safe_load((ROOT / ".github/aviato.yml").read_text(encoding="utf-8"))
     assert declaration["overrides"]["settings"]["default_branch"] == {"required_reviews": 0}
 
-    backlog = (ROOT / "docs/requirements/modules/security/backlog.md").read_text(encoding="utf-8")
-    open_work = backlog.split("## Open", 1)[1].split("## Settled", 1)[0]
-    assert "SEC-007" not in open_work
-    settled = backlog.split("## Settled — do not reopen", 1)[1]
+    scanning = (ROOT / "docs/specifications/modules/security/scanning.md").read_text(encoding="utf-8")
+    settled = scanning.split("## Settled decisions — do not reopen", 1)[1]
     assert "`required_reviews: 0`" in settled
     assert "standing bypass actors" in settled
     assert "recurring admin merges" in settled
@@ -482,9 +499,19 @@ def test_normative_or_aggregate_traceability_rows_do_not_overclaim_verification(
         "SEC-010",
     ),
 )
-def test_actionable_traceability_rows_link_to_an_owning_backlog(identifier: str) -> None:
+def test_actionable_traceability_rows_link_to_issue_or_owning_page(identifier: str) -> None:
     notes = _matrix_rows()[identifier][6]
-    targets = [target for target in re.findall(r"\[[^]]+\]\(([^)]+backlog\.md)\)", notes)]
-    assert len(targets) == 1, f"{identifier}: expected one owning backlog link"
-    backlog = (MATRIX.parent / targets[0]).resolve()
-    assert identifier in backlog.read_text(encoding="utf-8"), f"{identifier}: owning backlog omits trace ID"
+    links = re.findall(r"\[[^]]+\]\(([^)]+)\)", notes)
+
+    issue_links = [target for target in links if re.fullmatch(r"https://github\.com/amattas/aviato/issues/\d+", target)]
+    if issue_links:
+        return
+
+    page_links = [target for target in links if target.endswith(".md") and "://" not in target]
+    matching = [
+        target
+        for target in page_links
+        if (page := (MATRIX.parent / target.split("#", 1)[0]).resolve()).exists()
+        and identifier in page.read_text(encoding="utf-8")
+    ]
+    assert matching, f"{identifier}: notes must link a tracking issue or an in-repo page containing the trace ID"

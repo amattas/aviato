@@ -20,7 +20,7 @@ artifacts, not the system of record.
 
 Before declaring feature or documentation work complete:
 
-1. Remove completed work from backlog `Open` sections; keep unresolved work and deliberate settled decisions in the owning module backlog.
+1. Close the tracking issues (label `backlog`) for completed work; file unresolved work as GitHub issues labeled `backlog`; record deliberate settled decisions in the owning module page's `Settled decisions — do not reopen` section.
 2. Update `docs/requirements/traceability.md` with the actual requirement/threat state and existing implementation and verification evidence.
 3. Promote durable requirements, behavior, decisions, threats, mitigations, assumptions, and residual risks out of old plans before pruning them.
 4. Never claim an external gate passed without durable evidence.
