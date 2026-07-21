@@ -60,3 +60,9 @@ flowchart TD
     E --> F["Advance floating major reference only if highest in major line (§8.14)"]
     F --> G["Done"]
 ```
+
+## Settled decisions — do not reopen
+
+- Release gate keeps `merge-base --is-ancestor` (R6-4); fixes may ADD SHA-binding, never re-tighten to tip equality.
+- Tag-only release publishing; no stored release PAT; fail-closed `aviato-ref` (no `main` default).
+- C12-W1 release privilege split (FINDINGS #2) is implemented: derive job runs `contents: read` with no token; only the propose/tag job holds `contents: write` + `pull-requests: write`; top-level `permissions: {}` (reusable-release.yml:71-200). The accepted ambient-token residual is recorded in `docs/security/threat-model.md` and the workflow rationale. Do not reopen.

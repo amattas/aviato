@@ -18,5 +18,7 @@ specifications/
 ```
 
 Specifications describe intended behavior, not implementation history. Open
-work stays in the owning requirements module's `backlog.md`; implementation and
-verification status stays in `docs/requirements/traceability.md`.
+work is tracked as [GitHub issues labeled `backlog`](https://github.com/amattas/aviato/issues?q=is%3Aissue+label%3Abacklog),
+and settled "do not reopen" decisions live in a "Settled decisions — do not
+reopen" section on each owning module's page; implementation and verification
+status stays in `docs/requirements/traceability.md`.

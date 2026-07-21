@@ -47,3 +47,8 @@ flowchart TD
     E --> F["Confirm version resolvable on index"]
     P["Prerequisite: consumer workflow + pypi environment<br/>registered as PyPI trusted publisher"] -.-> D
 ```
+
+## Settled decisions — do not reopen
+
+- pip-audit stays `--strict`; no severity filter (R7-1: pip-audit JSON carries no severity).
+- §13.1 TestPyPI proof PROVEN 2026-07-17: aviato 0.4.1a2 published via the consumer-local OIDC trusted publisher (environment `pypi`, required reviewer), PEP 691 confirmation green, pip-download from the test index verified, `gh attestation verify` exit 0. Real-PyPI half already satisfied by production releases 0.3.0/0.4.0/0.4.1. TestPyPI yank of 0.4.1a2 is a pending operator UI click (§11.6 hygiene), not a code gap. See [traceability §13.1](../../../../requirements/traceability.md) and the [2026-07-18 evidence record](../../../../requirements/evidence/2026-07-18-deploy-proofs.md).

@@ -44,3 +44,8 @@ flowchart TD
     Sforce -- no --> Skip["SKIP + report (protect operator's file)"]
     Sforce -- yes --> W
 ```
+
+## Settled decisions — do not reopen
+
+- Templates are only ever regenerated via `scripts/regen-templates.py`; never hand-edited. `aviato validate` fails on template/scaffold parity drift.
+- Swift/Xcode project and package manifests remain operator-owned and are not seeded (§12.3); the earlier backlog request for a Swift manifest fragment contradicted that settled contract and is closed as a non-defect.

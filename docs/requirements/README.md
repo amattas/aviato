@@ -32,7 +32,10 @@ relevant and may be revisited post-day-zero.
 > Split from the monolithic REQUIREMENTS.md on 2026-07-11. § numbering is preserved
 > verbatim in the split files, so code citations like §5.2 remain valid. Start with
 > `core/` for outcomes and constraints. Precise behavioral contracts live under
-> `../specifications/`; each requirements module retains its owning `backlog.md`.
+> `../specifications/`. Open backlog work is tracked as [GitHub issues labeled
+> `backlog`](https://github.com/amattas/aviato/issues?q=is%3Aissue+label%3Abacklog);
+> settled "do not reopen" decisions live in a "Settled decisions — do not reopen"
+> section on each owning module's page.
 
 ## § → file index
 

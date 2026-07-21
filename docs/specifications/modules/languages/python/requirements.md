@@ -57,3 +57,7 @@ symmetric across Python and Node.
 
 **Runner:** Linux. **Definition of done:** verify + release green in real CI (plus
 the docs build when `docs: true`); the attached deploy plug-in meets its DoD.
+
+## Settled decisions — do not reopen
+
+- Numeric coverage remains opt-in and measure-only unless a consumer chooses a threshold; Aviato does not invent one universal percentage for heterogeneous repositories.

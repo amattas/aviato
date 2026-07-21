@@ -14,7 +14,7 @@ before declaring reconciliation complete.
 ## Reconciliation order
 
 1. Inventory living requirements, specifications, architecture, security docs,
-   module backlogs, traceability, findings, and dated plans/specs.
+   open `backlog` issues, traceability, findings, and dated plans/specs.
 2. Classify every unique statement:
 
 | Content | Living owner |
@@ -23,16 +23,17 @@ before declaring reconciliation complete.
 | Interface, schema, state transition, error, exact behavior | `docs/specifications/` |
 | Current components, boundaries, dependencies, deployment | `docs/architecture/` |
 | Threat, mitigation, assumption, residual risk, control | `docs/security/` |
-| Unresolved work | Owning module `backlog.md` → `## Open` |
-| Deliberate decision future reviews must not reopen | Owning module `backlog.md` → `## Settled — do not reopen` |
+| Unresolved work | GitHub issue labeled `backlog` (plus a severity label) |
+| Deliberate decision future reviews must not reopen | Owning module page → `## Settled decisions — do not reopen` |
 | Implementation or verification proof | `docs/requirements/traceability.md` |
 
 3. Promote durable content into its owner. Merge duplicates without weakening
    normative wording. Preserve stable IDs and section numbers.
-4. Reconcile backlog:
-   - remove completed entries from `Open`;
-   - keep unresolved entries in `Open`;
-   - keep deliberate settled decisions in `Settled`;
+4. Reconcile tracked work:
+   - close the `backlog` issues for completed work;
+   - keep unresolved work as open `backlog` issues;
+   - keep deliberate settled decisions in the owning module page's
+     `Settled decisions — do not reopen` section;
    - do not create a completed-work archive or release-history substitute.
 5. Update traceability. Completed work requires implementation evidence;
    verified work also requires verification evidence. External gates remain
@@ -54,11 +55,11 @@ link. Unverified mitigation claims remain blocked or implemented—not verified.
 
 | Situation | Action |
 |---|---|
-| Completed backlog item with evidence | Update traceability, then remove it |
+| Completed `backlog` issue with evidence | Update traceability, then close it |
 | Completed item without evidence | Reconstruct evidence or report blocked |
-| Old plan contains open work | Move it to the owning backlog before deletion |
+| Old plan contains open work | File it as a `backlog` issue before deletion |
 | Old plan contains exact behavior | Promote it to a specification |
-| Settled backlog decision | Preserve it unless superseded with evidence |
+| Settled decision on a module page | Preserve it unless superseded with evidence |
 | Duplicate current prose | Select one owner and replace other copies with links |
 
 ## Red flags
