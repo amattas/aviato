@@ -14,3 +14,4 @@ catalog.md
 repos-*.txt
 
 /.review
+/.worktrees/
