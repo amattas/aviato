@@ -10,6 +10,9 @@ starter kit, and an operator-run Python CLI (`aviato`).
 
 ## Where to start
 
+- **[Guide](guide/getting-started.md)** — install the CLI, adopt or provision a
+  repository, and the day-to-day operator commands, [release model](guide/releases-and-docs.md),
+  and [CLI reference](guide/cli.md).
 - **[Architecture](architecture/overview.md)** — the agnostic core engine,
   plug-in module data, rendering pipeline, and validation gate.
 - **[Requirements](requirements/README.md)** — the living record of what the
