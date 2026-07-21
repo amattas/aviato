@@ -12,36 +12,36 @@
         <meta name="author" content="Anthony Mattas">
       
       
-        <link rel="canonical" href="https://amattas.github.io/aviato/dev/requirements/modules/starter-kit/backlog/">
+        <link rel="canonical" href="https://amattas.github.io/aviato/dev/guide/cli/">
       
       
-        <link rel="prev" href="../conventions/">
+        <link rel="prev" href="../getting-started/">
       
       
-        <link rel="next" href="../../../../specifications/">
+        <link rel="next" href="../releases-and-docs/">
       
       
         
       
       
-      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="zensical-0.0.50">
     
     
       
-        <title>Starter kit backlog - Aviato</title>
+        <title>CLI reference - Aviato</title>
       
     
     
       
         
       
-      <link rel="stylesheet" href="../../../../assets/stylesheets/modern/main.62c9b9cc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/modern/main.62c9b9cc.min.css">
       
         
           
         
-        <link rel="stylesheet" href="../../../../assets/stylesheets/modern/palette.dfe2e883.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/modern/palette.dfe2e883.min.css">
       
       
 
@@ -60,7 +60,7 @@
       
     
     
-    <script>__md_scope=new URL("../../../..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+    <script>__md_scope=new URL("../..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
     
       
 
@@ -85,7 +85,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#starter-kit-backlog" class="md-skip">
+        <a href="#cli-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -105,7 +105,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../../.." title="Aviato" class="md-header__button md-logo" aria-label="Aviato" data-md-component="logo">
+    <a href="../.." title="Aviato" class="md-header__button md-logo" aria-label="Aviato" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-book-open" viewBox="0 0 24 24"><path d="M12 7v14M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
@@ -125,7 +125,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Starter kit backlog
+              CLI reference
             
           </span>
         </div>
@@ -214,7 +214,7 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../../.." title="Aviato" class="md-nav__button md-logo" aria-label="Aviato" data-md-component="logo">
+    <a href="../.." title="Aviato" class="md-nav__button md-logo" aria-label="Aviato" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-book-open" viewBox="0 0 24 24"><path d="M12 7v14M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
@@ -244,7 +244,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../.." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -267,8 +267,10 @@
       
   
   
+    
   
   
+  
     
     
       
@@ -282,11 +284,11 @@
     
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -306,7 +308,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -323,7 +325,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../guide/getting-started/" class="md-nav__link">
+      <a href="../getting-started/" class="md-nav__link">
         
   
   
@@ -347,10 +349,36 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../../../guide/cli/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  CLI reference
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="././" class="md-nav__link md-nav__link--active">
         
   
   
@@ -365,6 +393,71 @@
   
 
       </a>
+      
+        
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#adoption" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Adoption
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ongoing-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Ongoing operations
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#release-and-versioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Release and versioning
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#library-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Library-only
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -377,7 +470,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../guide/releases-and-docs/" class="md-nav__link">
+      <a href="../releases-and-docs/" class="md-nav__link">
         
   
   
@@ -468,7 +561,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../architecture/overview/" class="md-nav__link">
+      <a href="../../architecture/overview/" class="md-nav__link">
         
   
   
@@ -495,7 +588,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../architecture/data-flow/" class="md-nav__link">
+      <a href="../../architecture/data-flow/" class="md-nav__link">
         
   
   
@@ -522,7 +615,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../architecture/infrastructure/" class="md-nav__link">
+      <a href="../../architecture/infrastructure/" class="md-nav__link">
         
   
   
@@ -549,7 +642,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../architecture/validation/" class="md-nav__link">
+      <a href="../../architecture/validation/" class="md-nav__link">
         
   
   
@@ -576,7 +669,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../architecture/security/" class="md-nav__link">
+      <a href="../../architecture/security/" class="md-nav__link">
         
   
   
@@ -607,8 +700,6 @@
       
   
   
-    
-  
   
   
     
@@ -628,15 +719,15 @@
     
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../" class="md-nav__link ">
+            <a href="../../requirements/" class="md-nav__link ">
               
   
   
@@ -659,7 +750,7 @@
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -678,7 +769,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../traceability/" class="md-nav__link">
+      <a href="../../requirements/traceability/" class="md-nav__link">
         
   
   
@@ -768,7 +859,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../core/purpose/" class="md-nav__link">
+      <a href="../../requirements/core/purpose/" class="md-nav__link">
         
   
   
@@ -795,7 +886,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../core/principles/" class="md-nav__link">
+      <a href="../../requirements/core/principles/" class="md-nav__link">
         
   
   
@@ -822,7 +913,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../core/structure/" class="md-nav__link">
+      <a href="../../requirements/core/structure/" class="md-nav__link">
         
   
   
@@ -849,7 +940,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../core/modularity/" class="md-nav__link">
+      <a href="../../requirements/core/modularity/" class="md-nav__link">
         
   
   
@@ -876,7 +967,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../core/state-and-failures/" class="md-nav__link">
+      <a href="../../requirements/core/state-and-failures/" class="md-nav__link">
         
   
   
@@ -903,7 +994,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../core/definition-of-done/" class="md-nav__link">
+      <a href="../../requirements/core/definition-of-done/" class="md-nav__link">
         
   
   
@@ -930,7 +1021,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../core/glossary/" class="md-nav__link">
+      <a href="../../requirements/core/glossary/" class="md-nav__link">
         
   
   
@@ -957,7 +1048,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../core/backlog/" class="md-nav__link">
+      <a href="../../requirements/core/backlog/" class="md-nav__link">
         
   
   
@@ -989,8 +1080,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1026,15 +1115,15 @@
     
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4" >
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../" class="md-nav__link ">
+            <a href="../../requirements/modules/" class="md-nav__link ">
               
   
   
@@ -1057,7 +1146,7 @@
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1076,7 +1165,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../onboarding/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/onboarding/backlog/" class="md-nav__link">
         
   
   
@@ -1103,7 +1192,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../scaffolding/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/scaffolding/backlog/" class="md-nav__link">
         
   
   
@@ -1130,7 +1219,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../drift/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/drift/backlog/" class="md-nav__link">
         
   
   
@@ -1157,7 +1246,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reconcile/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/reconcile/backlog/" class="md-nav__link">
         
   
   
@@ -1184,7 +1273,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../fleet/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/fleet/backlog/" class="md-nav__link">
         
   
   
@@ -1211,7 +1300,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../versioning/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/versioning/backlog/" class="md-nav__link">
         
   
   
@@ -1238,7 +1327,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../offboarding/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/offboarding/backlog/" class="md-nav__link">
         
   
   
@@ -1265,7 +1354,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../security/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/security/backlog/" class="md-nav__link">
         
   
   
@@ -1316,7 +1405,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../languages/" class="md-nav__link ">
+            <a href="../../requirements/modules/languages/" class="md-nav__link ">
               
   
   
@@ -1358,7 +1447,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../languages/python/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/languages/python/backlog/" class="md-nav__link">
         
   
   
@@ -1385,7 +1474,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../languages/node/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/languages/node/backlog/" class="md-nav__link">
         
   
   
@@ -1412,7 +1501,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../languages/swift/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/languages/swift/backlog/" class="md-nav__link">
         
   
   
@@ -1475,7 +1564,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../deployment/" class="md-nav__link ">
+            <a href="../../requirements/modules/deployment/" class="md-nav__link ">
               
   
   
@@ -1517,7 +1606,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../deployment/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/deployment/backlog/" class="md-nav__link">
         
   
   
@@ -1544,7 +1633,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../deployment/pypi/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/deployment/pypi/backlog/" class="md-nav__link">
         
   
   
@@ -1571,7 +1660,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../deployment/ghcr/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/deployment/ghcr/backlog/" class="md-nav__link">
         
   
   
@@ -1598,7 +1687,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../deployment/docs-site/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/deployment/docs-site/backlog/" class="md-nav__link">
         
   
   
@@ -1625,7 +1714,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../deployment/apple/backlog/" class="md-nav__link">
+      <a href="../../requirements/modules/deployment/apple/backlog/" class="md-nav__link">
         
   
   
@@ -1657,10 +1746,8 @@
                 
   
   
-    
   
   
-  
     
     
       
@@ -1672,11 +1759,11 @@
     
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4_12" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_4_12" id="__nav_4_4_12_label" tabindex="0">
@@ -1696,7 +1783,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_4_12_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_4_12_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_4_12">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1713,7 +1800,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../conventions/" class="md-nav__link">
+      <a href="../../requirements/modules/starter-kit/conventions/" class="md-nav__link">
         
   
   
@@ -1737,36 +1824,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-  Backlog
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="././" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../requirements/modules/starter-kit/backlog/" class="md-nav__link">
         
   
   
@@ -1781,49 +1842,6 @@
   
 
       </a>
-      
-        
-
-
-<nav class="md-nav md-nav--secondary" aria-label="On this page">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      On this page
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#open" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Open
-      </span>
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#settled-do-not-reopen" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Settled — do not reopen
-      </span>
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1901,7 +1919,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../../specifications/" class="md-nav__link ">
+            <a href="../../specifications/" class="md-nav__link ">
               
   
   
@@ -1943,7 +1961,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/core/consumer-contract/" class="md-nav__link">
+      <a href="../../specifications/core/consumer-contract/" class="md-nav__link">
         
   
   
@@ -2021,7 +2039,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/onboarding/flow/" class="md-nav__link">
+      <a href="../../specifications/modules/onboarding/flow/" class="md-nav__link">
         
   
   
@@ -2048,7 +2066,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/onboarding/bootstrap/" class="md-nav__link">
+      <a href="../../specifications/modules/onboarding/bootstrap/" class="md-nav__link">
         
   
   
@@ -2132,7 +2150,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/scaffolding/sync/" class="md-nav__link">
+      <a href="../../specifications/modules/scaffolding/sync/" class="md-nav__link">
         
   
   
@@ -2218,7 +2236,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/drift/file-drift/" class="md-nav__link">
+      <a href="../../specifications/modules/drift/file-drift/" class="md-nav__link">
         
   
   
@@ -2245,7 +2263,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/drift/settings-drift/" class="md-nav__link">
+      <a href="../../specifications/modules/drift/settings-drift/" class="md-nav__link">
         
   
   
@@ -2331,7 +2349,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/reconcile/flow/" class="md-nav__link">
+      <a href="../../specifications/modules/reconcile/flow/" class="md-nav__link">
         
   
   
@@ -2358,7 +2376,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/reconcile/consent/" class="md-nav__link">
+      <a href="../../specifications/modules/reconcile/consent/" class="md-nav__link">
         
   
   
@@ -2444,7 +2462,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/fleet/diagnosis/" class="md-nav__link">
+      <a href="../../specifications/modules/fleet/diagnosis/" class="md-nav__link">
         
   
   
@@ -2471,7 +2489,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/fleet/scan/" class="md-nav__link">
+      <a href="../../specifications/modules/fleet/scan/" class="md-nav__link">
         
   
   
@@ -2557,7 +2575,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/versioning/release/" class="md-nav__link">
+      <a href="../../specifications/modules/versioning/release/" class="md-nav__link">
         
   
   
@@ -2584,7 +2602,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/versioning/repin/" class="md-nav__link">
+      <a href="../../specifications/modules/versioning/repin/" class="md-nav__link">
         
   
   
@@ -2668,7 +2686,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/offboarding/flow/" class="md-nav__link">
+      <a href="../../specifications/modules/offboarding/flow/" class="md-nav__link">
         
   
   
@@ -2754,7 +2772,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/security/scanning/" class="md-nav__link">
+      <a href="../../specifications/modules/security/scanning/" class="md-nav__link">
         
   
   
@@ -2781,7 +2799,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/security/supply-chain/" class="md-nav__link">
+      <a href="../../specifications/modules/security/supply-chain/" class="md-nav__link">
         
   
   
@@ -2869,7 +2887,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/languages/python/requirements/" class="md-nav__link">
+      <a href="../../specifications/modules/languages/python/requirements/" class="md-nav__link">
         
   
   
@@ -2896,7 +2914,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/languages/node/requirements/" class="md-nav__link">
+      <a href="../../specifications/modules/languages/node/requirements/" class="md-nav__link">
         
   
   
@@ -2923,7 +2941,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/languages/swift/requirements/" class="md-nav__link">
+      <a href="../../specifications/modules/languages/swift/requirements/" class="md-nav__link">
         
   
   
@@ -3013,7 +3031,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/deployment/pypi/requirements/" class="md-nav__link">
+      <a href="../../specifications/modules/deployment/pypi/requirements/" class="md-nav__link">
         
   
   
@@ -3040,7 +3058,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/deployment/ghcr/requirements/" class="md-nav__link">
+      <a href="../../specifications/modules/deployment/ghcr/requirements/" class="md-nav__link">
         
   
   
@@ -3067,7 +3085,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/deployment/docs-site/requirements/" class="md-nav__link">
+      <a href="../../specifications/modules/deployment/docs-site/requirements/" class="md-nav__link">
         
   
   
@@ -3094,7 +3112,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/deployment/apple/requirements/" class="md-nav__link">
+      <a href="../../specifications/modules/deployment/apple/requirements/" class="md-nav__link">
         
   
   
@@ -3178,7 +3196,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../specifications/modules/starter-kit/documentation-governance/" class="md-nav__link">
+      <a href="../../specifications/modules/starter-kit/documentation-governance/" class="md-nav__link">
         
   
   
@@ -3271,7 +3289,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../security/threat-model/" class="md-nav__link">
+      <a href="../../security/threat-model/" class="md-nav__link">
         
   
   
@@ -3298,7 +3316,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../security/controls/" class="md-nav__link">
+      <a href="../../security/controls/" class="md-nav__link">
         
   
   
@@ -3366,10 +3384,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#open" class="md-nav__link">
+  <a href="#adoption" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Open
+        Adoption
       </span>
     </span>
   </a>
@@ -3377,10 +3395,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#settled-do-not-reopen" class="md-nav__link">
+  <a href="#ongoing-operations" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Settled — do not reopen
+        Ongoing operations
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#release-and-versioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Release and versioning
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#library-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Library-only
       </span>
     </span>
   </a>
@@ -3412,7 +3452,7 @@
   
   
     <li class="md-path__item">
-      <a href="../../../.." class="md-path__link">
+      <a href="../.." class="md-path__link">
         
   
   <span class="md-ellipsis">
@@ -3432,60 +3472,6 @@
     
       
         
-          
-        
-      
-        
-      
-        
-      
-        
-      
-    
-    
-    
-    
-      <li class="md-path__item">
-        <a href="../../../" class="md-path__link">
-          
-  
-  <span class="md-ellipsis">
-    Requirements
-  </span>
-
-        </a>
-      </li>
-    
-  
-
-      
-        
-  
-  
-    
-    
-      
-        
-          
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
       
         
       
@@ -3496,39 +3482,11 @@
     
     
       <li class="md-path__item">
-        <a href="../../" class="md-path__link">
+        <a href="../getting-started/" class="md-path__link">
           
   
   <span class="md-ellipsis">
-    Modules
-  </span>
-
-        </a>
-      </li>
-    
-  
-
-      
-        
-  
-  
-    
-    
-      
-        
-      
-        
-      
-    
-    
-    
-    
-      <li class="md-path__item">
-        <a href="../conventions/" class="md-path__link">
-          
-  
-  <span class="md-ellipsis">
-    Starter kit
+    Guide
   </span>
 
         </a>
@@ -3545,7 +3503,7 @@
                 
                   
   
-    <a href="https://github.com/amattas/aviato/edit/main/docs/requirements/modules/starter-kit/backlog.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/amattas/aviato/edit/main/docs/guide/cli.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-file-pen" viewBox="0 0 24 24"><path d="M12.659 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v9.34"/><path d="M14 2v5a1 1 0 0 0 1 1h5M10.378 12.622a1 1 0 0 1 3 3.003L8.36 20.637a2 2 0 0 1-.854.506l-2.867.837a.5.5 0 0 1-.62-.62l.836-2.869a2 2 0 0 1 .506-.853z"/></svg>
     </a>
@@ -3554,25 +3512,85 @@
     
       
     
-    <a href="https://github.com/amattas/aviato/raw/main/docs/requirements/modules/starter-kit/backlog.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/amattas/aviato/raw/main/docs/guide/cli.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-file-code-2" viewBox="0 0 24 24"><path d="M4 12.15V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-3.35"/><path d="M14 2v5a1 1 0 0 0 1 1h5M5 16l-3 3 3 3M9 22l3-3-3-3"/></svg>
     </a>
   
 
 
-<h1 id="starter-kit-backlog">Starter kit backlog<a class="headerlink" href="#starter-kit-backlog" title="Permanent link">&para;</a></h1>
-<h2 id="open">Open<a class="headerlink" href="#open" title="Permanent link">&para;</a></h2>
-<ul>
-<li>(none)</li>
-</ul>
-<h2 id="settled-do-not-reopen">Settled — do not reopen<a class="headerlink" href="#settled-do-not-reopen" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Multi-arch container builds REQUIRED — amd64+arm64 native-runner matrix (G2).</li>
-<li>No infra/terraform profile (G3, operator decision).</li>
-<li>Zensical with built-in search is the sole docs baseline (operator decision 2026-07-11); prior Docusaurus and external-search decisions are historical and superseded.</li>
-<li>The fleet Python floor is 3.12 (operator decision 2026-07-18, made during the pydmp adoption): every fleet project targets &gt;=3.12, and the managed lint/typecheck configs (ruff target-version py312, mypy python_version 3.12) assume it. Floor-awareness machinery (deriving config targets from a consumer's requires-python) is deliberately NOT built — revisit only if a sub-floor consumer ever needs adopting.</li>
-</ul>
+<h1 id="cli-reference">CLI reference<a class="headerlink" href="#cli-reference" title="Permanent link">&para;</a></h1>
+<p>Every Aviato subcommand, grouped by lifecycle stage. Section (§) references point
+at the requirements index (<code>docs/requirements/README.md</code>). Run
+<code>aviato &lt;command&gt; --help</code> for the full flag surface of any command.</p>
+<p>Aviato keeps no persistent inventory: commands target a local root, one explicit
+local checkout, or one <code>OWNER/REPO</code>. Privileged changes are always
+operator-initiated and, where they touch settings, gated (§5.7/§5.8).</p>
+<h2 id="adoption">Adoption<a class="headerlink" href="#adoption" title="Permanent link">&para;</a></h2>
+<p><strong><code>aviato onboard PATH|OWNER/REPO --profile P --pin X.Y.Z</code></strong> — plan or adopt a
+repository (§5.2). Plans by default; <code>--write</code> applies the plan locally,
+<code>--open-pr</code> adopts a remote repository via a reviewable scaffold PR. <code>--docs</code>
+composes the opt-in docs deploy (§13.3); repeat <code>--var KEY=VALUE</code> for non-secret
+profile variables; <code>--allow-dirty</code> acknowledges a non-clean worktree. The pin
+must resolve to a published tag/branch; re-onboarding preserves the existing pin.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>aviato<span class="w"> </span>onboard<span class="w"> </span>.<span class="w"> </span>--profile<span class="w"> </span>python-library<span class="w"> </span>--pin<span class="w"> </span><span class="m">1</span>.2.3<span class="w"> </span>--docs<span class="w"> </span>--write
+</span></code></pre></div>
+<p><strong><code>aviato provision OWNER/REPO --profile P --pin X.Y.Z</code></strong> — create, stage-protect,
+and scaffold a brand-new repository (§5.2/§2.11). Private by default; add
+<code>--public</code> to create a public repository.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>aviato<span class="w"> </span>provision<span class="w"> </span>amattas/example<span class="w"> </span>--profile<span class="w"> </span>node-service<span class="w"> </span>--pin<span class="w"> </span><span class="m">1</span>.2.3
+</span></code></pre></div>
+<p><strong><code>aviato apply-rulesets OWNER/REPO</code></strong> — dry-run (default) or <code>--apply</code> the GitHub
+rulesets (§5.6). With <code>--declaration</code> it resolves checks and approvals through the
+consumer's declared overrides — the payload that settings-drift remediation
+recommends. Without a declaration it dry-runs a base profile only.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>aviato<span class="w"> </span>apply-rulesets<span class="w"> </span>OWNER/REPO<span class="w"> </span>--apply<span class="w"> </span>--declaration<span class="w"> </span>/path/.github/aviato.yml
+</span></code></pre></div>
+<p><strong><code>aviato complete-protection /path/to/consumer</code></strong> — idempotently (re-)apply full
+branch protection; the §5.2 recovery path.</p>
+<h2 id="ongoing-operations">Ongoing operations<a class="headerlink" href="#ongoing-operations" title="Permanent link">&para;</a></h2>
+<p><strong><code>aviato doctor /path/to/consumer</code></strong> — classify managed artifacts and probe their
+health (§5.4).</p>
+<p><strong><code>aviato sync /path/to/consumer</code></strong> — materialize managed artifacts, including the
+caller workflows (§5.3/§15). <code>--rebaseline-seeds</code> accepts current seed-once
+contents as the new baseline; <code>--override-version-pin</code> is the recovery switch for
+a recorded-pin mismatch.</p>
+<p><strong><code>aviato drift-report /path/to/consumer</code></strong> — report file and settings drift
+(§5.5/§5.6). <code>--file-only</code>/<code>--settings-only</code> scope the report; <code>--require-settings</code>
+exits non-zero if settings can't be read.</p>
+<p><strong><code>aviato reconcile /path/to/consumer ISSUE --confirm DIFF_ID</code></strong> — operator-gated,
+diff-bound settings apply (§5.7). Fail-closed: the consent label must be present
+and the <code>DIFF_ID</code> must still match the live diff.</p>
+<p><strong><code>aviato scan /path/a /path/b</code></strong> — read-only fleet diagnosis (§5.11); <code>--fix</code>
+opens managed-file proposals and <code>--audit</code> surfaces open settings-drift tracking
+issues (§5.5).</p>
+<p><strong><code>aviato repin /path/to/consumer X.Y.Z</code></strong> — move the Library version pin (§5.12);
+<code>--write</code> applies locally, <code>--open-pr</code> opens a reviewable re-pin proposal.</p>
+<p><strong><code>aviato offboard /path/to/consumer</code></strong> — remove a repository from Aviato
+management (§5.13). <code>--write</code> removes management state but preserves managed files
+unless <code>--delete-files</code> is also given; <code>--open-pr</code> opens a reviewable removal
+proposal.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>aviato<span class="w"> </span>scan<span class="w"> </span>/path/a<span class="w"> </span>/path/b<span class="w"> </span>--fix<span class="w"> </span>--audit
+</span></code></pre></div>
+<h2 id="release-and-versioning">Release and versioning<a class="headerlink" href="#release-and-versioning" title="Permanent link">&para;</a></h2>
+<p><strong><code>aviato next-version --current X.Y.Z --commit "feat: x"</code></strong> — derive the next
+SemVer from Conventional Commits (§5.9).</p>
+<p><strong><code>aviato bump-version X.Y.Z /path/to/consumer</code></strong> — write the version into the
+version-source locations (§3.3).</p>
+<p><strong><code>aviato is-highest 1.2.3 1.0.0 1.2.3</code></strong> — exit 0 iff the first argument is the
+highest release among the rest; the §8.14 monotonic-alias gate.</p>
+<p><strong><code>aviato render-rulesets</code></strong> — print the rendered ruleset JSON.</p>
+<h2 id="library-only">Library-only<a class="headerlink" href="#library-only" title="Permanent link">&para;</a></h2>
+<p><strong><code>aviato validate</code></strong> — validate the policy infrastructure, agnosticism, digest
+pins, template parity, and inline monotonic-alias parity. Runs from a <strong>source
+checkout only</strong>, not a pip-installed package.</p>
+<p><strong><code>aviato lint-actions [PATH]</code></strong> — the §11.3 supply-chain gate: zizmor over
+<code>uses:</code>/image pinning plus a fail-closed <code>curl|bash</code> check and non-exact pip pin
+detection.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>aviato<span class="w"> </span>validate
+</span></code></pre></div>
+<p>The legacy <code>scripts/audit-repos.sh</code> and <code>scripts/apply-rulesets.sh</code> wrappers exec
+the CLI and still work.</p>
 
 
 
@@ -3610,7 +3628,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../conventions/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Conventions">
+          <a href="../getting-started/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Getting started">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7M19 12H5"/></svg>
@@ -3620,20 +3638,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Conventions
+                Getting started
               </div>
             </div>
           </a>
         
         
           
-          <a href="../../../../specifications/" class="md-footer__link md-footer__link--next" aria-label="Next: Index">
+          <a href="../releases-and-docs/" class="md-footer__link md-footer__link--next" aria-label="Next: Releases and docs">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Index
+                Releases and docs
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -3670,10 +3688,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate":null,"base":"../../../..","features":["content.action.edit","content.action.view","content.code.copy","content.tooltips","navigation.footer","navigation.indexes","navigation.instant","navigation.path","navigation.top","navigation.tracking","search.highlight"],"search":"../../../../assets/javascripts/workers/search.b6b7e04f.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":{"alias":true,"default":"latest","provider":"mike"}}</script>
+      <script id="__config" type="application/json">{"annotate":null,"base":"../..","features":["content.action.edit","content.action.view","content.code.copy","content.tooltips","navigation.footer","navigation.indexes","navigation.instant","navigation.path","navigation.top","navigation.tracking","search.highlight"],"search":"../../assets/javascripts/workers/search.b6b7e04f.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":{"alias":true,"default":"latest","provider":"mike"}}</script>
     
     
-      <script src="../../../../assets/javascripts/bundle.d7f30b55.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7f30b55.min.js"></script>
       
     
   </body>
