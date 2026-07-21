@@ -55,70 +55,16 @@
         <loc>https://amattas.github.io/aviato/dev/requirements/core/glossary/</loc>
       </url>
       <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/core/backlog/</loc>
-      </url>
-      <url>
         <loc>https://amattas.github.io/aviato/dev/requirements/modules/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/onboarding/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/scaffolding/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/drift/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/reconcile/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/fleet/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/versioning/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/offboarding/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/security/backlog/</loc>
       </url>
       <url>
         <loc>https://amattas.github.io/aviato/dev/requirements/modules/languages/</loc>
       </url>
       <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/languages/python/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/languages/node/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/languages/swift/backlog/</loc>
-      </url>
-      <url>
         <loc>https://amattas.github.io/aviato/dev/requirements/modules/deployment/</loc>
       </url>
       <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/deployment/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/deployment/pypi/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/deployment/ghcr/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/deployment/docs-site/backlog/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/deployment/apple/backlog/</loc>
-      </url>
-      <url>
         <loc>https://amattas.github.io/aviato/dev/requirements/modules/starter-kit/conventions/</loc>
-      </url>
-      <url>
-        <loc>https://amattas.github.io/aviato/dev/requirements/modules/starter-kit/backlog/</loc>
       </url>
       <url>
         <loc>https://amattas.github.io/aviato/dev/specifications/</loc>
