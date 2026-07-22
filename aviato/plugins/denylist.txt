@@ -39,3 +39,7 @@ pip
 docker
 container
 dockerfile
+# Day-zero contained advisory-model provider (D3/D4): core defines only the neutral Advisor
+# port; the concrete contained-endpoint binding lives in a plug-in/binding, never in core.
+azure
+openai
