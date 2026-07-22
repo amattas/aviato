@@ -23,6 +23,10 @@ def test_denylist_is_the_maintained_list() -> None:
     # `docker run` lives in the plug-in tree, so core must never name these (§9b).
     assert "docker" in denylist
     assert "container" in denylist
+    # Day-zero contained advisory-model provider (D3/D4): core defines only the neutral Advisor
+    # port; the concrete binding names the provider, so core must never learn these words.
+    assert "azure" in denylist
+    assert "openai" in denylist
 
 
 def test_unparseable_core_file_is_flagged_not_silently_skipped(tmp_path: Path) -> None:

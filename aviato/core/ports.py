@@ -87,3 +87,43 @@ class Platform(Protocol):
         ...
 
     def create_repo(self, repo: str, *, private: bool) -> None: ...
+
+
+@dataclass(frozen=True)
+class AdviceRequest:
+    """One advisory prompt (Track L, D3). Provider-neutral so any contained binding can serve it.
+
+    ``feature`` + ``prompt_version`` participate in the deterministic cache key and the audit
+    record, so an identical request never re-bills or re-varies (§2.5).
+    """
+
+    feature: str  # e.g. "release-notes" | "docs-verifier" | "version-recommendation"
+    prompt_version: str
+    system: str
+    user: str
+    max_output_tokens: int = 1024
+
+
+@dataclass(frozen=True)
+class AdviceResponse:
+    """A model's advisory reply. Advisory only — never authoritative for a gating decision (D3)."""
+
+    text: str
+    model: str
+
+
+@runtime_checkable
+class Advisor(Protocol):
+    """The advisory-model binding interface (D3), a sibling to :class:`Platform`.
+
+    The core depends only on this Protocol; the concrete contained-endpoint binding lives OUTSIDE
+    the agnostic core (like the hosting-platform binding). A model is advisory only: it may draft
+    prose or raise a flag, but never picks a value that gates a publish — the deterministic engine
+    stays the source of truth (§2.5). ``advise`` is the single call; ``model`` names the served
+    model for the cache key + audit trail.
+    """
+
+    @property
+    def model(self) -> str: ...
+
+    def advise(self, request: AdviceRequest) -> AdviceResponse: ...
