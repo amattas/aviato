@@ -9,6 +9,12 @@ that change is a **proposal**: it is not in force until the owning requirement �
 is amended and the validation gate updated. Nothing here relaxes a current §
 principle by being written down.
 
+**Current implementation status:** this roadmap and the provider-neutral
+`Advisor` seam are the only landed bot work. There is not yet a running App,
+webhook receiver, service, queue, dashboard, or service-backed flow. Aviato is a
+bot only after the Phase-1 runtime and cutover exit gates below pass; adding a
+port or publishing a container alone does not count.
+
 This document records the target shape and the phased path for evolving Aviato
 from an Operator-run CLI + reusable-workflow library into a service-backed
 **release bot**, and — critically — which of Aviato's security principles are
@@ -29,9 +35,10 @@ Aviato today is not "cobbled-together scripts": it is an agnostic core engine
   a schedule **inside each Consumer repo**.
 
 "Becoming a bot" is therefore a **delivery/identity** change, not a rewrite. The
-work adds an identity (a GitHub App), a service (webhook-driven, in Kubernetes),
-and two new **bindings behind existing ports** — never new logic in the agnostic
-core (§2.1/§4.3).
+work adds split-purpose GitHub App identities, a webhook-driven Kubernetes
+service, and service drivers/bindings around the agnostic core. New generic
+orchestration may extend core ports and flows, but provider-, hosting-, and
+deployment-specific logic stays outside core (§2.1/§4.3).
 
 Three axes advance in parallel:
 
@@ -46,15 +53,17 @@ Three axes advance in parallel:
 | # | Decision | Rationale |
 |---|----------|-----------|
 | D1 | **Tenancy: internal-first, tenant-shaped.** One tenant now; every state row, config object, queue message, and credential lookup is keyed by `installation_id` from day one. | Multi-tenant later becomes a switch, not a migration. |
-| D2 | **Identity: a GitHub App** (not an Operator PAT), even single-tenant. | Scoped, revocable, short-lived installation tokens, and actor-type-distinguishable for the §2.7 gate. |
-| D3 | **LLM is advisory only, behind an `Advisor` port** (sibling to `Platform`); concrete binding outside core; provider name added to `aviato/plugins/denylist.txt` (§9b); `FakeAdvisor` for tests. | The core stays deterministic and agnostic; the model never picks a value that gates a publish. |
+| D2 | **Identity: split-purpose GitHub Apps** (not Operator PATs), even single-tenant. The Bot App receives webhooks and reads/proposes; a separately registered Settings Executor App, introduced only in Phase 3, can mutate protected settings. No key can mint both proposal/content tokens and administration-write tokens. | Scoped, revocable, short-lived installation tokens preserve least privilege and actor-type distinction for §2.7; compromise of the public-facing webhook service does not automatically confer settings-admin privilege. |
+| D3 | **LLM is advisory only, behind an `Advisor` port** (sibling to `Platform`); concrete binding outside core; provider name added to `aviato/plugins/denylist.txt` (§9b); `FakeAdvisor` for tests. Before the first advisor ships, the port gains typed provider-neutral unavailable, budget, and policy-denied failures. | The core stays deterministic and agnostic; model output never controls a required check, version, merge, tag, publish, deploy, or settings mutation. Typed failures permit a narrow fail-open path without catching unrelated programming errors. |
 | D4 | **LLM egress: a contained hosted endpoint** (Azure OpenAI-style: no-train, in-tenant/region), reached over a private link; endpoint is per-installation config. | The model ingests diffs/commits/docs; a security-first tool must not open-egress Consumer code. |
-| D5 | **Platform: cloud-agnostic Kubernetes**, generic Postgres, native K8s Secrets, Postgres-as-queue, KEDA, Gateway API. | Mirrors the agnostic-core value; no cloud lock-in. |
-| D6 | **The cluster is the brain; GitHub Actions remains the hands for publishing.** | OIDC Trusted Publishing and the deploy-environment gates bind to the Consumer repo's workflow identity (§11.1/§11.2/§13.1); publishing from the cluster would reintroduce stored publish credentials. |
-| D7 | **Phase-1 logic is service-centric:** the cluster reads state, computes drift, opens PRs/issues, and drafts release PRs; only publish/deploy stays in Actions. | This is the "real bot" target, not a scheduler of scripts. |
+| D5 | **Platform: cloud-agnostic Kubernetes**, generic Postgres, native K8s Secrets, Postgres-as-queue, KEDA, Gateway API, and an independent retention-locked audit sink. | Mirrors the agnostic-core value; no cloud lock-in. Postgres is operational state, not the sole non-repudiation boundary. |
+| D6 | **The cluster is the brain; GitHub Actions remains the hands for tagging, publishing, and deploying.** | The bot plans and proposes a release; after the human merges the release PR, the existing Consumer workflow creates the tag with its ephemeral `GITHUB_TOKEN` and runs the tag-pinned deploy. OIDC Trusted Publishing and deploy-environment gates stay bound to the Consumer workflow identity (§11.1/§11.2/§13.1). |
+| D7 | **Phase-1 logic is service-centric:** the cluster reads state, computes drift, opens PRs/issues, and drafts release PRs; tag creation, publish, and deploy stay in Actions. | This is the "real bot" target, not a scheduler of scripts. |
 | D8 | **Repo topology: a sibling `aviato-bot` repo now, converging to one repo later.** The bot is itself an Aviato-managed `python-service` Consumer. | Keeps the Library public/inert/forkable (§2.2) and its SemVer a clean Consumer contract (§2.6); maximal dogfood. |
 | D9 | **Consolidation path: §10 Path A — lift the single-profile-per-repo restriction** (multi-profile-per-repo, each profile with its own declaration + independent pin). | Per-profile pins let services on older Library versions stay undisturbed through consolidation (§2.6 honored per profile). |
-| D10 | **Gated-apply authorization: dashboard-native GitHub-OAuth from day one.** The approver authenticates as a GitHub `User`; the App executes. | A first-class control surface; §2.7 actor-type proof preserved by anchoring consent to a GitHub `User`, not the App. |
+| D10 | **Gated-apply authorization: dashboard-native GitHub-OAuth from day one.** The approver authenticates as a GitHub `User`; the Operator CLI executes in Phases 1–2, and the isolated Settings Executor App executes from Phase 3. | A first-class control surface; §2.7 actor-type proof preserved by anchoring consent to a GitHub `User`, never an App. |
+| D11 | **Webhook trust is fail-closed and delivery processing is idempotent.** Verify `X-Hub-Signature-256` over the unmodified request bytes before parsing; reject a missing/invalid signature; persist `X-GitHub-Delivery` plus the raw-body digest under a unique `(installation_id, delivery_id)` constraint before acknowledging. | GitHub retries and attackers can replay or forge HTTP requests. Authentication, durable acceptance, bounded replay detection, and de-duplication are prerequisites to every event-driven action. |
+| D12 | **Credential posture changes when each capability appears, not at "full autonomy."** Phase 0 is read-only. Phase 1 introduces a stored proposal-capable Bot App key and amends §11.2/§14 before fleet enrollment. Phase 3 separately introduces the settings-write key. | A private key able to mint a write token is a write-capable stored credential even when each installation token is short-lived. The posture ledger must describe actual capability, not intended use. |
 
 ## Invariants (these do NOT change)
 
@@ -65,14 +74,19 @@ Three axes advance in parallel:
   release-cut merge remains the human gate; the tag still triggers the in-repo
   deploy. The cluster orchestrates, decides, advises, proposes, and observes —
   it never becomes the publisher.
+- **Tag creation also stays in the Consumer's Actions.** The Bot App never
+  creates or moves a release tag. A model recommendation never enters the
+  tagging input; the deterministic release workflow derives and verifies it.
 - **The same `aviato.core` drives both the CLI and the service.** The CLI
   remains as the local / break-glass path; the service is an additional driver
   of the identical ports.
 - **Report before mutate** (§2.4) holds unchanged through Phases 0–2. It is
   renegotiated only at Phase 3, and only for an explicitly signed low-risk tier.
-- **The LLM never gates a publish.** Deterministic `core.versioning` remains the
-  source of truth for the version; the model may only draft prose or *raise a
-  flag* for a human (§2.5 idempotency preserved).
+- **The LLM never supplies an authoritative gate.** Deterministic
+  `core.versioning` remains the source of truth for the version; the model may
+  only draft prose or *raise a non-required flag* for a human. Model confidence
+  cannot turn that flag into a failing required check (§2.5 idempotency
+  preserved).
 
 ## Target architecture (Phase 1+)
 
@@ -80,28 +94,48 @@ Three axes advance in parallel:
 
 - **Gateway API → webhook/API receiver** (stateless, HPA-scaled): receives
   GitHub App webhooks (`push`, `pull_request`, `release`, `installation`) and
-  serves the Operator dashboard/API.
+  serves the Operator dashboard/API. The webhook route retains the raw body,
+  verifies `X-Hub-Signature-256` with a constant-time comparison before JSON
+  parsing, allows a signed installation-lifecycle event to establish/remove
+  installation state, rejects all other events for unknown
+  installations/repositories, rejects a repeated delivery id or raw-body
+  digest inside the replay window, and durably inserts the delivery before
+  returning 2xx. Dashboard routes use a separate origin, session, and
+  rate-limit policy.
 - **Job workers** (KEDA-scaled on Postgres-queue depth): run the existing
   `aviato/core` flows — `file_drift_flow`, `settings_drift_flow`,
   `reconcile_flow`, `fleet` — plus release-PR drafting and LLM advisories. The
-  bounded rate-limit retry already in `aviato/github.py` carries over.
+  bounded rate-limit retry already in `aviato/github.py` carries over. Every
+  job has a deterministic key containing installation, repository, flow,
+  declaration pin, input hash, and flow version; retries resume or no-op rather
+  than open duplicate PRs/issues or repeat an advisory.
 - **Postgres**: the state store (installations, per-profile pins, drift status,
-  audit log, LLM cache) **and** the job queue (`FOR UPDATE SKIP LOCKED` /
-  `pgmq`). A dedicated broker is a later upgrade, gated on volume, not a day-one
-  dependency.
-- **Bindings**: an App-auth `Platform` implementation (mints per-installation
-  tokens from the App private key) alongside the existing `gh`-shelling
-  `github_platform.py`; an `Advisor` implementation for the contained LLM
-  endpoint over a private link.
-- **K8s Secrets** holding exactly three things: the **GitHub App private key**,
-  the **LLM key**, and **DB credentials**.
+  hash-chained audit log, LLM cache, accepted webhook deliveries) **and** the
+  job queue (`FOR UPDATE SKIP LOCKED` / `pgmq`). Queue claim, retry, dead-letter,
+  and lease-expiry behavior is specified and tested. A dedicated broker is a
+  later upgrade, gated on volume, not a day-one dependency.
+- **Independent audit sink**: periodically anchors the Postgres audit-chain
+  head and stores signed consent/apply receipts under retention lock (for
+  example, S3-compatible Object Lock/WORM or an enterprise append-only SIEM).
+  The bot's database credentials cannot rewrite or delete those anchors.
+- **Bindings**: a Bot-App-auth `Platform` implementation (mints
+  per-installation, per-job permission-reduced tokens) alongside the existing
+  `gh`-shelling `github_platform.py`; a separately deployed Settings Executor
+  binding in Phase 3; and an installation-scoped `Advisor` binding for the
+  contained LLM endpoint over a private link.
+- **Explicit secret inventory**, separated by workload identity and RBAC:
+  Bot App private key, GitHub webhook secret, GitHub OAuth client/session
+  secrets, LLM endpoint credential, DB credentials, and audit-sink credential
+  or signing material. The Phase-3 Settings Executor private key is held in a
+  different Secret, service account, namespace policy, and deployment; webhook
+  and general worker pods cannot read it.
 
 ### In GitHub — the hands
 
-- Consumer Actions keep **verify / release-gate / publish / deploy**
+- Consumer Actions keep **verify / tag / release-gate / publish / deploy**
   (`reusable-release.yml`, `reusable-release-gate.yml`, and the deploy
-  workflows) — OIDC, in-repo identity. The App is the identity for every read,
-  proposal, and issue the cluster performs.
+  workflows) — OIDC, in-repo identity. The Bot App is the identity for every
+  read, proposal, and issue the cluster performs.
 
 ### Shared
 
@@ -115,30 +149,63 @@ The per-repo scheduled drift cron (`reusable-consumer-automation.yml`) largely
 **retires for managed repos** once the cluster runs drift centrally; only the
 verify/release/publish workflows remain in-repo (they must, for OIDC).
 
+### Workflow-to-service ownership and cutover
+
+| Capability | Before cutover | After Phase-1/2 cutover |
+|------------|----------------|--------------------------|
+| Scheduled file/settings drift | Consumer `aviato-drift.yml` caller | Service event + reconciliation jobs |
+| Drift PRs and tracking issues | Consumer automation | Bot App |
+| Release planning / release-PR drafting | Reusable release propose phase | Service release planner |
+| Release tag creation | Consumer release workflow | **Consumer release workflow (unchanged trust boundary)** |
+| Verify, required checks, security scans | Consumer Actions | Consumer Actions |
+| Publish/deploy and protected environments | Consumer Actions | Consumer Actions |
+| Break-glass audit/reconcile | Operator CLI | Operator CLI remains available |
+
+Cutover is explicit per installation and profile; merely installing the App
+does not disable Consumer automation. The service first runs in shadow mode,
+records the result it *would* have emitted, and must agree with the existing
+workflow for a defined observation window. The Operator then records a
+cutover generation, the service becomes the sole drift proposer, and only then
+does `sync` remove/disable the scheduled drift caller. A service health breach
+halts new mutations and surfaces a runbook to re-enable the caller; dual
+proposal writers are never left active.
+
 ## Phases
 
-Phase **1 = A** (bot identity + service, safety model intact); Phase **4 = B**
+Phase **1 = A** (bot identity + proposal service, existing settings/deployment
+authorization intact, credential posture explicitly amended); Phase **4 = B**
 (full autonomy). Each phase ships value and de-risks the next.
 
 ### Phase 0 — Identity & client (no behavior change)
 
-Register the GitHub App. Add the App-auth `Platform` binding (per-installation
-token minting) beside `github_platform.py`. Everything still runs as today; the
-CLI is unaffected. **No principle change.**
+Register the Bot App with read-only production permissions. Add the App-auth
+read path (per-installation token minting) beside `github_platform.py`, the
+permission manifest, signature-verification library, delivery schema, and
+secret-rotation runbook. Proposal payloads can be generated in dry-run; write
+permissions are enabled only in an isolated test installation. Everything in
+the fleet still runs as today; the CLI is unaffected. **No production
+principle change.**
 
-*Exit gate:* the App reads/proposes on a test installation with parity to the
-`gh` path.
+*Exit gate:* signed and forged webhook fixtures prove accept/reject behavior;
+duplicate deliveries produce one durable job; the App reads a test
+installation with parity to the `gh` path; production installation tokens
+cannot write.
 
-### Phase 1 — The service (report-only) = A
+### Phase 1 — The service (proposal-capable) = A
 
-Stand up the full Kubernetes stack (§Track K) and the service-centric flows
-(D7): central drift detection, file-drift PRs, settings-drift tracking issues,
-and release-PR drafting — all low-privilege. Persist installations, pins, drift
-status, and the audit log. Ship the Operator dashboard, including the
+Before enabling writes, amend §11.2/§14 to permit the narrowly scoped,
+proposal-capable stored Bot App key and record its actual contents/issues/PR
+capabilities. Stand up the full Kubernetes stack (§Track K) and the
+service-centric flows (D7): central drift detection, file-drift PRs,
+settings-drift tracking issues, and release-PR drafting — all
+low-blast-radius but still write-capable. Persist installations, pins, accepted
+deliveries, job state, drift status, and the audit chain. Ship the Operator
+dashboard, including the
 **dashboard-native gated-apply approval surface** (D10; §Gated-apply
 authorization). Land the first two LLM advisors (release-notes draft; docs-update
 verifier). Privileged settings mutation still flows through the operator-gated
-§5.7 path — now surfaced in the dashboard rather than the CLI.
+§5.7 path: the dashboard records the diff-bound approval, but the Operator CLI
+still recomputes and applies with the Operator's credentials.
 
 *Proposed principle change:* **§2.2** — the App's installation list is a
 permissioned inventory. It is inherent to an App, is not committed to the Library
@@ -147,22 +214,44 @@ holds no registry). Amend §2.2 to distinguish "the Library keeps no committed
 Consumer registry" (unchanged) from "the service knows its own installations"
 (new, permissioned).
 
-*Exit gate:* the fleet is watched end-to-end; every privileged change is still
-human-approved.
+*Proposed credential change:* **§11.2/§14** — unlike an ephemeral workflow
+token, the stored Bot App private key can mint proposal/content-write tokens.
+Contain it with per-job permission reduction, no ruleset bypass, release-gate
+revalidation, namespace/RBAC isolation, rotation, anomaly alerts, and
+break-glass installation suspension. It has no administration-write
+permission.
+
+*Proposed consent-surface change:* **§5.7/§6.4** — the authoritative grant
+moves from a GitHub issue-label event to a dashboard-issued, diff-bound signed
+receipt. The §2.7 human/role checks and §2.8 apply-time re-read remain
+unchanged; the CLI verifies the receipt and external audit checkpoint before
+applying. Issue labels/comments become notification and cross-reference
+surfaces, not authorization.
+
+*Exit gate:* one test installation completes signed webhook → durable job →
+core flow → idempotent PR/issue → audit anchor end-to-end; replaying the same
+delivery and job creates no duplicate or second LLM charge; the shadow window
+matches Consumer automation; cutover is explicit; every protected-settings
+change is still human-approved under the amended §5.7 fail-closed path.
 
 ### Phase 2 — Autonomous releases
 
-The release-cut merge is already the human gate (§2.12/§11.1), so the bot can own
-the release **mechanics** without crossing §2.7: on the qualifying merge signal it
-computes the next version (`core.versioning.next_version`, deterministic), cuts
-the tag, and lets the in-repo deploy run. Optionally it auto-opens the release PR
-from Conventional Commits so the only human action is the merge. The
-version-recommendation LLM advisor lands here as a *second opinion* over the
-deterministic floor.
+The release-cut merge is already the human gate (§2.12/§11.1), so the bot owns
+release **planning and proposal** without crossing §2.7: it computes the next
+version (`core.versioning.next_version`, deterministic), writes the
+version/changelog on a release branch, and opens or updates one release PR. The
+only human action is the merge. The Consumer's existing release workflow then
+creates the tag with its ephemeral `GITHUB_TOKEN` and runs the in-repo deploy;
+the Bot App neither creates nor moves tags. The version-recommendation LLM
+advisor lands here as a non-required *second opinion* over the deterministic
+result.
 
 *Principle change:* none — a `User` still merged.
 
-*Exit gate:* hands-off releases; a human approves by merging.
+*Exit gate:* duplicate/out-of-order merge and webhook deliveries converge on
+one release PR and one version; the merged commit, tag, gate, artifact, and
+deploy all identify the same SHA; the Bot App audit contains no tag-write call;
+a human approves by merging.
 
 ### Phase 3 — Gated auto-apply of low-risk settings (start of B)
 
@@ -170,7 +259,11 @@ Introduce a **settings risk tier**. Low-blast-radius drift auto-reconciles insid
 a *pre-authorized policy*; high-blast-radius drift (branch-protection relaxation,
 required-reviews changes) always requires a live human approval. §2.8 apply-time
 recompute and the §5.7 diff-binding carry over unchanged; high-risk applies
-require **dual control** (two distinct `User`s).
+require **dual control** (two distinct `User`s). Register and deploy the
+separate Settings Executor App only now; it has administration-write but no
+contents, PR, issue, webhook, or OAuth role. The public receiver and general
+workers submit a diff-bound command to the isolated executor and cannot mint
+its token.
 
 *Proposed principle changes:*
 
@@ -182,21 +275,28 @@ require **dual control** (two distinct `User`s).
   dashboard by an authenticated GitHub `User`.
 - **§2.3** — "privilege follows blast radius" gains a **confidence/risk-tier**
   dimension.
+- **§11.2/§14** — a second stored key can now mint administration-write tokens.
+  This is the credential-posture change for protected settings; it occurs in
+  Phase 3, not Phase 4.
 
 *Exit gate:* low-risk drift self-heals under policy; high-risk still human-gated
-and dual-controlled.
+and dual-controlled; compromise tests prove the Bot App cannot call settings
+writes and the Settings Executor cannot push code, create tags, or approve its
+own command.
 
 ### Phase 4 — Full autonomy = B
 
-The bot applies settings/rulesets unattended within the pre-authorized policy
-envelope; humans handle exceptions and edit policy. This is a different threat
-model, adopted deliberately.
+The bot applies settings/rulesets unattended within an expanded
+pre-authorized policy envelope; humans handle exceptions and edit policy. This
+is a different authorization model, adopted deliberately. It does not add a
+new credential class: the isolated Settings Executor key arrived in Phase 3.
 
-*Proposed principle change:* **§11.2/§14** — the App now holds continuously
-write-capable credentials (today the posture is "no write-capable stored
-secret"). Compensating controls: fine-grained per-installation scopes, a
-tamper-evident audit log, break-glass revocation, anomaly detection, and §2.8
-apply-time recompute with diff bounds still enforced on every apply.
+*Proposed principle change:* **§2.4/§2.7** — authorization moves from a live
+human approval for high-risk changes to a signed policy envelope for every
+covered class. Compensating controls: dual-controlled policy changes,
+fine-grained per-installation scopes, retention-locked audit receipts,
+break-glass installation suspension, anomaly detection, and §2.8 apply-time
+recompute with diff bounds still enforced on every apply.
 
 *Exit gate:* the envelope holds under audit; human involvement is exception-only.
 
@@ -204,22 +304,22 @@ apply-time recompute with diff bounds still enforced on every apply.
 
 | Phase | Autonomy | Track K (platform) | Track L (LLM) | Proposed §-change |
 |-------|----------|--------------------|---------------|-------------------|
-| **0** | App identity + client parity | CLI still | — | none |
-| **1 = A** | Service: central drift/proposals/release-PRs, report-only | Full K8s stack + dashboard | Release-notes draft; docs verifier | §2.2 |
+| **0** | Read-only App identity + client parity | CLI still | — | none |
+| **1 = A** | Service: central drift/proposals/release-PRs | Full K8s stack + dashboard | Release-notes draft; docs verifier | §2.2 + §5.7/§6.4 + §11.2/§14 (proposal key) |
 | **2** | Autonomous releases (merge = gate) | — | Version recommendation | none |
-| **3** | Gated auto-apply of low-risk settings | — | advisories mature | §2.4 / §2.7 / §2.3 |
-| **4 = B** | Full autonomy within policy envelope | — | — | §11.2 / §14 |
+| **3** | Gated auto-apply of low-risk settings | Isolated Settings Executor | advisories mature | §2.4 / §2.7 / §2.3 + §11.2/§14 (settings key) |
+| **4 = B** | Full autonomy within policy envelope | — | — | §2.4 / §2.7 |
 
 ## Track L — LLM advisors
 
 The `Advisor` port (D3) admits one contained binding day zero. Advisors are
-ordered by blast radius and mirror the §2.13 gate policy (high-confidence acts,
-low reports):
+ordered by blast radius, but every output remains non-authoritative regardless
+of model confidence:
 
 | Advisor | Role | Lands | Guardrail |
 |---------|------|-------|-----------|
 | **Release-notes draft** | Prose, reviewed at the release cut (§11.1) | P1–2 | Human edits before merge; safest first win |
-| **Docs-update verifier** | PR comment: "you changed X, the docs still claim Y" | P1–2 | Advisory; hard-fail only on high confidence, else comment |
+| **Docs-update verifier** | PR comment: "you changed X, the docs still claim Y" | P1–2 | Always a non-required comment/check annotation; model confidence never makes it a gate |
 | **Version recommendation** | Second opinion on the bump | P2–3 | Deterministic `core.versioning` stays the floor / source of truth; the model may only *raise a flag* (e.g. a breaking change mislabeled `fix:`), never lower or silently set the number |
 
 The docs-update verifier is the **semantic** counterpart to Aviato's existing
@@ -229,13 +329,23 @@ the advisor catches prose that no longer matches behavior.
 
 Guardrails, in force for every advisor:
 
-- **Determinism** — deterministic decoding (temperature 0); cache keyed on
-  `(feature, model, prompt-version, input-hash)` so identical input never
-  re-bills or re-varies (§2.5).
+- **Determinism** — deterministic decoding (temperature 0) reduces variation
+  but is not treated as a reproducibility guarantee. The service-side
+  advisory coordinator (outside the agnostic core) caches on
+  `(installation-id, endpoint-id, immutable-model-revision, feature,
+  prompt-version, policy-version, input-hash)` so tenants and endpoint policies
+  cannot share entries and identical accepted input never re-bills. Failures
+  are not cached as successful advice (§2.5).
 - **Auditability** — every call's prompt, response, model, and prompt-version is
-  persisted to the audit log; runs are reproducible and reviewable.
+  persisted under its installation and anchored in the external audit sink;
+  the exact cached response is reviewable. Re-executing a hosted model is not
+  mislabeled as bit-for-bit reproducibility.
 - **Fail-open-but-loud** — model unavailable or over budget ⇒ skip the advisory,
   emit a loud warning + audit entry, and **never block** a release or PR.
+  Advisory work runs as a separate job from deterministic proposal/gate work.
+  Its caller catches only the port's typed expected failures; an unexpected
+  exception fails that advisory job loudly and is never converted into
+  success-shaped advice.
 - **Egress** — a contained endpoint over a private link; the surface the model
   sees is diffs + commit messages + docs, not the whole repo; the endpoint is
   per-installation config so a future tenant can bring its own.
@@ -250,7 +360,9 @@ Guardrails, in force for every advisor:
 - **Queue = Postgres-as-queue** (`FOR UPDATE SKIP LOCKED` / `pgmq`); KEDA has a
   Postgres scaler. A dedicated broker (Redis/NATS) is a later, volume-gated
   upgrade.
-- **Secrets = native K8s Secrets** (App private key, LLM key, DB creds).
+- **Secrets = native K8s Secrets with an explicit inventory** (App private
+  keys, webhook secret, OAuth/session secrets, LLM key, DB credentials, and
+  audit material), isolated by workload rather than mounted into one service.
 - **Delivery** — Helm/Kustomize + GitOps (Argo/Flux), consistent with Aviato's
   policy-as-code posture. The bot's own container image is built and released by
   the §13.2 GHCR pipeline (Trivy + SBOM + provenance) it manages for others.
@@ -259,12 +371,14 @@ Guardrails, in force for every advisor:
 
 ### Honest posture note — native K8s Secrets
 
-Native Secrets are base64 in etcd, not a vault. For a security-first tool holding
-the App private key + LLM key, the compensating controls are: **etcd
-encryption-at-rest**, **RBAC-scoped** Secret access, **SOPS/sealed-secrets** so
-nothing sits plaintext in Git, and short key rotation. GitHub App *tokens* are
-already short-lived; only the private key is long-lived. This is a deliberate
-step down from cloud workload-identity, contained by those four controls.
+Native Secrets are base64 in etcd, not a vault. For a security-first tool
+holding App private keys and endpoint credentials, the compensating controls
+are: **etcd encryption-at-rest**, **RBAC-scoped per-workload Secret access**,
+**SOPS/sealed-secrets** so nothing sits plaintext in Git, short key rotation,
+and network-policy isolation. GitHub App *tokens* are short-lived; the private
+keys remain long-lived write-capability roots and are treated accordingly.
+Webhook-secret rotation accepts old+new only for a bounded overlap and records
+which key verified each delivery.
 
 ## Repo topology & consolidation
 
@@ -303,10 +417,12 @@ Library pin remain undisturbed through consolidation.
 
 ## Gated-apply authorization (§5.7 in the service)
 
-The service is an App, but §2.7 requires consent from a real human, actor type
-`User` — never `Bot`/`App` — fail-closed. The rule: **the App is the hands, never
-the authority.** A gated apply is *authorized* by a human and only *executed* by
-the App — the same brain/hands split as publishing (D6), applied to consent.
+The service acts through Apps, but §2.7 requires consent from a real human,
+actor type `User` — never `Bot`/`App` — fail-closed. The rule: **an App may be
+the hands, never the authority.** A gated apply is *authorized* by a human and
+executed by the Operator CLI in Phases 1–2 or by the isolated Settings Executor
+from Phase 3 — the same brain/hands split as publishing (D6), applied to
+consent.
 
 Two layers, kept separate:
 
@@ -321,32 +437,40 @@ with these day-one requirements to stay §2.7-faithful and fail-closed:
 
 - **Actor type** — a GitHub OAuth user-access token identifies a `User` (not the
   App's installation token); record the `login`/`id`. Identity unresolved ⇒
-  **DENY**.
+  **DENY**. The user token is short-lived, is not retained after approval, and
+  is never used to perform the mutation.
 - **Authorization** — after login, verify the user's repo/org role (admin/maintain
   or a designated approver team) *via the App*. Role lookup failed/ambiguous ⇒
   **DENY**.
 - **Diff-binding** — approval is for an exact `diff-id`; at apply, re-read live
   state and recompute (§2.8); a differing diff aborts/re-prompts, an empty diff
-  no-ops and records.
+  no-ops and records. A live-approval receipt is short-lived, nonce-bound, and
+  consumed transactionally once, so an old approval cannot authorize a later
+  A→B→A recurrence of the same diff.
 - **Step-up on approve** — the approve action requires a fresh explicit auth
   gesture, plus CSRF tokens, `SameSite` cookies, and short sessions, so a
   long-lived dashboard session cannot silently consent.
-- **Audit as consent system-of-record** — record approver id, role, `diff-id`,
-  timestamp, and the recomputed-diff hash in an **append-only / hash-chained**
-  log.
+- **Audit as consent system-of-record** — record installation, repository,
+  profile, approver id, role, `diff-id`, timestamp, policy version, and the
+  recomputed-diff hash in an **append-only / hash-chained** log; write a signed
+  authorization receipt and chain-head checkpoint to the independent
+  retention-locked sink before execution, then anchor the outcome receipt.
+  Sink unavailable or the pre-execution checkpoint failed ⇒ **DENY**.
 
 **Core is already shaped for this.** The consent model in `aviato/core/ports.py`
 already carries the neutral fields — `consent_actor_type`, `consent_role` +
 `consent_role_lookup_ok`, `consent_diff_id`, `ambiguous`,
-`edited_by_nonhuman_since_grant`. This is a **binding change, not a core-model
-change**; the one refactor is to generalize the port type name `Issue` → a
-surface-neutral `ConsentRecord` (the fields are already neutral) to keep the §9b
-agnostic discipline.
+`edited_by_nonhuman_since_grant`. This requires a port-surface refactor, not a
+change to the authorization decision: generalize the type name `Issue` → a
+surface-neutral `ConsentRecord` (the fields are already neutral) to keep the
+§9b agnostic discipline.
 
-**Tradeoff — recover external non-repudiation.** Dashboard-native consent gives up
-GitHub's external, tamper-evident issue timeline as the record. Compensate by
-**mirroring each approval back to a repo issue comment**: the dashboard is the UX;
-the mirrored comment restores an external, immutable record.
+**Tradeoff — recover external non-repudiation.** Dashboard-native consent gives
+up GitHub's external issue timeline as the authoritative record. The
+retention-locked audit receipt above is the non-repudiation control. Mirror its
+receipt id + digest back to a repo issue comment for Operator visibility and
+cross-reference only; GitHub comments are editable/deletable and are explicitly
+**not** treated as immutable evidence or authorization.
 
 **`Approval ≠ auto-apply`.** Every gated apply still needs a live human approval;
 Phase 3's pre-authorized low-risk tiers are *also signed here*, later.
@@ -359,13 +483,52 @@ Phase 3's pre-authorized low-risk tiers are *also signed here*, later.
 | Auto-apply of settings | §2.4 | 3 | Only within a signed low-risk tier |
 | Consent | §2.7 | 3 | Pre-authorized **policy** consent, signed by a GitHub `User` |
 | Privilege model | §2.3 | 3 | Blast radius **+ confidence/risk-tier** |
-| Stored write-capable creds (App key) | §11.2 / §14 | 4 | Short-lived tokens; only the private key long-lived; break-glass revoke; fine-grained scopes |
+| Stored proposal/content-write credential (Bot App key) | §11.2 / §14 | 1 | Permission-reduced short-lived tokens; no administration write or bypass; isolated Secret; release gate; break-glass suspend |
+| Stored protected-settings credential (Settings Executor key) | §11.2 / §14 | 3 | Separate App/deployment/RBAC; no contents/PR/webhook access; diff-bound commands; dual control; break-glass suspend |
 | LLM egress (diffs/docs) | security-first | 1 | Contained endpoint, private link, per-installation policy |
 | LLM nondeterminism | §2.5 | 1 | Advisory-only; temperature 0; cached; audited |
-| Static creds in K8s Secrets | vault-ideal | 1 | etcd encryption + RBAC + SOPS + rotation |
+| Static creds in K8s Secrets | vault-ideal | 1 | etcd encryption + per-workload RBAC + SOPS + rotation + network policy |
+| Webhook forgery/replay | §2.7 / §2.5 | 0–1 | Raw-body HMAC verification; durable delivery id; unique constraint; idempotent jobs |
+| Dashboard consent evidence | §2.7 / §2.8 | 1 | Diff-bound signed receipt; external retention-locked anchor; issue comment is visibility only |
 
-Phases 0–2 leave the threat model intact; 3–4 renegotiate it deliberately, one
-control at a time.
+Phase 0 leaves the production threat model intact. Phase 1 deliberately adds a
+proposal-capable stored credential; Phase 3 adds a separately isolated
+settings-write credential and pre-authorized low-risk applies; Phase 4 expands
+the authorization envelope. Each change lands only after its requirement,
+threat-model, control, and validation updates.
+
+## Conversion definition of done
+
+The conversion is complete only when all of the following are persistent and
+operator-verifiable:
+
+1. The `aviato-bot` service repository contains the receiver, API/dashboard,
+   workers, Postgres migrations, App and Advisor bindings, deploy manifests,
+   permission manifests, runbooks, and tests; production does not depend on an
+   editable sibling checkout.
+2. Signed webhook acceptance, forged-request rejection, duplicate delivery,
+   queue retry/lease expiry, out-of-order events, token expiry, rate limiting,
+   model outage/budget exhaustion, DB restart, and audit-sink outage have
+   explicit behavior and automated tests.
+3. One real test installation proves event → durable job → pinned
+   `aviato.core` flow → idempotent PR/issue/release proposal → Consumer
+   tag/publish workflow → anchored audit evidence without stored publish
+   credentials.
+4. App permission manifests are machine-checked against observed API calls.
+   The Bot App cannot write protected settings; the Settings Executor cannot
+   push content, create tags, receive webhooks, or authorize itself; neither
+   App is a ruleset bypass actor.
+5. Per-installation enrollment, suspension, key rotation, uninstallation,
+   deletion/retention, backup/restore, and disaster-recovery paths are
+   documented and exercised. Uninstallation revokes queued work and tokens
+   before any further action.
+6. Workflow cutover completes the shadow/equality window, records a generation,
+   leaves one proposal writer, and preserves the Operator CLI as a tested
+   break-glass path. Remaining Consumer workflows are intentionally retained
+   according to the ownership table above.
+7. The authoritative requirements, specifications, threat model, controls, and
+   traceability matrix describe the service-backed behavior and carry evidence;
+   this roadmap is not used as a substitute for those updates.
 
 ## Open items (not yet decided)
 
