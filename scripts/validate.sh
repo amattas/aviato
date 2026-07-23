@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Local gate. ruff/black/pytest/shellcheck/actionlint run when installed. Missing tools are
+# Local gate. ruff/pytest/shellcheck/actionlint run when installed. Missing tools are
 # SKIPPED (so the gate is usable without them) but reported in a LOUD banner at the
 # end — because CI *does* run them, and a silent skip lets workflow-lint failures slip
 # through to CI (e.g. shellcheck findings in reusable workflows). Set
@@ -18,12 +18,6 @@ if command -v ruff >/dev/null 2>&1; then
   ruff format --check .
 else
   SKIPPED+=("ruff (lint + format)")
-fi
-
-if command -v black >/dev/null 2>&1; then
-  black --check --line-length 120 --target-version py312 aviato tests scripts
-else
-  SKIPPED+=("black (formatter compatibility)")
 fi
 
 if command -v pytest >/dev/null 2>&1; then
