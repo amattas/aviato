@@ -50,42 +50,6 @@ class DiagnosisReport:
     prerequisites_remote: dict[str, bool | None] = field(default_factory=dict)
 
 
-def _has_drift_automation(root: Path, markers: Sequence[str]) -> bool:
-    """True if a consumer workflow references one of the drift-automation ``markers`` (§5.5/§5.6).
-
-    review #18: the marker(s) — the Library's automation-workflow identifier — are plug-in DATA
-    supplied by the caller, NOT a hardcoded library artifact name in core (§9b), exactly like
-    ``prerequisite_paths``. With no markers the probe is not meaningful and reports absent.
-    """
-    if not markers:
-        return False
-    workflows = confined_target(root, ".github/workflows", operation="scan drift automation")
-    if not workflows.is_dir():
-        return False
-    # errors="replace": a corrupted/non-UTF-8 workflow file must not crash diagnosis (and thus a
-    # whole fleet scan); the check is a substring search, so replacement is harmless. GitHub
-    # Actions accepts BOTH .yml and .yaml, so a consumer using aviato-drift.yaml must not read as
-    # "drift automation absent" (matches validation/actionpins dual-extension scans).
-    for ext in ("*.yml", "*.yaml"):
-        for path in workflows.glob(ext):
-            relative = path.relative_to(Path(root).resolve()).as_posix()
-            path = confined_target(root, relative, operation="read drift automation workflow")
-            # C12-R3-4 (§5.11/§2.4): a glob hit can be a DIRECTORY (`aviato-drift.yml/`) or otherwise
-            # unreadable — `read_text` then raises `IsADirectoryError`/`OSError` outside the AviatoError
-            # net and crashes `doctor` / a whole fleet scan. Skip non-files; treat a read error as "this
-            # file provides no drift automation", never a crash.
-            if not path.is_file():
-                continue
-            try:
-                path = confined_target(root, relative, operation="read drift automation workflow")
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            if any(marker in text for marker in markers):
-                return True
-    return False
-
-
 def _probe_prerequisites(root: Path, prerequisite_paths: Mapping[str, Sequence[str]]) -> dict[str, bool]:
     """Probe the §17 prerequisites determinable from the local tree.
 
@@ -174,7 +138,6 @@ def diagnose(
     declaration_variables: Mapping[str, object] | None = None,
     secret_var_names: Sequence[str] = (),
     prerequisite_paths: Mapping[str, Sequence[str]] | None = None,
-    drift_automation_markers: Sequence[str] = (),
     profile: str | None = None,
     is_library: bool = False,
     bootstrap_declared: bool = False,
@@ -229,11 +192,8 @@ def diagnose(
     declaration_variables = declaration_variables or {}
     report.secret_in_declaration = any(declaration_variables.get(name) is not None for name in secret_var_names)
 
-    # ``drift_automation_markers`` is retained on the signature for caller parity (scan_fleet still
-    # forwards it) but the local scheduled-workflow presence probe is no longer surfaced on the
-    # report: drift health now comes from the aviato-bot service (see ``bot_status``). The fleet
-    # scan still consults ``_has_drift_automation`` directly until Task 3 rewires it onto the bot
-    # probe.
+    # Drift-automation health is no longer probed from a local scheduled workflow: it comes from
+    # the aviato-bot service, probed by the binding and surfaced on ``bot_status`` (§5.4/§17).
     report.prerequisites = _probe_prerequisites(root, prerequisite_paths or {})
 
     return report

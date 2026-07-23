@@ -84,12 +84,11 @@ def test_fleet_passes_profile_derived_health_inputs(tmp_path: Path, monkeypatch:
     calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(fleet, "diagnose", _record_keyword_arguments(original_diagnose, calls))
-    markers = ("reusable-consumer-automation",)
     registry = Registry(MODULE_SOURCE_ROOT)
-    scan_fleet([consumer], registry, drift_automation_markers=markers)
+    scan_fleet([consumer], registry)
 
     assert calls[0]["prerequisite_paths"] == registry.profile_doc("python-library").get("prerequisites", {})
-    assert calls[0]["drift_automation_markers"] == markers
+    assert "drift_automation_markers" not in calls[0]
 
 
 def test_scan_reports_repo_without_declaration(tmp_path: Path) -> None:

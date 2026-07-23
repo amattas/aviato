@@ -59,10 +59,6 @@ from .repos import git_root, is_owner_repo_slug, normalize_slug, remote_url, wor
 from .rulesets import apply_rulesets, render_all_rulesets
 from .validation import validate
 
-# The Library's scheduled drift/report automation workflow identifier (§5.5/§5.6). This is a
-# Library artifact name, so it lives OUTSIDE the agnostic core (review #18) and is passed into
-# diagnose() as data — core never hardcodes a specific library workflow name.
-DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
 DECLARATION_RELATIVE_PATH = ".github/aviato.yml"
 
 
@@ -368,8 +364,11 @@ def _tri(value: bool | None) -> str:
 
 
 def _print_bot_status(status: BotStatus | None) -> None:
-    """Render the aviato-bot drift-coverage probe (§5.4). Silent when not probed (no remote)."""
+    """Render the aviato-bot drift-coverage probe (§5.4). Always prints a line, mirroring the
+    neighboring ``_tri()`` fields — an unprobed repo (no remote) reads as an explicit state, never
+    a silently absent line the operator could mistake for a clean/covered result."""
     if status is None:
+        print("bot status: not probed (no remote)")
         return
     if not status.configured:
         print("bot status: unconfigured (set AVIATO_BOT_URL and AVIATO_BOT_STATUS_TOKEN)")
@@ -385,6 +384,20 @@ def _print_bot_status(status: BotStatus | None) -> None:
         print(f"bot status: covered (last drift check {status.last_checked})")
     else:
         print("bot status: covered")
+
+
+def _bot_column(status: BotStatus | None) -> str:
+    """Map the aviato-bot probe to scan's ``bot`` column (successor to the retired drift-workflow
+    presence signal). ``None`` — no remote slug resolved — reads as ``not-probed``, the same
+    unprobed treatment doctor gives a repo without a remote and distinct from ``unconfigured``
+    (the operator has not set AVIATO_BOT_URL / status token)."""
+    if status is None:
+        return "not-probed"
+    if not status.configured:
+        return "unconfigured"
+    if status.error is not None:
+        return "error"
+    return "covered" if status.covered else "uncovered"
 
 
 def _bot_status_exit_code(status: BotStatus | None) -> int:
@@ -614,14 +627,12 @@ def _owner_repo_vars(slug: str) -> dict[str, str]:
 
 class _DiagnosisProbeInputs(TypedDict):
     prerequisite_paths: Mapping[str, Sequence[str]]
-    drift_automation_markers: Sequence[str]
 
 
 def _diagnosis_probe_inputs(registry: Registry, profile: str) -> _DiagnosisProbeInputs:
     """Profile-derived local health inputs shared by every diagnosis entrypoint."""
     return {
         "prerequisite_paths": registry.profile_doc(profile).get("prerequisites", {}),
-        "drift_automation_markers": DRIFT_AUTOMATION_MARKERS,
     }
 
 
@@ -1207,9 +1218,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
         registry,
         include_archived=args.include_archived,
         archived_probe=_archived_probe,
-        # finding 33: full §5.4 parity with doctor — the fleet sweep probes the drift
-        # automation and §17 prerequisites too.
-        drift_automation_markers=DRIFT_AUTOMATION_MARKERS,
     )
     rc = 0
     for scan in scans:
@@ -1225,16 +1233,19 @@ def cmd_scan(args: argparse.Namespace) -> int:
             continue
         summary = ", ".join(f"{output}={status}" for output, status in sorted(scan.statuses.items())) or "—"
         flags = " [secret-in-declaration]" if scan.secret_in_declaration else ""
-        print(f"{scan.path}\t{scan.profile}\t{summary}{flags}")
+        # Drift-automation health now comes from the aviato-bot service (successor to the retired
+        # scheduled-workflow presence signal): probe the bot's per-repo coverage where a remote slug
+        # resolves. probe_bot_status self-guards on AVIATO_BOT_URL/token, so an operator who has not
+        # opted the bot in pays no network cost — the column just reads `unconfigured`.
+        slug = normalize_slug(remote_url(Path(scan.path)))
+        bot = _bot_column(probe_bot_status(slug) if slug else None)
+        print(f"{scan.path}\t{scan.profile}\tbot={bot}\t{summary}{flags}")
         # §6.3 seed-once integrity divergence (tamper/deletion) must surface in the fleet sweep,
         # not only in `doctor` — otherwise the scale-out command silently drops the one signal
         # seed-once tracking exists to provide.
         if scan.seed_divergence:
             for output in sorted(scan.seed_divergence):
                 print(f"  seed divergence: {output}", file=sys.stderr)
-        # finding 33: the §5.4 probes the sweep previously dropped.
-        if scan.drift_automation_present is False:
-            print("  drift automation: MISSING", file=sys.stderr)
         missing_prereqs = sorted(name for name, ok in scan.prerequisites.items() if not ok)
         if missing_prereqs:
             print(f"  missing prerequisites: {', '.join(missing_prereqs)}", file=sys.stderr)

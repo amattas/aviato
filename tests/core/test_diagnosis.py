@@ -9,7 +9,6 @@ from aviato.core.diagnosis import (
     ExpectedArtifact as _ExpectedArtifact,
 )
 from aviato.core.diagnosis import (
-    _has_drift_automation,
     diagnose,
 )
 from aviato.core.errors import BootstrapError, PathConfinementError
@@ -47,24 +46,6 @@ def test_diagnose_rejects_nested_symlinked_parent(tmp_path: Path) -> None:
         diagnose(tmp_path, [ExpectedArtifact("nested/managed/cfg.py", "expected\n")])
 
     assert outside_target.read_bytes() == original
-
-
-def test_has_drift_automation_tolerates_non_utf8_workflow_file(tmp_path: Path) -> None:
-    # A corrupted/non-UTF-8 workflow file in .github/workflows must not crash the drift-automation
-    # presence probe (and thus a whole fleet scan) with a UnicodeDecodeError (§5.4 robustness).
-    # Place a VALID drift caller ALONGSIDE the bad file and assert it is still found — proving the
-    # bad file was tolerated and the scan continued, not that detection was silently disabled
-    # (which a bare `present is False` could not distinguish from "no caller present").
-    # (Post-Plan-B, drift health lives on BotStatus; `_has_drift_automation` remains the fleet
-    # sweep's local presence probe until Task 3 repoints it at the bot.)
-    workflows = tmp_path / ".github" / "workflows"
-    workflows.mkdir(parents=True)
-    (workflows / "bad.yml").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
-    (workflows / "aviato-drift.yml").write_text(
-        "jobs:\n  drift:\n    uses: owner/aviato/.github/workflows/reusable-consumer-automation.yml@main\n",
-        encoding="utf-8",
-    )
-    assert _has_drift_automation(tmp_path, ("reusable-consumer-automation",)) is True
 
 
 def test_clean_when_body_matches(tmp_path: Path) -> None:
@@ -319,22 +300,6 @@ def test_probes_prerequisites(tmp_path: Path) -> None:
     (tmp_path / "Dockerfile").write_text("FROM scratch\n")
     report2 = diagnose(tmp_path, [], prerequisite_paths=prereqs)
     assert report2.prerequisites["container_build_definition"] is True
-
-
-def test_has_drift_automation_probes_local_workflow_markers(tmp_path: Path) -> None:
-    markers = ("reusable-consumer-automation",)  # review #18: marker is caller-supplied data
-    # no drift workflow → absent
-    assert _has_drift_automation(tmp_path, markers) is False
-
-    # add a consumer drift workflow
-    wf = tmp_path / ".github" / "workflows"
-    wf.mkdir(parents=True)
-    (wf / "drift.yml").write_text("uses: amattas/aviato/.github/workflows/reusable-consumer-automation.yml@main\n")
-    assert _has_drift_automation(tmp_path, markers) is True
-
-    # review #18: with NO markers supplied the probe is not meaningful → reports absent (the literal
-    # is no longer hardcoded in core, so an empty marker set cannot detect anything).
-    assert _has_drift_automation(tmp_path, ()) is False
 
 
 def test_platform_probes_default_unknown(tmp_path: Path) -> None:

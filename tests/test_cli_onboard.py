@@ -278,7 +278,7 @@ def test_doctor_reports_clean_and_missing(tmp_path: Path, capsys: pytest.Capture
     assert ".editorconfig" in out
     assert "clean" in out
     assert "missing" in out  # other managed files are absent
-    assert "bot status" not in out  # not probed without a remote
+    assert "bot status: not probed (no remote)" in out  # explicit unprobed line without a remote
 
 
 def test_doctor_rejects_bootstrap_declaration_in_non_library(
