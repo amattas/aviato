@@ -247,3 +247,11 @@ def test_doctor_reports_bot_status(
 
     assert main(["doctor", str(tmp_path)]) == expected_rc
     assert expected_fragment in capsys.readouterr().out
+
+
+def test_drift_report_command_is_gone(capsys: pytest.CaptureFixture[str]) -> None:
+    # Task 4: drift detection moved to aviato-bot; the `drift-report` CLI command is removed.
+    # argparse must reject it as an unknown subcommand (exit 2) rather than dispatch.
+    with pytest.raises(SystemExit):
+        main(["drift-report", "."])
+    assert "invalid choice" in capsys.readouterr().err

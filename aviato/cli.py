@@ -45,11 +45,10 @@ from .core.scaffold import (
     render_managed,
     scaffold,
 )
-from .core.settings_drift_flow import run_settings_drift
 from .core.variables import resolve_declared_variables, resolve_variables, writeback_variables
 from .core.version import is_compatible, is_known_version_pin, most_restrictive_recorded, normalize_pin
 from .core.versioning import classify_commits, is_highest, next_version
-from .github import GitHubAPIError, SettingsReadError, gh_json_paginated_optional, is_archived
+from .github import GitHubAPIError, gh_json_paginated_optional, is_archived
 from .github_platform import GitHubPlatform, UnmodeledProtectionError
 from .library_source import fetch_library_registry
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
@@ -1940,177 +1939,6 @@ def cmd_provision(args: argparse.Namespace) -> int:
 SETTINGS_DRIFT_ISSUE_KEY = "aviato-settings-drift"
 
 
-def cmd_drift_report(args: argparse.Namespace) -> int:
-    """Consumer-automation entrypoint: report file + settings drift (§5.5/§5.6).
-
-    Low-privilege, propose/report-only — never mutates protected settings. Run on
-    a jittered schedule by the consumer-automation workflow.
-    """
-    if args.file_only and args.require_settings:
-        # --require-settings gates the settings-read skip; with --file-only there is no settings
-        # phase to gate, so the combination is a silent no-op. Reject it rather than mislead a CI
-        # gate into thinking it enforces a settings read (§5.6).
-        print("--require-settings has no effect with --file-only (there is no settings drift to gate)", file=sys.stderr)
-        return 2
-
-    root = Path(args.path).resolve()
-    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
-    if not declaration_path.is_file():
-        print(f"no declaration at {declaration_path}", file=sys.stderr)
-        return 2
-
-    slug = normalize_slug(remote_url(root))
-    if not slug:
-        print("could not determine OWNER/REPO from the repository remote", file=sys.stderr)
-        return 2
-
-    registry = Registry(MODULE_SOURCE_ROOT)
-    try:
-        declaration = _load_consumer_declaration(root)
-        resolved = resolve_profile(
-            registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
-        )
-        expected = _expected_artifacts(registry, declaration)
-    except AviatoError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-
-    pin_error = _version_pin_error(root, declaration, expected, args.override_version_pin)
-    if pin_error:
-        print(pin_error, file=sys.stderr)
-        return 2
-
-    # §11.2/§5.6 least-privilege: file drift and settings drift use DIFFERENT privileges
-    # (contents/PR/issue write vs. the admin `administration` read). The consumer-automation
-    # workflow runs them as separate steps under separate tokens, so --file-only / --settings-
-    # only let each step carry only the token it needs; the default runs both (operator/local).
-    do_file = not args.settings_only
-    do_settings = not args.file_only
-    platform = GitHubPlatform(workdir=root)
-    rc = 0  # R3-3: a file-drift channel failure sets rc=1 but must NOT abort the settings phase
-
-    if do_file:
-        secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
-        # diagnose() rejects a bootstrap declaration in a non-Library repo (§5.4/§5.10) — surface
-        # that as a clean operator error (exit 2), not an uncaught traceback.
-        try:
-            report = diagnose(
-                root,
-                expected,
-                declaration_variables=declaration.variables,
-                secret_var_names=secret_names,
-                **_diagnosis_probe_inputs(registry, declaration.profile),
-                profile=declaration.profile,
-                is_library=is_library(root),
-                bootstrap_declared=declaration.bootstrap,
-            )
-        except AviatoError as exc:
-            print(str(exc), file=sys.stderr)
-            return 2
-        # The proposal must write the SAME marker-stamped content scaffold() writes, so
-        # a merged PR is classified clean (not dirty for a missing marker, §6.2/§5.4).
-        managed_bodies: dict[str, str] = {}
-        for artifact in resolved_artifacts(
-            registry,
-            declaration.profile,
-            declaration.variables,
-            pin=declaration.version,
-            docs=declaration.docs,
-            bootstrap=declaration.bootstrap,
-            overrides=declaration.overrides,
-        ):
-            if artifact.seed_once:
-                continue
-            item = ScaffoldItem(
-                output=artifact.output,
-                body=artifact.body,
-                comment=artifact.comment,
-                input_hash=artifact.input_hash,
-            )
-            managed_bodies[artifact.output] = render_managed(
-                item, profile=declaration.profile, version=declaration.version
-            )
-
-        # R3-3/§5.6: a file-drift proposal push failure (CommandError/GitHubAPIError) must FAIL
-        # LOUD with a non-zero exit but NOT abort before the independent settings-drift phase —
-        # the two are deliberately separate steps under separate tokens.
-        try:
-            file_outcome = run_file_drift(
-                platform,
-                repo=slug,
-                profile=declaration.profile,
-                statuses=report.statuses,
-                expected_bodies=managed_bodies,
-                # Bootstrap (§2.10/§5.10): when the Library diagnoses itself it does not raise
-                # file-drift proposals against the remote-ref scaffold — its automation is
-                # self-applied/operator-maintained locally. Consistent with the pin-gate skip.
-                is_bootstrap=is_library(root),
-            )
-            print(f"file drift: proposed={file_outcome.proposed} dirty={file_outcome.dirty}")
-        except (GitHubAPIError, CommandError) as exc:
-            print(f"file drift: FAILED — could not open/update the proposal ({exc})", file=sys.stderr)
-            rc = 1
-
-    # Settings drift READS branch protection / rulesets, which the platform GITHUB_TOKEN
-    # cannot do (it has no administration scope). §5.6 splits two failure modes that must
-    # NOT be conflated:
-    #   - a live-settings READ failure (no admin token) → skip fail-closed (never compute
-    #     from a falsely-unprotected read, §2.7); by default exits 0 so a scheduled run is
-    #     not failed by a missing token (--require-settings makes the skip fail);
-    #   - an ISSUE-CHANNEL failure (issues disabled / API error opening or commenting the
-    #     tracking issue) → FAIL LOUD (§5.6 "never silently drops the report"), exit non-zero.
-    if do_settings:
-        try:
-            # CX#1: pass the consumer's resolved required_reviews override so the ruleset render
-            # matches the classic-protection desired state (both express the same approval count).
-            _db = resolved.settings.get("default_branch", {})
-            drifted_rulesets = _drifted_rulesets(
-                slug,
-                platform,
-                required_approvals=_db.get("required_reviews"),
-                extra_status_checks=list(_db.get("required_status_checks", [])),
-            )
-            settings_outcome = run_settings_drift(
-                platform,
-                repo=slug,
-                desired_settings=_desired_settings(resolved),
-                issue_key=SETTINGS_DRIFT_ISSUE_KEY,
-                drifted_rulesets=drifted_rulesets,
-                # C12-3: the issue-body remediation points at apply-rulesets --declaration so the
-                # restored ruleset honours this consumer's overrides (the standard consumer path).
-                declaration_path=".github/aviato.yml",
-            )
-            print(f"settings drift: {settings_outcome.status} (destructive={settings_outcome.destructive})")
-            if settings_outcome.drifted_rulesets:
-                print(
-                    f"  missing/drifted rulesets (apply with `aviato apply-rulesets {slug} "
-                    # finding 26: the REPO-RELATIVE declaration path (the runner-local
-                    # absolute path printed here before does not exist on the operator's
-                    # machine; the issue body already used the relative form).
-                    f"--apply --declaration .github/aviato.yml`): {list(settings_outcome.drifted_rulesets)}"
-                )
-        except SettingsReadError as exc:
-            print(
-                f"settings drift: skipped — could not read protected settings ({exc}); "
-                "supply an admin-capable `settings-token` secret to enable it (§5.6).",
-                file=sys.stderr,
-            )
-            if args.require_settings:
-                return 1
-        except (GitHubAPIError, CommandError) as exc:
-            # The issue channel (not the settings read) failed. §5.6 requires this to fail loud —
-            # never a silent skip — so §5.4 diagnosis can flag the broken channel. N5: the issue
-            # WRITE (open_or_update_issue → gh) raises CommandError, not GitHubAPIError, so without
-            # catching it the failure fell through to main()'s exit 2 instead of this fail-loud exit 1.
-            print(
-                f"settings drift: FAILED — the tracking-issue channel is unavailable ({exc}); "
-                "the drift report was not delivered (§5.6). This is not a settings-read skip.",
-                file=sys.stderr,
-            )
-            return 1
-    return rc
-
-
 def cmd_lint_actions(args: argparse.Namespace) -> int:
     """Report §11.3 supply-chain pin violations (unpinned uses/images, unchecked fetch-execute,
     non-exact pip pins, unpinned npx registry fetches); exit 1 on any. (R10-7: the rows span several
@@ -2508,33 +2336,6 @@ def build_parser() -> argparse.ArgumentParser:
     provision.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     provision.add_argument("--public", action="store_true", help="Create a public repo (default: private).")
     provision.set_defaults(func=cmd_provision)
-
-    drift = subparsers.add_parser("drift-report", help="Consumer automation: report file + settings drift (read-only).")
-    drift.add_argument("path", help="Path to the consumer repository.")
-    drift.add_argument(
-        "--override-version-pin", action="store_true", help="Proceed despite a version-pin mismatch (§2.6)."
-    )
-    drift_scope = drift.add_mutually_exclusive_group()
-    drift_scope.add_argument(
-        "--file-only",
-        action="store_true",
-        help="Run only file drift (platform token; no admin settings-token needed, §5.6).",
-    )
-    drift_scope.add_argument(
-        "--settings-only",
-        action="store_true",
-        help="Run only settings drift (admin settings-token; read-only, §5.6).",
-    )
-    drift.add_argument(
-        "--require-settings",
-        action="store_true",
-        help=(
-            "Exit non-zero if settings drift cannot be evaluated (unreadable settings). Without "
-            "this, an unreadable-settings skip exits 0 so a scheduled run is not failed by a "
-            "missing admin token; set it when gating CI on settings drift (§5.6)."
-        ),
-    )
-    drift.set_defaults(func=cmd_drift_report)
 
     highest = subparsers.add_parser(
         "is-highest", help="Exit 0 iff CANDIDATE is the highest released version (§8.14 alias guard)."
