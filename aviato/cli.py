@@ -1264,7 +1264,7 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
     Resolves the repo's declaration, re-diagnoses, and routes the same
     marker-stamped bodies scaffold() would write through ``run_file_drift`` so a
     merged PR classifies clean (§6.2/§5.4). Enforces the §2.6 version-pin gate first
-    — exactly like ``drift-report``/``sync`` — so an incompatible local tool cannot
+    — exactly like ``sync`` (drift detection now lives in the aviato-bot service) — so an incompatible local tool cannot
     regenerate a consumer's files (unless the operator passes --override-version-pin).
     """
     declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
@@ -1273,7 +1273,8 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
 
     declaration = _load_consumer_declaration(root)
     expected = _expected_artifacts(registry, declaration)
-    # §2.6 pin gate before any remote/proposal work (matches drift-report/sync): an
+    # §2.6 pin gate before any remote/proposal work (matches sync; drift detection now lives in
+    # the aviato-bot service): an
     # incompatible local tool must not regenerate a consumer's files via scan --fix.
     pin_error = _version_pin_error(root, declaration, expected, override_version_pin)
     if pin_error:
@@ -1737,7 +1738,7 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
 
     # R3-7/§2.6: complete-protection applies the resolved profile's protected settings to a PINNED
     # consumer, so an incompatible local tool must not silently mutate them — gate on version-pin
-    # compatibility exactly like sync/drift-report/scan-fix (with the same --override escape hatch).
+    # compatibility exactly like sync/scan-fix (with the same --override escape hatch).
     pin_error = _version_pin_error(root, declaration, expected, getattr(args, "override_version_pin", False))
     if pin_error:
         print(pin_error, file=sys.stderr)

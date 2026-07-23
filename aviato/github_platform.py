@@ -790,7 +790,7 @@ class GitHubPlatform:
         # fragment the consent/audit trail. A genuine ``200 []`` (no match) still creates one.
         existing = github.gh_json_paginated_optional(f"repos/{repo}/issues?state=open&labels={_seg(key)}", default=[])
         # A malformed 200 (issue object without "number") must not crash the scheduled
-        # drift-report; fall through to creating a fresh issue rather than KeyError. When
+        # aviato-bot drift detector; fall through to creating a fresh issue rather than KeyError. When
         # several issues share the label, act on ONE deterministically (oldest), with a warn.
         chosen = _select_issue(existing, repo, key)
         number = chosen.get("number") if chosen else None

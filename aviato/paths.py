@@ -21,6 +21,6 @@ SCAFFOLD_DIR = MODULE_SOURCE_ROOT / "scaffold"
 
 # Policy + ruleset DATA (policy.yml, rulesets.yml, rulesets/*.json) lives INSIDE the package so
 # it ships in the wheel — a pip-installed `aviato` (operator `apply-rulesets`/`render-rulesets`,
-# or the consumer `drift-report --settings-only`, which renders the desired rulesets) loads it
+# or the aviato-bot drift detector, which renders the desired rulesets) loads it
 # without a source checkout (§5.6/§11.3). Source checkouts resolve the same packaged path.
 POLICY_DATA_ROOT = MODULE_SOURCE_ROOT

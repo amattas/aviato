@@ -96,7 +96,7 @@ def _classify_managed(
         # output path cannot carry a valid marker → operator-owned, dirty-drift (never silently
         # regenerated). Must not crash diagnosis: a raw OSError/UnicodeDecodeError (neither an
         # AviatoError) would escape scan_fleet's per-repo guard and abort the WHOLE fleet scan
-        # (§5.11), and leak a raw traceback in doctor/drift-report (§2.4).
+        # (§5.11), and leak a raw traceback in doctor/the aviato-bot service (§2.4).
         return "dirty-drift"
     marker = parse_marker_from_text(text)
     if marker is None:
