@@ -9,14 +9,14 @@ Aviato is a reusable GitHub policy, CI, release, and onboarding conventions libr
 ## Commands
 
 ```bash
-python3 -m pip install -e .[dev]   # install CLI + dev tools (black, mypy, pytest, ruff, yamllint)
-./scripts/validate.sh              # full local gate: compile, validate, ruff, black, mypy --strict, pytest, build, yamllint, shellcheck, actionlint
+python3 -m pip install -e .[dev]   # install CLI + dev tools (mypy, pytest, ruff, yamllint)
+./scripts/validate.sh              # full local gate: compile, validate, ruff, mypy --strict, pytest, build, yamllint, shellcheck, actionlint
 python3 -m pytest                  # run tests
 python3 -m pytest tests/test_rulesets.py::test_rendered_tag_ruleset_uses_policy_pattern  # single test
-ruff check . && ruff format --check . && black --check --line-length 120 --target-version py312 aviato tests scripts
+ruff check . && ruff format --check .
 ```
 
-Note: `validate.sh` runs pytest with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`. Tests must not depend on third-party pytest plugins. `ruff`/`black`/`pytest`/`shellcheck`/`actionlint` are skipped when not installed locally, but the run ends with a **loud banner** listing every skipped tool (because CI runs them — a green local gate with skips does **not** mean CI is green). Run with `AVIATO_STRICT_TOOLS=1 ./scripts/validate.sh` for CI-parity: a missing tool then fails the gate. CI installs all of them.
+Note: `validate.sh` runs pytest with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`. Tests must not depend on third-party pytest plugins. `ruff`/`pytest`/`shellcheck`/`actionlint` are skipped when not installed locally, but the run ends with a **loud banner** listing every skipped tool (because CI runs them — a green local gate with skips does **not** mean CI is green). Run with `AVIATO_STRICT_TOOLS=1 ./scripts/validate.sh` for CI-parity: a missing tool then fails the gate. CI installs all of them.
 
 CLI surface (entrypoint `aviato.cli:main`):
 

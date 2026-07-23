@@ -23,7 +23,6 @@ dependencies = [
 # toolchain lets a new lint/test release red (or silently green) CI with no repo
 # change. Dependabot's pip ecosystem bumps these deliberately.
 dev = [
-  "black==26.5.1",
   "build==1.5.0",
   "mypy==2.3.0",
   "pytest==9.1.1",
