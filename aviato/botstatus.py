@@ -53,13 +53,20 @@ def probe_bot_status(repo: str, *, opener: Callable[..., Any] | None = None) -> 
         )
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         return BotStatus(configured=True, covered=None, last_checked=None, error=f"bot status probe failed: {exc}")
-    drift = payload.get("drift") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return BotStatus(
+            configured=True,
+            covered=None,
+            last_checked=None,
+            error="bot status probe failed: unexpected response body",
+        )
+    drift = payload.get("drift")
     timestamps: list[str] = sorted(
         row["updated_at"] for row in (drift or []) if isinstance(row, dict) and isinstance(row.get("updated_at"), str)
     )
     return BotStatus(
         configured=True,
-        covered=bool(payload.get("managed")) if isinstance(payload, dict) else None,
+        covered=bool(payload.get("managed")),
         last_checked=timestamps[-1] if timestamps else None,
         error=None,
     )

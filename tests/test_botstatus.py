@@ -15,7 +15,7 @@ import pytest
 from aviato.botstatus import BotStatus, probe_bot_status
 
 
-def _opener_returning(payload: dict[str, Any]) -> Callable[..., Any]:
+def _opener_returning(payload: Any) -> Callable[..., Any]:
     class _Response(io.BytesIO):
         status = 200
 
@@ -73,6 +73,16 @@ def test_covered_repo_reports_latest_check(
     assert status.configured and status.covered is expected_covered
     assert status.last_checked == expected_last
     assert status.error is None
+
+
+def test_non_dict_body_reports_probe_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AVIATO_BOT_URL", "https://bot.example")
+    monkeypatch.setenv("AVIATO_BOT_STATUS_TOKEN", "tok")
+    status = probe_bot_status("acme/app", opener=_opener_returning([]))
+    assert status.configured
+    assert status.covered is None
+    assert status.last_checked is None
+    assert status.error == "bot status probe failed: unexpected response body"
 
 
 @pytest.mark.parametrize(
