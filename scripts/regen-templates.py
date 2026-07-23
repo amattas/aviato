@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate the documented copyable caller templates from the scaffold bundles.
 
-The ``templates/profile-*.yml`` and ``templates/consumer-automation.yml`` files are
+The ``templates/profile-*.yml`` files are
 human-readable EXAMPLES of what ``aviato sync``/``onboard`` materializes. They are
 rendered from the authoritative scaffold bundles (never hand-maintained), so this
 script is the only sanctioned way to update them. ``aviato validate`` fails if they
@@ -29,7 +29,7 @@ def _body(registry: Registry, profile: str, output: str) -> str:
     return next(a.body for a in artifacts if a.output == output)
 
 
-_OUTPUTS = tuple(Path(path) for path in _PROFILE_TEMPLATE_FILES.values()) + (Path("templates/consumer-automation.yml"),)
+_OUTPUTS = tuple(Path(path) for path in _PROFILE_TEMPLATE_FILES.values())
 
 
 def _preflight_outputs(root: Path) -> dict[Path, Path]:
@@ -45,9 +45,6 @@ def _render_templates() -> dict[Path, str]:
     rendered: dict[Path, str] = {}
     for profile, rel_path in _PROFILE_TEMPLATE_FILES.items():
         rendered[Path(rel_path)] = _body(registry, profile, ".github/workflows/aviato-ci.yml")
-    rendered[Path("templates/consumer-automation.yml")] = _body(
-        registry, "python-library", ".github/workflows/aviato-drift.yml"
-    )
     return rendered
 
 

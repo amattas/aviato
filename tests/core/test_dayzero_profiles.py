@@ -167,10 +167,9 @@ def test_swift_app_requires_macos_and_deploys_app_store(registry: Registry) -> N
 @pytest.mark.parametrize("name", DAYZERO)
 def test_profile_scaffolds_caller_workflows(registry: Registry, name: str) -> None:
     # §15: a consumer actually receives the verify/release/deploy/security CI caller
-    # and the scheduled drift/report workflow — not just composed pipeline names.
+    # — not just composed pipeline names.
     outputs = {t.output_path for t in resolve_profile(registry, name).templates}
     assert ".github/workflows/aviato-ci.yml" in outputs
-    assert ".github/workflows/aviato-drift.yml" in outputs
 
 
 def test_node_ci_workflow_renders_typecheck_from_variant() -> None:

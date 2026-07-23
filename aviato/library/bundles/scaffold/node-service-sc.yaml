@@ -4,7 +4,6 @@ name: node-service-sc
 extends: node-sc
 add:
   - wf-ci-node-service
-  - wf-drift
   - wf-docs-node-service
   - zensical-config
   - docs-intro

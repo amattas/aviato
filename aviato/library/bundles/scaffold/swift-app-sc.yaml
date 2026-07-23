@@ -4,7 +4,6 @@ name: swift-app-sc
 extends: swift-sc
 add:
   - wf-ci-swift-app
-  - wf-drift
   - wf-docs-swift-app
   - zensical-config
   - docs-intro

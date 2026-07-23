@@ -121,7 +121,7 @@ def test_keep_files_still_deletes_automation_workflows(tmp_path: Path) -> None:
     # DELETED, not just marker-stripped — a stripped-but-present workflow keeps running,
     # which would leave the §2.13 baseline / drift automation active after offboarding.
     _setup_consumer(tmp_path)
-    wf = ".github/workflows/aviato-drift.yml"
+    wf = ".github/workflows/aviato-security.yml"
     scaffold(tmp_path, [ScaffoldItem(wf, "on: schedule\n", "#", False)], profile="p", version="v1")
     ci = ".github/workflows/aviato-ci.yml"
     scaffold(tmp_path, [ScaffoldItem(ci, "on: push\n", "#", False)], profile="p", version="v1")

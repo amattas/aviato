@@ -47,16 +47,13 @@ REQUIRED_FILES = [
     ".github/workflows/reusable-app-store-connect.yml",
     ".github/workflows/reusable-security-baseline.yml",
     ".github/workflows/reusable-common-lint.yml",
-    ".github/workflows/reusable-consumer-automation.yml",
     ".github/aviato.yml",
     ".github/workflows/aviato-ci.yml",
-    ".github/workflows/aviato-drift.yml",
     "templates/profile-python-service.yml",
     "templates/profile-python-library.yml",
     "templates/profile-python-component.yml",
     "templates/profile-node-service.yml",
     "templates/profile-swift-app.yml",
-    "templates/consumer-automation.yml",
 ]
 
 RELEASE_WORKFLOWS = [
@@ -346,7 +343,6 @@ def _check_docs_caller_name_parity(root: Path, errors: list[str]) -> None:
 # A repo rename/transfer must update all of them together or the sites desync pairwise
 # (e.g. scaffolds render the new prefix while the pin-exemption still matches the old).
 _INSTALL_URL_COPY_COUNTS = {
-    ".github/workflows/reusable-consumer-automation.yml": 1,
     ".github/workflows/reusable-common-lint.yml": 1,
     ".github/workflows/reusable-release.yml": 2,
 }
@@ -466,7 +462,7 @@ def _check_scaffold_constant_parity(root: Path, errors: list[str]) -> None:
         errors.append(f"python-version differs across scaffold callers: {versions} (finding 43)")
 
     crons = _values("wf-*.yml", r'cron:\s*"([^"]+)"')
-    ci_crons = {n: v for n, v in crons.items() if not n.startswith("wf-docs-") and n != "wf-drift.yml"}
+    ci_crons = {n: v for n, v in crons.items() if not n.startswith("wf-docs-")}
     if len({v for vs in ci_crons.values() for v in vs}) > 1:
         errors.append(f"CI caller cron schedules differ: {ci_crons} (finding 43)")
 
@@ -718,7 +714,6 @@ def _check_scaffold_workflow_yaml(root: Path, repository: str, errors: list[str]
 def _check_template_scaffold_parity(root: Path, errors: list[str]) -> None:
     """Documented caller templates must equal the rendered scaffold output (no drift)."""
     checks = [(p, f, ".github/workflows/aviato-ci.yml") for p, f in _PROFILE_TEMPLATE_FILES.items()]
-    checks.append(("python-library", "templates/consumer-automation.yml", ".github/workflows/aviato-drift.yml"))
     for profile, rel_path, output in checks:
         path = root / rel_path
         if not path.exists():

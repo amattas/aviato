@@ -15,7 +15,6 @@ add:
   - python-service-test
   - python-requirements
   - wf-ci-python-service
-  - wf-drift
   - wf-docs-python-service
   - zensical-config
   - docs-intro
