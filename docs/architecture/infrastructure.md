@@ -46,9 +46,13 @@ Reusable workflows live in `.github/workflows` and are consumed through
 - Generated callers include a dispatch-only, no-checkout status bridge that
   publishes the exact required CI/security/common-lint contexts onto a release
   PR head SHA, allowing branch rulesets to remain enforced without bypasses.
-- `reusable-consumer-automation.yml` runs the scheduled drift report: it opens
-  file-drift proposals and files settings-drift tracking issues, and never
-  mutates protected settings.
+
+Scheduled file/settings drift detection is no longer a Library workflow. It is
+owned by the [aviato-bot](https://github.com/amattas/aviato-bot) service
+(settings-event webhooks plus a weekly fleet sweep), which opens file-drift
+proposals and files settings-drift tracking issues without mutating protected
+settings. `doctor`/`scan` probe that service for per-repo coverage
+(`aviato/botstatus.py`, `AVIATO_BOT_URL` + `AVIATO_BOT_STATUS_TOKEN`).
 
 The CI workflows use a common language-module contract:
 
@@ -175,9 +179,12 @@ The Python CLI lives in `aviato/`.
   inspect-first recovery action for missing/corrupt seed integrity state.
 - `aviato scan <paths...>` diagnoses many local consumer repositories
   (read-only); `--fix` opens managed-file proposals and `--audit` also surfaces
-  each repo's open settings-drift tracking issue (§5.11).
-- `aviato drift-report <path>` reports file + settings drift for one consumer
-  (`--file-only`, `--settings-only`, `--require-settings`) (§5.5/§5.6).
+  each repo's open settings-drift tracking issue (§5.11). Each row carries a
+  `bot=` drift-coverage column from the aviato-bot probe.
+- `aviato doctor`/`scan` probe the aviato-bot service for each consumer's drift
+  coverage (`aviato/botstatus.py`) instead of running a local drift report; the
+  retired `drift-report` command has been removed (§5.5/§5.6 drift is now
+  bot-owned).
 - `aviato reconcile <path> <issue> --confirm <diff-id>` applies settings from a
   tracking issue — operator-gated and diff-bound (§5.7).
 - `aviato complete-protection <path>` idempotently (re-)applies full branch

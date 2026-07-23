@@ -31,8 +31,9 @@ Aviato today is not "cobbled-together scripts": it is an agnostic core engine
 - it runs as a CLI from an Operator's workstation, under the Operator's own
   `gh` credentials (`aviato/github_platform.py` shells out to `gh api`);
 - it has no identity of its own, no service, and no reaction to events;
-- the only unattended surface is `reusable-consumer-automation.yml`, running on
-  a schedule **inside each Consumer repo**.
+- the only unattended surface *was* `reusable-consumer-automation.yml`, running on
+  a schedule **inside each Consumer repo** (retired as of 0.7.0 — drift detection
+  is now owned by the aviato-bot service; `doctor`/`scan` probe it for coverage).
 
 "Becoming a bot" is therefore a **delivery/identity** change, not a rewrite. The
 work adds split-purpose GitHub App identities, a webhook-driven Kubernetes

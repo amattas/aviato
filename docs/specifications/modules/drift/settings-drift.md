@@ -24,9 +24,8 @@ scope branch-protection and rulesets require), the automation **skips
 settings drift fail-closed** — it never computes a diff from a falsely
 "unprotected" read — and reports the skip; by default this is not a hard
 failure (so a scheduled run is not failed by a missing admin token), but an
-operator gating CI on settings drift can opt to treat the skip as a failure
-(`drift-report --require-settings`). The automation performs **no** settings
-mutation.
+operator gating CI on settings drift can opt to treat the skip as a hard
+failure. The automation performs **no** settings mutation.
 
 #### Rulesets (presence + content)
 

@@ -44,16 +44,23 @@ branch protection; the §5.2 recovery path.
 ## Ongoing operations
 
 **`aviato doctor /path/to/consumer`** — classify managed artifacts and probe their
-health (§5.4).
+health (§5.4), including the consumer's [aviato-bot](https://github.com/amattas/aviato-bot)
+drift coverage. Set `AVIATO_BOT_URL` and `AVIATO_BOT_STATUS_TOKEN` to enable the
+probe; without them the `bot status:` line reads `unconfigured`. `doctor` exits
+non-zero only when a configured probe reports a repo the bot does not cover or the
+probe errors.
 
 **`aviato sync /path/to/consumer`** — materialize managed artifacts, including the
 caller workflows (§5.3/§15). `--rebaseline-seeds` accepts current seed-once
 contents as the new baseline; `--override-version-pin` is the recovery switch for
 a recorded-pin mismatch.
 
-**`aviato drift-report /path/to/consumer`** — report file and settings drift
-(§5.5/§5.6). `--file-only`/`--settings-only` scope the report; `--require-settings`
-exits non-zero if settings can't be read.
+Scheduled file/settings drift reporting is no longer a CLI command. Drift
+detection (§5.5/§5.6) is owned by the [aviato-bot](https://github.com/amattas/aviato-bot)
+service — settings-event webhooks plus a weekly fleet sweep — which opens
+file-drift proposals and files settings-drift tracking issues. `doctor`/`scan`
+surface that coverage (see below); the operator applies drift through the gated
+`reconcile` command.
 
 **`aviato reconcile /path/to/consumer ISSUE --confirm DIFF_ID`** — operator-gated,
 diff-bound settings apply (§5.7). Fail-closed: the consent label must be present
@@ -61,7 +68,9 @@ and the `DIFF_ID` must still match the live diff.
 
 **`aviato scan /path/a /path/b`** — read-only fleet diagnosis (§5.11); `--fix`
 opens managed-file proposals and `--audit` surfaces open settings-drift tracking
-issues (§5.5).
+issues (§5.5). Each row includes a `bot=` drift-coverage column
+(`unconfigured`/`covered`/`uncovered`/`error`/`not-probed`) from the aviato-bot
+probe; set `AVIATO_BOT_URL` and `AVIATO_BOT_STATUS_TOKEN` to enable it.
 
 **`aviato repin /path/to/consumer X.Y.Z`** — move the Library version pin (§5.12);
 `--write` applies locally, `--open-pr` opens a reviewable re-pin proposal.

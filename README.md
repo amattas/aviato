@@ -33,10 +33,10 @@ in consumer repositories rather than supported by release publish workflows.
 - `aviato/library/rulesets.yml` - ruleset manifest.
 - `aviato/library/rulesets/*.json` - GitHub ruleset templates.
 - `.github/workflows/reusable-*.yml` - reusable CI, release, deploy, and security workflows.
-- `templates/profile-*.yml`, `templates/consumer-automation.yml` - composed, copyable
-  caller-workflow examples for consumer repos (rendered from the scaffold bundles; they
-  include the always-on security baseline, §2.13). Use these composed callers rather than
-  hand-wiring a single reusable workflow, which can omit the required baseline.
+- `templates/profile-*.yml` - composed, copyable caller-workflow examples for
+  consumer repos (rendered from the scaffold bundles; they include the always-on
+  security baseline, §2.13). Use these composed callers rather than hand-wiring a
+  single reusable workflow, which can omit the required baseline.
 - `aviato/` - Python CLI implementation.
 - `scripts/*.sh` - compatibility wrappers and validation entrypoints.
 
@@ -127,10 +127,9 @@ Consumer lifecycle commands (see `aviato <command> --help` for the full flags):
 ```bash
 aviato render-rulesets                       # print rendered ruleset JSON
 aviato apply-rulesets OWNER/REPO --declaration /path/.github/aviato.yml --apply  # override-aware apply: resolves checks/approvals through the consumer's declared overrides (what settings-drift remediation recommends)
-aviato doctor /path/to/consumer              # classify managed artifacts + probe health
+aviato doctor /path/to/consumer              # classify managed artifacts + probe health (incl. aviato-bot drift coverage)
 aviato sync /path/to/consumer                # materialize managed artifacts incl. caller workflows
-aviato scan /path/a /path/b [--fix --audit]  # fleet diagnosis; --fix opens managed-file proposals, --audit surfaces open settings-drift tracking issues
-aviato drift-report /path/to/consumer [--file-only|--settings-only] [--require-settings]  # file + settings drift report
+aviato scan /path/a /path/b [--fix --audit]  # fleet diagnosis (incl. a bot drift-coverage column); --fix opens managed-file proposals, --audit surfaces open settings-drift tracking issues
 aviato reconcile /path/to/consumer ISSUE --confirm DIFF_ID  # operator-gated settings apply, diff-bound
 aviato complete-protection /path/to/consumer # idempotently (re-)apply full branch protection
 aviato repin /path/to/consumer 1.3.0 [--write | --open-pr]  # move the Library version pin; --open-pr opens a reviewable re-pin proposal
@@ -154,6 +153,39 @@ aviato scan /path/to/fleet --fix --audit
 aviato offboard /path/to/consumer --write --delete-files
 aviato sync /path/to/consumer --rebaseline-seeds
 ```
+
+### Drift coverage via aviato-bot
+
+Scheduled file/settings drift detection is no longer a Library workflow; it is
+owned by the [aviato-bot](https://github.com/amattas/aviato-bot) service
+(settings-event webhooks plus a weekly fleet sweep). `doctor` and `scan` no
+longer run a drift report themselves — instead they probe the bot for each
+consumer's coverage. Point them at the service by exporting two environment
+variables:
+
+```bash
+export AVIATO_BOT_URL=https://aviato-bot.example        # service base URL
+export AVIATO_BOT_STATUS_TOKEN=<repo-status bearer token>
+```
+
+With both set, `doctor` prints a `bot status:` line (`unconfigured`, `covered`,
+`not covered by bot automation`, or `probe failed`) and exits non-zero only when
+a configured probe reports a repo the bot does not cover or the probe errors.
+`scan` adds a `bot=` column (`unconfigured`/`covered`/`uncovered`/`error`/`not-probed`).
+When the variables are unset the probe is skipped with no network cost — `doctor`
+reports `unconfigured` and `scan` reports `bot=unconfigured`. Operator-gated
+settings reconciliation is unchanged: `aviato reconcile` still applies the
+diff-bound change the bot's tracking issue describes.
+
+> **Migrating from the scheduled drift caller (pre-0.7.0):** the retired
+> `aviato drift-report` command, the `reusable-consumer-automation.yml` reusable
+> workflow, and the generated `.github/workflows/aviato-drift.yml` caller are all
+> gone. `sync` does **not** delete departed managed artifacts, so a consumer that
+> was onboarded before 0.7.0 keeps an orphaned `aviato-drift.yml` caller after
+> repin/sync. That caller will fail on its schedule because its reusable target no
+> longer exists. **Delete `.github/workflows/aviato-drift.yml` from each consumer
+> repository manually** as part of the upgrade, then rely on aviato-bot coverage
+> (above) for drift detection.
 
 ### Operator setup and live verification
 
@@ -236,7 +268,6 @@ The legacy script names still work:
 - `reusable-app-store-connect.yml`
 - `reusable-security-baseline.yml`
 - `reusable-common-lint.yml`
-- `reusable-consumer-automation.yml`
 
 `reusable-release.yml` is split into a read-only derive job and a write release
 job. `reusable-release-gate.yml` exports the validated commit as a `gated-sha`
