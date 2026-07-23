@@ -31,7 +31,6 @@ from .core.model import ResolvedSet, VariableSpec
 from .core.offboarding import offboard as offboard_repo
 from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, resolved_artifacts
 from .core.pathguard import confined_target
-from .core.ports import Platform
 from .core.provision import provision_repo
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
@@ -448,34 +447,6 @@ def _deployment_environments(resolved: ResolvedSet, render_inputs: Mapping[str, 
         if environment:
             environments.add(environment)
     return tuple(sorted(environments))
-
-
-def _drifted_rulesets(
-    slug: str,
-    platform: Platform,
-    *,
-    required_approvals: int | None = None,
-    extra_status_checks: list[str] | None = None,
-) -> tuple[str, ...]:
-    """Names of desired rulesets MISSING from, or content-DRIFTED on, the live platform (§5.6).
-
-    The GitHub-specific work (render the desired payloads with the resolved verify checks, read
-    the live payloads, compare presence + content) lives here in the binding layer, NOT the
-    agnostic flow. Reads are admin-scoped and fail closed (SettingsReadError) like other settings
-    reads, so the caller's existing fail-closed/fail-loud handling covers them.
-
-    R9-21 (cycle 9, fixed cycle 11): ``extra_status_checks`` is the consumer's **override-resolved**
-    required status checks (from ``resolved.settings``), NOT the base profile's. Using the base
-    profile here reported phantom drift for a consumer that removed a pipeline via overrides, and the
-    non-declaration remediation path would re-add a required check whose workflow no longer runs
-    (unmergeable PRs). CX#1: ``required_approvals`` is the resolved ``required_reviews`` override,
-    flowed in for the same reason (ruleset + classic-protection agree on the count).
-    """
-    from .rulesets import drifted_ruleset_names, render_all_rulesets
-
-    desired = render_all_rulesets(required_approvals=required_approvals, extra_status_checks=extra_status_checks or [])
-    live = platform.read_rulesets(slug)
-    return tuple(drifted_ruleset_names(desired, live))
 
 
 def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[ExpectedArtifact]:
