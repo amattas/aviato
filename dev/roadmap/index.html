@@ -3152,13 +3152,13 @@ deployment-specific logic stays outside core (§2.1/§4.3).</p>
 </tr>
 <tr>
 <td>D3</td>
-<td><strong>LLM is advisory only, behind an <code>Advisor</code> port</strong> (sibling to <code>Platform</code>); concrete binding outside core; provider name added to <code>aviato/plugins/denylist.txt</code> (§9b); <code>FakeAdvisor</code> for tests. Before the first advisor ships, the port gains typed provider-neutral unavailable, budget, and policy-denied failures.</td>
+<td><strong>LLM is advisory only, behind an <code>Advisor</code> port</strong> (sibling to <code>Platform</code>); concrete binding outside core; provider name added to <code>aviato/plugins/denylist.txt</code> (§9b); <code>FakeAdvisor</code> for tests. Before the first advisor ships, the port gains typed provider-neutral unavailable and budget failures (a policy-denied variant existed while the binding targeted a policy-gated hosted endpoint; retired with the direct Anthropic binding, which has no producer for it).</td>
 <td>The core stays deterministic and agnostic; model output never controls a required check, version, merge, tag, publish, deploy, or settings mutation. Typed failures permit a narrow fail-open path without catching unrelated programming errors.</td>
 </tr>
 <tr>
 <td>D4</td>
-<td><strong>LLM egress: a contained hosted endpoint</strong> (Azure OpenAI-style: no-train, in-tenant/region), reached over a private link; endpoint is per-installation config.</td>
-<td>The model ingests diffs/commits/docs; a security-first tool must not open-egress Consumer code.</td>
+<td><strong>LLM egress: a contained commercial endpoint — the Anthropic API</strong> (amended 2026-07-22; originally an Azure OpenAI-style private-link endpoint). Direct TLS to <code>api.anthropic.com</code> (no-train under commercial terms), model pinned to an immutable dated revision for cache/audit scoping; base URL stays per-installation config so a gateway or private routing can be interposed without code change. Cluster egress is bounded to TLS/443 by NetworkPolicy.</td>
+<td>The model ingests diffs/commits/docs; a security-first tool must not open-egress Consumer code. The Advisor port stays provider-neutral, so the binding — not core — carries this decision.</td>
 </tr>
 <tr>
 <td>D5</td>
