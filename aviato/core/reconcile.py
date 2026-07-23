@@ -10,6 +10,52 @@ from .settingsdrift import classify_settings, diff_identity
 from .version import is_compatible
 
 Action = Literal["apply", "noop", "abort", "refuse"]
+ReconcileAction = Literal["apply", "noop", "abort", "refuse", "degraded"]
+
+
+@dataclass(frozen=True)
+class ReconcilePlan:
+    desired_settings: dict[str, Any]
+    live_settings: dict[str, Any]
+    diff_id: str
+    changes: dict[str, str]
+    values: dict[str, dict[str, Any]]
+    pin: str
+    tool_version: str
+    recorded_version: str
+
+    @property
+    def clean(self) -> bool:
+        return not self.changes
+
+
+@dataclass(frozen=True)
+class DeclarativeReconcileOutcome:
+    action: ReconcileAction
+    reason: str
+    skipped: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
+
+
+def build_reconcile_plan(
+    *,
+    desired_settings: dict[str, Any],
+    live_settings: dict[str, Any],
+    pin: str,
+    tool_version: str,
+    recorded_version: str,
+) -> ReconcilePlan:
+    diff = classify_settings(desired=desired_settings, live=live_settings)
+    return ReconcilePlan(
+        desired_settings=dict(desired_settings),
+        live_settings=dict(live_settings),
+        diff_id=diff_identity(diff),
+        changes=dict(diff.changes),
+        values={key: dict(value) for key, value in diff.values.items()},
+        pin=pin,
+        tool_version=tool_version,
+        recorded_version=recorded_version,
+    )
 
 
 @dataclass(frozen=True)

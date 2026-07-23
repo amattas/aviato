@@ -6,7 +6,7 @@ import pytest
 
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
 from aviato.core.ports import Issue
-from aviato.core.reconcile_flow import run_reconcile
+from aviato.core.reconcile_flow import execute_reconcile, plan_reconcile, run_reconcile
 from aviato.core.settings_drift_flow import diff_identity
 from aviato.core.settingsdrift import classify_settings
 from aviato.github_platform import to_security_payload
@@ -394,3 +394,131 @@ def test_apply_reads_consent_again_and_aborts_if_revoked_before_apply() -> None:
     )
     assert outcome.action != "apply"  # re-read saw the revoke → refused
     assert "apply_settings" not in platform.call_names()  # nothing was written
+
+
+def test_execute_reconcile_aborts_when_live_diff_changes() -> None:
+    platform = FakePlatform(settings={"default_branch": "trunk", "delete_branch_on_merge": False})
+    desired = {"default_branch": "main", "delete_branch_on_merge": True}
+    plan = plan_reconcile(
+        platform,
+        repo="owner/repo",
+        desired_settings=desired,
+        pin="0.3.0",
+        tool_version="0.3.0",
+        recorded_version="0.3.0",
+    )
+    platform.settings = {
+        "default_branch": "release",
+        "delete_branch_on_merge": False,
+    }
+
+    outcome = execute_reconcile(
+        platform,
+        repo="owner/repo",
+        plan=plan,
+    )
+
+    assert outcome.action == "abort"
+    assert "apply_settings" not in platform.call_names()
+
+
+def test_execute_reconcile_applies_the_current_declaration() -> None:
+    platform = FakePlatform(settings={"default_branch": "trunk"})
+    desired = {"default_branch": "main"}
+    plan = plan_reconcile(
+        platform,
+        repo="owner/repo",
+        desired_settings=desired,
+        pin="0.3.0",
+        tool_version="0.3.0",
+        recorded_version="0.3.0",
+    )
+
+    outcome = execute_reconcile(
+        platform,
+        repo="owner/repo",
+        plan=plan,
+    )
+
+    assert outcome.action == "apply"
+    assert next(args for name, args in platform.calls if name == "apply_settings") == (
+        "owner/repo",
+        desired,
+        {"default_branch": "trunk"},
+    )
+
+
+def test_execute_reconcile_reports_skipped_fields_as_degraded() -> None:
+    platform = FakePlatform(settings={"default_branch": "trunk"})
+    platform.skipped_on_apply = ["rulesets"]
+    platform.notes_on_apply = ["rulesets require a supported API shape"]
+    plan = plan_reconcile(
+        platform,
+        repo="owner/repo",
+        desired_settings={"default_branch": "main"},
+        pin="0.3.0",
+        tool_version="0.3.0",
+        recorded_version="0.3.0",
+    )
+
+    outcome = execute_reconcile(
+        platform,
+        repo="owner/repo",
+        plan=plan,
+    )
+
+    assert outcome.action == "degraded"
+    assert outcome.skipped == ("rulesets",)
+    assert outcome.notes == ("rulesets require a supported API shape",)
+
+
+def test_execute_reconcile_noops_for_a_clean_plan_without_applying() -> None:
+    settings = {"default_branch": "main"}
+    platform = FakePlatform(settings=settings)
+    plan = plan_reconcile(
+        platform,
+        repo="owner/repo",
+        desired_settings=settings,
+        pin="0.3.0",
+        tool_version="0.3.0",
+        recorded_version="0.3.0",
+    )
+
+    outcome = execute_reconcile(platform, repo="owner/repo", plan=plan)
+
+    assert outcome.action == "noop"
+    assert "apply_settings" not in platform.call_names()
+
+
+def test_execute_reconcile_refuses_an_incompatible_version() -> None:
+    platform = FakePlatform(settings={"default_branch": "trunk"})
+    plan = plan_reconcile(
+        platform,
+        repo="owner/repo",
+        desired_settings={"default_branch": "main"},
+        pin="0.3.0",
+        tool_version="0.2.0",
+        recorded_version="0.3.0",
+    )
+
+    outcome = execute_reconcile(platform, repo="owner/repo", plan=plan)
+
+    assert outcome.action == "refuse"
+    assert "apply_settings" not in platform.call_names()
+
+
+def test_execute_reconcile_applies_with_an_explicit_version_pin_override() -> None:
+    platform = FakePlatform(settings={"default_branch": "trunk"})
+    plan = plan_reconcile(
+        platform,
+        repo="owner/repo",
+        desired_settings={"default_branch": "main"},
+        pin="0.3.0",
+        tool_version="0.2.0",
+        recorded_version="0.3.0",
+    )
+
+    outcome = execute_reconcile(platform, repo="owner/repo", plan=plan, override_version_pin=True)
+
+    assert outcome.action == "apply"
+    assert "apply_settings" in platform.call_names()

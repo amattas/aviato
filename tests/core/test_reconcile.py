@@ -4,7 +4,7 @@ import dataclasses
 from typing import Any, cast
 
 from aviato.core.consent import ACTOR_HUMAN, ROLE_PRIVILEGED
-from aviato.core.reconcile import ReconcileState, reconcile_decision
+from aviato.core.reconcile import ReconcileState, build_reconcile_plan, reconcile_decision
 from aviato.core.settingsdrift import classify_settings, diff_identity
 
 # The gate binds to the APPLY-TIME recomputed diff (§2.8/§6.4), so the consent and
@@ -150,3 +150,48 @@ def test_unparseable_recorded_version_refuses_not_crashes() -> None:
 def test_unparseable_recorded_version_applies_with_override() -> None:
     outcome = reconcile_decision(_state(recorded_version="", override_version_pin=True))
     assert outcome.action == "apply"
+
+
+def test_build_reconcile_plan_captures_the_displayed_snapshot() -> None:
+    desired = {"default_branch": "main", "delete_branch_on_merge": True}
+    live = {"default_branch": "trunk", "delete_branch_on_merge": False}
+
+    plan = build_reconcile_plan(
+        desired_settings=desired,
+        live_settings=live,
+        pin="0.3.0",
+        tool_version="0.3.0",
+        recorded_version="0.3.0",
+    )
+
+    assert plan.desired_settings == desired
+    assert plan.live_settings == live
+    assert plan.changes == {
+        "default_branch": "destructive",
+        "delete_branch_on_merge": "additive",
+    }
+    assert plan.values == {
+        "default_branch": {"desired": "main", "live": "trunk"},
+        "delete_branch_on_merge": {"desired": True, "live": False},
+    }
+    assert len(plan.diff_id) == 32
+    assert plan.pin == "0.3.0"
+    assert plan.tool_version == "0.3.0"
+    assert plan.recorded_version == "0.3.0"
+    assert plan.clean is False
+
+
+def test_build_reconcile_plan_marks_equal_settings_clean() -> None:
+    settings = {"default_branch": "main", "delete_branch_on_merge": True}
+
+    plan = build_reconcile_plan(
+        desired_settings=settings,
+        live_settings=settings,
+        pin="0.3.0",
+        tool_version="0.3.0",
+        recorded_version="0.3.0",
+    )
+
+    assert plan.clean is True
+    assert plan.changes == {}
+    assert plan.values == {}
