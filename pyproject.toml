@@ -27,7 +27,7 @@ dev = [
   "mypy==2.3.0",
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
-  "ruff==0.15.22",
+  "ruff==0.16.0",
   # CI-failure fix: mypy --strict needs the PyYAML stubs in the SAME env (they were
   # only ever installed locally); without them the type gate fails on import-untyped.
   "types-PyYAML==6.0.12.20260518",
