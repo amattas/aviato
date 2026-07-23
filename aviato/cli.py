@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 from . import __version__
 from .audit import audit_repos, discover_and_audit, render_json, render_tsv
+from .botstatus import BotStatus, probe_bot_status
 from .command import CommandError, run
 from .core.bootstrap import is_library
 from .core.composition import resolve_profile
@@ -62,10 +63,6 @@ from .validation import validate
 # Library artifact name, so it lives OUTSIDE the agnostic core (review #18) and is passed into
 # diagnose() as data — core never hardcodes a specific library workflow name.
 DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
-# findings 30/31: the drift caller's repo path, for the API-state probe (enabled +
-# last scheduled-run conclusion). A Library artifact name — passed to the binding as
-# data, like the markers above.
-DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
 DECLARATION_RELATIVE_PATH = ".github/aviato.yml"
 
 
@@ -368,6 +365,36 @@ def _version_pin_error(
 
 def _tri(value: bool | None) -> str:
     return "unknown" if value is None else ("yes" if value else "no")
+
+
+def _print_bot_status(status: BotStatus | None) -> None:
+    """Render the aviato-bot drift-coverage probe (§5.4). Silent when not probed (no remote)."""
+    if status is None:
+        return
+    if not status.configured:
+        print("bot status: unconfigured (set AVIATO_BOT_URL and AVIATO_BOT_STATUS_TOKEN)")
+        return
+    if status.error is not None:
+        # ``error`` already carries the "bot status probe failed: ..." prefix.
+        print(status.error)
+        return
+    if status.covered is False:
+        print("bot status: not covered by bot automation")
+        return
+    if status.last_checked is not None:
+        print(f"bot status: covered (last drift check {status.last_checked})")
+    else:
+        print("bot status: covered")
+
+
+def _bot_status_exit_code(status: BotStatus | None) -> int:
+    """Doctor's health gate, successor to the retired drift-automation gate: a configured bot that
+    reports this repo is NOT covered — or whose probe errored — is an actionable drift-automation
+    gap and fails (1). Unconfigured (operator has not opted the bot in), covered, or not-probed
+    read as 0."""
+    if status is not None and status.configured and (status.covered is False or status.error is not None):
+        return 1
+    return 0
 
 
 def _desired_settings(resolved: ResolvedSet) -> dict[str, Any]:
@@ -1021,13 +1048,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             slug,
             environments=environments,
             probe_pages_build_type=declaration.docs and serve_pages,
-            # findings 30/31/32: API-state probes — drift caller enabled + last-run
-            # conclusion, and code-scanning enablement (§2.13/§17 "probeable").
-            drift_workflow_path=DRIFT_CALLER_PATH,
             desired_rulesets=desired_rulesets,
         )
         report.prerequisites_remote = dict(remote_health)
-        report.drift_automation_enabled = report.prerequisites_remote.pop("drift_automation_enabled", None)
+        # Drift health now comes from the aviato-bot service, not a scheduled Library workflow:
+        # probe the bot's per-repo coverage (unconfigured/covered/not-covered/error).
+        report.bot_status = probe_bot_status(slug)
 
     print(f"doctor: {declaration.profile} @ {declaration.version} ({root})")
     for output_path, status in sorted(report.statuses.items()):
@@ -1038,8 +1064,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print(f"- {path}")
     if report.secret_in_declaration:
         print("WARNING: secret-typed variable present in declaration (§6.6/§8.15)")
-    print(f"drift automation present locally: {'yes' if report.drift_automation_present else 'no'}")
-    print(f"drift automation enabled remotely: {_tri(report.drift_automation_enabled)}")
+    _print_bot_status(report.bot_status)
     print("prerequisites:")
     for name, ok in sorted(report.prerequisites.items()):
         print(f"- {name}: {'ok' if ok else 'missing'}")
@@ -1051,7 +1076,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print("remote prerequisites (§17):")
         for name, value in sorted(report.prerequisites_remote.items()):
             print(f"- {name}: {_tri(value)}")
-    return 0 if report.drift_automation_healthy else 1
+    return _bot_status_exit_code(report.bot_status)
 
 
 def cmd_sync(args: argparse.Namespace) -> int:

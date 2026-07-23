@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from aviato import cli, rulesets
+from aviato.botstatus import BotStatus
 from aviato.cli import main
 from aviato.core.diagnosis import DiagnosisReport
 from aviato.core.model import VariableSpec
@@ -52,9 +53,7 @@ def test_doctor_probes_pages_only_for_docs_and_serve_pages(
             statuses={},
             seed_divergence=(),
             secret_in_declaration=False,
-            drift_automation_present=True,
-            drift_automation_enabled=True,
-            drift_automation_healthy=True,
+            bot_status=None,
             prerequisites={},
             issue_channel_available=None,
             scan_heartbeat_present=None,
@@ -63,12 +62,13 @@ def test_doctor_probes_pages_only_for_docs_and_serve_pages(
 
     monkeypatch.setattr(cli, "diagnose", fake_diagnose)
     monkeypatch.setattr(cli, "remote_url", lambda root: "https://github.com/o/r.git")
+    monkeypatch.setattr(cli, "probe_bot_status", lambda *a, **k: BotStatus(False, None, None, None))
     seen: list[bool] = []
 
     def probe(self: GitHubPlatform, repo: str, **kwargs: object) -> tuple[None, None, dict[str, bool]]:
         seen.append(cast(bool, kwargs["probe_pages_build_type"]))
         assert kwargs["desired_rulesets"]
-        return None, None, {"drift_automation_enabled": True, "ruleset_protection_full": False}
+        return None, None, {"ruleset_protection_full": False}
 
     monkeypatch.setattr(GitHubPlatform, "probe_health", probe)
     assert main(["doctor", str(tmp_path)]) == 0
@@ -107,14 +107,15 @@ def test_doctor_probes_swift_resolved_deployment_environment(
     monkeypatch.setattr(
         cli,
         "diagnose",
-        lambda *args, **kwargs: DiagnosisReport(drift_automation_present=True),
+        lambda *args, **kwargs: DiagnosisReport(),
     )
     monkeypatch.setattr(cli, "remote_url", lambda root: "https://github.com/o/r.git")
+    monkeypatch.setattr(cli, "probe_bot_status", lambda *a, **k: BotStatus(False, None, None, None))
     seen: list[tuple[str, ...]] = []
 
     def probe(self: GitHubPlatform, repo: str, **kwargs: object) -> tuple[None, None, dict[str, bool]]:
         seen.append(cast(tuple[str, ...], kwargs["environments"]))
-        return None, None, {"drift_automation_enabled": True}
+        return None, None, {}
 
     monkeypatch.setattr(GitHubPlatform, "probe_health", probe)
 
@@ -146,14 +147,15 @@ def test_doctor_preserves_static_or_absent_deployment_environments(
     monkeypatch.setattr(
         cli,
         "diagnose",
-        lambda *args, **kwargs: DiagnosisReport(drift_automation_present=True),
+        lambda *args, **kwargs: DiagnosisReport(),
     )
     monkeypatch.setattr(cli, "remote_url", lambda root: "https://github.com/o/r.git")
+    monkeypatch.setattr(cli, "probe_bot_status", lambda *a, **k: BotStatus(False, None, None, None))
     seen: list[tuple[str, ...]] = []
 
     def probe(self: GitHubPlatform, repo: str, **kwargs: object) -> tuple[None, None, dict[str, bool]]:
         seen.append(cast(tuple[str, ...], kwargs["environments"]))
-        return None, None, {"drift_automation_enabled": True}
+        return None, None, {}
 
     monkeypatch.setattr(GitHubPlatform, "probe_health", probe)
 
@@ -193,22 +195,43 @@ def test_onboard_secret_value_never_prints_in_doctor_facing_plan(
 
 
 @pytest.mark.parametrize(
-    ("local_present", "remote_enabled", "expected_rc", "remote_text"),
+    ("bot_status", "expected_fragment", "expected_rc"),
     [
-        (True, True, 0, "yes"),
-        (True, False, 1, "no"),
-        (False, True, 1, "yes"),
-        (True, None, 1, "unknown"),
+        (
+            BotStatus(configured=False, covered=None, last_checked=None, error=None),
+            "bot status: unconfigured (set AVIATO_BOT_URL and AVIATO_BOT_STATUS_TOKEN)",
+            0,
+        ),
+        (
+            BotStatus(configured=True, covered=True, last_checked="2026-07-22T06:17:00+00:00", error=None),
+            "bot status: covered (last drift check 2026-07-22T06:17:00+00:00)",
+            0,
+        ),
+        # covered but no recorded drift check yet → the parenthetical is omitted.
+        (
+            BotStatus(configured=True, covered=True, last_checked=None, error=None),
+            "bot status: covered\n",
+            0,
+        ),
+        (
+            BotStatus(configured=True, covered=False, last_checked=None, error=None),
+            "bot status: not covered by bot automation",
+            1,
+        ),
+        (
+            BotStatus(configured=True, covered=None, last_checked=None, error="bot status probe failed: HTTP 401"),
+            "bot status probe failed: HTTP 401",
+            1,
+        ),
     ],
 )
-def test_doctor_reports_local_and_remote_drift_automation_health(
+def test_doctor_reports_bot_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    local_present: bool,
-    remote_enabled: bool | None,
+    bot_status: BotStatus,
+    expected_fragment: str,
     expected_rc: int,
-    remote_text: str,
 ) -> None:
     declaration = tmp_path / ".github" / "aviato.yml"
     declaration.parent.mkdir(parents=True)
@@ -216,17 +239,11 @@ def test_doctor_reports_local_and_remote_drift_automation_health(
         "profile: python-library\nversion: '0'\nvariables:\n  distribution-name: acme\n  import-name: acme\n",
         encoding="utf-8",
     )
-    report = DiagnosisReport(drift_automation_present=local_present)
     monkeypatch.setattr(cli, "_expected_artifacts", lambda *args, **kwargs: ())
-    monkeypatch.setattr(cli, "diagnose", lambda *args, **kwargs: report)
+    monkeypatch.setattr(cli, "diagnose", lambda *args, **kwargs: DiagnosisReport())
     monkeypatch.setattr(cli, "remote_url", lambda root: "https://github.com/o/r.git")
-    monkeypatch.setattr(
-        GitHubPlatform,
-        "probe_health",
-        lambda *args, **kwargs: (None, None, {"drift_automation_enabled": remote_enabled}),
-    )
+    monkeypatch.setattr(GitHubPlatform, "probe_health", lambda *args, **kwargs: (None, None, {}))
+    monkeypatch.setattr(cli, "probe_bot_status", lambda *args, **kwargs: bot_status)
 
     assert main(["doctor", str(tmp_path)]) == expected_rc
-    output = capsys.readouterr().out
-    assert f"drift automation present locally: {'yes' if local_present else 'no'}" in output
-    assert f"drift automation enabled remotely: {remote_text}" in output
+    assert expected_fragment in capsys.readouterr().out

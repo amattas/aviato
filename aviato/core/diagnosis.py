@@ -3,9 +3,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from .errors import BootstrapError
+
+if TYPE_CHECKING:
+    from ..botstatus import BotStatus
 from .marker import content_hash, parse_marker_from_text, strip_marker_from_text
 from .pathguard import confined_target
 from .scaffold import read_sidecar
@@ -31,22 +34,20 @@ class DiagnosisReport:
     # platform-dependent ones (issue-channel availability, per-run scan heartbeat)
     # are left None here and populated by the GitHub binding when it has API access
     # — and absence reads as broken, never clean (§5.14).
-    drift_automation_present: bool = False
-    drift_automation_enabled: bool | None = None
     prerequisites: dict[str, bool] = field(default_factory=dict)
     issue_channel_available: bool | None = None
     scan_heartbeat_present: bool | None = None
+    # Drift-automation health no longer comes from a scheduled Library workflow; the
+    # aviato-bot service is now the drift detector, so its per-repo coverage is probed
+    # by the binding (doctor) and reported here. None means "not probed" (e.g. no remote,
+    # or --no-remote-probe); the states themselves live on BotStatus.
+    bot_status: BotStatus | None = None
     # R6-2-§17-PROBE: REMOTE-probeable §17 prerequisites filled by the platform binding (the names
     # and what they mean are plug-in DATA — core is agnostic to which checks the binding emits,
     # §9b). Distinct from the LOCAL `prerequisites` map (file-path probes). None per key means
     # "unable to determine"; the doctor report surfaces both so the operator can act (§5.4 —
     # absence reads as broken, never clean).
     prerequisites_remote: dict[str, bool | None] = field(default_factory=dict)
-
-    @property
-    def drift_automation_healthy(self) -> bool:
-        """True only when local presence and remote enablement are both proven."""
-        return self.drift_automation_present and self.drift_automation_enabled is True
 
 
 def _has_drift_automation(root: Path, markers: Sequence[str]) -> bool:
@@ -228,7 +229,11 @@ def diagnose(
     declaration_variables = declaration_variables or {}
     report.secret_in_declaration = any(declaration_variables.get(name) is not None for name in secret_var_names)
 
-    report.drift_automation_present = _has_drift_automation(root, drift_automation_markers)
+    # ``drift_automation_markers`` is retained on the signature for caller parity (scan_fleet still
+    # forwards it) but the local scheduled-workflow presence probe is no longer surfaced on the
+    # report: drift health now comes from the aviato-bot service (see ``bot_status``). The fleet
+    # scan still consults ``_has_drift_automation`` directly until Task 3 rewires it onto the bot
+    # probe.
     report.prerequisites = _probe_prerequisites(root, prerequisite_paths or {})
 
     return report

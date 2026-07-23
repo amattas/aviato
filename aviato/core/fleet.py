@@ -7,7 +7,7 @@ from pathlib import Path
 from .bootstrap import is_library
 from .composition import resolve_profile
 from .declaration import Declaration, load_declaration
-from .diagnosis import ExpectedArtifact, diagnose
+from .diagnosis import ExpectedArtifact, _has_drift_automation, diagnose
 from .errors import AviatoError, DeclarationError
 from .onboarding import resolved_artifacts
 from .registry import Registry
@@ -120,7 +120,12 @@ def scan_fleet(
                 seed_divergence=report.seed_divergence,
                 secret_in_declaration=report.secret_in_declaration,
                 prerequisites=dict(report.prerequisites),
-                drift_automation_present=report.drift_automation_present if drift_automation_markers else None,
+                # DiagnosisReport no longer carries drift-automation presence (drift health moved
+                # to the aviato-bot service). Until Task 3 repoints the fleet sweep at the bot
+                # probe, keep the existing scheduled-workflow presence signal by probing directly.
+                drift_automation_present=(
+                    _has_drift_automation(root, drift_automation_markers) if drift_automation_markers else None
+                ),
             )
         )
     return scans
