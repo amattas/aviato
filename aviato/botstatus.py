@@ -55,9 +55,7 @@ def probe_bot_status(repo: str, *, opener: Callable[..., Any] | None = None) -> 
         return BotStatus(configured=True, covered=None, last_checked=None, error=f"bot status probe failed: {exc}")
     drift = payload.get("drift") if isinstance(payload, dict) else None
     timestamps: list[str] = sorted(
-        row["updated_at"]
-        for row in (drift or [])
-        if isinstance(row, dict) and isinstance(row.get("updated_at"), str)
+        row["updated_at"] for row in (drift or []) if isinstance(row, dict) and isinstance(row.get("updated_at"), str)
     )
     return BotStatus(
         configured=True,

@@ -229,9 +229,7 @@ def test_scan_reports_bot_coverage_column(
     assert expected_column in out
 
 
-def test_scan_bot_column_not_probed_without_remote(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_scan_bot_column_not_probed_without_remote(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # A repo whose remote slug does not resolve gets the same not-probed treatment doctor gives an
     # unprobed repo — never a network call, and distinct from `unconfigured`.
     consumer = tmp_path / "c"
