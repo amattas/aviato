@@ -126,7 +126,7 @@ jobs:
               exit 1
             fi
             # library.repository copy; aviato validate binds this URL to packaged policy.yml.
-            python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
+            python -m pip install "git+https://github.com/mattas-net/aviato@${AVIATO_REF}"
           fi
           aviato lint-actions .
 

@@ -42,7 +42,7 @@ releases live in `aviato/core/` (`file_drift_flow`, `settings_drift_flow`,
 `reconcile_flow`, `fleet`) behind the `aviato/github_platform.py` binding, and
 are surfaced through the `reconcile`/`scan` CLI commands and the
 `reusable-release.yml` workflow. Scheduled file/settings drift detection is now
-owned by the sibling [aviato-bot](https://github.com/amattas/aviato-bot) service
+owned by the sibling [aviato-bot](https://github.com/mattas-net/aviato-bot) service
 (the retired `drift-report` command and `reusable-consumer-automation.yml`
 workflow are gone); `doctor`/`scan` probe that service for per-repo coverage. What
 remains is live end-to-end operator verification of those flows against a real

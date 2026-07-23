@@ -48,7 +48,7 @@ Reusable workflows live in `.github/workflows` and are consumed through
   PR head SHA, allowing branch rulesets to remain enforced without bypasses.
 
 Scheduled file/settings drift detection is no longer a Library workflow. It is
-owned by the [aviato-bot](https://github.com/amattas/aviato-bot) service
+owned by the [aviato-bot](https://github.com/mattas-net/aviato-bot) service
 (settings-event webhooks plus a weekly fleet sweep), which opens file-drift
 proposals and files settings-drift tracking issues without mutating protected
 settings. `doctor`/`scan` probe that service for per-repo coverage

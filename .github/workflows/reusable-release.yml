@@ -136,7 +136,7 @@ jobs:
             python -m pip install -e .
           else
             # library.repository copy; aviato validate binds this URL to packaged policy.yml.
-            python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
+            python -m pip install "git+https://github.com/mattas-net/aviato@${AVIATO_REF}"
           fi
 
       - name: Derive next version
@@ -257,7 +257,7 @@ jobs:
             python -m pip install -e .
           else
             # library.repository copy; aviato validate binds this URL to packaged policy.yml.
-            python -m pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"
+            python -m pip install "git+https://github.com/mattas-net/aviato@${AVIATO_REF}"
           fi
 
       - name: Propose release PR

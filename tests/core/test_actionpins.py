@@ -25,7 +25,7 @@ def test_third_party_pinned_to_sha_is_ok() -> None:
 
 def test_first_party_and_library_self_ref_exempt() -> None:
     assert unpinned_third_party_uses("      - uses: actions/checkout@v4\n") == []
-    assert unpinned_third_party_uses("      - uses: amattas/aviato/.github/workflows/x.yml@v1\n") == []
+    assert unpinned_third_party_uses("      - uses: mattas-net/aviato/.github/workflows/x.yml@v1\n") == []
 
 
 def test_library_self_ref_exemption_accepts_policy_repository() -> None:
@@ -223,7 +223,7 @@ _MIKE_SHA = "2d4ad799442f4592db8ad53b179bfb33db8c69ac"
         ("git+https://github.com/squidfunk/mike.git@2d4ad79", True),
         (f"mike @ git+https://github.com/squidfunk/mike.git@{_MIKE_SHA[:12]}", True),
         ("GIT+https://github.com/squidfunk/mike.git@master", True),
-        ("git+https://github.com/amattas/aviato@${AVIATO_REF}", False),
+        ("git+https://github.com/mattas-net/aviato@${AVIATO_REF}", False),
         ("mike @ git+https://github.com/squidfunk/mike.git@${REF}", True),
         ("git+https://github.com/x/y.git@${SOMEVERSION}", True),
         ("pkg @ git+https://github.com/x/y.git@${REF}", True),

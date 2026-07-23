@@ -136,7 +136,7 @@ def test_real_zizmor_first_party_not_false_flagged_under_auditor(tmp_path: Path)
         "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n"
         "      - uses: actions/checkout@v4\n"
         "      - uses: github/codeql-action@v3\n"
-        "      - uses: amattas/aviato/.github/workflows/x.yml@v1\n",
+        "      - uses: mattas-net/aviato/.github/workflows/x.yml@v1\n",
     )
     out = zizmor_scan.zizmor_uses_image_violations(wf)
     assert not any("unpinned-uses" in v for v in out), out

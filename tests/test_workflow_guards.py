@@ -1281,7 +1281,7 @@ def test_aviato_ref_pin_guard_present_and_regex_correct() -> None:
         assert m, f"{name} missing the AVIATO_REF pin guard"
         # The guard must run BEFORE the pinned install.
         assert body.index("AVIATO_REF") < body.index(
-            'pip install "git+https://github.com/amattas/aviato@${AVIATO_REF}"'
+            'pip install "git+https://github.com/mattas-net/aviato@${AVIATO_REF}"'
         )
         pattern = re.compile(m.group(1))
         for good in ("1.2.3", "1.2.3-alpha1", "1.2.3-beta2", "7", "1.10.0"):

@@ -81,7 +81,7 @@ aviato apply-rulesets OWNER/REPO --apply --declaration .github/aviato.yml
 ```
 
 **Check drift coverage.** Scheduled file/settings drift detection is owned by the
-[aviato-bot](https://github.com/amattas/aviato-bot) service (settings-event
+[aviato-bot](https://github.com/mattas-net/aviato-bot) service (settings-event
 webhooks plus a weekly fleet sweep), which opens file-drift proposals and files
 settings-drift tracking issues. Confirm the repository is covered by pointing
 `doctor` at the service:

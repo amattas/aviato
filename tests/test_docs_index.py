@@ -110,7 +110,7 @@ def test_readme_documents_load_bearing_operator_flags() -> None:
 def test_readme_documents_exact_external_control_verification() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     required = {
-        "repos/amattas/aviato/rulesets/${id}",
+        "repos/mattas-net/aviato/rulesets/${id}",
         "Required reviewers are an operator prerequisite",
         "job ID `deploy`",
         "display name `Deploy GitHub Pages`",
@@ -503,7 +503,9 @@ def test_actionable_traceability_rows_link_to_issue_or_owning_page(identifier: s
     notes = _matrix_rows()[identifier][6]
     links = re.findall(r"\[[^]]+\]\(([^)]+)\)", notes)
 
-    issue_links = [target for target in links if re.fullmatch(r"https://github\.com/amattas/aviato/issues/\d+", target)]
+    issue_links = [
+        target for target in links if re.fullmatch(r"https://github\.com/mattas-net/aviato/issues/\d+", target)
+    ]
     if issue_links:
         return
 

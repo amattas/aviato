@@ -56,7 +56,7 @@ container-image pinning (`uses:` clauses, `container:`/`services:` images) are e
 **zizmor** (`unpinned-uses`/`unpinned-images`, plus `template-injection` — gated since the
 2026-06 scope expansion: the audit is upstream-maintained, so gating it carries no
 hand-rolled-detector flap risk) via a bundled policy config
-(`aviato/library/zizmor.yml`: `actions/*`, `github/*`, and the `amattas/aviato/*` self-ref are
+(`aviato/library/zizmor.yml`: `actions/*`, `github/*`, and the `mattas-net/aviato/*` self-ref are
 ref-pinnable, everything else SHA-required). zizmor is invoked
 `--offline --persona=auditor --no-ignores`: offline because the gated audits are syntactic and must
 not be coupled to GitHub-API availability (R10-3); auditor persona because `unpinned-images` is

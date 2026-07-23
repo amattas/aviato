@@ -44,7 +44,7 @@ branch protection; the §5.2 recovery path.
 ## Ongoing operations
 
 **`aviato doctor /path/to/consumer`** — classify managed artifacts and probe their
-health (§5.4), including the consumer's [aviato-bot](https://github.com/amattas/aviato-bot)
+health (§5.4), including the consumer's [aviato-bot](https://github.com/mattas-net/aviato-bot)
 drift coverage. Set `AVIATO_BOT_URL` and `AVIATO_BOT_STATUS_TOKEN` to enable the
 probe; without them the `bot status:` line reads `unconfigured`. `doctor` exits
 non-zero only when a configured probe reports a repo the bot does not cover or the
@@ -56,7 +56,7 @@ contents as the new baseline; `--override-version-pin` is the recovery switch fo
 a recorded-pin mismatch.
 
 Scheduled file/settings drift reporting is no longer a CLI command. Drift
-detection (§5.5/§5.6) is owned by the [aviato-bot](https://github.com/amattas/aviato-bot)
+detection (§5.5/§5.6) is owned by the [aviato-bot](https://github.com/mattas-net/aviato-bot)
 service — settings-event webhooks plus a weekly fleet sweep — which opens
 file-drift proposals and files settings-drift tracking issues. `doctor`/`scan`
 surface that coverage (see below); the operator applies drift through the gated

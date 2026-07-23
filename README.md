@@ -157,7 +157,7 @@ aviato sync /path/to/consumer --rebaseline-seeds
 ### Drift coverage via aviato-bot
 
 Scheduled file/settings drift detection is no longer a Library workflow; it is
-owned by the [aviato-bot](https://github.com/amattas/aviato-bot) service
+owned by the [aviato-bot](https://github.com/mattas-net/aviato-bot) service
 (settings-event webhooks plus a weekly fleet sweep). `doctor` and `scan` no
 longer run a drift report themselves — instead they probe the bot for each
 consumer's coverage. Point them at the service by exporting two environment
@@ -197,9 +197,9 @@ non-fast-forward protection. Any unrelated API failure remains fatal.
 ```bash
 aviato apply-rulesets OWNER/REPO --apply --declaration /path/to/checkout/.github/aviato.yml
 gh api --paginate repos/OWNER/REPO/rulesets
-# The list endpoint is only a summary. Fetch every full live payload for amattas/aviato:
-for id in $(gh api --paginate repos/amattas/aviato/rulesets --jq '.[].id'); do
-  gh api "repos/amattas/aviato/rulesets/${id}"
+# The list endpoint is only a summary. Fetch every full live payload for mattas-net/aviato:
+for id in $(gh api --paginate repos/mattas-net/aviato/rulesets --jq '.[].id'); do
+  gh api "repos/mattas-net/aviato/rulesets/${id}"
 done
 gh api --method PUT repos/OWNER/REPO/automated-security-fixes
 ```

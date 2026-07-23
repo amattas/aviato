@@ -301,7 +301,7 @@ def test_checkout_by_repository_name_in_release_workflow_is_detected(repo_copy: 
     # of the slug-qualified checkout must flag.
     wf = repo_copy / RELEASE_WORKFLOWS[0]
     with wf.open("a", encoding="utf-8") as handle:
-        handle.write("\n# drift fixture:\n#          repository: amattas/aviato\n")
+        handle.write("\n# drift fixture:\n#          repository: mattas-net/aviato\n")
     errors = validate(repo_copy)
     assert any("checks out Aviato by repository name" in e for e in errors)
 
@@ -322,12 +322,12 @@ def test_stale_library_bootstrap_artifact_is_detected(repo_copy: Path) -> None:
 
 def test_released_aviato_ref_in_bootstrap_artifact_is_detected(repo_copy: Path) -> None:
     # §5.10: the Library's own callers must use local workflow refs, never a released
-    # amattas/aviato/... ref (a released self-reference would deadlock bootstrap).
+    # mattas-net/aviato/... ref (a released self-reference would deadlock bootstrap).
     wf = repo_copy / ".github" / "workflows" / "aviato-ci.yml"
     text = wf.read_text(encoding="utf-8")
     drifted = text.replace(
         "uses: ./.github/workflows/reusable-python-ci.yml",
-        "uses: amattas/aviato/.github/workflows/reusable-python-ci.yml@1.2.3",
+        "uses: mattas-net/aviato/.github/workflows/reusable-python-ci.yml@1.2.3",
     )
     assert drifted != text, "fixture did not contain the expected local workflow ref"
     wf.write_text(drifted, encoding="utf-8")
@@ -361,7 +361,7 @@ def test_rendered_scaffold_wrong_repository_is_detected_with_placeholder_ref(rep
     errors = validate(repo_copy)
 
     assert any(
-        "rendered scaffold workflow" in error and "wrong/repository" in error and "amattas/aviato" in error
+        "rendered scaffold workflow" in error and "wrong/repository" in error and "mattas-net/aviato" in error
         for error in errors
     )
 
@@ -369,8 +369,8 @@ def test_rendered_scaffold_wrong_repository_is_detected_with_placeholder_ref(rep
 @pytest.mark.parametrize(
     "replacement",
     [
-        "amattas/aviato/.github/workflows/reusable-python-ci.yml",
-        "amattas/aviato/.github/workflows/reusable-python-ci.yml@",
+        "mattas-net/aviato/.github/workflows/reusable-python-ci.yml",
+        "mattas-net/aviato/.github/workflows/reusable-python-ci.yml@",
     ],
 )
 def test_rendered_scaffold_requires_one_nonempty_ref(repo_copy: Path, replacement: str) -> None:
@@ -397,9 +397,9 @@ def test_remote_workflow_reference_accepts_placeholder_ref() -> None:
 
     errors: list[str] = []
     validation._check_remote_reusable_reference(
-        "amattas/aviato/.github/workflows/reusable-python-ci.yml@{{ aviato-ref }}",
+        "mattas-net/aviato/.github/workflows/reusable-python-ci.yml@{{ aviato-ref }}",
         source="fixture",
-        repository="amattas/aviato",
+        repository="mattas-net/aviato",
         workflow_files={"reusable-python-ci.yml"},
         errors=errors,
     )
@@ -411,7 +411,7 @@ def test_documented_template_wrong_repository_is_detected(repo_copy: Path) -> No
     template = repo_copy / "templates/profile-python-library.yml"
     text = template.read_text(encoding="utf-8")
     drifted = text.replace(
-        "amattas/aviato/.github/workflows/reusable-python-ci.yml@EXAMPLE_PIN",
+        "mattas-net/aviato/.github/workflows/reusable-python-ci.yml@EXAMPLE_PIN",
         "wrong/repository/.github/workflows/reusable-python-ci.yml@EXAMPLE_PIN",
         1,
     )
@@ -421,7 +421,7 @@ def test_documented_template_wrong_repository_is_detected(repo_copy: Path) -> No
     errors = validate(repo_copy)
 
     assert any(
-        "templates/profile-python-library.yml" in error and "wrong/repository" in error and "amattas/aviato" in error
+        "templates/profile-python-library.yml" in error and "wrong/repository" in error and "mattas-net/aviato" in error
         for error in errors
     )
 
@@ -503,7 +503,7 @@ def test_library_slug_copy_drift_is_detected(repo_copy: Path) -> None:
     # must be flagged so a rename/transfer moves every site together.
     z = repo_copy / "aviato/library/zizmor.yml"
     text = z.read_text(encoding="utf-8")
-    drifted = text.replace("amattas/aviato/*: ref-pin", "someone-else/aviato/*: ref-pin")
+    drifted = text.replace("mattas-net/aviato/*: ref-pin", "someone-else/aviato/*: ref-pin")
     assert drifted != text, "fixture did not contain the zizmor slug exemption"
     z.write_text(drifted, encoding="utf-8")
     assert any("finding 41" in e for e in validate(repo_copy))
@@ -513,12 +513,12 @@ def test_every_release_install_url_copy_must_match_policy(repo_copy: Path) -> No
     workflow = repo_copy / ".github/workflows/reusable-release.yml"
     text = workflow.read_text(encoding="utf-8")
     drifted = text.replace(
-        "git+https://github.com/amattas/aviato@${AVIATO_REF}",
+        "git+https://github.com/mattas-net/aviato@${AVIATO_REF}",
         "git+https://github.com/wrong/repository@${AVIATO_REF}",
         1,
     )
     assert drifted != text
-    assert "git+https://github.com/amattas/aviato@${AVIATO_REF}" in drifted
+    assert "git+https://github.com/mattas-net/aviato@${AVIATO_REF}" in drifted
     workflow.write_text(drifted, encoding="utf-8")
 
     errors = validate(repo_copy)
@@ -541,13 +541,13 @@ def test_every_zizmor_repository_policy_copy_must_match(repo_copy: Path) -> None
 def test_policy_zizmor_repository_exemption_must_be_ref_pin(repo_copy: Path, replacement: str) -> None:
     config = repo_copy / "aviato/library/zizmor.yml"
     text = config.read_text(encoding="utf-8")
-    drifted = text.replace("amattas/aviato/*: ref-pin", f"amattas/aviato/*: {replacement}", 1)
+    drifted = text.replace("mattas-net/aviato/*: ref-pin", f"mattas-net/aviato/*: {replacement}", 1)
     assert drifted != text
     config.write_text(drifted, encoding="utf-8")
 
     errors = validate(repo_copy)
 
-    assert any("zizmor.yml" in error and "amattas/aviato" in error and "ref-pin" in error for error in errors)
+    assert any("zizmor.yml" in error and "mattas-net/aviato" in error and "ref-pin" in error for error in errors)
 
 
 @pytest.mark.parametrize(
@@ -558,7 +558,7 @@ def test_policy_zizmor_repository_exemption_must_be_ref_pin(repo_copy: Path, rep
         ("github/*: ref-pin", "github/*: ref-pin\n        evil/repository/*: hash-pin"),
         ('"*": hash-pin', '"*": ref-pin'),
         ("        actions/*: ref-pin          # first-party GitHub — branch/tag allowed\n", ""),
-        ("        amattas/aviato/*: ref-pin\n", ""),
+        ("        mattas-net/aviato/*: ref-pin\n", ""),
     ],
 )
 def test_zizmor_unpinned_uses_policy_map_is_closed(
@@ -585,7 +585,7 @@ def test_library_repository_policy_mutation_binds_validation_and_remote(repo_cop
     text = policy_path.read_text(encoding="utf-8")
     policy_path.write_text(
         text.replace(
-            "library:\n  repository: amattas/aviato",
+            "library:\n  repository: mattas-net/aviato",
             "library:\n  repository: example/library",
         ),
         encoding="utf-8",

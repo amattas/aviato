@@ -69,7 +69,7 @@ def test_library_repository_policy_drives_rendered_references(tmp_path: Path) ->
     policy = library / "policy.yml"
     policy.write_text(
         policy.read_text(encoding="utf-8").replace(
-            "library:\n  repository: amattas/aviato",
+            "library:\n  repository: mattas-net/aviato",
             "library:\n  repository: example/library",
         ),
         encoding="utf-8",
@@ -87,7 +87,7 @@ def test_library_repository_policy_drives_rendered_references(tmp_path: Path) ->
 
     assert "uses: example/library/.github/workflows/" in items[".github/workflows/aviato-ci.yml"].body
     assert "https://github.com/example/library" in items["CONTRIBUTING.md"].body
-    assert "amattas/aviato" not in items[".github/workflows/aviato-ci.yml"].body
+    assert "mattas-net/aviato" not in items[".github/workflows/aviato-ci.yml"].body
 
 
 def test_core_does_not_name_the_library_repository() -> None:
@@ -98,7 +98,7 @@ def test_core_does_not_name_the_library_repository() -> None:
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
         if isinstance(node, ast.Constant) and isinstance(node.value, str)
     }
-    assert not any("amattas/aviato" in value for value in string_literals)
+    assert not any("mattas-net/aviato" in value for value in string_literals)
 
 
 def test_bootstrap_uses_local_workflow_refs_and_local_install() -> None:
@@ -115,7 +115,7 @@ def test_bootstrap_uses_local_workflow_refs_and_local_install() -> None:
     }
     ci = items[".github/workflows/aviato-ci.yml"].body
     assert "uses: ./.github/workflows/reusable-python-ci.yml" in ci
-    assert "uses: amattas/aviato/.github/workflows/" not in ci
+    assert "uses: mattas-net/aviato/.github/workflows/" not in ci
     assert "local-install: true" in ci
 
 
