@@ -66,7 +66,6 @@ def test_serializing_workflows_declare_per_repo_concurrency() -> None:
     # SERIALIZE per repo (queue, never cancel) so concurrent runs can't race a force-push / alias
     # move / duplicate publish. Guard the concurrency block structurally.
     for name in (
-        "reusable-consumer-automation.yml",
         "reusable-release.yml",
         "reusable-pypi-publish.yml",
         "reusable-app-store-connect.yml",
@@ -130,22 +129,6 @@ def test_docs_callers_resolve_bare_aviato_release_tags() -> None:
         assert "--list '[0-9]" in body, f"{caller.name} must match bare-SemVer release tags"
 
 
-def test_consumer_automation_jitters_scheduled_runs() -> None:
-    # §5.5/§8.x: the scheduled drift/report caller MUST jitter before doing work so a
-    # fleet sharing one cron does not stampede the hosting platform. Guard the jitter
-    # step structurally so a refactor cannot silently drop it (it is otherwise only
-    # exercised by a live scheduled run, which the test suite does not perform).
-    wf = _load("reusable-consumer-automation.yml")
-    runs = [
-        step.get("run", "")
-        for job in wf["jobs"].values()
-        if isinstance(job, dict)
-        for step in job.get("steps", [])
-        if isinstance(step, dict)
-    ]
-    assert any("sleep" in run and "RANDOM" in run for run in runs), "no anti-stampede jitter step found"
-
-
 def test_local_install_is_limited_to_structural_library_bootstrap() -> None:
     # §5.10: local-install is only for the Library bootstrapping itself before a
     # released ref exists. A consumer hand-editing local-install:true must fail before
@@ -154,7 +137,6 @@ def test_local_install_is_limited_to_structural_library_bootstrap() -> None:
         # C12-W1: BOTH release jobs install Aviato; each must carry the full guard.
         ("reusable-release.yml", "derive"),
         ("reusable-release.yml", "release"),
-        ("reusable-consumer-automation.yml", "drift-report"),
     ):
         wf = _load(name)
         install = next(s for s in wf["jobs"][job_name]["steps"] if s.get("name") == "Install Aviato (pinned)")
@@ -1028,46 +1010,6 @@ def test_security_baseline_jitters_scheduled_scans_at_the_chokepoint() -> None:
     ), "jitter must precede the privilege-probe work step"
 
 
-def test_consumer_automation_settings_drift_token_is_optional_and_read_only() -> None:
-    # §5.6/§11.3: settings drift READS branch protection + rulesets, which the platform
-    # GITHUB_TOKEN cannot do (there is no `administration` workflow-permission scope — a
-    # common wrong fix that actionlint rejects). Detection therefore takes an OPTIONAL
-    # operator-supplied admin token via the `settings-token` secret, used read-only.
-    wf = _load("reusable-consumer-automation.yml")
-
-    # The bogus scope must never reappear; permissions stay the low-privilege report set.
-    assert "administration" not in wf["permissions"]
-    assert wf["permissions"] == {
-        "contents": "write",
-        "pull-requests": "write",
-        "issues": "write",
-    }
-
-    # The optional admin token is declared (not required).
-    # (YAML 1.1 parses the `on:` key as boolean True, hence wf.get(True).)
-    on_block = _on(wf)
-    settings_secret = on_block["workflow_call"]["secrets"]["settings-token"]
-    assert settings_secret.get("required") is False
-
-    # §11.2/§5.6 least-privilege: the admin settings-token must NOT be a job-wide GH_TOKEN
-    # (that would expose it to the install step and the file-drift WRITES). It is scoped to
-    # the single read-only settings-drift step; file drift runs under the platform token.
-    job = wf["jobs"]["drift-report"]
-    assert "settings-token" not in str(job.get("env", {})), "admin token must not be job-wide env"
-    steps = job["steps"]
-    file_step = next(s for s in steps if "--file-only" in s.get("run", ""))
-    assert "github.token" in file_step.get("env", {}).get("GH_TOKEN", "")
-    assert "settings-token" not in str(file_step.get("env", {})), "file-drift step must not see the admin token"
-    settings_step = next(s for s in steps if "--settings-only" in s.get("run", ""))
-    assert "settings-token" in str(settings_step.get("env", {})), "settings-drift step must receive the admin token"
-
-    # The scaffolded caller (read as text — it carries {{ }} placeholders) passes the
-    # consumer's optional secret through to the reusable workflow.
-    caller = (SCAFFOLD_FILES / "wf-drift.yml").read_text(encoding="utf-8")
-    assert "settings-token: ${{ secrets.AVIATO_SETTINGS_TOKEN }}" in caller
-    assert "administration:" not in caller
-
-
 def test_release_tag_phase_proves_version_source_was_bumped() -> None:
     # §5.9/§719: the tag phase must PROVE the merged commit actually bumped the version-
     # source to NEXT before tagging — a commit whose subject merely claims `chore(release):
@@ -1332,7 +1274,6 @@ def test_aviato_ref_pin_guard_present_and_regex_correct() -> None:
     guard_re = re.compile(r"AVIATO_REF.*?=~\s+(\S+)\s+\]\]")
     for name in (
         "reusable-release.yml",
-        "reusable-consumer-automation.yml",
         "reusable-common-lint.yml",
     ):
         body = (WORKFLOWS / name).read_text()

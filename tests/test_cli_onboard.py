@@ -271,11 +271,14 @@ def test_doctor_reports_clean_and_missing(tmp_path: Path, capsys: pytest.Capture
 
     rc = main(["doctor", str(tmp_path)])
     out = capsys.readouterr().out
-    assert rc == 1  # remote automation state is unknown without a GitHub remote (§5.14)
+    # Drift health now comes from the aviato-bot service, not a scheduled Library workflow. Without
+    # a GitHub remote the bot is not probed (bot_status is None), so doctor reports the local
+    # classification and exits 0 — the artifact-status lines never gated the exit code.
+    assert rc == 0
     assert ".editorconfig" in out
     assert "clean" in out
     assert "missing" in out  # other managed files are absent
-    assert "drift automation enabled remotely: unknown" in out
+    assert "bot status: not probed (no remote)" in out  # explicit unprobed line without a remote
 
 
 def test_doctor_rejects_bootstrap_declaration_in_non_library(

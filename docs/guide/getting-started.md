@@ -80,10 +80,16 @@ adoption follows to bring GitHub's server-side state in line with the declaratio
 aviato apply-rulesets OWNER/REPO --apply --declaration .github/aviato.yml
 ```
 
-**Report settings drift** between the declared posture and the live repository:
+**Check drift coverage.** Scheduled file/settings drift detection is owned by the
+[aviato-bot](https://github.com/amattas/aviato-bot) service (settings-event
+webhooks plus a weekly fleet sweep), which opens file-drift proposals and files
+settings-drift tracking issues. Confirm the repository is covered by pointing
+`doctor` at the service:
 
 ```bash
-aviato drift-report . --settings-only
+export AVIATO_BOT_URL=https://aviato-bot.example
+export AVIATO_BOT_STATUS_TOKEN=<repo-status bearer token>
+aviato doctor .   # prints the bot status: line for this repo
 ```
 
 **Reconcile settings drift** through the fail-closed consent gate. Settings are

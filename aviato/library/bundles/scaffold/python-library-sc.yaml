@@ -7,7 +7,6 @@ add:
   - python-package-init
   - python-test-skeleton
   - wf-ci-python-library
-  - wf-drift
   - wf-docs-python-library
   - zensical-config
   - docs-intro

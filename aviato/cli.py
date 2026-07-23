@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 from . import __version__
 from .audit import audit_repos, discover_and_audit, render_json, render_tsv
+from .botstatus import BotStatus, probe_bot_status
 from .command import CommandError, run
 from .core.bootstrap import is_library
 from .core.composition import resolve_profile
@@ -30,7 +31,6 @@ from .core.model import ResolvedSet, VariableSpec
 from .core.offboarding import offboard as offboard_repo
 from .core.onboarding import applicable_templates, materialize_items, plan_onboarding, resolved_artifacts
 from .core.pathguard import confined_target
-from .core.ports import Platform
 from .core.provision import provision_repo
 from .core.reconcile_flow import run_reconcile
 from .core.registry import Registry
@@ -44,11 +44,10 @@ from .core.scaffold import (
     render_managed,
     scaffold,
 )
-from .core.settings_drift_flow import run_settings_drift
 from .core.variables import resolve_declared_variables, resolve_variables, writeback_variables
 from .core.version import is_compatible, is_known_version_pin, most_restrictive_recorded, normalize_pin
 from .core.versioning import classify_commits, is_highest, next_version
-from .github import GitHubAPIError, SettingsReadError, gh_json_paginated_optional, is_archived
+from .github import GitHubAPIError, gh_json_paginated_optional, is_archived
 from .github_platform import GitHubPlatform, UnmodeledProtectionError
 from .library_source import fetch_library_registry
 from .paths import MODULE_SOURCE_ROOT, REPO_ROOT
@@ -58,14 +57,6 @@ from .repos import git_root, is_owner_repo_slug, normalize_slug, remote_url, wor
 from .rulesets import apply_rulesets, render_all_rulesets
 from .validation import validate
 
-# The Library's scheduled drift/report automation workflow identifier (§5.5/§5.6). This is a
-# Library artifact name, so it lives OUTSIDE the agnostic core (review #18) and is passed into
-# diagnose() as data — core never hardcodes a specific library workflow name.
-DRIFT_AUTOMATION_MARKERS = ("reusable-consumer-automation",)
-# findings 30/31: the drift caller's repo path, for the API-state probe (enabled +
-# last scheduled-run conclusion). A Library artifact name — passed to the binding as
-# data, like the markers above.
-DRIFT_CALLER_PATH = ".github/workflows/aviato-drift.yml"
 DECLARATION_RELATIVE_PATH = ".github/aviato.yml"
 
 
@@ -370,6 +361,53 @@ def _tri(value: bool | None) -> str:
     return "unknown" if value is None else ("yes" if value else "no")
 
 
+def _print_bot_status(status: BotStatus | None) -> None:
+    """Render the aviato-bot drift-coverage probe (§5.4). Always prints a line, mirroring the
+    neighboring ``_tri()`` fields — an unprobed repo (no remote) reads as an explicit state, never
+    a silently absent line the operator could mistake for a clean/covered result."""
+    if status is None:
+        print("bot status: not probed (no remote)")
+        return
+    if not status.configured:
+        print("bot status: unconfigured (set AVIATO_BOT_URL and AVIATO_BOT_STATUS_TOKEN)")
+        return
+    if status.error is not None:
+        # ``error`` already carries the "bot status probe failed: ..." prefix.
+        print(status.error)
+        return
+    if status.covered is False:
+        print("bot status: not covered by bot automation")
+        return
+    if status.last_checked is not None:
+        print(f"bot status: covered (last drift check {status.last_checked})")
+    else:
+        print("bot status: covered")
+
+
+def _bot_column(status: BotStatus | None) -> str:
+    """Map the aviato-bot probe to scan's ``bot`` column (successor to the retired drift-workflow
+    presence signal). ``None`` — no remote slug resolved — reads as ``not-probed``, the same
+    unprobed treatment doctor gives a repo without a remote and distinct from ``unconfigured``
+    (the operator has not set AVIATO_BOT_URL / status token)."""
+    if status is None:
+        return "not-probed"
+    if not status.configured:
+        return "unconfigured"
+    if status.error is not None:
+        return "error"
+    return "covered" if status.covered else "uncovered"
+
+
+def _bot_status_exit_code(status: BotStatus | None) -> int:
+    """Doctor's health gate, successor to the retired drift-automation gate: a configured bot that
+    reports this repo is NOT covered — or whose probe errored — is an actionable drift-automation
+    gap and fails (1). Unconfigured (operator has not opted the bot in), covered, or not-probed
+    read as 0."""
+    if status is not None and status.configured and (status.covered is False or status.error is not None):
+        return 1
+    return 0
+
+
 def _desired_settings(resolved: ResolvedSet) -> dict[str, Any]:
     """Flat reconcilable settings: branch protection + repo security + PR merge-method toggles (§5.6/§2.13/§2.9).
 
@@ -409,34 +447,6 @@ def _deployment_environments(resolved: ResolvedSet, render_inputs: Mapping[str, 
         if environment:
             environments.add(environment)
     return tuple(sorted(environments))
-
-
-def _drifted_rulesets(
-    slug: str,
-    platform: Platform,
-    *,
-    required_approvals: int | None = None,
-    extra_status_checks: list[str] | None = None,
-) -> tuple[str, ...]:
-    """Names of desired rulesets MISSING from, or content-DRIFTED on, the live platform (§5.6).
-
-    The GitHub-specific work (render the desired payloads with the resolved verify checks, read
-    the live payloads, compare presence + content) lives here in the binding layer, NOT the
-    agnostic flow. Reads are admin-scoped and fail closed (SettingsReadError) like other settings
-    reads, so the caller's existing fail-closed/fail-loud handling covers them.
-
-    R9-21 (cycle 9, fixed cycle 11): ``extra_status_checks`` is the consumer's **override-resolved**
-    required status checks (from ``resolved.settings``), NOT the base profile's. Using the base
-    profile here reported phantom drift for a consumer that removed a pipeline via overrides, and the
-    non-declaration remediation path would re-add a required check whose workflow no longer runs
-    (unmergeable PRs). CX#1: ``required_approvals`` is the resolved ``required_reviews`` override,
-    flowed in for the same reason (ruleset + classic-protection agree on the count).
-    """
-    from .rulesets import drifted_ruleset_names, render_all_rulesets
-
-    desired = render_all_rulesets(required_approvals=required_approvals, extra_status_checks=extra_status_checks or [])
-    live = platform.read_rulesets(slug)
-    return tuple(drifted_ruleset_names(desired, live))
 
 
 def _expected_artifacts(registry: Registry, declaration: Declaration) -> list[ExpectedArtifact]:
@@ -587,14 +597,12 @@ def _owner_repo_vars(slug: str) -> dict[str, str]:
 
 class _DiagnosisProbeInputs(TypedDict):
     prerequisite_paths: Mapping[str, Sequence[str]]
-    drift_automation_markers: Sequence[str]
 
 
 def _diagnosis_probe_inputs(registry: Registry, profile: str) -> _DiagnosisProbeInputs:
     """Profile-derived local health inputs shared by every diagnosis entrypoint."""
     return {
         "prerequisite_paths": registry.profile_doc(profile).get("prerequisites", {}),
-        "drift_automation_markers": DRIFT_AUTOMATION_MARKERS,
     }
 
 
@@ -1021,13 +1029,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             slug,
             environments=environments,
             probe_pages_build_type=declaration.docs and serve_pages,
-            # findings 30/31/32: API-state probes — drift caller enabled + last-run
-            # conclusion, and code-scanning enablement (§2.13/§17 "probeable").
-            drift_workflow_path=DRIFT_CALLER_PATH,
             desired_rulesets=desired_rulesets,
         )
         report.prerequisites_remote = dict(remote_health)
-        report.drift_automation_enabled = report.prerequisites_remote.pop("drift_automation_enabled", None)
+        # Drift health now comes from the aviato-bot service, not a scheduled Library workflow:
+        # probe the bot's per-repo coverage (unconfigured/covered/not-covered/error).
+        report.bot_status = probe_bot_status(slug)
 
     print(f"doctor: {declaration.profile} @ {declaration.version} ({root})")
     for output_path, status in sorted(report.statuses.items()):
@@ -1038,8 +1045,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print(f"- {path}")
     if report.secret_in_declaration:
         print("WARNING: secret-typed variable present in declaration (§6.6/§8.15)")
-    print(f"drift automation present locally: {'yes' if report.drift_automation_present else 'no'}")
-    print(f"drift automation enabled remotely: {_tri(report.drift_automation_enabled)}")
+    _print_bot_status(report.bot_status)
     print("prerequisites:")
     for name, ok in sorted(report.prerequisites.items()):
         print(f"- {name}: {'ok' if ok else 'missing'}")
@@ -1051,7 +1057,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print("remote prerequisites (§17):")
         for name, value in sorted(report.prerequisites_remote.items()):
             print(f"- {name}: {_tri(value)}")
-    return 0 if report.drift_automation_healthy else 1
+    return _bot_status_exit_code(report.bot_status)
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
@@ -1182,9 +1188,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
         registry,
         include_archived=args.include_archived,
         archived_probe=_archived_probe,
-        # finding 33: full §5.4 parity with doctor — the fleet sweep probes the drift
-        # automation and §17 prerequisites too.
-        drift_automation_markers=DRIFT_AUTOMATION_MARKERS,
     )
     rc = 0
     for scan in scans:
@@ -1200,16 +1203,19 @@ def cmd_scan(args: argparse.Namespace) -> int:
             continue
         summary = ", ".join(f"{output}={status}" for output, status in sorted(scan.statuses.items())) or "—"
         flags = " [secret-in-declaration]" if scan.secret_in_declaration else ""
-        print(f"{scan.path}\t{scan.profile}\t{summary}{flags}")
+        # Drift-automation health now comes from the aviato-bot service (successor to the retired
+        # scheduled-workflow presence signal): probe the bot's per-repo coverage where a remote slug
+        # resolves. probe_bot_status self-guards on AVIATO_BOT_URL/token, so an operator who has not
+        # opted the bot in pays no network cost — the column just reads `unconfigured`.
+        slug = normalize_slug(remote_url(Path(scan.path)))
+        bot = _bot_column(probe_bot_status(slug) if slug else None)
+        print(f"{scan.path}\t{scan.profile}\tbot={bot}\t{summary}{flags}")
         # §6.3 seed-once integrity divergence (tamper/deletion) must surface in the fleet sweep,
         # not only in `doctor` — otherwise the scale-out command silently drops the one signal
         # seed-once tracking exists to provide.
         if scan.seed_divergence:
             for output in sorted(scan.seed_divergence):
                 print(f"  seed divergence: {output}", file=sys.stderr)
-        # finding 33: the §5.4 probes the sweep previously dropped.
-        if scan.drift_automation_present is False:
-            print("  drift automation: MISSING", file=sys.stderr)
         missing_prereqs = sorted(name for name, ok in scan.prerequisites.items() if not ok)
         if missing_prereqs:
             print(f"  missing prerequisites: {', '.join(missing_prereqs)}", file=sys.stderr)
@@ -1258,7 +1264,7 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
     Resolves the repo's declaration, re-diagnoses, and routes the same
     marker-stamped bodies scaffold() would write through ``run_file_drift`` so a
     merged PR classifies clean (§6.2/§5.4). Enforces the §2.6 version-pin gate first
-    — exactly like ``drift-report``/``sync`` — so an incompatible local tool cannot
+    — exactly like ``sync`` (drift detection now lives in the aviato-bot service) — so an incompatible local tool cannot
     regenerate a consumer's files (unless the operator passes --override-version-pin).
     """
     declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
@@ -1267,7 +1273,8 @@ def _propose_file_drift(registry: Registry, root: Path, *, override_version_pin:
 
     declaration = _load_consumer_declaration(root)
     expected = _expected_artifacts(registry, declaration)
-    # §2.6 pin gate before any remote/proposal work (matches drift-report/sync): an
+    # §2.6 pin gate before any remote/proposal work (matches sync; drift detection now lives in
+    # the aviato-bot service): an
     # incompatible local tool must not regenerate a consumer's files via scan --fix.
     pin_error = _version_pin_error(root, declaration, expected, override_version_pin)
     if pin_error:
@@ -1731,7 +1738,7 @@ def cmd_complete_protection(args: argparse.Namespace) -> int:
 
     # R3-7/§2.6: complete-protection applies the resolved profile's protected settings to a PINNED
     # consumer, so an incompatible local tool must not silently mutate them — gate on version-pin
-    # compatibility exactly like sync/drift-report/scan-fix (with the same --override escape hatch).
+    # compatibility exactly like sync/scan-fix (with the same --override escape hatch).
     pin_error = _version_pin_error(root, declaration, expected, getattr(args, "override_version_pin", False))
     if pin_error:
         print(pin_error, file=sys.stderr)
@@ -1902,177 +1909,6 @@ def cmd_provision(args: argparse.Namespace) -> int:
 
 
 SETTINGS_DRIFT_ISSUE_KEY = "aviato-settings-drift"
-
-
-def cmd_drift_report(args: argparse.Namespace) -> int:
-    """Consumer-automation entrypoint: report file + settings drift (§5.5/§5.6).
-
-    Low-privilege, propose/report-only — never mutates protected settings. Run on
-    a jittered schedule by the consumer-automation workflow.
-    """
-    if args.file_only and args.require_settings:
-        # --require-settings gates the settings-read skip; with --file-only there is no settings
-        # phase to gate, so the combination is a silent no-op. Reject it rather than mislead a CI
-        # gate into thinking it enforces a settings read (§5.6).
-        print("--require-settings has no effect with --file-only (there is no settings drift to gate)", file=sys.stderr)
-        return 2
-
-    root = Path(args.path).resolve()
-    declaration_path = _consumer_declaration_target(root, operation="inspect declaration")
-    if not declaration_path.is_file():
-        print(f"no declaration at {declaration_path}", file=sys.stderr)
-        return 2
-
-    slug = normalize_slug(remote_url(root))
-    if not slug:
-        print("could not determine OWNER/REPO from the repository remote", file=sys.stderr)
-        return 2
-
-    registry = Registry(MODULE_SOURCE_ROOT)
-    try:
-        declaration = _load_consumer_declaration(root)
-        resolved = resolve_profile(
-            registry, declaration.profile, overrides=declaration.overrides, docs=declaration.docs
-        )
-        expected = _expected_artifacts(registry, declaration)
-    except AviatoError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-
-    pin_error = _version_pin_error(root, declaration, expected, args.override_version_pin)
-    if pin_error:
-        print(pin_error, file=sys.stderr)
-        return 2
-
-    # §11.2/§5.6 least-privilege: file drift and settings drift use DIFFERENT privileges
-    # (contents/PR/issue write vs. the admin `administration` read). The consumer-automation
-    # workflow runs them as separate steps under separate tokens, so --file-only / --settings-
-    # only let each step carry only the token it needs; the default runs both (operator/local).
-    do_file = not args.settings_only
-    do_settings = not args.file_only
-    platform = GitHubPlatform(workdir=root)
-    rc = 0  # R3-3: a file-drift channel failure sets rc=1 but must NOT abort the settings phase
-
-    if do_file:
-        secret_names = tuple(spec.name for spec in resolved.variables if spec.secret)
-        # diagnose() rejects a bootstrap declaration in a non-Library repo (§5.4/§5.10) — surface
-        # that as a clean operator error (exit 2), not an uncaught traceback.
-        try:
-            report = diagnose(
-                root,
-                expected,
-                declaration_variables=declaration.variables,
-                secret_var_names=secret_names,
-                **_diagnosis_probe_inputs(registry, declaration.profile),
-                profile=declaration.profile,
-                is_library=is_library(root),
-                bootstrap_declared=declaration.bootstrap,
-            )
-        except AviatoError as exc:
-            print(str(exc), file=sys.stderr)
-            return 2
-        # The proposal must write the SAME marker-stamped content scaffold() writes, so
-        # a merged PR is classified clean (not dirty for a missing marker, §6.2/§5.4).
-        managed_bodies: dict[str, str] = {}
-        for artifact in resolved_artifacts(
-            registry,
-            declaration.profile,
-            declaration.variables,
-            pin=declaration.version,
-            docs=declaration.docs,
-            bootstrap=declaration.bootstrap,
-            overrides=declaration.overrides,
-        ):
-            if artifact.seed_once:
-                continue
-            item = ScaffoldItem(
-                output=artifact.output,
-                body=artifact.body,
-                comment=artifact.comment,
-                input_hash=artifact.input_hash,
-            )
-            managed_bodies[artifact.output] = render_managed(
-                item, profile=declaration.profile, version=declaration.version
-            )
-
-        # R3-3/§5.6: a file-drift proposal push failure (CommandError/GitHubAPIError) must FAIL
-        # LOUD with a non-zero exit but NOT abort before the independent settings-drift phase —
-        # the two are deliberately separate steps under separate tokens.
-        try:
-            file_outcome = run_file_drift(
-                platform,
-                repo=slug,
-                profile=declaration.profile,
-                statuses=report.statuses,
-                expected_bodies=managed_bodies,
-                # Bootstrap (§2.10/§5.10): when the Library diagnoses itself it does not raise
-                # file-drift proposals against the remote-ref scaffold — its automation is
-                # self-applied/operator-maintained locally. Consistent with the pin-gate skip.
-                is_bootstrap=is_library(root),
-            )
-            print(f"file drift: proposed={file_outcome.proposed} dirty={file_outcome.dirty}")
-        except (GitHubAPIError, CommandError) as exc:
-            print(f"file drift: FAILED — could not open/update the proposal ({exc})", file=sys.stderr)
-            rc = 1
-
-    # Settings drift READS branch protection / rulesets, which the platform GITHUB_TOKEN
-    # cannot do (it has no administration scope). §5.6 splits two failure modes that must
-    # NOT be conflated:
-    #   - a live-settings READ failure (no admin token) → skip fail-closed (never compute
-    #     from a falsely-unprotected read, §2.7); by default exits 0 so a scheduled run is
-    #     not failed by a missing token (--require-settings makes the skip fail);
-    #   - an ISSUE-CHANNEL failure (issues disabled / API error opening or commenting the
-    #     tracking issue) → FAIL LOUD (§5.6 "never silently drops the report"), exit non-zero.
-    if do_settings:
-        try:
-            # CX#1: pass the consumer's resolved required_reviews override so the ruleset render
-            # matches the classic-protection desired state (both express the same approval count).
-            _db = resolved.settings.get("default_branch", {})
-            drifted_rulesets = _drifted_rulesets(
-                slug,
-                platform,
-                required_approvals=_db.get("required_reviews"),
-                extra_status_checks=list(_db.get("required_status_checks", [])),
-            )
-            settings_outcome = run_settings_drift(
-                platform,
-                repo=slug,
-                desired_settings=_desired_settings(resolved),
-                issue_key=SETTINGS_DRIFT_ISSUE_KEY,
-                drifted_rulesets=drifted_rulesets,
-                # C12-3: the issue-body remediation points at apply-rulesets --declaration so the
-                # restored ruleset honours this consumer's overrides (the standard consumer path).
-                declaration_path=".github/aviato.yml",
-            )
-            print(f"settings drift: {settings_outcome.status} (destructive={settings_outcome.destructive})")
-            if settings_outcome.drifted_rulesets:
-                print(
-                    f"  missing/drifted rulesets (apply with `aviato apply-rulesets {slug} "
-                    # finding 26: the REPO-RELATIVE declaration path (the runner-local
-                    # absolute path printed here before does not exist on the operator's
-                    # machine; the issue body already used the relative form).
-                    f"--apply --declaration .github/aviato.yml`): {list(settings_outcome.drifted_rulesets)}"
-                )
-        except SettingsReadError as exc:
-            print(
-                f"settings drift: skipped — could not read protected settings ({exc}); "
-                "supply an admin-capable `settings-token` secret to enable it (§5.6).",
-                file=sys.stderr,
-            )
-            if args.require_settings:
-                return 1
-        except (GitHubAPIError, CommandError) as exc:
-            # The issue channel (not the settings read) failed. §5.6 requires this to fail loud —
-            # never a silent skip — so §5.4 diagnosis can flag the broken channel. N5: the issue
-            # WRITE (open_or_update_issue → gh) raises CommandError, not GitHubAPIError, so without
-            # catching it the failure fell through to main()'s exit 2 instead of this fail-loud exit 1.
-            print(
-                f"settings drift: FAILED — the tracking-issue channel is unavailable ({exc}); "
-                "the drift report was not delivered (§5.6). This is not a settings-read skip.",
-                file=sys.stderr,
-            )
-            return 1
-    return rc
 
 
 def cmd_lint_actions(args: argparse.Namespace) -> int:
@@ -2472,33 +2308,6 @@ def build_parser() -> argparse.ArgumentParser:
     provision.add_argument("--var", action="append", help="Set a declaration variable as KEY=VALUE (repeatable).")
     provision.add_argument("--public", action="store_true", help="Create a public repo (default: private).")
     provision.set_defaults(func=cmd_provision)
-
-    drift = subparsers.add_parser("drift-report", help="Consumer automation: report file + settings drift (read-only).")
-    drift.add_argument("path", help="Path to the consumer repository.")
-    drift.add_argument(
-        "--override-version-pin", action="store_true", help="Proceed despite a version-pin mismatch (§2.6)."
-    )
-    drift_scope = drift.add_mutually_exclusive_group()
-    drift_scope.add_argument(
-        "--file-only",
-        action="store_true",
-        help="Run only file drift (platform token; no admin settings-token needed, §5.6).",
-    )
-    drift_scope.add_argument(
-        "--settings-only",
-        action="store_true",
-        help="Run only settings drift (admin settings-token; read-only, §5.6).",
-    )
-    drift.add_argument(
-        "--require-settings",
-        action="store_true",
-        help=(
-            "Exit non-zero if settings drift cannot be evaluated (unreadable settings). Without "
-            "this, an unreadable-settings skip exits 0 so a scheduled run is not failed by a "
-            "missing admin token; set it when gating CI on settings drift (§5.6)."
-        ),
-    )
-    drift.set_defaults(func=cmd_drift_report)
 
     highest = subparsers.add_parser(
         "is-highest", help="Exit 0 iff CANDIDATE is the highest released version (§8.14 alias guard)."

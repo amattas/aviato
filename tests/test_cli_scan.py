@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from aviato import cli
+from aviato.botstatus import BotStatus
 from aviato.cli import _scan_has_file_drift, main
 from aviato.core.diagnosis import diagnose
 from aviato.core.errors import AviatoError
@@ -200,17 +201,45 @@ def test_scan_fix_blocks_incompatible_version_pin(tmp_path: Path, capsys: pytest
     assert "version-pin mismatch" in err
 
 
-def test_scan_surfaces_missing_drift_automation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    # finding 33: the fleet sweep runs the FULL §5.4 diagnosis — a consumer with no
-    # scheduled drift caller must be flagged, not read as healthy at scale.
+@pytest.mark.parametrize(
+    ("bot_status", "expected_column"),
+    [
+        (BotStatus(configured=True, covered=True, last_checked=None, error=None), "bot=covered"),
+        (BotStatus(configured=True, covered=False, last_checked=None, error=None), "bot=uncovered"),
+    ],
+)
+def test_scan_reports_bot_coverage_column(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    bot_status: BotStatus,
+    expected_column: str,
+) -> None:
+    # Post-Plan-B: the fleet sweep reports the aviato-bot per-repo coverage (successor to the
+    # retired scheduled drift-workflow presence signal) as a `bot` column on each repo's row.
+    consumer = tmp_path / "c"
+    (consumer / ".github").mkdir(parents=True)
+    (consumer / ".github" / "aviato.yml").write_text(PYTHON_DECLARATION, encoding="utf-8")
+    monkeypatch.setattr(cli, "remote_url", lambda root: "git@github.com:o/r.git")
+    monkeypatch.setattr(cli, "probe_bot_status", lambda *a, **k: bot_status)
+
+    rc = main(["scan", str(consumer)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert expected_column in out
+
+
+def test_scan_bot_column_not_probed_without_remote(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # A repo whose remote slug does not resolve gets the same not-probed treatment doctor gives an
+    # unprobed repo — never a network call, and distinct from `unconfigured`.
     consumer = tmp_path / "c"
     (consumer / ".github").mkdir(parents=True)
     (consumer / ".github" / "aviato.yml").write_text(PYTHON_DECLARATION, encoding="utf-8")
 
     rc = main(["scan", str(consumer)])
-    err = capsys.readouterr().err
+    out = capsys.readouterr().out
     assert rc == 0
-    assert "drift automation: MISSING" in err
+    assert "bot=not-probed" in out
 
 
 def test_scan_audit_lists_open_drift_issues(

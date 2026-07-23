@@ -1552,57 +1552,28 @@ def test_feature_unavailable_requires_client_error_status() -> None:
     assert _is_feature_unavailable(genuine) is True
 
 
-def test_probe_health_reports_code_scanning_and_drift_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    # findings 30/31/32: doctor's remote probes must surface code-scanning enablement
-    # and the drift caller's API state (enabled + last scheduled-run conclusion) —
-    # local file presence alone read a UI-disabled or persistently-failing workflow
-    # as healthy.
+@pytest.mark.parametrize(
+    ("analyses_enabled", "codeql", "expected_code_scanning"),
+    [(True, True, True), (False, False, False)],
+)
+def test_probe_health_reports_code_scanning_state(
+    monkeypatch: pytest.MonkeyPatch, analyses_enabled: bool, codeql: bool, expected_code_scanning: bool
+) -> None:
+    # finding 32: doctor's remote probes must surface code-scanning enablement — a 200 on the
+    # analyses read (any list, even empty) means enabled; a genuine 404 means not yet. (The
+    # retired scheduled drift-caller probe is gone — drift health now comes from aviato-bot.)
     def fake_optional(endpoint: str, *, default: object | None = None) -> object:
         if "code-scanning/analyses" in endpoint:
-            return []  # 200 with no analyses yet ⇒ enabled
-        if "actions/workflows/5/runs" in endpoint:
-            return {"workflow_runs": [{"conclusion": "failure"}]}
+            return [] if analyses_enabled else default  # 200 (empty) ⇒ enabled; 404 ⇒ not
         if endpoint.startswith("repos/o/r"):
             return {"has_issues": True, "default_branch": "main"}
         return default
 
-    def fake_paginated_optional(endpoint: str, *, default: object | None = None) -> object:
-        # the workflow listing is PAGINATED (--slurp → one page-object per page)
-        if endpoint.endswith("actions/workflows?per_page=100"):
-            wf = {"id": 5, "path": ".github/workflows/aviato-drift.yml", "state": "disabled_manually"}
-            return [{"workflows": [wf]}]
-        return default
-
     monkeypatch.setattr(github, "gh_json_optional", fake_optional)
-    monkeypatch.setattr(github, "gh_json_paginated_optional", fake_paginated_optional)
     monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
-    monkeypatch.setattr(github, "codeql_merge_protection_present", lambda repo: True)
-    _, _, remote = GitHubPlatform().probe_health("o/r", drift_workflow_path=".github/workflows/aviato-drift.yml")
-    assert remote["code_scanning"] is True
-    assert remote["codeql_merge_protection"] is True
-    assert remote["drift_automation_enabled"] is False  # disabled in the UI ⇒ flagged
-    assert remote["drift_automation_last_run_ok"] is False  # last run failed ⇒ flagged
-
-
-def test_probe_health_drift_workflow_absent_reads_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_optional(endpoint: str, *, default: object | None = None) -> object:
-        if "code-scanning/analyses" in endpoint:
-            return default  # genuine 404 ⇒ not enabled
-        if endpoint.startswith("repos/o/r"):
-            return {"has_issues": True, "default_branch": "main"}
-        return default
-
-    def fake_paginated_optional(endpoint: str, *, default: object | None = None) -> object:
-        if endpoint.endswith("actions/workflows?per_page=100"):
-            return [{"workflows": []}]
-        return default
-
-    monkeypatch.setattr(github, "gh_json_optional", fake_optional)
-    monkeypatch.setattr(github, "gh_json_paginated_optional", fake_paginated_optional)
-    monkeypatch.setattr(github, "repo_security_settings", lambda repo: {})
-    monkeypatch.setattr(github, "codeql_merge_protection_present", lambda repo: False)
-    _, _, remote = GitHubPlatform().probe_health("o/r", drift_workflow_path=".github/workflows/aviato-drift.yml")
-    assert remote["code_scanning"] is False
-    assert remote["codeql_merge_protection"] is False
-    assert remote["drift_automation_enabled"] is False
-    assert remote["drift_automation_last_run_ok"] is None
+    monkeypatch.setattr(github, "codeql_merge_protection_present", lambda repo: codeql)
+    _, _, remote = GitHubPlatform().probe_health("o/r")
+    assert remote["code_scanning"] is expected_code_scanning
+    assert remote["codeql_merge_protection"] is codeql
+    assert "drift_automation_enabled" not in remote
+    assert "drift_automation_last_run_ok" not in remote

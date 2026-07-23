@@ -611,7 +611,6 @@ class GitHubPlatform:
         *,
         environments: tuple[str, ...] = (),
         probe_pages_build_type: bool = False,
-        drift_workflow_path: str | None = None,
         desired_rulesets: tuple[dict[str, Any], ...] = (),
     ) -> tuple[bool | None, bool | None, dict[str, bool | None]]:
         """Probe issue-channel availability, scan-heartbeat presence, and §17 remote prereqs.
@@ -761,41 +760,10 @@ class GitHubPlatform:
             remote["codeql_merge_protection"] = github.codeql_merge_protection_present(repo)
         except github.GitHubAPIError:
             remote["codeql_merge_protection"] = None
-        # findings 31/30: the drift automation's API state — a workflow disabled in the
-        # GitHub UI (or persistently failing, e.g. silently throttled) previously read
-        # "present: yes" from the local file alone, the exact state §5.4's probe exists
-        # to expose. The path is a Library artifact name passed in as data.
-        if drift_workflow_path:
-            try:
-                # second-review fix: PAGINATED — a repo with >100 workflows must not get a
-                # false determinate "disabled" because the drift caller sat on page 2.
-                # --slurp returns one page-object per page for this object-shaped endpoint.
-                listing = github.gh_json_paginated_optional(f"repos/{repo}/actions/workflows?per_page=100", default=())
-                pages = listing if isinstance(listing, list) else [listing]
-                workflows = [w for page in pages if isinstance(page, dict) for w in (page.get("workflows") or [])]
-                match = next(
-                    (
-                        w
-                        for w in workflows
-                        if isinstance(w, dict) and str(w.get("path", "")).endswith(drift_workflow_path)
-                    ),
-                    None,
-                )
-                if match is None:
-                    remote["drift_automation_enabled"] = False
-                    remote["drift_automation_last_run_ok"] = None
-                else:
-                    remote["drift_automation_enabled"] = match.get("state") == "active"
-                    runs = github.gh_json_optional(
-                        f"repos/{repo}/actions/workflows/{match.get('id')}/runs?per_page=1", default=()
-                    )
-                    run_items = (runs.get("workflow_runs") or []) if isinstance(runs, dict) else []
-                    first = run_items[0] if run_items and isinstance(run_items[0], dict) else None
-                    conclusion = first.get("conclusion") if first else None
-                    remote["drift_automation_last_run_ok"] = None if conclusion is None else conclusion == "success"
-            except github.GitHubAPIError:
-                remote["drift_automation_enabled"] = None
-                remote["drift_automation_last_run_ok"] = None
+        # NB: the scheduled drift-caller workflow probe was removed here — the aviato-bot service
+        # is now the drift detector and its per-repo coverage is probed separately via
+        # ``probe_bot_status`` (surfaced by doctor as ``bot_status``), not by inspecting a Library
+        # workflow's Actions state.
         return issue_channel, heartbeat, remote
 
     def _actor_role(self, repo: str, login: str | None) -> tuple[str | None, bool]:
@@ -822,7 +790,7 @@ class GitHubPlatform:
         # fragment the consent/audit trail. A genuine ``200 []`` (no match) still creates one.
         existing = github.gh_json_paginated_optional(f"repos/{repo}/issues?state=open&labels={_seg(key)}", default=[])
         # A malformed 200 (issue object without "number") must not crash the scheduled
-        # drift-report; fall through to creating a fresh issue rather than KeyError. When
+        # aviato-bot drift detector; fall through to creating a fresh issue rather than KeyError. When
         # several issues share the label, act on ONE deterministically (oldest), with a warn.
         chosen = _select_issue(existing, repo, key)
         number = chosen.get("number") if chosen else None

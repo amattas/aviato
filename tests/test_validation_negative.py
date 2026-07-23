@@ -307,9 +307,9 @@ def test_checkout_by_repository_name_in_release_workflow_is_detected(repo_copy: 
 
 
 def test_missing_required_file_is_detected(repo_copy: Path) -> None:
-    (repo_copy / "templates" / "consumer-automation.yml").unlink()
+    (repo_copy / "templates" / "profile-python-service.yml").unlink()
     errors = validate(repo_copy)
-    assert any(e == "missing required file: templates/consumer-automation.yml" for e in errors)
+    assert any(e == "missing required file: templates/profile-python-service.yml" for e in errors)
 
 
 def test_stale_library_bootstrap_artifact_is_detected(repo_copy: Path) -> None:
